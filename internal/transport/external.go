@@ -57,7 +57,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 }
 
 type deployInput struct {
-	Actor          string `json:"actor" jsonschema:"Human or agent attribution"`
+	Actor          string `json:"actor,omitempty" jsonschema:"Human or agent attribution"`
 	IntegrationID  string `json:"integration_id" jsonschema:"Integration to deploy"`
 	EnvironmentID  string `json:"environment_id" jsonschema:"Explicitly configured DEV environment"`
 	ApplicationID  string `json:"application_id,omitempty" jsonschema:"Optional application selection when multiple components are configured"`
@@ -76,11 +76,11 @@ func (in deployInput) command() domain.Command {
 	if in.ExpectedDigest != "" {
 		data["expected_digest"] = in.ExpectedDigest
 	}
-	return domain.Command{Action: "deploy_integration", Actor: in.Actor, IntegrationID: in.IntegrationID, Data: data}
+	return domain.Command{Action: "deploy_integration", Actor: defaultActor(in.Actor), IntegrationID: in.IntegrationID, Data: data}
 }
 
 type deployExistingInput struct {
-	Actor         string `json:"actor"`
+	Actor         string `json:"actor,omitempty"`
 	IntegrationID string `json:"integration_id"`
 	EnvironmentID string `json:"environment_id"`
 	ApplicationID string `json:"application_id"`
@@ -89,7 +89,7 @@ type deployExistingInput struct {
 }
 
 func (in deployExistingInput) command() domain.Command {
-	return domain.Command{Action: "deploy_existing_artifact", Actor: in.Actor, IntegrationID: in.IntegrationID, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID, "revision_id": in.RevisionID, "artifact_id": in.ArtifactID}}
+	return domain.Command{Action: "deploy_existing_artifact", Actor: defaultActor(in.Actor), IntegrationID: in.IntegrationID, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID, "revision_id": in.RevisionID, "artifact_id": in.ArtifactID}}
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
@@ -125,9 +125,9 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		ProductID     string `json:"product_id"`
 		EnvironmentID string `json:"environment_id"`
 		ApplicationID string `json:"application_id,omitempty"`
-		Actor         string `json:"actor"`
+		Actor         string `json:"actor,omitempty"`
 	}) (*mcp.CallToolResult, any, error) {
-		v, e := service.Execute(ctx, domain.Command{Action: "refresh_environment_runtime", ProductID: in.ProductID, Actor: in.Actor, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID}})
+		v, e := service.Execute(ctx, domain.Command{Action: "refresh_environment_runtime", ProductID: in.ProductID, Actor: defaultActor(in.Actor), Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID}})
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_environment_state", Description: "Read desired GitOps state separately from reconciled and runtime observations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

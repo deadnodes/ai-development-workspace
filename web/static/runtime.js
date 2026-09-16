@@ -32,6 +32,6 @@ document.addEventListener('click',async e=>{
  const control=e.target.closest('[data-runtime-sync]');if(!control)return;
  const env=productItems('environments').find(x=>x.id===control.dataset.runtimeSync);if(!env)return;
  control.disabled=true;
- try{const op=await request('/api/commands',{action:'refresh_environment_runtime',actor:sessionStorage.getItem('rc-actor')||'human/local',product_id:env.product_id,data:{environment_id:env.id}});notice(`Read-only runtime sync queued: ${op.id}`);await refresh();runtimeLoad(env.id,true);}
+ try{const op=await request('/api/commands',{action:'refresh_environment_runtime',actor:'human/local',product_id:env.product_id,data:{environment_id:env.id}});notice(`Read-only runtime sync queued: ${op.id}`);await refresh();runtimeLoad(env.id,true);}
  catch(error){notice(error.message,true);}finally{if(control.isConnected)control.disabled=false;}
 });

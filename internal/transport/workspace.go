@@ -20,15 +20,15 @@ type workspaceService interface {
 }
 type workspaceInput struct {
 	ProductID string `json:"product_id"`
-	Actor     string `json:"actor"`
+	Actor     string `json:"actor,omitempty"`
 }
 type knowledgeInput struct {
 	ProductID string                  `json:"product_id,omitempty"`
-	Actor     string                  `json:"actor"`
+	Actor     string                  `json:"actor,omitempty"`
 	Knowledge domain.ProjectKnowledge `json:"knowledge"`
 }
 type workspaceImport struct {
-	Actor         string                             `json:"actor"`
+	Actor         string                             `json:"actor,omitempty"`
 	Configuration application.WorkspaceConfiguration `json:"configuration"`
 }
 
@@ -59,7 +59,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, service Service) {
 		if !workspaceJSON(w, r, &in) {
 			return
 		}
-		v, e := s.ScanWorkspace(r.Context(), in.ProductID, in.Actor)
+		v, e := s.ScanWorkspace(r.Context(), in.ProductID, defaultActor(in.Actor))
 		respond(w, v, e)
 	})
 	mux.HandleFunc("POST /api/workspaces/match", func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +67,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, service Service) {
 		if !workspaceJSON(w, r, &in) {
 			return
 		}
-		v, e := s.MatchWorkspace(r.Context(), in.ProductID, in.Actor)
+		v, e := s.MatchWorkspace(r.Context(), in.ProductID, defaultActor(in.Actor))
 		respond(w, v, e)
 	})
 	mux.HandleFunc("POST /api/products/{id}/knowledge", func(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +75,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, service Service) {
 		if !workspaceJSON(w, r, &in) {
 			return
 		}
-		v, e := s.SetProjectKnowledge(r.Context(), r.PathValue("id"), in.Actor, in.Knowledge)
+		v, e := s.SetProjectKnowledge(r.Context(), r.PathValue("id"), defaultActor(in.Actor), in.Knowledge)
 		respond(w, v, e)
 	})
 	mux.HandleFunc("GET /api/products/{id}/workspace-config", func(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +87,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, service Service) {
 		if !workspaceJSON(w, r, &in) {
 			return
 		}
-		v, e := s.ImportWorkspace(r.Context(), in.Actor, in.Configuration)
+		v, e := s.ImportWorkspace(r.Context(), defaultActor(in.Actor), in.Configuration)
 		respond(w, v, e)
 	})
 }
@@ -103,15 +103,15 @@ func registerWorkspaceTools(server *mcp.Server, service Service) {
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "scan_workspace", Description: "Read-only discovery of local Git repositories and root/repository AGENTS.md under the server-configured RCP_WORKSPACE_ROOT. No client path, clone, hooks, builds or deployment. Creates MIXED-purpose repository records; classify explicitly later. Rescan refreshes observations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceInput) (*mcp.CallToolResult, any, error) {
-		v, e := s.ScanWorkspace(ctx, in.ProductID, in.Actor)
+		v, e := s.ScanWorkspace(ctx, in.ProductID, defaultActor(in.Actor))
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "match_local_repositories", Description: "Read-only scan of configured workspace; match SSH/HTTPS remote identity to repositories already attached to this Product. Preserve registry IDs and roles; never import unrelated repositories. Return checkout paths, branches, commits and AGENTS context. Does not fetch or change source."}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceInput) (*mcp.CallToolResult, any, error) {
-		v, e := s.MatchWorkspace(ctx, in.ProductID, in.Actor)
+		v, e := s.MatchWorkspace(ctx, in.ProductID, defaultActor(in.Actor))
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "set_project_knowledge", InputSchema: map[string]any{"type": "object", "required": []string{"product_id", "actor", "knowledge"}, "properties": map[string]any{"product_id": map[string]any{"type": "string"}, "actor": map[string]any{"type": "string"}, "knowledge": map[string]any{"type": "object"}}, "additionalProperties": false}, Description: "Set current product overview, agent instructions, hierarchical areas and typed relationships, separately from feature memory. Repository references must belong to Product. Parameters are nonsecret documentation; never store credentials here."}, func(ctx context.Context, _ *mcp.CallToolRequest, in knowledgeInput) (*mcp.CallToolResult, any, error) {
-		v, e := s.SetProjectKnowledge(ctx, in.ProductID, in.Actor, in.Knowledge)
+	mcp.AddTool(server, &mcp.Tool{Name: "set_project_knowledge", InputSchema: map[string]any{"type": "object", "required": []string{"product_id", "knowledge"}, "properties": map[string]any{"product_id": map[string]any{"type": "string"}, "actor": map[string]any{"type": "string"}, "knowledge": map[string]any{"type": "object"}}, "additionalProperties": false}, Description: "Set current product overview, agent instructions, hierarchical areas and typed relationships, separately from feature memory. Repository references must belong to Product. Parameters are nonsecret documentation; never store credentials here."}, func(ctx context.Context, _ *mcp.CallToolRequest, in knowledgeInput) (*mcp.CallToolResult, any, error) {
+		v, e := s.SetProjectKnowledge(ctx, in.ProductID, defaultActor(in.Actor), in.Knowledge)
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "export_workspace_configuration", Description: "Export portable product setup and agent documentation without feature history, machine paths, provider credentials or deployment authorizations. Includes repositories/clone URLs, component parameters, environments, areas and observed repo-root AGENTS docs. Full history uses create_backup instead."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
@@ -120,8 +120,8 @@ func registerWorkspaceTools(server *mcp.Server, service Service) {
 		v, e := s.ExportWorkspace(ctx, in.ProductID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "import_workspace_configuration", InputSchema: map[string]any{"type": "object", "required": []string{"actor", "configuration"}, "properties": map[string]any{"actor": map[string]any{"type": "string"}, "configuration": map[string]any{"type": "object"}}, "additionalProperties": false}, Description: "Atomically import portable project setup into a Product that does not exist yet. Reject ID conflicts. Does not clone repositories, enable providers or schedule operations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceImport) (*mcp.CallToolResult, any, error) {
-		v, e := s.ImportWorkspace(ctx, in.Actor, in.Configuration)
+	mcp.AddTool(server, &mcp.Tool{Name: "import_workspace_configuration", InputSchema: map[string]any{"type": "object", "required": []string{"configuration"}, "properties": map[string]any{"actor": map[string]any{"type": "string"}, "configuration": map[string]any{"type": "object"}}, "additionalProperties": false}, Description: "Atomically import portable project setup into a Product that does not exist yet. Reject ID conflicts. Does not clone repositories, enable providers or schedule operations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceImport) (*mcp.CallToolResult, any, error) {
+		v, e := s.ImportWorkspace(ctx, defaultActor(in.Actor), in.Configuration)
 		return nil, v, e
 	})
 }

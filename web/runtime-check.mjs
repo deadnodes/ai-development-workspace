@@ -34,7 +34,7 @@ try {
  assert.equal(w.document.querySelector('main img'),null);assert.equal(w.document.querySelector('main [onerror]'),null);assert.equal(w.document.querySelectorAll('main a').length,1);assert.equal(w.document.querySelector('main a').href,'https://github.com/org/app/actions/runs/1');assert.match(text(),/metadata only/);assert.match(text(),/Verified artifact provenance/);
  w.document.querySelector('main').innerHTML=run('runtimePanel(state.environments[0])');
  w.sessionStorage.setItem('rc-actor','agent/runtime-test');w.document.querySelector('[data-runtime-sync]').click();await tick();
- assert.deepEqual(JSON.parse(JSON.stringify(requests.find(x=>x.body))),{path:'/api/commands',body:{action:'refresh_environment_runtime',actor:'agent/runtime-test',product_id:'p',data:{environment_id:'dev'}}});
+ assert.deepEqual(JSON.parse(JSON.stringify(requests.find(x=>x.body))),{path:'/api/commands',body:{action:'refresh_environment_runtime',actor:'human/local',product_id:'p',data:{environment_id:'dev'}}});
  assert.ok(requests.some(x=>x.path==='/api/environments/dev/state'));
  assert.doesNotMatch(source,/kubectl/);
 }finally{dom.window.close();}

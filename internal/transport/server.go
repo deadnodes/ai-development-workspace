@@ -60,6 +60,7 @@ func New(service Service, options Options) http.Handler {
 			write(w, 400, map[string]string{"error": "Expected one JSON object"})
 			return
 		}
+		c.Actor = defaultActor(c.Actor)
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
@@ -82,6 +83,7 @@ func New(service Service, options Options) http.Handler {
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. Use create_github_connection/import_repository/configure_component/configure_environment to configure explicit DEV delivery. refresh_integration_git queues observation; deploy_integration queues a real build/artifact/GitOps operation. Poll get_operation; GitOps application does not imply runtime health. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, _ *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
+		in.Actor = defaultActor(in.Actor)
 		v, e := service.Execute(ctx, in)
 		return nil, v, e
 	})
@@ -163,4 +165,12 @@ func protect(next http.Handler, o Options) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Attribution is not authentication. Explicit agent identifiers retain provenance.
+func defaultActor(actor string) string {
+	if strings.TrimSpace(actor) == "" {
+		return "agent"
+	}
+	return actor
 }

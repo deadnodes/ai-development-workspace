@@ -28,6 +28,7 @@ func registerLocalGitRoutes(mux *http.ServeMux, service Service) {
 		if !workspaceJSON(w, r, &in) {
 			return
 		}
+		in.Actor = defaultActor(in.Actor)
 		v, e := s.PlanLocalGitSync(r.Context(), in)
 		respond(w, v, e)
 	})
@@ -36,6 +37,7 @@ func registerLocalGitRoutes(mux *http.ServeMux, service Service) {
 		if !workspaceJSON(w, r, &in) {
 			return
 		}
+		in.Actor = defaultActor(in.Actor)
 		v, e := s.RecordLocalGitSync(r.Context(), in)
 		respond(w, v, e)
 	})
@@ -53,10 +55,12 @@ func registerLocalGitTools(server *mcp.Server, service Service) {
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "plan_local_git_sync", Description: "Persist a FETCH or FAST_FORWARD plan for an external host agent using its own credentials. Requires exact expected_head. Never executes Git or edits source. FAST_FORWARD requires clean attached branch strictly behind cached origin. Agent must review trusted Git configuration, preserve guards and record observation afterward."}, func(ctx context.Context, _ *mcp.CallToolRequest, in application.LocalGitRequest) (*mcp.CallToolResult, any, error) {
+		in.Actor = defaultActor(in.Actor)
 		v, e := s.PlanLocalGitSync(ctx, in)
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "record_local_git_sync", Description: "Re-read local Git state and append observed result of an external-agent plan. FAST_FORWARD must match exact planned target/branch and remain clean. FETCH is observation only, not proof of network execution. Does not execute Git mutations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in application.LocalGitRequest) (*mcp.CallToolResult, any, error) {
+		in.Actor = defaultActor(in.Actor)
 		v, e := s.RecordLocalGitSync(ctx, in)
 		return nil, v, e
 	})

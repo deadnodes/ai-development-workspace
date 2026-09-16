@@ -40,7 +40,7 @@ func flowSchema(spec flowAction) map[string]any {
 	if spec.action == "record_scenario_run" {
 		properties["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
 	}
-	required := append([]string{"actor", spec.refName}, strings.Fields(spec.required)...)
+	required := append([]string{spec.refName}, strings.Fields(spec.required)...)
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }
 func flowCommand(spec flowAction, input map[string]any) domain.Command {
@@ -52,7 +52,7 @@ func flowCommand(spec flowAction, input map[string]any) domain.Command {
 			data[key] = value
 		}
 	}
-	c := domain.Command{Action: spec.action, Actor: actor, Data: data}
+	c := domain.Command{Action: spec.action, Actor: defaultActor(actor), Data: data}
 	switch spec.refField {
 	case "id":
 		c.ID = reference

@@ -45,7 +45,7 @@ for(const integrationID of ['', 'i']) {
  assert.ok(capturedCommand,'submit must send a command');
  assert.equal(Object.hasOwn(capturedCommand.data,'integration_id'),false);
  assert.equal(capturedCommand.integration_id,integrationID||undefined);
- assert.equal(capturedCommand.actor,'test/agent');
+ assert.equal(capturedCommand.actor,'human/local');
 }
 let prevented=false, focused=false;
 sandbox.document.querySelector('#main').focus=()=>{focused=true;};

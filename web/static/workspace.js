@@ -24,7 +24,7 @@ function openWorkspaceDialog(action, title, help, html, saveLabel) {
  $('#dialog-title').textContent=title;$('#form-help').textContent=help;$('#fields').innerHTML=html;
  $('#dialog').classList.remove('composition-dialog');$('#form-error').textContent='';$('#save').disabled=false;$('#save').hidden=!saveLabel;$('#save').textContent=saveLabel||'Save';$('#dialog').showModal();
 }
-function workspaceActorField(){return inputField(field('_actor','Recorded by','text',true),sessionStorage.getItem('rc-actor')||'human/local');}
+function workspaceActorField(){return '';}
 async function workspaceAction(action) {
  try {
   if(action==='import'){openWorkspaceDialog(action,'Import workspace configuration','Creates a new product from portable configuration. Existing IDs or other conflicts are rejected. This is configuration import, not a history/backup restore or repository clone.',workspaceActorField()+inputField(field('configuration','Portable configuration JSON','textarea',true)),'Import as new product');return;}
@@ -44,16 +44,15 @@ function parseWorkspaceArray(text,label){const value=JSON.parse(text||'[]');if(!
 $('#command-form').addEventListener('submit',async event=>{
  if(!currentForm?.workspace)return;
  event.preventDefault();event.stopImmediatePropagation();
- const {action,product}=currentForm,form=new FormData(event.target),actor=String(form.get('_actor')||'').trim();
+ const {action,product}=currentForm,form=new FormData(event.target),actor='human/local';
  if(!['scan','knowledge','import'].includes(action))return;
  try {
-  if(!actor)throw new Error('Recorded by is required.');
   $('#save').disabled=true;
   let result;
   if(action==='scan')result=await request('/api/workspaces/scan',{product_id:product,actor});
   if(action==='knowledge'){const knowledge={overview:String(form.get('overview')||''),instructions:String(form.get('instructions')||''),areas:parseWorkspaceArray(form.get('areas'),'Project areas'),relationships:parseWorkspaceArray(form.get('relationships'),'Relationships'),parameters:parseWorkspaceParameters(form.get('parameters'))};result=await request(`/api/products/${encodeURIComponent(product)}/knowledge`,{actor,knowledge});}
   if(action==='import'){const configuration=JSON.parse(String(form.get('configuration')||''));if(!configuration||Array.isArray(configuration)||typeof configuration!=='object')throw new Error('Configuration must be a JSON object.');result=await request('/api/workspaces/import',{actor,configuration});}
-  sessionStorage.setItem('rc-actor',actor);projectContextCache.delete(product);closeDialog();
+  projectContextCache.delete(product);closeDialog();
   if(action==='import'){const id=result?.product?.id||result?.id;if(id){productID=id;localStorage.setItem('rc-product',id);}location.hash='';}
   await refresh();notice(action==='scan'?'Workspace scan recorded. Review checkout errors and AGENTS previews in project context.':action==='import'?'Workspace configuration imported. Repositories were not cloned.':'Project knowledge saved with audit history.');
  }catch(error){$('#form-error').textContent=error.message;}finally{$('#save').disabled=false;}

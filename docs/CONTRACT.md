@@ -60,3 +60,10 @@ Operation lifecycle status is separate from deployment state. `SUCCEEDED` for th
 ## Full instance backup
 
 MCP `get_backup_capabilities`, `create_backup {actor}`, `restore_backup {actor, archive_base64, sha256}` share the application backup service. HTTP uses binary gzip at POST `/api/backups/export` and `/api/backups/restore`, with actor/checksum headers. Restore is atomic into empty state only; it preserves record/event order and cancels imported active operations with original evidence in restore audit. Format v1 is bounded to 8 MiB compressed / 64 MiB expanded. See [backup contract](BACKUP.md).
+
+### Default action attribution
+
+The Web UI records actions as `human/local` without an author field. HTTP and MCP
+commands default omitted/blank attribution to `agent`. Callers may still supply a
+specific agent identifier to preserve provenance. These labels are not authenticated
+identities and do not grant permissions. Historical attribution remains unchanged.

@@ -174,3 +174,43 @@ func TestExistingArtifactHTTPAndMCPDelegateSameCommand(t *testing.T) {
 		t.Fatalf("MCP named differs: %+v", got)
 	}
 }
+
+func TestAutomaticActorAttribution(t *testing.T) {
+	svc := &boundaryService{commands: make(chan domain.Command, 10)}
+	server := httptest.NewServer(transport.New(svc, transport.Options{}))
+	defer server.Close()
+	for _, actor := range []string{"", "human/local", "agent/reviewer"} {
+		body, _ := json.Marshal(map[string]any{"action": "create_product", "actor": actor, "data": map[string]any{"name": "Example"}})
+		res, err := http.Post(server.URL+"/api/commands", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != 200 {
+			t.Fatal(res.StatusCode)
+		}
+		want := actor
+		if want == "" {
+			want = "agent"
+		}
+		if got := (<-svc.commands).Actor; got != want {
+			t.Fatalf("got %q want %q", got, want)
+		}
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "actor-test", Version: "1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "execute", Arguments: map[string]any{"action": "create_product", "data": map[string]any{"name": "Example"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatal(result)
+	}
+	if got := (<-svc.commands).Actor; got != "agent" {
+		t.Fatal(got)
+	}
+}
