@@ -149,7 +149,8 @@ func (o *Observer) Snapshot(ctx context.Context) delivery.RuntimeSnapshot {
 				break
 			}
 		}
-		if !belongs {
+		// Terminal Pods can remain after an older rollout; they are not current runtime.
+		if !belongs || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
 			continue
 		}
 		out := delivery.RuntimePod{Name: p.Metadata.Name, UID: p.Metadata.UID, Phase: p.Status.Phase}

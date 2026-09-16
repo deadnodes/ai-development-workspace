@@ -15,6 +15,7 @@ func TestSnapshotOwnerIdentityAndPartialEvidence(t *testing.T) {
 		count              int
 	}{
 		{"owned healthy only", "", "HEALTHY", 1},
+		{"terminal pods do not affect current runtime", "terminal", "HEALTHY", 1},
 		{"stale generation", "stale", "NOT_READY", 1},
 		{"scaled zero", "zero", "SCALED_ZERO", 0},
 		{"pending pod", "pending", "NOT_READY", 1},
@@ -65,6 +66,13 @@ func TestSnapshotOwnerIdentityAndPartialEvidence(t *testing.T) {
 					items := []any{pod("foreign", "foreign-rs")}
 					if tc.mode != "zero" {
 						items = append(items, pod("ours", "rs"))
+					}
+					if tc.mode == "terminal" {
+						for _, phase := range []string{"Succeeded", "Failed"} {
+							old := pod("old-"+phase, "rs")
+							old["status"].(map[string]any)["phase"] = phase
+							items = append(items, old)
+						}
 					}
 					json.NewEncoder(w).Encode(map[string]any{"items": items})
 				default:
