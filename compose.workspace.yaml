@@ -2,11 +2,11 @@
 services:
   app:
     environment:
-      RCP_WORKSPACE_ROOT: /workspace
+      RCP_WORKSPACE_ROOT: ${RCP_WORKSPACE_CONTAINER:-/workspace}
     volumes:
       - type: bind
         source: ${RCP_WORKSPACE_HOST:?Set RCP_WORKSPACE_HOST to an absolute checkout/workspace path}
-        target: /workspace
+        target: ${RCP_WORKSPACE_CONTAINER:-/workspace}
         read_only: true
         bind:
           create_host_path: false

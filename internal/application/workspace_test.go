@@ -106,3 +106,45 @@ func TestWorkspaceScanKnowledgeAndPortableSetup(t *testing.T) {
 		t.Fatal("failed import partially applied")
 	}
 }
+
+func TestMatchWorkspacePreservesRegisteredIdentityAndScope(t *testing.T) {
+	s, m := fixture(t)
+	root := t.TempDir()
+	s.SetWorkspaceRoot(root)
+	for _, name := range []string{"different-directory-name", "unrelated"} {
+		p := filepath.Join(root, name)
+		for _, args := range [][]string{{"init", p}, {"-C", p, "remote", "add", "origin", "git@github.com:DeadNodes/" + name + ".git"}} {
+			if b, e := osexec.Command("git", args...).CombinedOutput(); e != nil {
+				t.Fatalf("%s %v", b, e)
+			}
+		}
+	}
+	p := filepath.Join(root, "different-directory-name")
+	if b, e := osexec.Command("git", "-C", p, "remote", "set-url", "origin", "git@github.com:DeadNodes/pp-back.git").CombinedOutput(); e != nil {
+		t.Fatalf("%s %v", b, e)
+	}
+	m.state.Repositories = []domain.Repository{{Meta: domain.Meta{ID: "remote-id", ProductID: "p"}, Name: "pp-back", URL: "https://github.com/deadnodes/pp-back", Role: "APPLICATION", RegisteredRepositoryID: "registry-id"}, {Meta: domain.Meta{ID: "other", ProductID: "other"}, URL: "https://github.com/deadnodes/unrelated", Role: "APPLICATION"}}
+	for n := 0; n < 2; n++ {
+		v, e := s.MatchWorkspace(context.Background(), "p", "agent")
+		if e != nil {
+			t.Fatal(e)
+		}
+		cc := v.(map[string]any)["local_checkouts"].([]domain.LocalCheckout)
+		if len(cc) != 1 || cc[0].RepositoryID != "remote-id" || cc[0].RelativePath != "different-directory-name" {
+			t.Fatalf("bad matches %+v", cc)
+		}
+	}
+	if len(m.state.Repositories) != 2 || m.state.Repositories[0].URL != "https://github.com/deadnodes/pp-back" || m.state.Repositories[0].RegisteredRepositoryID != "registry-id" {
+		t.Fatal("registry modified or unrelated repos imported")
+	}
+	if b, e := osexec.Command("git", "-C", p, "remote", "set-url", "origin", "https://github.com/other/pp-back.git").CombinedOutput(); e != nil {
+		t.Fatalf("%s %v", b, e)
+	}
+	v, e := s.MatchWorkspace(context.Background(), "p", "agent")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(v.(map[string]any)["local_checkouts"].([]domain.LocalCheckout)) != 0 {
+		t.Fatal("rebound unrelated remote by directory")
+	}
+}

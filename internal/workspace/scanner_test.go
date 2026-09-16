@@ -218,3 +218,16 @@ func TestScanDepthBoundIsExplicit(t *testing.T) {
 		t.Fatalf("depth limit not visible: %+v", result)
 	}
 }
+
+func TestScanObservesTopLevelReposBeforeNestedTrees(t *testing.T) {
+	root := scanRoot(t)
+	initRepo(t, root, "a-temporary/nested")
+	initRepo(t, root, "z-product")
+	result, err := Scan(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Repositories) != 2 || result.Repositories[0].RelativePath != "z-product" {
+		t.Fatalf("top-level repository delayed behind nested traversal: %+v", result.Repositories)
+	}
+}

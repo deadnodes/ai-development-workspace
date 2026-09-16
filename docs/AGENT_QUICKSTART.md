@@ -200,3 +200,9 @@ Codex P1/P2 review comments can become persistent findings through MCP `sync_pul
 Статусы конечны: перед изменением состояния используй MCP `get_status_schema {}` или `GET /api/statuses`. Значения и переходы задаёт domain, произвольные строки запрещены; `ready` не означает `released`, а released нельзя назначить через обычное редактирование. [Контракт статусов](STATUSES.md).
 
 Delivery controls and ready-image selection: [DELIVERY_CONTROLS.md](DELIVERY_CONTROLS.md).
+
+For an existing Product with local clones, start with `match_local_repositories`,
+then `get_project_context` and `get_local_git_state`. Use `plan_local_git_sync` to
+prepare FETCH/FAST_FORWARD, execute Git in the agent's trusted host workspace,
+and report with `record_local_git_sync`. See [LOCAL_GIT.md](LOCAL_GIT.md).
+The server can remain mounted read-only; it never needs your host SSH credentials.

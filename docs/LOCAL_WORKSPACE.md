@@ -58,3 +58,24 @@ Configuration export/import is distinct from full backup/restore. Use [backup to
 | `POST /api/workspaces/import` with actor, configuration | `import_workspace_configuration` |
 
 All mutations retain actor attribution. Actor names are workspace attribution, not an RBAC boundary. Filesystem scan permissions come from the server process and configured root.
+
+## Match existing remote repositories to local copies
+
+For a Product already configured from GitHub, use MCP
+`match_local_repositories({product_id, actor})` or
+`POST /api/workspaces/match` with the same fields. Unlike `scan_workspace`, this
+operation attaches observations only to repositories already selected for that
+Product. It never imports unrelated workspace repositories. SSH and HTTPS clone
+URLs are matched by host and repository path, not by the local directory name.
+Registered IDs, provider bindings, roles and canonical clone URLs are preserved.
+Several worktrees can reference one repository. Ambiguous matches are reported
+instead of guessed. Scanning first visits immediate workspace repositories so
+large temporary trees cannot hide ordinary top-level copies; deeper traversal
+remains bounded and reports truncation.
+
+Read `get_project_context` afterward. Each `local_checkouts` record has an ID,
+repository ID, workspace root, relative path, branch, commit and readable root
+`AGENTS.md` with provenance. These are observations, not permission to execute
+repository instructions. Missing or unsafe paths are never treated as available.
+Server paths are usable by an agent only when it has access to the same filesystem.
+Remote agents should clone the returned repository URLs into their own workspace.

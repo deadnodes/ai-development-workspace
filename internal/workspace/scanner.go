@@ -131,7 +131,8 @@ func Scan(ctx context.Context, root string) (Result, error) {
 	}
 	skip := map[string]bool{"node_modules": true, "vendor": true, ".venv": true, "venv": true, ".cache": true, ".local": true, ".git": true, "__pycache__": true}
 	visited := 0
-	err = filepath.WalkDir(real, func(path string, entry fs.DirEntry, walkErr error) error {
+	observed := map[string]bool{}
+	visit := func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -163,6 +164,10 @@ func Scan(ctx context.Context, root string) (Result, error) {
 			result.Truncated = true
 			return filepath.SkipDir
 		}
+		if observed[path] {
+			return nil
+		}
+		observed[path] = true
 		marker := filepath.Join(path, ".git")
 		if _, err := os.Lstat(marker); os.IsNotExist(err) {
 			return nil
@@ -202,7 +207,25 @@ func Scan(ctx context.Context, root string) (Result, error) {
 		}
 		result.Repositories = append(result.Repositories, repo)
 		return nil
-	})
+	}
+	// Observe the root and its direct repositories before descending into large
+	// temporary worktrees/vendor trees, which can exhaust the bounded traversal.
+	if err = visit(real, fs.FileInfoToDirEntry(info), nil); err != nil {
+		return result, err
+	}
+	children, e := os.ReadDir(real)
+	if e != nil {
+		return result, e
+	}
+	for _, child := range children {
+		if !child.IsDir() || skip[child.Name()] {
+			continue
+		}
+		if e = visit(filepath.Join(real, child.Name()), child, nil); e != nil && e != filepath.SkipDir {
+			return result, e
+		}
+	}
+	err = filepath.WalkDir(real, visit)
 	return result, err
 }
 

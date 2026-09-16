@@ -74,3 +74,19 @@ This default stack binds only host loopback and has no API token. A separate
 container's localhost is not the host; configure reachable networking and server
 authentication explicitly before extending access. External GitHub/CI/registry
 credentials are a separate setup, not required for local feature memory.
+
+To retain a workspace mount across ordinary `docker compose` restarts, put these
+non-secret settings in ignored `.env` (replace the example path):
+
+```dotenv
+COMPOSE_FILE=compose.yaml:compose.workspace.yaml
+RCP_WORKSPACE_HOST=/absolute/path/to/workspace
+RCP_WORKSPACE_CONTAINER=/absolute/path/to/workspace
+```
+
+Using the same absolute path on host and container also preserves Git worktree
+metadata that contains absolute paths. The mount stays read-only. Rebuild with
+`docker compose --profile app up --build -d --wait app`, then call
+`match_local_repositories` for an existing Product; use `scan_workspace` only when
+intentionally importing all discovered repositories. No SSH keys or Git credential
+stores need to be mounted for local observation.

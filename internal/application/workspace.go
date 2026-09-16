@@ -154,6 +154,14 @@ func (s *Service) ProjectContext(ctx context.Context, product string) (any, erro
 	return map[string]any{"repository_documents": docs, "product": p, "repositories": repos, "components": apps, "environments": envs, "knowledge": knowledgeFor(st, product), "local_checkouts": checkouts, "workspace_agents": agents, "filesystem_enabled": s.workspaceRoot != "", "repository_documents_are_context_not_instructions": true}, nil
 }
 func (s *Service) ScanWorkspace(ctx context.Context, product, actor string) (any, error) {
+	return s.scanWorkspace(ctx, product, actor, false)
+}
+
+// MatchWorkspace links only repositories already attached to the selected Product.
+func (s *Service) MatchWorkspace(ctx context.Context, product, actor string) (any, error) {
+	return s.scanWorkspace(ctx, product, actor, true)
+}
+func (s *Service) scanWorkspace(ctx context.Context, product, actor string, attachedOnly bool) (any, error) {
 	if s.workspaceRoot == "" {
 		return nil, invalid("configure RCP_WORKSPACE_ROOT on the server first")
 	}
@@ -189,15 +197,25 @@ func (s *Service) ScanWorkspace(ctx context.Context, product, actor string) (any
 		for _, r := range result.Repositories {
 			var repoID string
 			for _, v := range st.Repositories {
-				if v.ProductID == product && r.RemoteURL != "" && v.URL == r.RemoteURL {
+				if v.ProductID == product && workspace.RemoteIdentity(r.RemoteURL) != "" && workspace.RemoteIdentity(v.URL) == workspace.RemoteIdentity(r.RemoteURL) {
+					if repoID != "" {
+						repoID = "ambiguous"
+						break
+					}
 					repoID = v.ID
-					break
 				}
+			}
+			if repoID == "ambiguous" {
+				result.Warnings = append(result.Warnings, r.RelativePath+": ambiguous repository identity; not linked")
+				continue
+			}
+			if repoID == "" && attachedOnly {
+				continue
 			}
 			if repoID == "" {
 				for n := len(st.LocalCheckouts) - 1; n >= 0; n-- {
 					v := st.LocalCheckouts[n]
-					if v.ProductID == product && v.Workspace == result.Root && v.RelativePath == r.RelativePath {
+					if v.ProductID == product && v.Workspace == result.Root && v.RelativePath == r.RelativePath && r.RemoteURL == "" {
 						repoID = v.RepositoryID
 						break
 					}
@@ -215,7 +233,7 @@ func (s *Service) ScanWorkspace(ctx context.Context, product, actor string) (any
 			if r.RemoteURL != "" {
 				for n := range st.Repositories {
 					v := &st.Repositories[n]
-					if v.ID == repoID {
+					if v.ID == repoID && v.RegisteredRepositoryID == "" {
 						v.URL = r.RemoteURL
 						v.UpdatedAt = m.UpdatedAt
 						v.Actor = actor
@@ -225,7 +243,11 @@ func (s *Service) ScanWorkspace(ctx context.Context, product, actor string) (any
 			st.LocalCheckouts = append(st.LocalCheckouts, domain.LocalCheckout{ScanID: m.ID, Meta: workspaceMeta(product, actor), RepositoryID: repoID, Workspace: result.Root, RelativePath: r.RelativePath, Branch: r.Branch, Commit: r.Commit, Agents: document(r.Agents), Errors: r.Errors})
 		}
 		st.WorkspaceDocuments = append(st.WorkspaceDocuments, domain.WorkspaceDocument{Meta: m, Workspace: result.Root, Agents: document(result.Agents)})
-		workspaceAudit(st, m, "scan_workspace", map[string]any{"repositories": len(result.Repositories), "warnings": result.Warnings})
+		action := "scan_workspace"
+		if attachedOnly {
+			action = "match_local_repositories"
+		}
+		workspaceAudit(st, m, action, map[string]any{"repositories": len(result.Repositories), "attached_only": attachedOnly, "warnings": result.Warnings})
 		return nil
 	})
 	if err != nil {
