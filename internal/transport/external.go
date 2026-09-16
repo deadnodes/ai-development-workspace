@@ -76,7 +76,24 @@ func (in deployInput) command() domain.Command {
 	}
 	return domain.Command{Action: "deploy_integration", Actor: in.Actor, IntegrationID: in.IntegrationID, Data: data}
 }
+
+type deployExistingInput struct {
+	Actor         string `json:"actor"`
+	IntegrationID string `json:"integration_id"`
+	EnvironmentID string `json:"environment_id"`
+	ApplicationID string `json:"application_id"`
+	RevisionID    string `json:"revision_id"`
+	ArtifactID    string `json:"artifact_id"`
+}
+
+func (in deployExistingInput) command() domain.Command {
+	return domain.Command{Action: "deploy_existing_artifact", Actor: in.Actor, IntegrationID: in.IntegrationID, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID, "revision_id": in.RevisionID, "artifact_id": in.ArtifactID}}
+}
 func registerProviderTools(server *mcp.Server, service Service) {
+	mcp.AddTool(server, &mcp.Tool{Name: "deploy_existing_artifact", Description: "Deploy a previously recorded successful build artifact to an enabled DEV GitOps mapping. Requires exact integration revision, fresh registry evidence and matching immutable digest. Never launches CI or rebuilds. Returns a persistent operation; GitOps success is not runtime health."}, func(ctx context.Context, _ *mcp.CallToolRequest, in deployExistingInput) (*mcp.CallToolResult, any, error) {
+		v, e := service.Execute(ctx, in.command())
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_product_configuration", Description: "Export the effective product configuration from the authoritative database for a one-way Git mirror. Includes secret references, never secret resolution. This is not a backup or import format."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		ProductID string `json:"product_id"`
 	}) (*mcp.CallToolResult, any, error) {

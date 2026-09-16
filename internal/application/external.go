@@ -318,8 +318,9 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_GIT", IntegrationID: in.ID, Status: "PENDING", RequestedBy: c.Actor, Phase: "OBSERVE", NextAttemptAt: m.CreatedAt}
 		st.Operations = append(st.Operations, v)
 		return v, m, nil
-	case "deploy_integration":
+	case "deploy_integration", "deploy_existing_artifact":
 		var input struct {
+			ArtifactID     string `json:"artifact_id"`
 			EnvironmentID  string `json:"environment_id"`
 			ApplicationID  string `json:"application_id"`
 			RevisionID     string `json:"revision_id"`
@@ -430,6 +431,19 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		request.Inputs["image_repository"] = build.ImageRepository
 		snapshot := &domain.DeliverySnapshot{Revision: *revision, Application: *app, Build: *build, Target: *target, Environment: *env, Source: *source, GitOps: *gitops, SourceConnection: sc.Config, GitOpsConnection: gc.Config, BuildRequest: request, GitOpsRequest: delivery.GitOpsRequest{Repository: repositoryLocator(st, *gitops), Ref: target.Ref, Path: target.Path, ImageRepository: build.ImageRepository, ImageField: target.ImageField, DigestField: target.DigestField}}
 		v := domain.ExternalOperation{Meta: m, Kind: "DEPLOY", IntegrationID: in.ID, EnvironmentID: env.ID, ApplicationID: app.ID, Status: "PENDING", RequestedBy: c.Actor, Phase: "PREFLIGHT", Snapshot: snapshot, ExpectedDigest: input.ExpectedDigest, NextAttemptAt: time.Now().UTC()}
+		if c.Action == "deploy_existing_artifact" {
+			known, err := validatedExistingArtifact(st, input.ArtifactID, in.ProductID, app.ID, app.RepositoryID, revision.HeadCommit, build.ImageRepository)
+			if err != nil {
+				return nil, m, err
+			}
+			if input.ExpectedDigest != "" && input.ExpectedDigest != known.Digest {
+				return nil, m, invalid("expected digest differs from selected artifact")
+			}
+			v.ExistingArtifact = known
+			v.ExpectedDigest = known.Digest
+		} else if input.ArtifactID != "" {
+			return nil, m, invalid("artifact_id requires deploy_existing_artifact")
+		}
 		st.Operations = append(st.Operations, v)
 		return v, m, nil
 	}

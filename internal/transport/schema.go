@@ -15,7 +15,7 @@ func CommandSchema() map[string]any {
 	}
 	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution for this engineering action; a human or agent identifier."}
 	data := map[string]any{}
-	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit version checksum uri build_url") {
+	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit version checksum uri build_url") {
 		data[k] = str()
 	}
 	for _, k := range strings.Fields("requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
@@ -86,6 +86,7 @@ func CommandSchema() map[string]any {
 		{"configure_environment", "product_id", "environment_id purpose connection_id repository_id ref path image_field application_id allow_deploy"},
 		{"refresh_integration_git", "integration_id", ""},
 		{"deploy_integration", "integration_id", "environment_id"},
+		{"deploy_existing_artifact", "integration_id", "environment_id application_id revision_id artifact_id"},
 		{"create_product", "", "name"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},
 		{"create_integration", "feature_id", "title objective"}, {"update_integration", "integration_id", ""},
 		{"start_integration complete_integration", "integration_id", ""}, {"transition_integration", "integration_id", "status"},

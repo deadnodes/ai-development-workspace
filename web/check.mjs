@@ -205,3 +205,22 @@ assert.ok(evaluate('applicationView(state.applications)').includes('LIBRARY'));
 assert.ok(evaluate("inputField(forms.create_application.fields.find(f=>f.name==='kind'),'LIBRARY')").includes('<select'));
 assert.ok(fs.readFileSync(new URL('./static/index.html',import.meta.url),'utf8').includes('/library.js'));
 console.log('Component kinds, source roles and library package evidence remain separate from environment delivery.');
+
+// Delivery workspace exposes configuration before any operations and keeps product scoping.
+evaluate(`state.applications=[{id:'app',product_id:'p',name:'Backend',repository_id:'src'}];state.environments=[{id:'dev',product_id:'p',name:'DEV'}];state.environment_bindings=[{id:'old',product_id:'p',environment_id:'dev',application_id:'app',purpose:'DEV',allow_deploy:false,path:'old.yaml'},{id:'new',product_id:'p',environment_id:'dev',application_id:'app',purpose:'DEV',allow_deploy:true,repository_id:'gitops',ref:'main',path:'dev/backend.yaml',image_field:'spec.values.image.repository',digest_field:'spec.values.image.tag'},{id:'other-map',product_id:'other',environment_id:'other',application_id:'other',allow_deploy:true}];state.delivery_artifacts=[{id:'image',product_id:'p',application_id:'app',repository_id:'src',source_commit:'abc',tag:'build-17',build_run_id:17,digest:'sha256:123',image_repository:'ghcr.io/demo/backend',availability:'PRESENT'},{id:'foreign',product_id:'other',image_repository:'PRIVATE_OTHER'}];currentForm=null;location.hash='#delivery'`);
+const deliveryHTML=evaluate('deliveryView()');
+for(const text of ['Available environments','Flux / GitOps mapping','dev/backend.yaml','spec.values.image.tag','build-17','sha256:123','Deploy this image','Provider settings'])assert.ok(deliveryHTML.includes(text),text);
+assert.ok(!deliveryHTML.includes('old.yaml'));assert.ok(!deliveryHTML.includes('PRIVATE_OTHER'));
+assert.ok(evaluate('operationsView()').includes('href="#delivery"'));
+assert.equal(evaluate("externalFormValues('configure_environment',{environment:'dev',application:'app'}).path"),'dev/backend.yaml');
+evaluate(`state.integration_revisions=[{id:'matching',integration_id:'i',repository_id:'src',head_commit:'abc'},{id:'wrong-sha',integration_id:'i',repository_id:'src',head_commit:'def'},{id:'wrong-repo',integration_id:'i',repository_id:'other',head_commit:'abc'}];currentForm={action:'deploy_existing_artifact',attrs:{artifact:'image',application:'app',integration:'i'}}`);
+assert.deepEqual(Array.from(evaluate("externalOptionsFor({type:'revision'}).map(r=>r.id)")),['matching']);
+formValues={_actor:'test/agent',artifact_id:'image',application_id:'app',integration_id:'i',revision_id:'matching',environment_id:'dev'};
+evaluate("currentForm={action:'deploy_existing_artifact',attrs:{artifact:'image',application:'app'},fields:forms.deploy_existing_artifact.fields}");
+elements.get('#command-form').onsubmit({preventDefault(){},target:{}});
+assert.equal(capturedCommand.action,'deploy_existing_artifact');assert.equal(capturedCommand.feature_id,'f');assert.equal(capturedCommand.integration_id,'i');assert.equal(capturedCommand.product_id,'p');assert.equal(capturedCommand.data.artifact_id,'image');assert.equal(capturedCommand.data.environment_id,'dev');assert.ok(!Object.hasOwn(capturedCommand.data,'integration_id'));
+console.log('Delivery navigation, scoped mappings/images, exact source selection and artifact command serialization passed.');
+
+evaluate(`state.github_connections=[{id:'connected',name:'Saved GitHub',connected:true}];state.environment_bindings[1].purpose='TEST'`);
+assert.ok(evaluate('externalProductPanels()').includes('Connected'));
+assert.ok(evaluate('deliveryView()').includes('TEST writes enabled'));

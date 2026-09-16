@@ -198,6 +198,12 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			return true, s.finish(ctx, *op, token, "BLOCKED", "GitOps preflight did not provide pinned head/blob", nil)
 		}
 		op.GitOpsBase = &base
+		if op.ExistingArtifact != nil {
+			if op.ExistingArtifact.SourceCommit != head {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "selected artifact does not match observed source", nil)
+			}
+			return true, s.advance(ctx, *op, token, "INSPECT", "WAITING_FOR_ARTIFACT", "recheck selected immutable artifact; CI build is disabled for this operation", map[string]string{"artifact_id": op.ExistingArtifact.ID})
+		}
 		if op.ExpectedDigest == "" {
 			state, readErr := s.State(ctx)
 			if readErr != nil {
@@ -295,11 +301,24 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			request.EvidenceOperationID = snapshot.BuildRequest.OperationID
 			request.SourceSHA = snapshot.Revision.HeadCommit
 		}
+		if known := op.ExistingArtifact; known != nil {
+			request.Tag = known.Tag
+			request.EvidenceRepository = known.BuildRequest.Repository
+			request.EvidenceRunID = known.BuildRunID
+			request.EvidenceOperationID = known.BuildRequest.OperationID
+			request.SourceSHA = known.SourceCommit
+		}
 		artifact, e := s.provider.InspectArtifact(callCtx, snapshot.SourceConnection, request)
 		if e != nil {
+			if op.ExistingArtifact != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "selected artifact unavailable or registry evidence expired; no build dispatched: "+e.Error(), nil)
+			}
 			return true, s.retry(ctx, *op, token, "artifact inspection failed: "+e.Error())
 		}
 		if !artifact.Available || artifact.Digest == "" {
+			if err := s.recordArtifactObservation(ctx, *op, "MISSING", artifact); err != nil {
+				return true, err
+			}
 			return true, s.finish(ctx, *op, token, "BLOCKED", "artifact is missing; rebuild requires a new operation with explicit intent", nil)
 		}
 		if !validArtifactDigest(artifact.Digest) || artifact.ObservedAt.IsZero() {
@@ -452,7 +471,12 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 			if op.Run != nil {
 				runID = op.Run.ID
 			}
-			st.DeliveryArtifacts = append(st.DeliveryArtifacts, domain.DeliveryArtifact{Meta: am, OperationID: op.ID, ApplicationID: op.ApplicationID, RepositoryID: op.Snapshot.Revision.RepositoryID, SourceCommit: op.Snapshot.Revision.HeadCommit, ImageRepository: op.Snapshot.Build.ImageRepository, Tag: op.Snapshot.BuildRequest.ImageTag, Digest: op.Artifact.Digest, Availability: "PRESENT", ObservedAt: op.Artifact.ObservedAt, BuildRequest: op.Snapshot.BuildRequest, BuildRunID: runID})
+			buildRequest := op.Snapshot.BuildRequest
+			if known := op.ExistingArtifact; known != nil {
+				buildRequest = known.BuildRequest
+				runID = known.BuildRunID
+			}
+			st.DeliveryArtifacts = append(st.DeliveryArtifacts, domain.DeliveryArtifact{Meta: am, OperationID: op.ID, ApplicationID: op.ApplicationID, RepositoryID: op.Snapshot.Revision.RepositoryID, SourceCommit: op.Snapshot.Revision.HeadCommit, ImageRepository: op.Snapshot.Build.ImageRepository, Tag: buildRequest.ImageTag, Digest: op.Artifact.Digest, Availability: "PRESENT", ObservedAt: op.Artifact.ObservedAt, BuildRequest: buildRequest, BuildRunID: runID})
 		}
 		stepMeta := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}
 		st.OperationSteps = append(st.OperationSteps, domain.OperationStep{Meta: stepMeta, OperationID: op.ID, Phase: phase, Status: op.Status, Detail: detail, Evidence: evidence})

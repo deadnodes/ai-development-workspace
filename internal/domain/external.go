@@ -74,6 +74,7 @@ type DeliverySnapshot struct {
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
 type ExternalOperation struct {
+	ExistingArtifact    *DeliveryArtifact  `json:"existing_artifact,omitempty"`
 	PreparedDeployments []DeliverySnapshot `json:"prepared_deployments,omitempty"`
 	ParentID            string             `json:"parent_id,omitempty"`
 	ChildIDs            []string           `json:"child_ids,omitempty"`

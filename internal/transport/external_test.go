@@ -129,3 +129,46 @@ func TestDeployEndpointRejectsUnknownInput(t *testing.T) {
 		t.Fatal("invalid deployment reached application")
 	}
 }
+
+func TestExistingArtifactHTTPAndMCPDelegateSameCommand(t *testing.T) {
+	svc := &boundaryService{commands: make(chan domain.Command, 3), queries: make(chan [2]string, 1)}
+	server := httptest.NewServer(transport.New(svc, transport.Options{}))
+	defer server.Close()
+	command := domain.Command{Action: "deploy_existing_artifact", Actor: "agent/test", IntegrationID: "integration", Data: map[string]any{"environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact"}}
+	raw, _ := json.Marshal(command)
+	response, err := http.Post(server.URL+"/api/commands", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatal(response.StatusCode)
+	}
+	got := <-svc.commands
+	if !reflect.DeepEqual(command, got) {
+		t.Fatalf("HTTP differs: %+v", got)
+	}
+	ctx := context.Background()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "artifact-test", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: command})
+	if err != nil || result.IsError {
+		t.Fatalf("execute: %v %+v", err, result)
+	}
+	got = <-svc.commands
+	if !reflect.DeepEqual(command, got) {
+		t.Fatalf("MCP execute differs: %+v", got)
+	}
+	args := map[string]any{"actor": "agent/test", "integration_id": "integration", "environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact"}
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_existing_artifact", Arguments: args})
+	if err != nil || result.IsError {
+		t.Fatalf("named tool: %v %+v", err, result)
+	}
+	got = <-svc.commands
+	if !reflect.DeepEqual(command, got) {
+		t.Fatalf("MCP named differs: %+v", got)
+	}
+}
