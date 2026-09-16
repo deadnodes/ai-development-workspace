@@ -35,7 +35,7 @@ func New(service Service, options Options) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { v, e := service.State(r.Context()); respond(w, v, e) })
+	mux.HandleFunc("GET /api/state", stateSnapshot(service))
 	mux.HandleFunc("GET /api/statuses", func(w http.ResponseWriter, r *http.Request) { write(w, http.StatusOK, StatusSchema()) })
 	mux.HandleFunc("GET /api/schema", func(w http.ResponseWriter, r *http.Request) { write(w, http.StatusOK, CommandSchema()) })
 	mux.HandleFunc("GET /api/features/{id}/context", func(w http.ResponseWriter, r *http.Request) {

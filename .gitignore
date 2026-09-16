@@ -16,3 +16,5 @@ __pycache__/
 
 *.rcp.json.gz
 *.rcp.json.gz.sha256
+
+node_modules/

@@ -1,0 +1,1 @@
+{"private":true,"scripts":{"test:live":"node web/live-check.mjs"},"devDependencies":{"jsdom":"26.1.0"}}

@@ -78,3 +78,5 @@ Codex P1/P2 review comments can become persistent findings through MCP `sync_pul
 ## Shared testing, independent release
 
 Test selected features together on a versioned environment composition. Release selected ready integrations through main, then build production artifacts from pinned main commits. DEV composition images are not production promotion inputs. See [scenario and release design / implementation status](docs/TEST_AND_RELEASE_FLOW.md).
+
+Frontend verification uses test-only jsdom. Run `npm ci` once before `make check`; the shipped UI remains dependency-free plain JavaScript. See [live UI updates](docs/LIVE_UI.md).

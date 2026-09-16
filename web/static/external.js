@@ -5,7 +5,7 @@ function operationsView(){
  return `<div class="page-heading"><div><span class="eyebrow">EXECUTION HISTORY</span><h1>Operations & attention</h1><p class="muted">Provider actions, their evidence, and what needs a human or agent next.</p></div><button data-load-attention>Refresh attention</button></div><div id="attention-summary">${attentionView(attentionResults.get(productID))}</div>${operations.length?operations.slice().reverse().map(operationCard).join(''):'<p class="empty">No operations for this product. Configure providers and a DEV target to begin.</p>'}`;
 }
 function operationCard(op){
- return `<article class="panel"><div class="row-heading"><div><h2>${esc(op.kind||op.action||'Operation')}</h2><p class="meta">${esc(op.id)} · ${esc(op.actor)} · ${esc(date(op.updated_at||op.created_at))}</p></div><div>${badge(op.status||'unknown')} ${op.deployment_state?badge(op.deployment_state):''}</div></div><dl>${detail('Requested by',op.requested_by||op.actor)}${detail('Current step',op.current_step||op.phase)}${detail('Integration',op.integration_id)}${detail('Environment',op.environment_id)}${detail('Error / attention',op.detail||op.error||op.message)}${detail('Desired GitOps commit',op.gitops_result?.commit_sha||op.gitops_commit||op.desired_commit)}</dl>${(list(op.steps).length?op.steps:list(state.operation_steps).filter(s=>s.operation_id===op.id)).map(step=>`<div class="row"><div class="row-heading"><strong>${esc(step.name||step.phase||step.kind)}</strong>${badge(step.status||'pending')}</div><p>${esc(step.detail||step.message||step.error||'')}</p><details><summary>Step evidence</summary><pre>${esc(JSON.stringify(step,null,2))}</pre></details></div>`).join('')}<details><summary>Full persisted operation</summary><pre>${esc(JSON.stringify(op,null,2))}</pre></details></article>`;
+ return `<article data-live-key="operation-${esc(op.id)}" class="panel"><div class="row-heading"><div><h2>${esc(op.kind||op.action||'Operation')}</h2><p class="meta">${esc(op.id)} · ${esc(op.actor)} · ${esc(date(op.updated_at||op.created_at))}</p></div><div>${badge(op.status||'unknown')} ${op.deployment_state?badge(op.deployment_state):''}</div></div><dl>${detail('Requested by',op.requested_by||op.actor)}${detail('Current step',op.current_step||op.phase)}${detail('Integration',op.integration_id)}${detail('Environment',op.environment_id)}${detail('Error / attention',op.detail||op.error||op.message)}${detail('Desired GitOps commit',op.gitops_result?.commit_sha||op.gitops_commit||op.desired_commit)}</dl>${(list(op.steps).length?op.steps:list(state.operation_steps).filter(s=>s.operation_id===op.id)).map(step=>`<div class="row"><div class="row-heading"><strong>${esc(step.name||step.phase||step.kind)}</strong>${badge(step.status||'pending')}</div><p>${esc(step.detail||step.message||step.error||'')}</p><details><summary>Step evidence</summary><pre>${esc(JSON.stringify(step,null,2))}</pre></details></div>`).join('')}<details><summary>Full persisted operation</summary><pre>${esc(JSON.stringify(op,null,2))}</pre></details></article>`;
 }
 async function showProviderQuery(path,title){
  try{const result=await request(path);currentForm=null;$('#dialog-title').textContent=title;$('#form-help').textContent='Live application query. Unknown or pending observations are not proof of a completed deployment.';$('#fields').innerHTML=`<pre>${esc(JSON.stringify(result,null,2))}</pre>`;$('#form-error').textContent='';$('#save').hidden=true;$('#dialog').showModal();}catch(error){notice(error.message,true);}
@@ -78,22 +78,6 @@ function externalScopePanel(target){
  const relationships=productItems('system_relationships').filter(r=>list(scope?.relationship_ids).includes(r.id)),ids=new Set([...list(scope?.external_system_ids),...relationships.map(r=>r.external_system_id)]);
  return `<details><summary>Affected external systems (${ids.size})</summary>${list(state.external_systems).filter(s=>ids.has(s.id)).map(s=>`<h3>${esc(s.name)}</h3><p>${esc(s.description)}</p><dl>${detail('Interfaces',s.interfaces)}${detail('Contracts',s.contracts)}${detail('Contact',s.contact)}</dl>`).join('')||'<p class="muted">No external systems scoped to this work yet.</p>'}${relationships.map(r=>`<p>${badge(r.type)} ${esc(r.notes)}</p>`).join('')}${button('set_external_scope','Set external scope',target)}</details>`;
 }
-
-// Poll only the operations page while work is active. Never interrupt a dialog,
-// keyboard interaction, another route, or a hidden browser tab.
-let operationsPollInFlight=false,operationsPollFailed=false;
-function canPollOperations(){
- const active=document.activeElement;
- return featureID()==='operations'&&!document.hidden&&!$('#dialog').open&&!currentForm&&(!active||['BODY','MAIN','HTML'].includes(active.tagName))&&productItems('operations').some(op=>['PENDING','RUNNING','QUEUED','BUILDING'].includes(op.status));
-}
-async function pollOperations(){
- if(operationsPollInFlight||!canPollOperations())return;
- operationsPollInFlight=true;const productAtRequest=productID;
- try{const next=await request('/api/state');if(productID!==productAtRequest||!canPollOperations())return;const x=window.scrollX||0,y=window.scrollY||0;state=next;render();if(typeof window.scrollTo==='function')window.scrollTo(x,y);if(operationsPollFailed)notice('Connection restored. Operation state is current.');operationsPollFailed=false;}
- catch(error){if(!operationsPollFailed&&featureID()==='operations'){notice('Automatic operation refresh failed. Your displayed history is retained; use Refresh to retry.',true);operationsPollFailed=true;}}
- finally{operationsPollInFlight=false;}
-}
-if(typeof window.setInterval==='function')window.setInterval(pollOperations,5000);
 
 const attentionResults=new Map();
 function attentionView(items){
