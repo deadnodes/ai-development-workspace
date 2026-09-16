@@ -21,6 +21,22 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 	if in == nil {
 		return s.finish(ctx, op, token, "FAILED", "integration missing", nil)
 	}
+	automatic := op.RequestedBy == autoGitActor
+	if automatic && !autoGitEligible(&st, *in) {
+		return s.finish(ctx, op, token, "SUCCEEDED", "Automatic Git scope is no longer active", nil)
+	}
+	work := *in
+	work.PullRequests = append([]domain.PullRequest{}, in.PullRequests...)
+	in = &work
+	if automatic {
+		open := []domain.PullRequest{}
+		for _, p := range in.PullRequests {
+			if strings.EqualFold(p.Status, "open") || strings.EqualFold(p.Status, "draft") {
+				open = append(open, p)
+			}
+		}
+		in.PullRequests = open
+	}
 	branches := append([]domain.Branch{}, in.Branches...)
 	seen := map[string]bool{}
 	for _, b := range branches {
@@ -28,13 +44,51 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 	}
 	for _, r := range st.IntegrationRevisions {
 		key := r.RepositoryID + "/" + r.Branch
-		if r.IntegrationID == in.ID && !seen[key] {
+		if !automatic && r.IntegrationID == in.ID && !seen[key] {
 			branches = append(branches, domain.Branch{RepositoryID: r.RepositoryID, Name: r.Branch})
 			seen[key] = true
 		}
 	}
 	if len(branches) == 0 && len(in.PullRequests) == 0 {
 		return s.finish(ctx, op, token, "BLOCKED", "link a branch, pull request, or capture an integration revision first", nil)
+	}
+	if scoped, ok := s.provider.(delivery.ScopedGitObserver); ok {
+		for _, b := range branches {
+			binding := repositoryBinding(&st, b.RepositoryID)
+			if binding == nil || binding.ProductID != in.ProductID {
+				continue
+			}
+			conn, err := scopedConnection(&st, binding.ConnectionID, in.ProductID)
+			if err != nil {
+				return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+			}
+			found, err := scoped.DiscoverBranchPullRequests(ctx, conn.Config, repositoryLocator(&st, *binding), b.Name)
+			if err != nil {
+				return s.finish(ctx, op, token, "FAILED", "branch PR discovery failed: "+err.Error(), nil)
+			}
+			for _, p := range found {
+				if automatic {
+					closedKnown := false
+					for _, old := range integration(&st, in.ID).PullRequests {
+						if old.RepositoryID == b.RepositoryID && old.ID == strconv.Itoa(p.Number) && (strings.EqualFold(old.Status, "merged") || strings.EqualFold(old.Status, "closed")) {
+							closedKnown = true
+						}
+					}
+					if closedKnown {
+						continue
+					}
+				}
+				known := false
+				for _, old := range in.PullRequests {
+					if old.RepositoryID == b.RepositoryID && old.ID == strconv.Itoa(p.Number) {
+						known = true
+					}
+				}
+				if !known {
+					in.PullRequests = append(in.PullRequests, domain.PullRequest{RepositoryID: b.RepositoryID, ID: strconv.Itoa(p.Number), URL: p.URL, Status: strings.ToLower(p.State)})
+				}
+			}
+		}
 	}
 	prs := []GraphPullRequest{}
 	if len(in.PullRequests) > 0 {
@@ -75,17 +129,46 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 		if e != nil {
 			return s.finish(ctx, op, token, "BLOCKED", e.Error(), nil)
 		}
-		list, e := s.provider.Branches(ctx, conn.Config, repositoryLocator(&st, *binding))
-		if e != nil {
-			return s.finish(ctx, op, token, "FAILED", "branch observation failed: "+e.Error(), nil)
-		}
 		var head, main string
-		for _, v := range list {
-			if v.Name == b.Name {
-				head = v.SHA
+		if scoped, ok := s.provider.(delivery.ScopedGitObserver); ok {
+			v, err := scoped.ObserveBranch(ctx, conn.Config, repositoryLocator(&st, *binding), b.Name)
+			if err != nil {
+				closed := false
+				for _, p := range prs {
+					if p.RepositoryID == b.RepositoryID && p.SourceBranch == b.Name && (p.Status == "MERGED" || p.Status == "CLOSED") {
+						closed = true
+					}
+				}
+				if closed {
+					continue
+				}
+				return s.finish(ctx, op, token, "FAILED", "branch observation failed: "+err.Error(), nil)
 			}
-			if v.Name == configuredBase(*binding) {
-				main = v.SHA
+			head = v.SHA
+			if b.Name == configuredBase(*binding) {
+				main = head
+			} else {
+				base, err := scoped.ObserveBranch(ctx, conn.Config, repositoryLocator(&st, *binding), configuredBase(*binding))
+				if err != nil {
+					return s.finish(ctx, op, token, "FAILED", "base observation failed: "+err.Error(), nil)
+				}
+				main = base.SHA
+			}
+		} else {
+			if automatic {
+				return s.finish(ctx, op, token, "BLOCKED", "provider lacks scoped branch reads", nil)
+			}
+			list, err := s.provider.Branches(ctx, conn.Config, repositoryLocator(&st, *binding))
+			if err != nil {
+				return s.finish(ctx, op, token, "FAILED", "branch observation failed: "+err.Error(), nil)
+			}
+			for _, v := range list {
+				if v.Name == b.Name {
+					head = v.SHA
+				}
+				if v.Name == configuredBase(*binding) {
+					main = v.SHA
+				}
 			}
 		}
 		if head == "" || main == "" {
@@ -135,6 +218,18 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 				return invalid("integration removed during observation")
 			}
 			if live.Status != "released" {
+				for _, p := range prs {
+					known := false
+					for _, old := range live.PullRequests {
+						if old.RepositoryID == p.RepositoryID && old.ID == p.ID {
+							known = true
+						}
+					}
+					if !known {
+						live.PullRequests = append(live.PullRequests, domain.PullRequest{RepositoryID: p.RepositoryID, ID: p.ID, URL: p.URL, Status: strings.ToLower(p.Status)})
+					}
+				}
+
 				for n := range live.PullRequests {
 					for _, p := range prs {
 						if live.PullRequests[n].RepositoryID == p.RepositoryID && live.PullRequests[n].ID == p.ID && live.PullRequests[n].URL == p.URL {

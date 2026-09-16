@@ -106,6 +106,22 @@ func run() error {
 		}()
 		defer func() { stop(); <-observerDone }()
 	}
+	gitInterval := 2 * time.Minute
+	if raw := os.Getenv("RCP_GIT_SYNC_INTERVAL"); raw != "" {
+		var err error
+		gitInterval, err = time.ParseDuration(raw)
+		if err != nil || gitInterval < 0 || (gitInterval > 0 && gitInterval < 30*time.Second) {
+			return fmt.Errorf("RCP_GIT_SYNC_INTERVAL must be 0 or a duration of at least 30s")
+		}
+	}
+	gitDone := make(chan struct{})
+	go func() {
+		defer close(gitDone)
+		if err := service.RunGitScheduler(ctx, gitInterval); err != nil && ctx.Err() == nil {
+			slog.Error("Git synchronization scheduler stopped", "error", err)
+		}
+	}()
+	defer func() { stop(); <-gitDone }()
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)

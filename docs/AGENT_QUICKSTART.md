@@ -206,3 +206,13 @@ then `get_project_context` and `get_local_git_state`. Use `plan_local_git_sync` 
 prepare FETCH/FAST_FORWARD, execute Git in the agent's trusted host workspace,
 and report with `record_local_git_sync`. See [LOCAL_GIT.md](LOCAL_GIT.md).
 The server can remain mounted read-only; it never needs your host SSH credentials.
+
+## Automatic scoped Git synchronization
+
+The server polls active Git work by default every **2 minutes**, independently of browser sessions and agent reports. Set `RCP_GIT_SYNC_INTERVAL=0` to disable, or a Go duration of at least `30s` to change it (restart required).
+
+The agent must first bind the real repository/branch to its Integration and set an owner and active status (`working`, `implemented`, `verifying`). Only those branches plus their configured base are read. Existing open/draft PRs are also followed while their Feature remains active, including review-ready integrations. Merely registering a repository/local checkout does not subscribe its entire history. Completed/archived Features and released Integrations are excluded. Captured historical revision branches are not automatically polled.
+
+Pushes update observed HEAD/divergence and capture new revisions. The latest ten PRs from each explicitly bound branch are discovered; linked open PRs are read directly until merged/closed. Discovery is bounded, not a complete historical import. GitHub queries are read-only. The server does not scan all organization repositories/branches or infer an unregistered agent's working branch. Local unpushed changes remain local and are not visible to the GitHub poller.
+
+Requests become persistent `REFRESH_GIT` operations attributed to `system/git-sync`, visible in Operations & attention. Pending/running requests suppress duplicates. Failed reads retry after five polling intervals; at most five integrations are queued per scheduler pass. Queue/network latency can add to the interval. Existing page polling updates the graph after observations are persisted. GitHub webhooks are not required; this is server-side polling, not instant event delivery. Git observations do not themselves mark an Integration released or prove Kubernetes deployment.
