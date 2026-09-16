@@ -4,6 +4,14 @@ Go modular monolith for development intent, integrations, verification, handoffs
 
 **Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Start there for MCP connection, exact setup commands, GitHub App credentials, repository attachment and the first DEV operation.
 
+## Product-independent by design
+
+A fresh instance contains no products or company configuration. Add any number of unrelated Products, each with its own components, repository selections, environments and external dependencies. Provider connections and the Repository Registry are instance-level; Products receive explicit access and attachments. No organization, repository name, team or GitOps layout is built into the runtime.
+
+GitHub is the first implemented provider stack, not a product identity. The current deployment executor supports explicit DEV policies; arbitrary environment names are supported by the domain. Credentials and instance data stay outside source control. The optional `scripts/dogfood.mjs` seeds historical context for this project only and never runs automatically.
+
+See [contribution and publication notes](CONTRIBUTING.md).
+
 ## Start
 
 Requires Docker with Compose. From the repository root:

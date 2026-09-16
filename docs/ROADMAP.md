@@ -1,6 +1,6 @@
 # Incremental delivery and compatibility
 
-This is an architectural implementation sequence, not a mutable progress log. Read application Features `rcp-lifecycle` and `rcp-github-dev` for actual work, decisions, verification and handoffs. The initial GitHub execution implementation is documented in [GITHUB_DEV.md](GITHUB_DEV.md); live acceptance remains distinct from implementation.
+This is an architectural implementation sequence, not a mutable progress log. Discover the relevant Feature in your configured instance for actual work, decisions, verification and handoffs. The initial GitHub execution implementation is documented in [GITHUB_DEV.md](GITHUB_DEV.md); live acceptance remains distinct from implementation.
 
 ## Existing phases
 

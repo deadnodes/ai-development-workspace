@@ -6,3 +6,10 @@ node_modules/
 
 .secrets/
 __pycache__/
+
+# Instance-local configuration, backups and credentials
+.local/
+.env.*
+*.pem
+*.key
+*.dump

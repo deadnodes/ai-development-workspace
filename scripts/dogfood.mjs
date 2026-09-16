@@ -1,4 +1,5 @@
-// Explicit, repeatable local dogfooding bootstrap. Never runs at app startup.
+// Optional self-hosted project example. Never runs at app startup.
+// Seeds historical bootstrap context, not the current implementation status.
 const endpoint = process.env.RC_URL || 'http://127.0.0.1:8090';
 const headers = { 'Content-Type': 'application/json' };
 if (process.env.RC_TOKEN) headers.Authorization = `Bearer ${process.env.RC_TOKEN}`;
@@ -26,7 +27,7 @@ await create('create_feature', 'rcp-bootstrap', { product_id: 'rcp' }, {
  requirements: ['One Go binary and PostgreSQL', 'Shared business logic for HTTP, UI and MCP', 'Append-only audit and evidence', 'Resume without previous conversation'],
  constraints: ['No automatic production changes', 'No distributed event sourcing', 'Keep the first version a modular monolith'],
  context: 'Architecture and schema rationale: docs/ARCHITECTURE.md and docs/CONTRACT.md. This feature is now the project development-state authority.',
- owner: 'human/vlad',
+ owner: 'human/maintainer',
 });
 await create('create_integration', 'rcp-core', { feature_id: 'rcp-bootstrap' }, {
  title: 'INT-01 · Core vertical slice', objective: 'Create, work, verify, resolve findings, complete and hand off through durable shared application state.',

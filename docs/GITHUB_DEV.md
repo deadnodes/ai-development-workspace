@@ -37,7 +37,7 @@ The workflow probes the registry first, verifies the revision label before reuse
 {
   "operation_id": "operation-id",
   "source_sha": "full-source-sha",
-  "image_repository": "ghcr.io/deadnodes/component",
+  "image_repository": "ghcr.io/example/component",
   "image_tag": "control-plane-tag",
   "digest": "sha256:64-lowercase-hex-characters",
   "available": true,
@@ -57,7 +57,7 @@ The Control Plane retains original artifact/provenance records when an image goe
 
 Use a configured DEV environment and explicit direct-commit policy. The repository role must be GITOPS and all referenced objects must belong to the Product. The requested source, workflow, mapping and artifact are recorded with the operation so edits to configuration cannot silently change an in-flight deployment.
 
-The real DeadNodes target uses a Flux HelmRelease in `DeadNodes/flux`, for example `clusters/platform-dev/custom-resources/lp-dev/pp-console.yaml`. Its image configuration is `spec.values.image.repository` plus `spec.values.image.tag`. The existing chart renders `repository:tag`; digest pinning therefore uses `tag: rcp@sha256:…`, yielding the valid immutable image reference `repository:rcp@sha256:…`. Adding an unused `image.digest` field would not deploy the intended image and is not sufficient validation.
+For a Flux HelmRelease, a configurable path could be `environments/dev/backend.yaml` in your GitOps repository. The supported alternative image mapping is `spec.values.image.repository` plus `spec.values.image.tag`. When the chart renders `repository:tag`, digest pinning therefore uses `tag: rcp@sha256:…`, yielding the valid immutable image reference `repository:rcp@sha256:…`. Adding an unused `image.digest` field would not deploy the intended image and is not sufficient validation.
 
 The adapter supports a bounded image mapping, checks the existing Git head/blob and changes only the configured image values. GitHub Contents API enforces atomic expected-blob-SHA comparison; branch head is a preflight check, not an atomic branch lock. An intervening edit of that file fails the write; unrelated concurrent file changes are preserved. It never force-pushes. The commit carries operation correlation for audit/recovery. No Kubernetes object is patched directly.
 

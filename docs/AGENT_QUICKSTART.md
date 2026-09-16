@@ -35,7 +35,7 @@ url: http://127.0.0.1:8090/mcp
 
 URL должен быть доступен из процесса агента: его `127.0.0.1` может относиться к другой машине/контейнеру. Для удалённого агента используй SSH-туннель к машине Control Plane. Если сервер настроен с `RC_TOKEN`, передавай `Authorization: Bearer <token>`. Стандартный Compose запускает локальный сервер без токена; переменная из shell автоматически в контейнер не передаётся.
 
-Первый вызов — `get_state {}`. Найди нужную Feature и вызови `resume {"feature_id":"…"}`. Для работы над самим Control Plane текущая Feature — `rcp-github-dev`, если она присутствует в состоянии. На чистой БД её нет; сначала создай Product, Feature и Integrations.
+Первый вызов — `get_state {}`. Найди нужную Feature и вызови `resume {"feature_id":"…"}`. Не предполагай фиксированные Product/Feature ID. На чистой БД сначала создай Product, Feature и Integrations.
 
 Основные MCP-вызовы:
 
@@ -137,7 +137,7 @@ image:
 {"action":"configure_environment","actor":"agent/setup","product_id":"PRODUCT_ID","data":{"environment_id":"ENVIRONMENT_ID","application_id":"APPLICATION_ID","connection_id":"CONNECTION_ID","repository_id":"GITOPS_ID","purpose":"DEV","ref":"main","path":"environments/dev/backend.yaml","image_field":"image.repository","digest_field":"image.digest","allow_deploy":true}}
 ```
 
-Этот файл должен реально использоваться вашим GitOps/Flux pipeline. Для существующего DeadNodes HelmRelease используются `image_field: spec.values.image.repository` и `digest_field: spec.values.image.tag`; подробности и фактический DEV путь — в [GITHUB_DEV.md](GITHUB_DEV.md). Не добавляй неиспользуемый digest в chart.
+Этот файл должен реально использоваться вашим GitOps/Flux pipeline. Для HelmRelease с chart, использующим image tag, используются `image_field: spec.values.image.repository` и `digest_field: spec.values.image.tag`; подробности поддерживаемого формата — в [GITHUB_DEV.md](GITHUB_DEV.md). Не добавляй неиспользуемый digest в chart.
 
 ## 5. Первый DEV-прогон
 

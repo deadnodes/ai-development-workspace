@@ -1,14 +1,11 @@
 # Bootstrap scaffold retired
 
-Development state is now tracked inside Release Control Plane.
+Development progress belongs in the configured Control Plane instance, not this file.
 
-- Product: `rcp` — Release Control Plane
-- Feature: `rcp-bootstrap` — RCP-001 · First usable control plane
-- Migration task: `rcp-migrate-state` — INT-02 · Migrate bootstrap development state
-- UI: http://127.0.0.1:8090/#rcp-bootstrap
-- MCP: `resume` with `{"feature_id":"rcp-bootstrap"}`
-- HTTP: `GET /api/features/rcp-bootstrap/context`
+1. Start or recover the instance: `docker compose --profile app up -d --build`.
+2. Call MCP `get_state` and select the relevant Product and Feature.
+3. Call `resume` with that Feature ID; follow its latest structured handoff.
 
-Do not add ongoing progress here. Use integrations, decisions, findings and structured handoffs in the application. Architecture and contract documentation remain versioned in Git.
+There is no mandatory Product, Feature ID, organization or deployment topology. A fresh database is empty. Optionally run `node scripts/dogfood.mjs` to seed historical bootstrap context for developing Release Control Plane itself; it is not required for using the application and is not a backup or current release status.
 
-Recovery: `docker compose --profile app up -d --build` starts the app and its persistent PostgreSQL volume. If starting with a new empty database, `node scripts/dogfood.mjs` creates initial tracked context; it is an explicit idempotent bootstrap, not a replacement for a database backup. Back up the named PostgreSQL volume or use `pg_dump` to preserve subsequent development history.
+Back up PostgreSQL to preserve your instance's history. Keep database dumps, credentials and private product configuration outside the public repository. See [agent quickstart](AGENT_QUICKSTART.md). Do not add ongoing progress here.
