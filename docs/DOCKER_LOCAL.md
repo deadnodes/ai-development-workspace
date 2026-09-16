@@ -1,5 +1,7 @@
 # Local Docker startup for agents
 
+Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
+
 Prerequisites: running Docker engine and Docker Compose with `up --wait` support.
 Run from this repository. Go and Node are not required to build/run the server:
 

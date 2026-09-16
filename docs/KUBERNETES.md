@@ -1,5 +1,7 @@
 # Kubernetes: отдельный Control Plane на продукт
 
+Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
+
 Поддерживаемая схема установки:
 
 | | Product A | Product B |

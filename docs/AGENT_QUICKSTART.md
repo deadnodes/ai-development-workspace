@@ -1,5 +1,7 @@
 # Инструкция для агента
 
+Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
+
 Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](DOCKER_LOCAL.md).
 
 Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](LOCAL_WORKSPACE.md).
@@ -40,6 +42,8 @@ docker compose --profile app down
 ```
 
 Команда устанавливает проектное подключение Codex, `.agents/skills/rcp-handoff/SKILL.md`, binding `.release-control.json` и управляемый блок в `AGENTS.md`. Для защищённого сервера добавь `--token-env RC_TOKEN`; значение токена не записывается в файлы. Скилл доступен также через MCP `get_agent_skill {"name":"rcp-handoff"}` и ресурс `rcp://skills/rcp-handoff/SKILL.md`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
+
+Автор действия: UI автоматически пишет `human/local`; API/MCP по умолчанию `agent`. Поле `actor` необязательно, но можно передать имя конкретного агента для истории. Это атрибуция, не авторизация.
 
 ## 2. Подключение агента
 

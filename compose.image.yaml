@@ -1,0 +1,4 @@
+# Use with compose.yaml. --no-build ensures the published image is used.
+services:
+  app:
+    image: ${RCP_IMAGE:?Set RCP_IMAGE to a published image digest or sha tag}

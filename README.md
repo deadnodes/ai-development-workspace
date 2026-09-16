@@ -1,5 +1,7 @@
 # AI Development Workspace
 
+Service installation maintenance: [updates, daily checks, backups and rollback](docs/UPDATES.md).
+
 Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](docs/DOCKER_LOCAL.md).
 
 Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](docs/LOCAL_WORKSPACE.md).
@@ -49,7 +51,7 @@ For local development, use `make run` (Go 1.25+), optionally setting `RCP_DATA_P
 
 Implemented: shared Repository Registry, Product/Feature/Integration scopes, unmanaged external dependencies, GitHub App authentication, Git observation, asynchronous Actions/GHCR operations and explicit DEV GitOps changes. The server does not use the local `gh` token. GitHub credentials and workflow/mapping configuration are required.
 
-A successful GitOps operation records desired state and remains pending reconciliation. Flux/Kubernetes runtime observation, automatic branch composition and production deployment are not implemented. Local tests are not evidence of a successful live deployment.
+A successful GitOps operation records desired state and remains pending reconciliation. Read-only Kubernetes API observation (kubeconfig or in-cluster ServiceAccount), configured Flux observation, managed integration branches and release workflows have separate policies and evidence. GitOps success alone is not runtime health; local tests are not evidence of a successful live deployment. See the delivery and runtime guides for configuration and limits.
 
 ## References
 

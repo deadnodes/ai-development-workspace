@@ -1,5 +1,7 @@
 # Connect a project to the Control Plane
 
+Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
+
 Run once in the project that agents will edit:
 
 ```sh
