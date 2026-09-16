@@ -67,3 +67,18 @@ try{
 const offline=browser();
 try{await tick();offline.pending.shift().resolve({ok:false,json:async()=>({error:'No graph'})});await tick();assert.match(offline.text(),/Graph unavailable/);offline.click('[data-graph-refresh]');offline.pending.shift().resolve({ok:true,json:async()=>fixture});await tick();assert.match(offline.text(),/Repositories/);assert.doesNotMatch(offline.text(),/Graph unavailable/);}finally{offline.dom.window.close();}
 console.log('Feature graph: API loading/retry, navigation races, repository/PR filters, evidence separation, slices and safe links passed.');
+const runtimeBrowser=browser();
+try{
+ await tick();
+ const enriched=structuredClone(fixture);
+ enriched.repositories[0].runtime=[{environment:'DEV',component:'api',context:'cluster',workload:'ns/app',health:'HEALTHY',observed_at:'2026-09-16T12:00:00Z',images:['ghcr.io/org/api:dev-12345678'],matches:[{branch:'dev (build commit) <img src=x onerror=alert(1)>',commit:sha,evidence:'tag_sha_hint',pod:'pod'}]}];
+ runtimeBrowser.pending.shift().resolve({ok:true,json:async()=>enriched});await tick();
+ assert.match(runtimeBrowser.text(),/SHA tag match · hint/);
+ assert.equal(runtimeBrowser.w.document.querySelector('#main [onerror]'),null);
+ runtimeBrowser.click('[data-graph-repo="api"]');
+ assert.match(runtimeBrowser.text(),/Runtime ↔ branch evidence/);
+ assert.match(runtimeBrowser.text(),/not necessarily current branch HEADs/);
+ assert.match(runtimeBrowser.text(),/Tag SHA hint/);
+ assert.doesNotMatch(runtimeBrowser.text(),/Digest provenance/);
+}finally{runtimeBrowser.dom.window.close();}
+console.log('Runtime graph matches distinguish tag hints from provenance and escape remote labels.');

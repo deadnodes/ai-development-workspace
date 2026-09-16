@@ -100,3 +100,9 @@ Selection rules:
 For workloads in another namespace, create the same Role **in that target namespace** and a RoleBinding there whose subject is `release-control-runtime` in the Control Plane's namespace. Do not use a ClusterRoleBinding merely to observe one namespace. The optional Flux observation additionally needs a Role in its namespace granting `get` on `kustomizations` in API group `kustomize.toolkit.fluxcd.io`, ideally restricted with `resourceNames` to configured Kustomizations, and a matching RoleBinding. No Secrets, exec, writes, or application data permissions are required.
 
 Render for review with `kubectl kustomize deploy/overlays/in-cluster` (this is an operator-side manifest tool; the service never invokes it). Apply through your existing GitOps deployment process after filling configuration. The base deployment still disables ServiceAccount token mounting unless this overlay is selected.
+
+## Feature delivery graph: runtime/source matches
+
+The graph's repository lanes show the latest snapshot per environment/component/context/workload/container, including observations made outside Control Plane deployment operations. New persisted runtime snapshots invalidate the graph through the existing UI state polling; Refresh graph only rereads stored evidence, while Sync Kubernetes requests a new cluster read.
+
+Source labels distinguish observed branch HEAD, recorded PR HEAD/merge commit and Actions build commit. `Digest provenance` requires matching image repository, runtime imageID digest and a scoped artifact record with source commit. `Tag SHA hint` only matches an unambiguous 7–40 hex SHA suffix against known full commits; it does not establish provenance, current branch HEAD or commit ancestry. Missing matches never imply the feature is absent. Multiple running versions and workloads are retained, and timestamps identify stale evidence. Historical reports remain available in Source slices/Environments.

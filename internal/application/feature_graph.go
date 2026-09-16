@@ -23,6 +23,7 @@ type FeatureGraph struct {
 	ReportedSnapshots []GraphReportedSnapshot      `json:"reported_snapshots"`
 }
 type GraphRepository struct {
+	Runtime      []GraphRuntime     `json:"runtime"`
 	Repository   domain.Repository  `json:"repository"`
 	Integrations []string           `json:"integrations"`
 	Branches     []GraphBranch      `json:"branches"`
@@ -392,6 +393,7 @@ func featureGraph(st domain.State, id string) (*FeatureGraph, error) {
 		}
 		return g.ReportedSnapshots[i].ReportedAt < g.ReportedSnapshots[j].ReportedAt
 	})
+	attachGraphRuntime(&st, g)
 	return g, nil
 }
 func graphContains(xs []string, s string) bool {
