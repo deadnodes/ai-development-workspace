@@ -1,6 +1,8 @@
 # Release Control Plane
 
-Go modular monolith for development intent, integrations, verification, handoffs and DEV delivery. One process serves the embedded UI, HTTP API and MCP; PostgreSQL stores state and audit history.
+A development metastore and control plane: intent, integrations, commit provenance, verification, agent context and delivery orchestration. It does not edit managed application source code or business data. See [responsibility boundary](docs/RESPONSIBILITY_BOUNDARY.md).
+
+Go modular monolith. One process serves the embedded UI, HTTP API and MCP; PostgreSQL stores state and audit history.
 
 **Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Start there for MCP connection, exact setup commands, GitHub App credentials, repository attachment and the first DEV operation.
 

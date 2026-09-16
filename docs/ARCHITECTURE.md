@@ -1,8 +1,10 @@
 # Release Control Plane — evolving architecture
 
-Status: evolving architecture, 2026-09-16. Revision 3 corrects repository ownership and adds unmanaged dependency context. This evolves the existing Go modular monolith; it does not replace the implemented MVP. Authoritative engineering context is in application Feature `rcp-lifecycle`. See [implementation boundaries and rollout](ROADMAP.md), [command contract](CONTRACT.md), and [composition semantics](ENVIRONMENT_COMPOSITION.md).
+Status: evolving architecture, 2026-09-16. Revision 3 corrects repository ownership and adds unmanaged dependency context. This evolves the existing Go modular monolith; it does not replace the implemented MVP. Discover authoritative engineering context in the configured instance. See [implementation boundaries and rollout](ROADMAP.md), [command contract](CONTRACT.md), and [composition semantics](ENVIRONMENT_COMPOSITION.md).
 
 ## Responsibility
+
+The service is a development metastore and control plane, not an application source editor or business-data processor. See [responsibility boundary](RESPONSIBILITY_BOUNDARY.md) for the agent/executor split and existing GitOps write boundary.
 
 The Control Plane owns semantic development state, desired source/environment compositions, orchestration plans, policy decisions, provenance and audit evidence. It coordinates external Git, CI, registries and GitOps systems. It is not a Git server, container registry, CI runner or Kubernetes operator.
 

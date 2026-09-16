@@ -162,3 +162,5 @@ TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/rele
 Конфигурацию проекта изменяй через API/MCP: БД — источник истины. Для Git-зеркала: `get_product_configuration {"product_id":"…"}` или `node scripts/export-configuration.mjs PRODUCT_ID OUTPUT.json`. Правила и границы экспорта: [CONFIGURATION_AUTHORITY.md](CONFIGURATION_AUTHORITY.md).
 
 Полный перенос истории: MCP `create_backup` / `restore_backup` или `scripts/backup.mjs`. Архив сжимает и распаковывает сервер. Целевой экземпляр должен быть пустым. [Инструкция по backup](BACKUP.md).
+
+Граница ответственности: Control Plane — metastore и control plane. Изменяй исходники во внешней рабочей среде, а в сервис записывай контекст, коммиты и evidence. Не используй его для доступа к бизнес-данным или произвольного выполнения кода. [Подробности](RESPONSIBILITY_BOUNDARY.md).
