@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const elements=new Map(),listeners=new Map();
 const element=selector=>({value:'',classList:{toggle(){},remove(){}},addEventListener(type,handler){listeners.set(`${selector}:${type}`,handler);},showModal(){this.open=true;},close(){this.open=false;}});
-const sandbox={console,URL,Date,JSON,String,Array,Set,Number,Object,Error,Map,encodeURIComponent,decodeURIComponent,
+const sandbox={console,URLSearchParams,URL,Date,JSON,String,Array,Set,Number,Object,Error,Map,encodeURIComponent,decodeURIComponent,
  document:{querySelector(selector){if(!elements.has(selector))elements.set(selector,element(selector));return elements.get(selector);},addEventListener(){}},
- location:{hash:''},localStorage:{getItem(){return null;},setItem(){}},sessionStorage:{getItem(){return null;},setItem(){}},window:{addEventListener(){}},fetch:()=>new Promise(()=>{})};
+ location:{hash:'',href:'http://localhost/',search:''},localStorage:{getItem(){return null;},setItem(){}},sessionStorage:{getItem(){return null;},setItem(){}},window:{addEventListener(){}},fetch:()=>new Promise(()=>{})};
+sandbox.history={replaceState(_state,_title,url){const u=new URL(url);Object.assign(sandbox.location,{href:u.href,search:u.search,hash:u.hash});},pushState(_state,_title,url){this.replaceState(_state,_title,url);}};
 vm.createContext(sandbox);
 for(const file of ['app','external','flow','library','workspace'])vm.runInContext(fs.readFileSync(new URL(`./static/${file}.js`,import.meta.url),'utf8'),sandbox);
 const run=source=>vm.runInContext(source,sandbox);

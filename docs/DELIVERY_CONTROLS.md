@@ -41,3 +41,8 @@ application_id, environment_id, revision_id and artifact_id. The equivalent
 `execute` action uses top-level integration_id and puts the last four IDs in data.
 For private GHCR, current report evidence must be no more than ten minutes old;
 expired proof blocks this no-build operation instead of dispatching CI silently.
+
+Browser links include `?product=PRODUCT_ID` before the section hash, for example
+`/?product=deadnodes#delivery`. Share the complete address. Product selection
+preserves the Delivery/Operations section; browser Back/Forward restores the product.
+Legacy links acquire an explicit product after opening.

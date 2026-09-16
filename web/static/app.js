@@ -7,7 +7,20 @@ const badge = v => `<span class="tag ${esc(v)}">${esc(v || 'unknown')}</span>`;
 const items = v => list(v).length ? `<ul>${v.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>` : '<span class="muted">None recorded</span>';
 const detail = (label,v) => v && (!Array.isArray(v)||v.length) ? `<dt>${esc(label)}</dt><dd>${Array.isArray(v)?items(v):esc(v)}</dd>` : '';
 const button = (action,label,attrs={}) => `<button data-action="${action}" ${Object.entries(attrs).map(([k,v])=>`data-${k}="${esc(v)}"`).join(' ')}>${esc(label)}</button>`;
-let state = {}, productID = localStorage.getItem('rc-product') || '', currentForm = null;
+const urlProduct = () => new URLSearchParams(location.search || '').get('product');
+let state = {}, productID = urlProduct() || localStorage.getItem('rc-product') || '', currentForm = null;
+function persistProductRoute(push=false,hash=location.hash){
+ const url=new URL(location.href);
+ if(productID)url.searchParams.set('product',productID);else url.searchParams.delete('product');
+ url.hash=hash;
+ if(url.href!==location.href)history[push?'pushState':'replaceState'](null,'',url);
+ localStorage.setItem('rc-product',productID);
+}
+function restoreProductRoute(){
+ productID=urlProduct() || localStorage.getItem('rc-product') || '';
+ const f=selectedFeature();if(f)productID=f.product_id;
+ render();
+}
 const featureID = () => decodeURIComponent(location.hash.slice(1));
 const selectedFeature = () => list(state.features).find(f=>f.id===featureID());
 const inFeature = name => list(state[name]).filter(x=>x.feature_id===featureID());
@@ -38,6 +51,9 @@ async function refresh(){
  finally{refreshInFlight--;}
 }
 function render(preserve=false){
+ const linkedProduct=urlProduct();if(linkedProduct!==null)productID=linkedProduct;
+ const linkedFeature=selectedFeature();if(linkedFeature)productID=linkedFeature.product_id;
+ persistProductRoute();
  if(!preserve&&typeof invalidateLive==='function')invalidateLive();
  const paint=(node,html)=>{if(preserve&&typeof patchLiveHTML==='function')patchLiveHTML(node,html);else node.innerHTML=html;};
  if(document.activeElement!==$('#product')){paint($('#product'),list(state.products).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')||'<option>No products yet</option>');$('#product').value=productID;}
@@ -108,14 +124,15 @@ $('#command-form').onsubmit=async e=>{e.preventDefault();if(!currentForm)return;
  if(Object.hasOwn(data,'integration_id')){if(data.integration_id)command.integration_id=data.integration_id;delete data.integration_id;}
  if(typeof transformExternalCommand==='function')transformExternalCommand(command,fd,attrs);
  if(attrs.gate)command.gate_id=attrs.gate;if(attrs.check)command.check_id=attrs.check;if(attrs.result)command.result_id=attrs.result;if(attrs.id)command.id=attrs.id;if(typeof transformFlowCommand==='function')transformFlowCommand(command,fd,attrs,e.target);if(typeof transformLibraryCommand==='function')transformLibraryCommand(command);
- $('#save').disabled=true;$('#save').textContent='Saving…';const result=await request('/api/commands',command);sessionStorage.setItem('rc-actor',actor);closeDialog();if(action==='create_product'){productID=result.id;location.hash='';localStorage.setItem('rc-product',productID);}if(action==='create_feature')location.hash=encodeURIComponent(result.id);await refresh();notice('Saved. Shared context and activity history are up to date.');
+ $('#save').disabled=true;$('#save').textContent='Saving…';const result=await request('/api/commands',command);sessionStorage.setItem('rc-actor',actor);closeDialog();if(action==='create_product'){productID=result.id;persistProductRoute(true,'');}if(action==='create_feature')location.hash=encodeURIComponent(result.id);await refresh();notice('Saved. Shared context and activity history are up to date.');
  }catch(error){$('#form-error').textContent=error.message;}finally{$('#save').disabled=false;$('#save').textContent=forms[action].label;}};
-$('#product').onchange=e=>{productID=e.target.value;localStorage.setItem('rc-product',productID);location.hash='';render();};
+$('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['delivery','operations'].includes(featureID())?location.hash:'');render();};
 $('#refresh').onclick=refresh;
 $('.skip').onclick=e=>{e.preventDefault();$('#main').focus();};
 $('#identity').onclick=()=>{currentForm=null;$('#dialog-title').textContent='Identity & access';$('#form-help').textContent='Credentials are kept only for this browser tab. The actor is attribution, not an authenticated user account.';$('#fields').innerHTML=inputField(field('actor','Default actor'),sessionStorage.getItem('rc-actor')||'human/local')+inputField(field('token','Optional server access token','password'),sessionStorage.getItem('rc-token')||'')+'<button type="button" class="primary" id="save-identity">Save identity</button>';$('#save').hidden=true;$('#form-error').textContent='';$('#dialog').showModal();$('#save-identity').onclick=()=>{sessionStorage.setItem('rc-actor',$('#input-actor').value);sessionStorage.setItem('rc-token',$('#input-token').value);closeDialog();refresh();};};
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(b){openForm(b.dataset.action,b.dataset);return;}if(e.target.closest('[data-resume]')){try{const context=await request(`/api/features/${encodeURIComponent(featureID())}/context`);currentForm=null;$('#dialog-title').textContent='Agent resume context';$('#form-help').textContent='This deterministic context is also available to coding agents through MCP resume.';$('#fields').innerHTML=`<pre>${esc(JSON.stringify(context,null,2))}</pre>`;$('#form-error').textContent='';$('#save').hidden=true;$('#dialog').showModal();}catch(error){notice(error.message,true);}}});
-window.addEventListener('hashchange',()=>{const f=selectedFeature();if(f)productID=f.product_id;render();});
+window.addEventListener('hashchange',restoreProductRoute);
+window.addEventListener('popstate',restoreProductRoute);
 refresh();
 
 function applicationView(xs) {

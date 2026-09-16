@@ -22,6 +22,7 @@ check:
 	node web/check.mjs
 	node web/workspace-check.mjs
 	node web/live-check.mjs
+	node web/routes-check.mjs
 	python3 -m unittest discover -s examples/github-actions -p 'test_*.py'
 	go test -race ./...
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server

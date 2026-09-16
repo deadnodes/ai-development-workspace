@@ -4,10 +4,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const element = () => ({value:'',dataset:{},classList:{toggle(){}},addEventListener(){},showModal(){},close(){}});
 const elements = new Map();
-const sandbox = {console, URL, Date, JSON, String, Array, Set, Number, Object, Error,
+const sandbox = {console, URLSearchParams, URL, Date, JSON, String, Array, Set, Number, Object, Error,
  document:{querySelector(selector){if(!elements.has(selector))elements.set(selector,element());return elements.get(selector);},addEventListener(){}},
- location:{hash:'#f'},localStorage:{getItem(){return null;},setItem(){}},sessionStorage:{getItem(){return null;},setItem(){}},
+ location:{hash:'#f',href:'http://localhost/#f',search:''},localStorage:{getItem(){return null;},setItem(){}},sessionStorage:{getItem(){return null;},setItem(){}},
  window:{addEventListener(){}},fetch:()=>new Promise(()=>{})};
+sandbox.history={replaceState(_state,_title,url){const u=new URL(url);Object.assign(sandbox.location,{href:u.href,search:u.search,hash:u.hash});},pushState(_state,_title,url){this.replaceState(_state,_title,url);}};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(new URL('./static/app.js',import.meta.url),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(new URL('./static/external.js',import.meta.url),'utf8'),sandbox);
