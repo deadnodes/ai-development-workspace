@@ -170,6 +170,7 @@ type Composition struct {
 	EnvironmentSnapshot  Environment            `json:"environment_snapshot"`
 }
 type Repository struct {
+	RegisteredRepositoryID string `json:"registered_repository_id,omitempty"`
 	Meta
 	Name     string `json:"name"`
 	URL      string `json:"url"`
@@ -195,25 +196,39 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
-	Applications         []Application         `json:"applications"`
-	IntegrationRevisions []IntegrationRevision `json:"integration_revisions"`
-	Compositions         []Composition         `json:"compositions"`
-	Products             []Product             `json:"products"`
-	Features             []Feature             `json:"features"`
-	Integrations         []Integration         `json:"integrations"`
-	Gates                []Gate                `json:"gates"`
-	Checks               []Check               `json:"checks"`
-	Results              []CheckResult         `json:"results"`
-	Findings             []Finding             `json:"findings"`
-	Memories             []Memory              `json:"memories"`
-	Environments         []Environment         `json:"environments"`
-	Repositories         []Repository          `json:"repositories"`
-	Releases             []Release             `json:"releases"`
-	Events               []Event               `json:"events"`
+	DeliveryArtifacts      []DeliveryArtifact     `json:"delivery_artifacts"`
+	DeliveryBuildRuns      []DeliveryBuildRun     `json:"delivery_build_runs"`
+	ExternalSystems        []ExternalSystem       `json:"external_systems"`
+	SystemRelationships    []SystemRelationship   `json:"system_relationships"`
+	ExternalScopes         []ExternalScope        `json:"external_scopes"`
+	RegisteredRepositories []RegisteredRepository `json:"registered_repositories"`
+	ConnectionGrants       []ConnectionGrant      `json:"connection_grants"`
+	GitHubConnections      []GitHubConnection     `json:"github_connections"`
+	RepositoryBindings     []RepositoryBinding    `json:"repository_bindings"`
+	ComponentBuilds        []ComponentBuild       `json:"component_builds"`
+	EnvironmentBindings    []EnvironmentBinding   `json:"environment_bindings"`
+	Operations             []ExternalOperation    `json:"operations"`
+	OperationSteps         []OperationStep        `json:"operation_steps"`
+	GitObservations        []GitObservation       `json:"git_observations"`
+	Applications           []Application          `json:"applications"`
+	IntegrationRevisions   []IntegrationRevision  `json:"integration_revisions"`
+	Compositions           []Composition          `json:"compositions"`
+	Products               []Product              `json:"products"`
+	Features               []Feature              `json:"features"`
+	Integrations           []Integration          `json:"integrations"`
+	Gates                  []Gate                 `json:"gates"`
+	Checks                 []Check                `json:"checks"`
+	Results                []CheckResult          `json:"results"`
+	Findings               []Finding              `json:"findings"`
+	Memories               []Memory               `json:"memories"`
+	Environments           []Environment          `json:"environments"`
+	Repositories           []Repository           `json:"repositories"`
+	Releases               []Release              `json:"releases"`
+	Events                 []Event                `json:"events"`
 }
 
 func EmptyState() State {
-	return State{Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {
@@ -229,4 +244,4 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-var Actions = []string{"create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release"}
+var Actions = []string{"create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release"}

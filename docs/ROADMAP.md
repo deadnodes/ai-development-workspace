@@ -1,12 +1,12 @@
 # Incremental delivery and compatibility
 
-This is an architectural implementation sequence, not a mutable progress log. Read application Feature `rcp-lifecycle` for actual work, decisions, verification and handoffs.
+This is an architectural implementation sequence, not a mutable progress log. Read application Features `rcp-lifecycle` and `rcp-github-dev` for actual work, decisions, verification and handoffs. The initial GitHub execution implementation is documented in [GITHUB_DEV.md](GITHUB_DEV.md); live acceptance remains distinct from implementation.
 
 ## Existing phases
 
 **Phase 1 — semantic development state:** working Product/Feature/Integration lifecycle, decisions/discoveries/blockers/progress/handoff, gates/results/findings, audit, PostgreSQL, embedded UI and shared API/MCP. Completion means ready, not deployed.
 
-**Phase 2 — product topology and desired composition:** working product-local applications/repositories/environments, arbitrary environment names, target metadata, immutable caller-reported integration revisions, ordered composition snapshots and desired selection. Multiple products can coexist; this is logical scope consistency in a trusted workspace, not per-user access isolation. The existing `Application` is the requested Component. Source verification and all provider execution remain future work.
+**Phase 2 — product topology and desired composition:** working product-local applications/repositories/environments, arbitrary environment names, target metadata, immutable caller-reported integration revisions, ordered composition snapshots and desired selection. Multiple products can coexist; this is logical scope consistency in a trusted workspace, not per-user access isolation. The existing `Application` is the requested Component. This phase originally stopped at intent. The subsequent GitHub slice adds source observation and DEV GitOps execution as explicit opt-in operations.
 
 ## Next bounded slices
 

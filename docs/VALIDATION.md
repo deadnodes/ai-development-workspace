@@ -9,7 +9,7 @@ Validated locally on 2026-09-16.
 - Frontend regression checks exercise output escaping, evidence history, form availability, optional integration-ID serialization, and skip-link focus without changing the feature route.
 - Container image built and started successfully, serving the same embedded assets as the source. PostgreSQL persists in the Compose named volume. Dogfooding state is created explicitly by scripts/dogfood.mjs.
 
-Known MVP limits: one trusted workspace; full-state reads and serialized writes target small teams, no pagination/optimistic edit tokens yet. Evidence is recorded by humans/agents, not executed by this application. Artifact URLs are references. Git/Flux/Kubernetes are modelled behind interfaces with no live adapters yet. Release records are immutable plans, not deployment attestations. No hosted CI run, production deployment or Git remote push is claimed.
+Known MVP limits: one trusted workspace; full-state reads and serialized writes target small teams, no pagination/optimistic edit tokens yet. Evidence is recorded by humans/agents, not executed by this application. Artifact URLs are references. Flux/Kubernetes observation remains pending; the GitHub adapter milestone is described below. Release records are immutable plans, not deployment attestations. No hosted CI run, production deployment or Git remote push is claimed.
 
 ## Dynamic environment compositions
 
@@ -20,3 +20,13 @@ The next slice adds application mappings, arbitrary product-local environment ta
 Architecture revision 2 preserves existing State, persisted kinds and commands. New target-only domain contracts cover scoped connections/topology, branch divergence, multi-sided conflicts, artifact provenance/rebuild replacement, retention representation, deployments and final release records. Pure tests reject diverged fast-forward, unobserved artifact presence, silent digest replacement, invalid conflict verification and incomplete/mismatched deployment evidence. These guards validate evidence structure; live application authorization, freshness and provider behavior are not implemented or claimed.
 
 `TEST_DATABASE_URL=... make check` passed with real PostgreSQL, race tests, vet, formatting, frontend regression checks and binary build. No UI behavior changed in this revision. No provider adapter or external mutation was exercised.
+
+## GitHub DEV execution and repository/external-system correction
+
+`TEST_DATABASE_URL=... make check` passed on 2026-09-16: formatting, vet, JavaScript checks, four workflow-contract Python tests, race-enabled Go tests with real PostgreSQL, and binary build.
+
+Deterministic provider tests cover App JWT/token handling, numeric repository identity, pinned Git observation, workflow correlation/report validation, GHCR availability and digest verification, and constrained YAML mutation. Orchestration tests cover explicit build/deployment policy, source provenance, missing/rebuilt artifacts, branch policy, asynchronous scheduling and failure history. PostgreSQL HTTP/MCP tests reopen storage during dispatch and GitOps recovery and verify persistent operations, evidence and no duplicate external mutation. Live App tests are explicitly opt-in and were not run.
+
+Registry tests cover shared repository identity across installations/products and narrowed Feature/Integration scopes. External-system tests cover affected relationships, context packages and fresh verification after changed external obligations. Browser dogfooding created an unmanaged dependency, linked a component and affected Feature, inspected Agent context, and observed a persistent failed Git refresh for an unconfigured Integration. That failure is configuration evidence, not a successful GitHub integration.
+
+Live acceptance remains incomplete: the available authenticated `gh` session enabled read-only DeadNodes repository/workflow/GitOps discovery, but no configured GitHub App private-key reference with Actions permissions is available. No real workflow was dispatched, image built, or GitOps commit written. The supported DEV endpoint stops at confirmed GitOps application / pending Flux reconciliation; it never infers runtime deployment. See GITHUB_DEV.md for the build contract and remaining setup.

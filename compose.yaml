@@ -20,6 +20,9 @@ services:
     environment:
       DATABASE_URL: postgres://releasecontrol:releasecontrol@db:5432/releasecontrol?sslmode=disable
       LISTEN_ADDR: :8080
+      RCP_SECRET_DIR: /run/secrets
+    volumes:
+      - ${RCP_SECRET_DIR_HOST:-./.secrets}:/run/secrets:ro
     ports:
       - "127.0.0.1:8090:8080"
     depends_on:

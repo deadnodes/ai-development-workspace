@@ -14,6 +14,8 @@ check:
 	test -z "$$(gofmt -l cmd internal web)"
 	go vet ./...
 	node --check web/static/app.js
+	node --check web/static/external.js
 	node web/check.mjs
+	python3 -m unittest discover -s examples/github-actions -p 'test_*.py'
 	go test -race ./...
 	go build -trimpath -o bin/release-control ./cmd/server

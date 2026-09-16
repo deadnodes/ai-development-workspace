@@ -27,7 +27,7 @@ Do not run the container app and local app on port 8090 simultaneously.
 - `GET /api/features/{id}/context` — deterministic agent resume package.
 - `GET /api/schema` — discover command inputs.
 - `POST /api/commands` — one attributed engineering action.
-- `/mcp` — official Go SDK Streamable HTTP server, with `get_state`, `resume`, `execute` tools. Tools advertise JSON schemas; execute shares the HTTP/UI application service.
+- `/mcp` — official Go SDK Streamable HTTP server, with `get_state`, `resume`, `execute` plus semantic Git/deployment/operation tools. Tools advertise JSON schemas; execute shares the HTTP/UI application service.
 
 ```sh
 curl -s http://127.0.0.1:8090/api/commands \
@@ -77,3 +77,10 @@ Environment desired, reconciled and runtime state are distinct. Unknown means un
 To seed the project’s own tracked bootstrap feature explicitly, run `node scripts/dogfood.mjs`. See [validation evidence](docs/VALIDATION.md).
 
 See [architecture and invariants](docs/ARCHITECTURE.md), [shared contract](docs/CONTRACT.md), and [bootstrap handoff](docs/IMPLEMENTATION_STATE.md). Once dogfooding is seeded, the application feature and handoff replace the bootstrap file as the development state authority.
+
+
+### Real GitHub DEV execution
+
+The GitHub App adapter, asynchronous operation worker, Actions/GHCR build contract and DEV GitOps mutation path are implemented. Configure a real App installation and source/build/GitOps mappings using [GITHUB_DEV.md](docs/GITHUB_DEV.md). Installation tokens stay in memory; the local `gh` credential is not used by the server. The UI exposes connections, shared repository discovery/attachment, Git state, operations and unmanaged external dependencies.
+
+A successful GitOps operation ends at pending reconciliation; this slice does not claim Flux/runtime DEPLOYED. Live acceptance needs actual App credentials and an observed Actions → GHCR → GitOps operation; local fake-provider tests alone do not satisfy that milestone.

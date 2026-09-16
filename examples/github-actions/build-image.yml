@@ -1,0 +1,97 @@
+# Copy this to .github/workflows/build-image.yml in the SOURCE repository.
+# Copy registry_contract.py alongside it. Configure vars.RCP_IMAGE_REPOSITORY.
+name: RCP image contract
+run-name: rcp-${{ inputs.operation_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact source commit
+        required: true
+        type: string
+      image_tag:
+        description: Control Plane correlation tag
+        required: true
+        type: string
+      image_repository:
+        description: Configured GHCR image repository
+        required: true
+        type: string
+      operation_id:
+        description: Persistent Control Plane operation ID
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: rcp-${{ inputs.operation_id }}
+  cancel-in-progress: false
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      OPERATION_ID: ${{ inputs.operation_id }}
+      IMAGE_REPOSITORY: ${{ inputs.image_repository }}
+      ALLOWED_IMAGE_REPOSITORY: ${{ vars.RCP_IMAGE_REPOSITORY }}
+    steps:
+      - name: Get trusted workflow contract
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: contract
+          persist-credentials: false
+      - name: Validate configured image destination
+        run: test "$IMAGE_REPOSITORY" = "$ALLOWED_IMAGE_REPOSITORY"
+      - name: Probe registry using the workflow token
+        id: probe
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 contract/.github/workflows/registry_contract.py
+      - name: Login to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Verify existing image source
+        if: steps.probe.outputs.exists == 'true'
+        env:
+          DIGEST: ${{ steps.probe.outputs.digest }}
+        run: |
+          docker pull "$IMAGE_REPOSITORY@$DIGEST"
+          recorded=$(docker image inspect "$IMAGE_REPOSITORY@$DIGEST" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          test "$recorded" = "$SOURCE_SHA"
+      - name: Checkout requested source
+        if: steps.probe.outputs.exists != 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Build and push missing image
+        id: build
+        if: steps.probe.outputs.exists != 'true'
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          docker buildx build --push --metadata-file build-metadata.json \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$IMAGE_REPOSITORY:$IMAGE_TAG" source
+          echo "digest=$(jq -r '.["containerimage.digest"]' build-metadata.json)" >> "$GITHUB_OUTPUT"
+      - name: Verify registry and produce evidence
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_DIGEST: ${{ steps.probe.outputs.digest || steps.build.outputs.digest }}
+        run: python3 contract/.github/workflows/registry_contract.py report
+      - name: Publish operation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcp-result-${{ inputs.operation_id }}
+          path: result.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove runner registry credentials
+        if: always()
+        run: docker logout ghcr.io

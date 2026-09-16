@@ -13,6 +13,7 @@ import (
 
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/persistence"
+	"releasecontrol/internal/providers/github"
 	"releasecontrol/internal/transport"
 )
 
@@ -40,7 +41,16 @@ func run() error {
 	if addr == "" {
 		addr = "127.0.0.1:8090"
 	}
-	server := &http.Server{Addr: addr, Handler: transport.New(application.New(store), transport.Options{Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	service := application.NewWithProvider(store, github.New())
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		if err := service.RunWorker(ctx, 2*time.Second); err != nil && ctx.Err() == nil {
+			slog.Error("operation worker stopped", "error", err)
+		}
+	}()
+	defer func() { stop(); <-workerDone }()
+	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan error, 1)
 	go func() { slog.Info("release-control listening", "address", addr); done <- server.ListenAndServe() }()
 	select {

@@ -96,6 +96,9 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		if e := repositories(st, []string{input.RepositoryID}, in.ProductID); e != nil {
 			return nil, m, e
 		}
+		if f := feature(st, in.FeatureID); f != nil && len(f.Repositories) > 0 && !slices.Contains(f.Repositories, input.RepositoryID) {
+			return nil, m, invalid("revision repository outside feature scope")
+		}
 		if len(in.Repositories) > 0 && !slices.Contains(in.Repositories, input.RepositoryID) {
 			return nil, m, invalid("revision repository must be declared by integration")
 		}

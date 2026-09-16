@@ -46,3 +46,13 @@ Environment names are trimmed and unique case-insensitively within each product 
 ## Target architecture boundary
 
 The lifecycle/provider contracts in `internal/domain/lifecycle.go` and `providers.go` are not persisted State arrays or additional execute actions yet. See [architecture](ARCHITECTURE.md) and [rollout](ROADMAP.md). Current `Application` maps to the domain term Component without JSON/storage renames. Current `Release` remains an immutable planned selection; future final `ReleaseRecord` requires verified deployment evidence. Current global get_state is trusted-instance visibility, not per-user product authorization.
+
+## GitHub execution and external impact context
+
+The current execution commands and their typed fields are published by `/api/schema` and MCP `execute`. Named MCP queries include `get_integration_context`, `get_git_state`, `get_environment_state`, `get_operation`, `get_attention_required`; `deploy_integration` returns a durable operation immediately. Git synchronization and deployment steps execute in the worker, outside the command's database transaction.
+
+The instance Repository Registry stores numeric GitHub identities; Product Repository records are explicit attachment projections retaining legacy IDs. Connection grants control which installation a Product may use. Feature repository selection narrows Product attachments; Integration selection narrows the Feature. Source discovery is provider-observed rather than caller-asserted names.
+
+`create_external_system` / `update_external_system` accept name, description, team, contact, interfaces[], contracts[], notes. `create_system_relationship` links a product (and optional component_id) to external_system_id using type DEPENDS_ON, CONSUMES, PROVIDES_TO or SHARES_DATA_WITH. `set_external_scope` records external_system_ids[] and relationship_ids[] against a Feature, Integration or Gate. Scopes are append-only; the latest target scope is effective. Changing a blocking Gate's external obligation requires fresh check evidence. Resume/context returns relevant systems, relationships and scopes. External systems have no deployment commands.
+
+Operation lifecycle status is separate from deployment state. `SUCCEEDED` for this milestone means the GitOps mutation was confirmed; deployment remains `GITOPS_APPLIED` / pending reconciliation, never inferred DEPLOYED. See [GitHub DEV setup and build contract](GITHUB_DEV.md) for credentials, workflow evidence and the exact live acceptance boundary.

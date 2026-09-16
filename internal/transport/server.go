@@ -22,6 +22,7 @@ type Service interface {
 	State(context.Context) (domain.State, error)
 	Execute(context.Context, domain.Command) (any, error)
 	Resume(context.Context, string) (any, error)
+	Query(context.Context, string, string) (any, error)
 }
 
 type Options struct {
@@ -60,8 +61,9 @@ func New(service Service, options Options) http.Handler {
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
+	registerQueryRoutes(mux, service)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, nil)
-	mcp.AddTool(server, &mcp.Tool{Name: "get_state", Description: "Read products, features, integration/work claims, verification, findings, applications, environments, immutable source revisions, composition plans, releases and audit history."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_state", Description: "Read products, features, integration/work claims, verification, findings, applications, environments, immutable source revisions, composition plans, releases, GitHub connections, delivery operations, provider observations and audit history."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		v, e := service.State(ctx)
 		return nil, v, e
 	})
@@ -71,10 +73,11 @@ func New(service Service, options Options) http.Handler {
 		v, e := service.Resume(ctx, in.FeatureID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, _ *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. Use create_github_connection/import_repository/configure_component/configure_environment to configure explicit DEV delivery. refresh_integration_git queues observation; deploy_integration queues a real build/artifact/GitOps operation. Poll get_operation; GitOps application does not imply runtime health. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, _ *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, in)
 		return nil, v, e
 	})
+	registerProviderTools(server, service)
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20}))
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 	return protect(mux, options)

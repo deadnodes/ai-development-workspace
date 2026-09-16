@@ -63,3 +63,19 @@ func TestResumeBoundsAuditWithoutCommandPayloads(t *testing.T) {
 		t.Fatal("structured memory truncated")
 	}
 }
+
+func TestResumeIncludesOnlyFeatureSourceSubset(t *testing.T) {
+	s, _ := fixture(t)
+	for _, repo := range []string{"used", "unused"} {
+		exec(t, s, domain.Command{Action: "create_repository", ID: repo, ProductID: "p", Data: map[string]any{"name": repo, "url": "https://github.com/example/" + repo}})
+	}
+	exec(t, s, domain.Command{Action: "update_feature", FeatureID: "f", Data: map[string]any{"repositories": []string{"used"}}})
+	contextPackage, err := s.Resume(context.Background(), "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := contextPackage.(map[string]any)["repositories"].([]domain.Repository)
+	if len(repos) != 1 || repos[0].ID != "used" {
+		t.Fatalf("unrelated product repository leaked into feature context: %+v", repos)
+	}
+}

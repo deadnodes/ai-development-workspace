@@ -1,6 +1,6 @@
 # Release Control Plane — evolving architecture
 
-Status: architecture revision 2, 2026-09-16. This evolves the existing Go modular monolith; it does not replace the implemented MVP. Authoritative engineering context is in application Feature `rcp-lifecycle`. See [implementation boundaries and rollout](ROADMAP.md), [command contract](CONTRACT.md), and [composition semantics](ENVIRONMENT_COMPOSITION.md).
+Status: evolving architecture, 2026-09-16. Revision 3 corrects repository ownership and adds unmanaged dependency context. This evolves the existing Go modular monolith; it does not replace the implemented MVP. Authoritative engineering context is in application Feature `rcp-lifecycle`. See [implementation boundaries and rollout](ROADMAP.md), [command contract](CONTRACT.md), and [composition semantics](ENVIRONMENT_COMPOSITION.md).
 
 ## Responsibility
 
@@ -19,7 +19,7 @@ Transport remains embedded Web UI, HTTP and MCP in one binary. All use the same 
 
 ## Instance and Product
 
-An Instance is one installation and database. It can manage one or many unrelated Products. Product is a first-class **logical isolation boundary**, not a synonym for an installation or a global namespace. Every repository, component, environment, feature, integration, composition, conflict, artifact, build, deployment and release is scoped to a Product. Reference validation checks product ownership before using a provider.
+An Instance is one installation and database. It can manage one or many unrelated Products. Product is a first-class **logical isolation boundary**, not a synonym for an installation or a global namespace. Repositories have instance-level identities in a provider-discovered Repository Registry. Products explicitly attach selected registered repositories, and own their components, environments, features, integrations, compositions, conflicts, artifacts, builds, deployments and releases. A repository may be attached to multiple Products without duplicating its provider identity. Reference validation checks product ownership before using a provider.
 
 A Product defines its own topology and defaults. It can use any environment names and counts; there is no hardcoded DEV/STAGE/PROD chain. Environment purpose (`integration`, `test`, `staging`, `production`, `custom`) is explicit configuration, not inferred from its name. Cluster/namespace, Git providers, registries, CI workflows and GitOps mappings are per-product choices. Independent products can share physical infrastructure only through explicit configuration; their feature selection is never implicitly mixed. For example, DeadNodes can define `dev` and `prod`, while Platform independently defines `dev`, `test`, `stage` and `prod`. Each environment selects its own component versions and integration revisions; adding an environment never requires a new global lifecycle enum.
 
@@ -31,7 +31,7 @@ ProviderConnections belong to the instance and describe adapter kind, endpoint, 
 | --- | --- | --- |
 | Product | Independent topology and ownership boundary | Persisted |
 | Component | Deployable application, repository and optional monorepo path | Persisted as `Application`; compatible alias |
-| Repository | Product repository identity and provider binding | Basic record persisted; connection binding target |
+| Repository Registry / attachment | Instance provider identity and explicit Product selection; Feature/Integration use narrower subsets | Additive registry; legacy Repository IDs retained as Product attachments |
 | Environment | Named product-local target, desired/reconciled/runtime separation | Persisted; target purpose/bindings target |
 | EnvironmentComposition | Immutable component selections, pinned source revisions, target snapshot | Persisted as `Composition`; artifacts/execution target |
 | Feature / Integration | Intent and independently implementable/releasable work | Persisted |
@@ -106,7 +106,7 @@ The future application executor persists a planned operation/outbox entry and au
 
 ## MCP and human information architecture
 
-Current MCP tools remain `get_state`, `resume`, `execute`, operating on the implemented command set. Do not advertise target-only actions as executable.
+MCP retains `get_state`, `resume`, `execute` and adds the concrete GitHub slice queries/actions documented in [GITHUB_DEV.md](GITHUB_DEV.md). Do not advertise target-only actions as executable.
 
 Incremental semantic queries: product state, feature/integration resume, environment composition, branch state, conflicts, conflict context, release readiness and actionable attention. Target actions include branch creation/update, integration requests, conflict claim/resolution, build/dev-deployment requests, verification and release planning. All actions use the same application services/policy and scoped connections as the UI; MCP supplies structured requests, never arbitrary commands.
 
@@ -122,4 +122,13 @@ Core invariants remain: same-product references, acyclic dependencies, independe
 
 The initial pure guards check supplied evidence shape, pinned digest/revision agreement and complete component coverage. They do not authenticate evidence, resolve product ownership, enforce freshness windows or authorize provider calls. Future application services must load trusted persisted observations and enforce those checks; a caller-supplied `ready` flag is never sufficient authority.
 
-There are no new live adapters, external writes, background polling or automatic production changes in this architecture revision. The running phase-1/2 UI/API/MCP behavior and data remain intact.
+The concrete GitHub slice now implements `internal/domain/external.go`, `internal/delivery`, `internal/providers/github` and the application worker. Its connection registry, grants, repository attachments, Git observations, operations/steps, build and artifact observations are persisted through the existing JSON record store. No SQL schema migration is required for these additive document kinds. The broader lifecycle.go types in the table remain target contracts; concrete DEV operations stop at GitOps applied pending reconciliation. Live acceptance is tracked in Feature `rcp-github-dev`; implemented adapter code and deterministic tests do not constitute a real deployment. Production execution is excluded.
+
+
+## Repository registry and unmanaged dependencies
+
+Provider discovery populates one installation-wide Repository Registry keyed by provider identity and numeric external repository ID. Product repository records are attachments to registry entries, not exclusive ownership of source repositories. Existing IDs remain valid attachment IDs for compatibility. Features select the attached repositories relevant to their intent; Integrations select only the repositories they modify within that Feature scope. Reusing a registered repository across Products never implicitly shares their development memory or deployment policy.
+
+ExternalSystem is an instance-level unmanaged dependency with name, description, owning team/contact, interfaces/contracts and notes. Relationships link a managed Product/Component to it using DEPENDS_ON, CONSUMES, PROVIDES_TO or SHARES_DATA_WITH. A Feature can mark external systems and relationships as affected; an Integration can narrow that scope. Verification Gates can reference external compatibility obligations; existing blocking checks/results provide release readiness enforcement and audit. The context projection includes the relevant unmanaged systems, relationships and gate obligations so an agent sees affected contracts/teams.
+
+An ExternalSystem ID is never accepted as a repository, managed Component or deployment target. It has no managed branches, artifacts, environments or releases. This is development/release context, not project synchronization or a generic service catalog.

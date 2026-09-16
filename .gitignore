@@ -3,3 +3,6 @@
 .env
 .DS_Store
 node_modules/
+
+.secrets/
+__pycache__/

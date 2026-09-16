@@ -126,11 +126,6 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 			envs = append(envs, v)
 		}
 	}
-	for _, v := range st.Repositories {
-		if v.ProductID == f.ProductID {
-			repos = append(repos, v)
-		}
-	}
 	for _, rid := range f.Repositories {
 		relevantRepos[rid] = true
 	}
@@ -138,11 +133,22 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 		for _, rid := range in.Repositories {
 			relevantRepos[rid] = true
 		}
+		for _, branch := range in.Branches {
+			relevantRepos[branch.RepositoryID] = true
+		}
+		for _, commit := range in.Commits {
+			relevantRepos[commit.RepositoryID] = true
+		}
 	}
 	for _, rev := range st.IntegrationRevisions {
 		if rev.FeatureID == featureID {
 			revisions = append(revisions, rev)
 			relevantRepos[rev.RepositoryID] = true
+		}
+	}
+	for _, repository := range st.Repositories {
+		if repository.ProductID == f.ProductID && relevantRepos[repository.ID] {
+			repos = append(repos, repository)
 		}
 	}
 	relevantApps := map[string]bool{}
@@ -178,5 +184,8 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 	if eventsTotal > 20 {
 		events = events[eventsTotal-20:]
 	}
-	return map[string]any{"applications": apps, "integration_revisions": revisions, "compositions": compositions, "feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}, nil
+	response := map[string]any{"applications": apps, "integration_revisions": revisions, "compositions": compositions, "feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}
+	addExternalContext(response, st, featureID)
+	addDeliveryContext(response, st, featureID, "")
+	return response, nil
 }

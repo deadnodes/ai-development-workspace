@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
@@ -21,9 +22,18 @@ type Store interface {
 	Read(context.Context) (domain.State, error)
 	Update(context.Context, func(*domain.State) error) error
 }
-type Service struct{ store Store }
+type Service struct {
+	store    Store
+	provider delivery.Provider
+	workerID string
+}
 
-func New(store Store) *Service { return &Service{store: store} }
+func New(store Store) *Service { return &Service{store: store, workerID: id()} }
+func NewWithProvider(store Store, provider delivery.Provider) *Service {
+	s := New(store)
+	s.provider = provider
+	return s
+}
 func (s *Service) State(ctx context.Context) (domain.State, error) {
 	st, err := s.store.Read(ctx)
 	if err == nil {
@@ -154,6 +164,9 @@ func latest(st *domain.State, c string) *domain.CheckResult {
 	return r
 }
 func gateResult(st *domain.State, g domain.Gate) string {
+	if !externalGateEvidenceCurrent(st, g) {
+		return "pending"
+	}
 	count := 0
 	for _, c := range st.Checks {
 		if c.GateID != g.ID {
@@ -243,15 +256,37 @@ func validateIntegration(st *domain.State, in domain.Integration) error {
 	if err := refs(st, in.Dependencies, in.FeatureID); err != nil {
 		return err
 	}
+	if f := feature(st, in.FeatureID); f != nil && len(f.Repositories) > 0 {
+		for _, repo := range in.Repositories {
+			if !slices.Contains(f.Repositories, repo) {
+				return invalid("integration repository outside feature scope")
+			}
+		}
+	}
 	if err := repositories(st, in.Repositories, in.ProductID); err != nil {
 		return err
 	}
+	allowedRepository := func(repo string) error {
+		if len(in.Repositories) > 0 && !slices.Contains(in.Repositories, repo) {
+			return invalid("Git reference repository outside integration scope")
+		}
+		if f := feature(st, in.FeatureID); f != nil && len(f.Repositories) > 0 && !slices.Contains(f.Repositories, repo) {
+			return invalid("Git reference repository outside feature scope")
+		}
+		return nil
+	}
 	for _, b := range in.Branches {
+		if err := allowedRepository(b.RepositoryID); err != nil {
+			return err
+		}
 		if err := repositories(st, []string{b.RepositoryID}, in.ProductID); err != nil {
 			return err
 		}
 	}
 	for _, c := range in.Commits {
+		if err := allowedRepository(c.RepositoryID); err != nil {
+			return err
+		}
 		if c.SHA == "" {
 			return invalid("commit sha required")
 		}
@@ -260,6 +295,9 @@ func validateIntegration(st *domain.State, in domain.Integration) error {
 		}
 	}
 	for _, pr := range in.PullRequests {
+		if err := allowedRepository(pr.RepositoryID); err != nil {
+			return err
+		}
 		if err := repositories(st, []string{pr.RepositoryID}, in.ProductID); err != nil {
 			return err
 		}
@@ -331,7 +369,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	}
 	m.ProductID = c.ProductID
 	m.FeatureID = c.FeatureID
-	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition"}, c.Action) {
+	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system"}, c.Action) {
 		b, _ := json.Marshal(st)
 		var arrays map[string][]map[string]any
 		_ = json.Unmarshal(b, &arrays)
@@ -344,6 +382,18 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	}
 	switch c.Action {
+	case "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope":
+		var err error
+		out, m, err = applyExternalSystems(st, c, m)
+		if err != nil {
+			return nil, err
+		}
+	case "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration":
+		var err error
+		out, m, err = applyExternal(st, c, m)
+		if err != nil {
+			return nil, err
+		}
 	case "create_application", "record_integration_revision", "plan_composition", "select_composition":
 		var err error
 		out, m, err = applyComposition(st, c, m)
@@ -392,6 +442,13 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 		if old != nil {
 			*old = v
+			for _, child := range st.Integrations {
+				if child.FeatureID == v.ID {
+					if err := validateIntegration(st, child); err != nil {
+						return nil, err
+					}
+				}
+			}
 		} else {
 			st.Features = append(st.Features, v)
 		}

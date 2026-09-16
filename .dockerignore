@@ -3,3 +3,6 @@ bin
 artifacts
 node_modules
 .env
+
+.secrets/
+__pycache__/
