@@ -1,0 +1,13 @@
+# Optional read-only access to the developer's system kubeconfig.
+# Context is selected explicitly per runtime target; no kubectl is installed or invoked.
+services:
+  app:
+    environment:
+      KUBECONFIG: /run/kube/config
+    volumes:
+      - type: bind
+        source: ${RCP_KUBECONFIG_DIR_HOST:?Set RCP_KUBECONFIG_DIR_HOST to the system kubeconfig directory}
+        target: /run/kube
+        read_only: true
+        bind:
+          create_host_path: false

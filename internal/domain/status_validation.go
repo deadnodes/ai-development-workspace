@@ -22,6 +22,17 @@ func ValidateStateStatuses(st State) error {
 		}
 		return nil
 	}
+	for _, v := range st.RuntimeSnapshots {
+		if err := check("runtime_comparison", v.ID, v.ReferenceComparison, true); err != nil {
+			return err
+		}
+		if err := check("runtime_comparison", v.ID, v.Comparison, false); err != nil {
+			return err
+		}
+		if err := check("runtime_health", v.ID, v.Runtime.Health, false); err != nil {
+			return err
+		}
+	}
 	for _, c := range st.CompositionConflicts {
 		if err := check("composition_conflict", c.ID, c.Status, false); err != nil {
 			return err

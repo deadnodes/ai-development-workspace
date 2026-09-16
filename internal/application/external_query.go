@@ -171,7 +171,13 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				observations = append(observations, r)
 			}
 		}
-		return map[string]any{"environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."}, nil
+		snapshots := []domain.RuntimeSnapshot{}
+		for _, v := range st.RuntimeSnapshots {
+			if v.EnvironmentID == id && v.ProductID == env.ProductID {
+				snapshots = append(snapshots, v)
+			}
+		}
+		return map[string]any{"runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."}, nil
 	case "get_operation":
 		for _, op := range st.Operations {
 			if op.ID == id {

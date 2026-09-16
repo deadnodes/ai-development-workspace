@@ -121,6 +121,15 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		v, e := service.Query(ctx, "get_integration_git", in.IntegrationID)
 		return nil, v, e
 	})
+	mcp.AddTool(server, &mcp.Tool{Name: "refresh_environment_runtime", Description: "Queue read-only Kubernetes/Flux and GitOps/Actions inventory. Returns persistent operation immediately; never changes cluster resources or advances deployment readiness."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID     string `json:"product_id"`
+		EnvironmentID string `json:"environment_id"`
+		ApplicationID string `json:"application_id,omitempty"`
+		Actor         string `json:"actor"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Execute(ctx, domain.Command{Action: "refresh_environment_runtime", ProductID: in.ProductID, Actor: in.Actor, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID}})
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_environment_state", Description: "Read desired GitOps state separately from reconciled and runtime observations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		EnvironmentID string `json:"environment_id"`
 	}) (*mcp.CallToolResult, any, error) {

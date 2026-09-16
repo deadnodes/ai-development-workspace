@@ -18,6 +18,8 @@ import (
 )
 
 type Target struct {
+	Kubeconfig     string `json:"kubeconfig,omitempty"`
+	Context        string `json:"context,omitempty"`
 	ProductID      string `json:"product_id"`
 	EnvironmentID  string `json:"environment_id"`
 	ApplicationID  string `json:"application_id"`
@@ -36,6 +38,7 @@ type Result = delivery.RuntimeEvidence
 type Observer struct {
 	Target Target
 	client *http.Client
+	token  string
 }
 
 func Load(path string) ([]*Observer, error) {
@@ -58,18 +61,34 @@ func Load(path string) ([]*Observer, error) {
 	return out, nil
 }
 func New(t Target) (*Observer, error) {
+	var material kubeMaterial
+	if t.Kubeconfig != "" || t.Context != "" || t.APIURL == "" {
+		var err error
+		material, err = resolveKubeconfig(&t)
+		if err != nil {
+			return nil, err
+		}
+	}
 	u, e := url.Parse(t.APIURL)
 	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("observer requires HTTPS Kubernetes API URL")
 	}
-	for _, s := range []string{t.ProductID, t.EnvironmentID, t.ApplicationID, t.FluxNamespace, t.Kustomization, t.Namespace, t.Deployment, t.Container} {
+	for _, s := range []string{t.ProductID, t.EnvironmentID, t.ApplicationID, t.Namespace, t.Deployment, t.Container} {
 		if strings.TrimSpace(s) == "" {
 			return nil, fmt.Errorf("observer target identifiers are required")
 		}
 	}
+	if (t.FluxNamespace == "") != (t.Kustomization == "") {
+		return nil, fmt.Errorf("Flux namespace and kustomization must be configured together")
+	}
 	tc := &tls.Config{MinVersion: tls.VersionTLS12}
-	if t.CAFile != "" {
-		b, e := os.ReadFile(t.CAFile)
+	tc.ServerName = material.serverName
+	if t.CAFile != "" || len(material.ca) > 0 {
+		b := material.ca
+		var e error
+		if len(b) == 0 {
+			b, e = os.ReadFile(t.CAFile)
+		}
 		if e != nil {
 			return nil, e
 		}
@@ -78,19 +97,36 @@ func New(t Target) (*Observer, error) {
 			return nil, fmt.Errorf("invalid observer CA")
 		}
 	}
-	if t.ClientCertFile != "" || t.ClientKeyFile != "" {
-		c, e := tls.LoadX509KeyPair(t.ClientCertFile, t.ClientKeyFile)
+	if t.ClientCertFile != "" || t.ClientKeyFile != "" || len(material.cert) > 0 || len(material.key) > 0 {
+		cert, key := material.cert, material.key
+		var e error
+		if len(cert) == 0 {
+			cert, e = os.ReadFile(t.ClientCertFile)
+			if e != nil {
+				return nil, fmt.Errorf("client certificate unavailable")
+			}
+		}
+		if len(key) == 0 {
+			key, e = os.ReadFile(t.ClientKeyFile)
+			if e != nil {
+				return nil, fmt.Errorf("client key unavailable")
+			}
+		}
+		c, e := tls.X509KeyPair(cert, key)
 		if e != nil {
 			return nil, e
 		}
 		tc.Certificates = []tls.Certificate{c}
 	}
-	return &Observer{Target: t, client: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tc}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Observer{Target: t, token: material.token, client: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tc}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (o *Observer) get(ctx context.Context, path string, out any) error {
 	req, e := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(o.Target.APIURL, "/")+path, nil)
 	if e != nil {
 		return e
+	}
+	if o.token != "" {
+		req.Header.Set("Authorization", "Bearer "+o.token)
 	}
 	if o.Target.TokenFile != "" {
 		b, e := os.ReadFile(o.Target.TokenFile)

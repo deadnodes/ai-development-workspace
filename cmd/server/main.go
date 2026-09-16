@@ -83,6 +83,11 @@ func run() error {
 		for i, o := range configuredObservers {
 			observers[i] = o
 		}
+		snapshots := make([]delivery.RuntimeSnapshotObserver, len(configuredObservers))
+		for i, o := range configuredObservers {
+			snapshots[i] = o
+		}
+		service.SetRuntimeObservers(snapshots)
 		observerDone := make(chan struct{})
 		go func() {
 			defer close(observerDone)

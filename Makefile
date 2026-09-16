@@ -18,6 +18,7 @@ check:
 	node --check web/static/workspace.js
 	node --check web/static/live.js
 	node --check web/static/graph.js
+	node --check web/static/runtime.js
 	node --check scripts/export-configuration.mjs
 	node --check scripts/backup.mjs
 	node web/check.mjs
@@ -25,6 +26,7 @@ check:
 	node web/live-check.mjs
 	node web/routes-check.mjs
 	node web/graph-check.mjs
+	node web/runtime-check.mjs
 	python3 -m unittest discover -s examples/github-actions -p 'test_*.py'
 	go test -race ./...
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server

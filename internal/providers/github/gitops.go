@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"strings"
@@ -14,14 +15,20 @@ import (
 )
 
 func gitopsPath(r delivery.GitOpsRequest) error {
+	if e := gitopsReadPath(r); e != nil {
+		return e
+	}
+	_, e := registryRepository(r.ImageRepository)
+	return e
+}
+func gitopsReadPath(r delivery.GitOpsRequest) error {
 	if r.Path == "" || path.IsAbs(r.Path) || path.Clean(r.Path) != r.Path || r.Path == ".." || strings.HasPrefix(r.Path, "../") || strings.Contains(r.Path, "\\") || r.Ref == "" {
 		return errors.New("GitOps requires branch and clean repository-relative file path")
 	}
 	if !((r.ImageField == "" || r.ImageField == "image.repository") && (r.DigestField == "" || r.DigestField == "image.digest")) && !(r.ImageField == "spec.values.image.repository" && r.DigestField == "spec.values.image.tag") {
 		return fmt.Errorf("%w: mapping supports root image.repository/digest or HelmRelease spec.values.image.repository/tag only", ErrUnsupported)
 	}
-	_, e := registryRepository(r.ImageRepository)
-	return e
+	return nil
 }
 func mappingValue(n *yaml.Node, key string) (*yaml.Node, error) {
 	if n.Kind != yaml.MappingNode {
@@ -91,7 +98,7 @@ func documentImageFields(doc *yaml.Node, request delivery.GitOpsRequest) (*yaml.
 }
 func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
 	var out delivery.GitOpsSnapshot
-	if e := gitopsPath(r); e != nil {
+	if e := gitopsReadPath(r); e != nil {
 		return out, e
 	}
 	repo, e := p.repository(ctx, c, r.Repository)
@@ -128,6 +135,13 @@ func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r deli
 	if e != nil || len(raw) > 1<<20 {
 		return out, errors.New("invalid or oversized GitOps file")
 	}
+	if r.ImageRepository == "" {
+		image, value, err := observedImageFields(string(raw), r)
+		if err != nil {
+			return out, err
+		}
+		return delivery.GitOpsSnapshot{ImageRepository: image, Digest: value, HeadSHA: ref.Object.SHA, BlobSHA: file.SHA, Content: string(raw)}, nil
+	}
 	_, image, digest, e := imageFields(string(raw), r)
 	if e != nil {
 		return out, e
@@ -140,6 +154,9 @@ func (p *Provider) ApplyGitOps(ctx context.Context, c delivery.Connection, r del
 		return out, errors.New("GitOps mutation requires full expected head/blob, digest and operation ID")
 	}
 	request := r.Request
+	if e := gitopsPath(request); e != nil {
+		return out, e
+	}
 	request.ExpectedHeadSHA = r.ExpectedHeadSHA
 	snapshot, e := p.ReadGitOps(ctx, c, request)
 	if e != nil {
@@ -203,4 +220,50 @@ func digestValue(value string, r delivery.GitOpsRequest) string {
 		return digest
 	}
 	return value
+}
+
+// observedImageFields accepts no desired image filter. All mapped resources must
+// agree, so a read cannot silently select one of several different deployments.
+func observedImageFields(content string, r delivery.GitOpsRequest) (string, string, error) {
+	decoder := yaml.NewDecoder(strings.NewReader(content))
+	repo, value := "", ""
+	found := false
+	for {
+		var doc yaml.Node
+		err := decoder.Decode(&doc)
+		if err == io.EOF {
+			break
+		}
+		if err != nil || len(doc.Content) != 1 {
+			return "", "", errors.New("invalid GitOps YAML")
+		}
+		if r.ImageField == "spec.values.image.repository" {
+			kind, err := mappingValue(doc.Content[0], "kind")
+			if err != nil || kind.Value != "HelmRelease" {
+				continue
+			}
+			api, err := mappingValue(doc.Content[0], "apiVersion")
+			if err != nil || !strings.HasPrefix(api.Value, "helm.toolkit.fluxcd.io/") {
+				continue
+			}
+		}
+		image, version, err := documentImageFields(&doc, r)
+		if err != nil {
+			return "", "", err
+		}
+		if image.Value == "" || version.Value == "" {
+			return "", "", errors.New("empty GitOps image reference")
+		}
+		if found && (repo != image.Value || value != version.Value) {
+			return "", "", errors.New("GitOps resources have ambiguous image versions")
+		}
+		repo, value, found = image.Value, version.Value, true
+	}
+	if !found {
+		return "", "", errors.New("no matching GitOps image resources")
+	}
+	if digest := digestValue(value, r); digest != "" {
+		value = digest
+	}
+	return repo, value, nil
 }

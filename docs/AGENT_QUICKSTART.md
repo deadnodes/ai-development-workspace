@@ -161,7 +161,7 @@ image:
 
 Вызови `deploy_integration` и сохрани ID возвращённой операции. Опрашивай `get_operation` примерно раз в 5–10 секунд до `SUCCEEDED`, `FAILED` или `CANCELLED`. Не отправляй повторный deploy вместо ожидания.
 
-Проверь evidence: source SHA → Actions run → GHCR digest → GitOps commit. `SUCCEEDED` с `GITOPS_APPLIED` означает, что desired state записан. Это **не** подтверждение работающих pods: автоматического Flux/runtime collector пока нет. Для parent/child composition flow доступен `record_runtime_observation` — явное свидетельство человека/агента с точным commit/digest, а не серверная проверка кластера.
+Проверь evidence: source SHA → Actions run → GHCR digest → GitOps commit. `SUCCEEDED` с `GITOPS_APPLIED` означает, что desired state записан. Это **не** подтверждение работающих pods: для независимого read-only наблюдения Kubernetes доступен `refresh_environment_runtime` (см. [KUBERNETES_RUNTIME.md](KUBERNETES_RUNTIME.md)). Для parent/child composition flow доступен `record_runtime_observation` — явное свидетельство человека/агента с точным commit/digest, а не серверная проверка кластера.
 
 При ошибке читай шаг/error и `get_attention_required`. Исправь конкретную причину. BEHIND/DIVERGED блокируют deploy; реальный SOURCE branch надо обновить отдельно. Missing artifact запускает CI только при `rebuild_missing: true`. GitOps изменяется только при `allow_deploy: true`.
 

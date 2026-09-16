@@ -41,7 +41,7 @@ func operationByID(st *domain.State, id string) *domain.ExternalOperation {
 // Tick claims one durable operation step. Network I/O happens outside the store
 // transaction. A persisted dispatch intent is never blindly dispatched again.
 func (s *Service) Tick(ctx context.Context) (bool, error) {
-	if s.provider == nil {
+	if s.provider == nil && len(s.runtimeObservers) == 0 {
 		return false, nil
 	}
 	now := time.Now().UTC()
@@ -51,6 +51,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		var candidate *domain.ExternalOperation
 		for i := range st.Operations {
 			v := &st.Operations[i]
+			if s.provider == nil && v.Kind != "REFRESH_RUNTIME" {
+				continue
+			}
 			if terminalOperation(v.Status) || v.NextAttemptAt.After(now) || v.LeaseUntil.After(now) {
 				continue
 			}
@@ -62,6 +65,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			v := candidate
 			v.LeaseOwner = token
 			v.LeaseUntil = now.Add(45 * time.Second)
+			if v.Kind == "REFRESH_RUNTIME" {
+				v.LeaseUntil = now.Add(10 * time.Minute)
+			}
 			v.Attempts++
 			if v.StartedAt == nil {
 				started := now
@@ -77,8 +83,15 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	if err != nil || op == nil {
 		return false, err
 	}
-	callCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	timeout := 25 * time.Second
+	if op.Kind == "REFRESH_RUNTIME" {
+		timeout = 8 * time.Minute
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if op.Kind == "REFRESH_RUNTIME" {
+		return true, s.tickRuntime(callCtx, *op, token)
+	}
 	if op.Kind == "CREATE_BRANCH" || op.Kind == "PIN_REVISION" {
 		return true, s.tickManagedBranch(callCtx, *op, token)
 	}

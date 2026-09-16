@@ -23,10 +23,11 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
-	workspaceRoot string
-	store         Store
-	provider      delivery.Provider
-	workerID      string
+	runtimeObservers []delivery.RuntimeSnapshotObserver
+	workspaceRoot    string
+	store            Store
+	provider         delivery.Provider
+	workerID         string
 }
 
 func New(store Store) *Service { return &Service{store: store, workerID: id()} }
@@ -483,7 +484,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-	case "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration", "deploy_existing_artifact":
+	case "refresh_environment_runtime", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration", "deploy_existing_artifact":
 		var err error
 		out, m, err = applyExternal(st, c, m)
 		if err != nil {

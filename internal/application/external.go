@@ -129,6 +129,28 @@ func terminalOperation(status string) bool {
 }
 func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
 	switch c.Action {
+	case "refresh_environment_runtime":
+		var input struct {
+			EnvironmentID string `json:"environment_id"`
+			ApplicationID string `json:"application_id"`
+		}
+		if err := decode(c.Data, &input); err != nil {
+			return nil, m, err
+		}
+		env := environmentByID(st, input.EnvironmentID)
+		if env == nil || env.ProductID != c.ProductID {
+			return nil, m, invalid("environment must belong to product")
+		}
+		if input.ApplicationID != "" {
+			a := applicationByID(st, input.ApplicationID)
+			if a == nil || a.ProductID != c.ProductID {
+				return nil, m, invalid("component must belong to product")
+			}
+		}
+		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_RUNTIME", EnvironmentID: input.EnvironmentID, ApplicationID: input.ApplicationID, Status: "PENDING", RequestedBy: c.Actor, Phase: "OBSERVE_RUNTIME", CurrentStep: "OBSERVE_RUNTIME", NextAttemptAt: m.CreatedAt}
+		st.Operations = append(st.Operations, v)
+		return v, m, nil
+
 	case "grant_connection":
 		var input struct {
 			ConnectionID string `json:"connection_id"`

@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import {JSDOM} from 'jsdom';
+
+const dom=new JSDOM('<!doctype html><body><main id="main"></main></body>',{url:'http://localhost/?product=p',runScripts:'outside-only'});
+const w=dom.window,run=s=>vm.runInContext(s,dom.getInternalVMContext()),tick=()=>new Promise(r=>setTimeout(r,0));
+const source=fs.readFileSync(new URL('./static/runtime.js',import.meta.url),'utf8');
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const requests=[];
+w.esc=esc;w.list=x=>Array.isArray(x)?x:[];w.date=x=>x||'Unknown';w.badge=x=>`<span>${esc(x)}</span>`;w.notice=()=>{};w.render=()=>{};w.refresh=async()=>{};
+w.graphLink=(url,title)=>/^https?:\/\//.test(url)?`<a href="${esc(url)}" rel="noopener noreferrer">${esc(title)}</a>`:esc(title);
+w.request=async(path,body)=>{requests.push({path,body});return body?{id:'queued'}:{runtime_snapshots:[],runtime_targets:[]};};
+w.state={products:[{id:'p'}],applications:[{id:'a',product_id:'p',repository_id:'repo-a',name:'App A'},{id:'b',product_id:'p',repository_id:'repo-b',name:'App B'},{id:'foreign',product_id:'q',repository_id:'repo-a',name:'Wrong product'}],environments:[{id:'dev',product_id:'p',name:'DEV'},{id:'stage',product_id:'p',name:'STAGE'},{id:'other',product_id:'q',name:'OTHER'}],operations:[],runtime_snapshots:[]};
+w.productItems=key=>(w.state[key]||[]).filter(x=>x.product_id==='p');
+run(source);
+const row=(id,context,time,extra={})=>({id,product_id:'p',environment_id:'dev',application_id:'a',created_at:time,comparison:'UNKNOWN',expected:{image_repository:'ghcr.io/org/app',value:'v2'},runtime:{context,namespace:'ns',deployment:'api',container:'app',health:'HEALTHY',workload_image:'ghcr.io/org/app:v2',pods:[{name:'api-pod',phase:'Running',ready:true,image:'ghcr.io/org/app:v2',image_id:'containerd://app@sha256:actual'}]},...extra});
+try {
+ w.rows=[row('old','cluster-a','2026-09-16T10:00:00Z'),row('new','cluster-a','2026-09-16T11:00:00Z'),row('second','cluster-b','2026-09-16T09:00:00Z')];
+ assert.deepEqual(Array.from(run('runtimeLatest(rows)'),x=>x.id).sort(),['new','second']);
+ w.rows.push(row('namespace','cluster-a','2026-09-16T08:00:00Z',{runtime:{...w.rows[0].runtime,namespace:'another'}}));
+ assert.equal(run('runtimeLatest(rows).length'),3,'namespace independently observed');
+ w.state.runtime_snapshots=w.rows.concat(row('wrong-env','cluster-c','2026-09-16T12:00:00Z',{environment_id:'stage',runtime:{...w.rows[0].runtime,workload_image:'stage-image'}}),row('b','cluster-b','2026-09-16T11:00:00Z',{application_id:'b'}),row('foreign','cluster-f','2026-09-16T11:00:00Z',{product_id:'q',application_id:'foreign'}));
+ run('for(const e of productItems("environments"))runtimeViews.set(e.id,{state,loading:false});');
+ w.document.querySelector('main').innerHTML=run('runtimePanel(state.environments[0],["repo-a"])');
+ const text=()=>w.document.querySelector('main').textContent;
+ assert.equal(w.document.querySelectorAll('tbody tr').length,3);
+ assert.match(text(),/App A/);assert.doesNotMatch(text(),/App B|Wrong product|stage-image/);
+ const keys=Array.from(w.document.querySelectorAll('tbody tr'),r=>r.dataset.liveKey);assert.equal(new Set(keys).size,keys.length,'live row keys must include cluster and namespace');
+ assert.match(text(),/UNKNOWN/);assert.match(text(),/tag alone cannot prove/);assert.doesNotMatch(text(),/MATCH HEALTHY/);
+ const unsafe='<img src=x onerror=alert(1)>';
+ w.evil=row('unsafe','cluster-a','2026-09-16T12:00:00Z',{expected:{image_repository:unsafe,value:unsafe,error:unsafe},runtime:{...w.rows[0].runtime,workload_image:unsafe,pods:[{name:unsafe,image:unsafe,image_id:unsafe,phase:unsafe}],errors:[unsafe]},actions_runs:[{url:'javascript:alert(1)',name:unsafe,head_branch:unsafe},{url:'https://github.com/org/app/actions/runs/1',name:'Safe run'}],artifact_matches:[{digest:unsafe,source_commit:unsafe,build_run_id:unsafe}]});
+ w.document.querySelector('main').innerHTML='<table><tbody>'+run('runtimeRow(evil,state.applications)')+'</tbody></table>';
+ assert.equal(w.document.querySelector('main img'),null);assert.equal(w.document.querySelector('main [onerror]'),null);assert.equal(w.document.querySelectorAll('main a').length,1);assert.equal(w.document.querySelector('main a').href,'https://github.com/org/app/actions/runs/1');assert.match(text(),/metadata only/);assert.match(text(),/Verified artifact provenance/);
+ w.document.querySelector('main').innerHTML=run('runtimePanel(state.environments[0])');
+ w.sessionStorage.setItem('rc-actor','agent/runtime-test');w.document.querySelector('[data-runtime-sync]').click();await tick();
+ assert.deepEqual(JSON.parse(JSON.stringify(requests.find(x=>x.body))),{path:'/api/commands',body:{action:'refresh_environment_runtime',actor:'agent/runtime-test',product_id:'p',data:{environment_id:'dev'}}});
+ assert.ok(requests.some(x=>x.path==='/api/environments/dev/state'));
+ assert.doesNotMatch(source,/kubectl/);
+}finally{dom.window.close();}
+console.log('Runtime UI: latest workload/context snapshots, scope isolation, safe image/provenance rendering, honest comparison labels and read-only sync command passed.');
