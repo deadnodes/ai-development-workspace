@@ -12,6 +12,10 @@ GitHub is the first implemented provider stack, not a product identity. The curr
 
 See [contribution and publication notes](CONTRIBUTING.md).
 
+## Kubernetes: one instance per product
+
+Deploy a dedicated Control Plane and database per product. All developers, agents and environments of that product share its instance. Generic Deployment/Service manifests and agent setup instructions: [Kubernetes guide](docs/KUBERNETES.md). Multi-product instances remain supported.
+
 ## Start
 
 Requires Docker with Compose. From the repository root:

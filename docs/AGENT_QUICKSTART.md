@@ -2,6 +2,8 @@
 
 Цель: запустить Control Plane, получить контекст работы через MCP и подключить GitHub → Actions → GHCR → DEV GitOps. Все действия доступны без UI.
 
+Для выделенного сервиса на продукт в Kubernetes используй [KUBERNETES.md](KUBERNETES.md). MCP/API и команды настройки те же.
+
 ## 1. Запуск
 
 Из корня репозитория. Нужен только Docker с Compose:

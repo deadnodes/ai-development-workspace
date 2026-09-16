@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-control
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: release-control
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

@@ -132,3 +132,7 @@ Provider discovery populates one installation-wide Repository Registry keyed by 
 ExternalSystem is an instance-level unmanaged dependency with name, description, owning team/contact, interfaces/contracts and notes. Relationships link a managed Product/Component to it using DEPENDS_ON, CONSUMES, PROVIDES_TO or SHARES_DATA_WITH. A Feature can mark external systems and relationships as affected; an Integration can narrow that scope. Verification Gates can reference external compatibility obligations; existing blocking checks/results provide release readiness enforcement and audit. The context projection includes the relevant unmanaged systems, relationships and gate obligations so an agent sees affected contracts/teams.
 
 An ExternalSystem ID is never accepted as a repository, managed Component or deployment target. It has no managed branches, artifacts, environments or releases. This is development/release context, not project synchronization or a generic service catalog.
+
+## Dedicated product deployments
+
+A supported deployment topology is one instance per Product: its own Kubernetes namespace, Deployment/Service, API token, provider secrets and PostgreSQL database/user. All product environments share that instance. Instance scope remains the boundary for repository registry and provider connections; no cross-instance synchronization is implied. Multiple Products in one instance remain supported. See [Kubernetes deployment](KUBERNETES.md).
