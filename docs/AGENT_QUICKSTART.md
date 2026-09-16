@@ -29,6 +29,16 @@ docker compose --profile app down
 
 Данные находятся в PostgreSQL named volume. Не используй `down -v`: это удалит состояние.
 
+## Подключить MCP и handoff-скилл одной командой
+
+После запуска сервера:
+
+```sh
+./bin/release-control connect --url http://127.0.0.1:8090 --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID
+```
+
+Команда устанавливает проектное подключение Codex, `.agents/skills/rcp-handoff/SKILL.md`, binding `.release-control.json` и управляемый блок в `AGENTS.md`. Для защищённого сервера добавь `--token-env RC_TOKEN`; значение токена не записывается в файлы. Скилл доступен также через MCP `get_agent_skill {"name":"rcp-handoff"}` и ресурс `rcp://skills/rcp-handoff/SKILL.md`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
+
 ## 2. Подключение агента
 
 В MCP-клиенте добавь сервер:

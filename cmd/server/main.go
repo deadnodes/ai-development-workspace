@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"releasecontrol/internal/agentconnect"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
@@ -27,6 +28,9 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "connect" {
+		return agentconnect.Run(context.Background(), os.Args[2:], os.Stdout)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	boot, cancel := context.WithTimeout(ctx, 20*time.Second)

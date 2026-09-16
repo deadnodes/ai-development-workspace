@@ -6,6 +6,8 @@ A development metastore and control plane: intent, integrations, commit provenan
 
 Go modular monolith. One process serves the embedded UI, HTTP API and MCP; embedded bbolt or configured PostgreSQL stores state and audit history.
 
+One-command workspace setup: `./bin/release-control connect --url http://127.0.0.1:8090 --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID`. Installs project MCP configuration, instructions and the handoff skill; see [agent connection](docs/AGENT_CONNECT.md).
+
 **Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Start there for MCP connection, exact setup commands, GitHub App credentials, repository attachment and the first DEV operation.
 
 ## Product-independent by design
