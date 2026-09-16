@@ -40,13 +40,13 @@ func TestRepositoryPurposeAndComponentKindCatalog(t *testing.T) {
 		})
 	}
 	s, _ := fixture(t)
-	for _, role := range []string{"", "custom", "library", "DEPLOYMENT"} {
+	for _, role := range []string{"", "custom", "library", "DEPLOYMENT", "SOURCE"} {
 		reject(t, s, domain.Command{Action: "create_repository", ProductID: "p", Data: map[string]any{"name": "Invalid", "url": "https://example.test/repo", "role": role}})
 	}
-	exec(t, s, domain.Command{Action: "create_repository", ID: "legacy", ProductID: "p", Data: map[string]any{"name": "Legacy", "url": "https://example.test/repo"}})
-	exec(t, s, domain.Command{Action: "create_application", ProductID: "p", Data: map[string]any{"name": "Existing app", "repository_id": "legacy"}})
-	if domain.ComponentKind(domain.Application{}) != "APPLICATION" {
-		t.Fatal("legacy component kind changed")
+	exec(t, s, domain.Command{Action: "create_repository", ID: "default-app", ProductID: "p", Data: map[string]any{"name": "Application", "url": "https://example.test/repo"}})
+	exec(t, s, domain.Command{Action: "create_application", ProductID: "p", Data: map[string]any{"name": "Default app", "repository_id": "default-app"}})
+	if domain.ComponentKind(domain.Application{}) != "" {
+		t.Fatal("missing stored kind was silently inferred")
 	}
 }
 func TestLibraryNeedsNoClusterAndCannotBecomeDeployment(t *testing.T) {
@@ -83,7 +83,7 @@ func TestMixedRepositoryApplicationCompositionExcludesLibrary(t *testing.T) {
 }
 
 func TestRepositoryClassificationKeepsBindingHistoryAndScope(t *testing.T) {
-	s, m := repositoryPurposeFixture(t, "SOURCE")
+	s, m := repositoryPurposeFixture(t, "APPLICATION")
 	original := m.state.RepositoryBindings[0]
 	exec(t, s, domain.Command{Action: "classify_repository", ID: "repo", ProductID: "p", Data: map[string]any{"role": "LIBRARY"}})
 	if m.state.Repositories[0].Role != "LIBRARY" || len(m.state.RepositoryBindings) != 2 || m.state.RepositoryBindings[0] != original {

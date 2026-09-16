@@ -19,3 +19,7 @@ Before implementation, discover the current Product/Feature and resume it throug
 Before reporting completion, reconcile every affected Integration with its actual acceptance criteria. Use `complete_integration` for verified implementation; clear stale remaining work, record the commit/check evidence and update the Feature status when its current scope is complete. `ready` is not `released`. Track live external acceptance separately from implementation checks. If a roadmap Integration is only partly delivered, preserve its completed work and explicit remaining scope; never mark it ready merely because a narrower milestone passed. Keep blocked work out of an actively-working status when no execution is occurring, and record the blocker.
 
 Read back the Product/Feature state before the final response. The UI and agent context must agree with the completion claim. If the instance is unavailable, report that blocker and reconcile state when it returns; do not silently make local state files authoritative again.
+
+## First-version development
+
+Maintain one current schema. There are no supported legacy installations. Do not add compatibility aliases, parallel contract versions or migration blockers to preserve disposable local prototype data. Normalize/reset local records when needed, then reconcile development tracking in the instance. Real provider credentials and live acceptance evidence must still be reported honestly.

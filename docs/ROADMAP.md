@@ -1,4 +1,4 @@
-# Incremental delivery and compatibility
+# First-version delivery
 
 This is an architectural implementation sequence, not a mutable progress log. Discover the relevant Feature in your configured instance for actual work, decisions, verification and handoffs. The initial GitHub execution implementation is documented in [GITHUB_DEV.md](GITHUB_DEV.md); live acceptance remains distinct from implementation.
 
@@ -23,17 +23,15 @@ Next product slice: reusable test scenarios and immutable runs bound to existing
 
 All slices use the existing modular monolith and domain/application layer. Provider interfaces are replaceable ports, not a plugin framework. External system runs remain external.
 
-## Compatibility and migration strategy
+## First-version schema policy
 
-- Keep persisted `applications`, `application_id`, `application_snapshots`, command `create_application` and current JSON responses. `Component` is an additive Go/domain alias now. A future `/components` name is a projection/alias first, with the same stable IDs.
-- Current persistence groups documents by `records.kind` into `State` JSON keys; unknown kinds are not automatically usable. The current upsert does not change `kind`. A future storage rename therefore needs an explicit SQL migration plus versioned reader/projector, not just a Go type rename.
-- Never rewrite historical event command payloads or immutable composition snapshots to modernize naming. Preserve their schema and introduce explicit versioned projections where necessary. Avoid mixed-version writers during any non-compatible storage migration.
-- Current `Release` is a planned immutable selection. Preserve it as the legacy release-plan contract. Introduce final `ReleaseRecord` only with verified execution; do not mark old plans released during migration.
-- New lifecycle entities in `internal/domain/lifecycle.go` are target contracts. They are not added to `State` or stored automatically. Each activation must add concrete command/query schemas, persisted kinds/indexes/migrations, scoping validation, provenance, transport parity tests and UI evidence together.
-- Provider connection/credential migration is additive: existing repository.provider and local environment.cluster remain descriptive legacy values until an explicit connection binding is configured. No guessing credentials or implicitly reusing a connection across products.
-- Do not infer environment purpose/promotion order from existing names. Existing unknown observations remain unknown; absent connection/policy means execution unavailable.
-- Secrets are references resolved at execution time through an eventual secret backend. Store only sanitized parameters and secret reference identifiers in plans/audit. Token injection by a UI/API request is never a normal domain write.
-- Introduce outbox/operation rows with expected external refs and idempotency IDs when enabling the first write adapter. No external request while holding a SQL mutation lock. Version pinned policy/configuration and approvals with execution plans.
+There are no supported previous installations or public API versions during first-version development. Keep one current model and contract. Change provisional names and schemas directly when required; do not introduce compatibility aliases, legacy readers or parallel versions solely to preserve local prototype data. Local prototype records may be normalized or reset. Maintain the project's development context in the running instance after such changes.
+
+Repository purposes are APPLICATION, LIBRARY, MIXED and GITOPS. Persist an explicit purpose and component kind. SOURCE is rejected. New application defaults are creation defaults, not fallback interpretations of incomplete persisted records.
+
+Product history, event provenance and immutable execution evidence remain product requirements. Permission to replace bootstrap data does not authorize rewriting external Git history or concealing failed checks. Credentials and live provider verification are factual setup requirements, not schema compatibility blockers.
+
+Target contracts become supported functionality only with concrete commands, persistence, scope validation, UI/MCP context and tests. Do not infer runtime health from desired GitOps state.
 
 ## Required validation for each execution capability
 

@@ -134,7 +134,7 @@ func TestPostgresExternalRegistryAndDeliveryRestart(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Fatal("repository discovery failed")
 	}
-	for _, r := range []struct{ id, product, name, role string }{{"source", "p1", "source", "SOURCE"}, {"gitops", "p1", "gitops", "GITOPS"}, {"shared-source", "p2", "source", "SOURCE"}} {
+	for _, r := range []struct{ id, product, name, role string }{{"source", "p1", "source", "APPLICATION"}, {"gitops", "p1", "gitops", "GITOPS"}, {"shared-source", "p2", "source", "APPLICATION"}} {
 		post(domain.Command{Action: "import_repository", ID: r.id, ProductID: r.product, Data: map[string]any{"connection_id": "conn", "full_name": "team/" + r.name, "role": r.role, "default_branch": "main"}}, 200)
 	}
 	post(domain.Command{Action: "create_application", ID: "app", ProductID: "p1", Data: map[string]any{"name": "API", "repository_id": "source"}}, 200)

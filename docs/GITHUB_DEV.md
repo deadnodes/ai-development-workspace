@@ -12,7 +12,7 @@ Supported secret references are `env:RCP_…` and `file:/run/secrets/…` (or a 
 
 The GitHub API destination defaults to `api.github.com`. An enterprise/test endpoint requires an operator allowlist (`RCP_GITHUB_API_URL` or `RCP_GITHUB_API_ALLOWED_HOSTS`); a UI field alone cannot redirect an App JWT to an arbitrary server.
 
-Test the connection, discover repositories, and attach the required repositories with SOURCE or GITOPS roles. A GitHub App with only Contents permission can read Git but cannot dispatch Actions; connection discovery alone is not proof of all execution permissions.
+Test the connection, discover repositories, and attach the required repositories with APPLICATION, LIBRARY, MIXED or GITOPS roles. A GitHub App with only Contents permission can read Git but cannot dispatch Actions; connection discovery alone is not proof of all execution permissions.
 
 ## Source binding and builds
 

@@ -34,8 +34,8 @@ func TestPostgresFlowHistoryRestartAndBackupMigration(t *testing.T) {
 	integrationMeta := meta("integration")
 	integrationMeta.FeatureID = "feature"
 	seed.Integrations = append(seed.Integrations, domain.Integration{Meta: integrationMeta, Title: "Callback fix", Kind: "hotfix", Status: "released", Repositories: []string{"repository"}})
-	seed.Repositories = append(seed.Repositories, domain.Repository{Meta: meta("repository"), Name: "team/source"})
-	seed.Applications = append(seed.Applications, domain.Application{Meta: meta("component"), Name: "API", RepositoryID: "repository"})
+	seed.Repositories = append(seed.Repositories, domain.Repository{Role: "APPLICATION", Meta: meta("repository"), Name: "team/source"})
+	seed.Applications = append(seed.Applications, domain.Application{Kind: "APPLICATION", Meta: meta("component"), Name: "API", RepositoryID: "repository"})
 	seed.Environments = append(seed.Environments, domain.Environment{Meta: meta("environment"), Name: "TEST", Cluster: "cluster", Namespace: "test", DesiredCompositionID: "composition", DesiredOperationID: "active-parent"})
 	revision := domain.IntegrationRevision{Meta: meta("revision"), IntegrationID: "integration", RepositoryID: "repository", Branch: "feature/fix", BaseCommit: deliveryBase, HeadCommit: deliveryHead, Commits: []string{deliveryHead}}
 	seed.IntegrationRevisions = append(seed.IntegrationRevisions, revision)

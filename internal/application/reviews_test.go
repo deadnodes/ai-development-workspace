@@ -21,7 +21,7 @@ func TestReviewImportDedupResolutionAndContext(t *testing.T) {
 	s, m := fixture(t)
 	ctx := context.Background()
 	m.state.Repositories = append(m.state.Repositories, domain.Repository{Meta: domain.Meta{ID: "repo", ProductID: "p"}})
-	m.state.RepositoryBindings = append(m.state.RepositoryBindings, domain.RepositoryBinding{Meta: domain.Meta{ID: "binding", ProductID: "p"}, RepositoryID: "repo", ConnectionID: "conn", Role: "SOURCE", FullName: "example/source"})
+	m.state.RepositoryBindings = append(m.state.RepositoryBindings, domain.RepositoryBinding{Meta: domain.Meta{ID: "binding", ProductID: "p"}, RepositoryID: "repo", ConnectionID: "conn", Role: "APPLICATION", FullName: "example/source"})
 	m.state.GitHubConnections = append(m.state.GitHubConnections, domain.GitHubConnection{Meta: domain.Meta{ID: "conn"}})
 	m.state.ConnectionGrants = append(m.state.ConnectionGrants, domain.ConnectionGrant{Meta: domain.Meta{ID: "grant", ProductID: "p"}, ConnectionID: "conn"})
 	provider := &reviewFixture{review: delivery.PullRequestReview{Number: 5, Head: "feature/work", Base: "dev", Comments: []delivery.ReviewComment{{ID: 11, Kind: "inline", Author: "chatgpt-codex-connector[bot]", Body: "**![P2 Badge](https://example.test/badge) Fix duplicate poll**", Commit: "abc", UpdatedAt: time.Now()}, {ID: 12, Kind: "inline", Body: "[P3] Optional style"}}}}
@@ -78,7 +78,7 @@ func TestReviewPriorities(t *testing.T) {
 func TestSharedPRRequiresExplicitAttribution(t *testing.T) {
 	s, m := fixture(t)
 	m.state.Repositories = append(m.state.Repositories, domain.Repository{Meta: domain.Meta{ID: "repo", ProductID: "p"}})
-	m.state.RepositoryBindings = append(m.state.RepositoryBindings, domain.RepositoryBinding{Meta: domain.Meta{ID: "binding", ProductID: "p"}, RepositoryID: "repo", ConnectionID: "conn", Role: "SOURCE", FullName: "example/source"})
+	m.state.RepositoryBindings = append(m.state.RepositoryBindings, domain.RepositoryBinding{Meta: domain.Meta{ID: "binding", ProductID: "p"}, RepositoryID: "repo", ConnectionID: "conn", Role: "APPLICATION", FullName: "example/source"})
 	m.state.GitHubConnections = append(m.state.GitHubConnections, domain.GitHubConnection{Meta: domain.Meta{ID: "conn"}})
 	m.state.ConnectionGrants = append(m.state.ConnectionGrants, domain.ConnectionGrant{Meta: domain.Meta{ID: "grant", ProductID: "p"}, ConnectionID: "conn"})
 	s.provider = &reviewFixture{review: delivery.PullRequestReview{Number: 6, Head: "dev", Base: "main", Comments: []delivery.ReviewComment{{ID: 1, Kind: "inline", Body: "[P1] Ours"}, {ID: 2, Kind: "inline", Body: "[P2] Another feature"}}}}

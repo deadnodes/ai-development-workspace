@@ -6,32 +6,29 @@ import (
 )
 
 func RepositoryRoles() []string {
-	return []string{"APPLICATION", "LIBRARY", "MIXED", "GITOPS", "SOURCE"}
+	return []string{"APPLICATION", "LIBRARY", "MIXED", "GITOPS"}
 }
 func ComponentKinds() []string { return []string{"APPLICATION", "LIBRARY"} }
 func IsSourceRole(role string) bool {
-	return slices.Contains([]string{"SOURCE", "APPLICATION", "LIBRARY", "MIXED"}, role)
+	return slices.Contains([]string{"APPLICATION", "LIBRARY", "MIXED"}, role)
 }
 
-// Empty kind is a backwards-compatible existing deployable Application.
+// ComponentKind returns the persisted delivery kind.
 func ComponentKind(v Application) string {
-	if v.Kind == "" {
-		return "APPLICATION"
-	}
 	return v.Kind
 }
 func RepositoryAllows(role, kind string) bool {
-	if role == "SOURCE" || role == "MIXED" {
+	if role == "MIXED" {
 		return slices.Contains(ComponentKinds(), kind)
 	}
 	return (role == "APPLICATION" && kind == "APPLICATION") || (role == "LIBRARY" && kind == "LIBRARY")
 }
 
 // ValidateRepositoryKinds also protects backup/store callbacks from introducing
-// new, unsupported purpose labels. Empty fields are existing legacy records.
+// unsupported purpose labels, including missing persisted classifications.
 func ValidateRepositoryKinds(st State) error {
 	for _, r := range st.Repositories {
-		if r.Role != "" && !slices.Contains(RepositoryRoles(), r.Role) {
+		if !slices.Contains(RepositoryRoles(), r.Role) {
 			return fmt.Errorf("invalid repository role %q for %s", r.Role, r.ID)
 		}
 	}

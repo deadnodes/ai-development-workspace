@@ -5,19 +5,19 @@ Object.assign(forms,{
  configure_publication:{label:'Configure library publication',help:'Record where this library is intended to publish. This does not upload a package, authenticate to a registry or create an environment deployment.',fields:[field('application_id','Library component','library_component',true),field('format','Package format','publication_format',true),field('registry_url','Registry URL','url',true),field('package_name','Package name','text',true)]},
  record_package_artifact:{label:'Record package artifact',help:'Record an artifact produced by an external build/publisher. Source, version, checksum and URI are caller-attested provenance; saving this record does not verify registry availability or publish anything.',fields:[field('application_id','Library component','library_component',true),field('publication_target_id','Publication target','publication_target',true),field('integration_id','Related integration (optional)','product_integrations_single'),field('source_commit','Exact source commit','text',true),field('version','Package version','text',true),field('checksum','Package checksum','text',true),field('uri','Published artifact URI','url',true),field('build_url','External build URL (optional)','url')]}
 });
-function repositoryPurpose(repo){return repo.role||productItems('repository_bindings').filter(b=>b.repository_id===repo.id).at(-1)?.role||'SOURCE';}
+function repositoryPurpose(repo){return repo.role||productItems('repository_bindings').filter(b=>b.repository_id===repo.id).at(-1)?.role||'APPLICATION';}
 function latestRepositoryBindings(){return Array.from(new Map(productItems('repository_bindings').map(b=>[b.repository_id,b])).values());}
 function libraryOptionsFor(f){
  const enums={component_kind:'component_kinds',repository_role:'repository_roles',publication_format:'publication_formats'};
  if(enums[f.type])return list(statusMetadata[enums[f.type]]).map(v=>({id:v,title:v}));
- if(f.type==='source_repository')return productItems('repositories').filter(r=>['SOURCE','APPLICATION','LIBRARY','MIXED'].includes(repositoryPurpose(r)));
+ if(f.type==='source_repository')return productItems('repositories').filter(r=>['APPLICATION','APPLICATION','LIBRARY','MIXED'].includes(repositoryPurpose(r)));
  if(f.type==='library_component')return productItems('applications').filter(a=>a.kind==='LIBRARY');
  if(f.type==='publication_target'){const app=$('#input-application_id').value||currentForm?.attrs.application;return productItems('publication_targets').filter(p=>p.application_id===app).map(p=>({...p,title:`${p.package_name} · ${p.format} · ${p.registry_url}`}));}
  if(f.type==='product_integrations_single'){const ids=new Set(productItems('features').map(f=>f.id));return list(state.integrations).filter(i=>ids.has(i.feature_id));}
  return null;
 }
 function libraryFormValues(action,attrs){
- if(action==='classify_repository')return {role:productItems('repositories').find(r=>r.id===attrs.id)?.role||'SOURCE'};
+ if(action==='classify_repository')return {role:productItems('repositories').find(r=>r.id===attrs.id)?.role||'APPLICATION'};
  if(action==='create_repository')return {role:'APPLICATION'};
  if(action==='create_application')return {kind:'APPLICATION'};
  if(action==='configure_publication'||action==='record_package_artifact')return {application_id:attrs.application,publication_target_id:attrs.publication};

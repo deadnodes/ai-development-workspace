@@ -106,7 +106,7 @@ Discovery заполняет общий Registry числовыми GitHub ID. �
 
 ```json
 {"action":"grant_connection","actor":"agent/setup","product_id":"PRODUCT_ID","data":{"connection_id":"CONNECTION_ID"}}
-{"action":"import_repository","actor":"agent/setup","product_id":"PRODUCT_ID","data":{"connection_id":"CONNECTION_ID","full_name":"ORG/SOURCE","role":"SOURCE","default_branch":"main","base_branch":"main"}}
+{"action":"import_repository","actor":"agent/setup","product_id":"PRODUCT_ID","data":{"connection_id":"CONNECTION_ID","full_name":"ORG/SOURCE","role":"APPLICATION","default_branch":"main","base_branch":"main"}}
 {"action":"import_repository","actor":"agent/setup","product_id":"PRODUCT_ID","data":{"connection_id":"CONNECTION_ID","full_name":"ORG/GITOPS","role":"GITOPS","default_branch":"main","base_branch":"main"}}
 ```
 

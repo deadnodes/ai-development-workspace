@@ -882,7 +882,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if !productExists(st, c.ProductID) {
 			return nil, missing("product", c.ProductID)
 		}
-		v := domain.Repository{Role: "SOURCE"}
+		v := domain.Repository{Role: "APPLICATION"}
 		if e := decode(c.Data, &v); e != nil {
 			return nil, e
 		}

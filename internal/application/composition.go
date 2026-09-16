@@ -246,10 +246,7 @@ func repositoryRole(st *domain.State, repoID string) string {
 	}
 	for _, r := range st.Repositories {
 		if r.ID == repoID {
-			if r.Role != "" {
-				return r.Role
-			}
-			return "SOURCE"
+			return r.Role
 		}
 	}
 	return ""

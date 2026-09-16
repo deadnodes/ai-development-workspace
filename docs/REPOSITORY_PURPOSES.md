@@ -8,11 +8,10 @@ A registered repository is a physical Git identity shared across the instance. I
 | LIBRARY | Reusable package/library source |
 | MIXED | Application and library source, commonly a monorepo |
 | GITOPS | Desired environment configuration |
-| SOURCE | Legacy unclassified source; accepted for compatibility, not an assertion that it deploys |
 
-Roles, component kinds and publication formats are finite domain-owned catalogs. `GET /api/statuses` and MCP `get_status_schema` include `repository_roles`, `component_kinds`, and `publication_formats`. Both repository creation/import schemas use the same values. Existing unclassified source remains visibly SOURCE; new UI attachments default to APPLICATION.
+Roles, component kinds and publication formats are finite domain-owned catalogs. `GET /api/statuses` and MCP `get_status_schema` include `repository_roles`, `component_kinds`, and `publication_formats`. Both repository creation/import schemas use the same values. New attachments default to APPLICATION. SOURCE is not a valid purpose.
 
-Create components with `create_application`, `product_id`, and `data: {name, repository_id, path?, kind}`. Kind is APPLICATION or LIBRARY; legacy components default to APPLICATION. An application can represent one Kubernetes Deployment or a chart containing several resources: the Control Plane tracks the configured delivery unit, not a mandatory one-resource mapping. Desired GitOps configuration is separate from reconciliation and runtime health.
+Create components with `create_application`, `product_id`, and `data: {name, repository_id, path?, kind}`. Kind is APPLICATION or LIBRARY; new components default to APPLICATION. An application can represent one Kubernetes Deployment or a chart containing several resources: the Control Plane tracks the configured delivery unit, not a mandatory one-resource mapping. Desired GitOps configuration is separate from reconciliation and runtime health.
 
 Libraries have publication targets and immutable package artifact records. They are excluded from environment composition, image build configuration and deployment selectors. OCI can be a library publication format; that does not turn the library into an environment application.
 
@@ -30,4 +29,4 @@ Supported formats are npm, pypi, nuget, maven, oci and generic. Record an extern
 
 Integration and build URL are optional. These commands persist caller-attested intent/evidence. They do not run a publisher, authenticate to a package registry, verify package availability, or deploy a library to Kubernetes. The UI labels that limitation and preserves the recording actor/time. No registry credentials should be placed in URLs or artifact metadata.
 
-To classify an existing legacy SOURCE attachment, use `classify_repository` with `id` set to its Product repository ID and `data: {role: "APPLICATION"}` (or another catalog role). The server checks existing component/mapping compatibility and records the change in audit history. The UI exposes “Classify …” beside Product repositories. This does not reclassify the shared physical registry identity or silently change an existing component’s kind.
+To change an attachment purpose, use `classify_repository` with `id` set to its Product repository ID and `data: {role: "APPLICATION"}` (or another catalog role). The server checks existing component/mapping compatibility and records the change in audit history. The UI exposes “Classify …” beside Product repositories. This does not reclassify the shared physical registry identity or silently change an existing component’s kind.

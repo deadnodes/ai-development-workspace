@@ -86,7 +86,7 @@ func externalFixture(t *testing.T) (*Service, *memoryStore, *fakeDelivery) {
 	if _, err := s.Query(context.Background(), "discover_repositories", "conn"); err != nil {
 		t.Fatal(err)
 	}
-	for _, repo := range []struct{ id, role string }{{"source", "SOURCE"}, {"gitops", "GITOPS"}} {
+	for _, repo := range []struct{ id, role string }{{"source", "APPLICATION"}, {"gitops", "GITOPS"}} {
 		exec(t, s, domain.Command{Action: "import_repository", ID: repo.id, ProductID: "p", Data: map[string]any{"connection_id": "conn", "full_name": "owner/" + repo.id, "role": repo.role, "default_branch": "main"}})
 	}
 	exec(t, s, domain.Command{Action: "create_application", ID: "component", ProductID: "p", Data: map[string]any{"name": "Component", "repository_id": "source"}})
@@ -191,7 +191,7 @@ func TestInstanceRegistrySharedAcrossProductsAndConnections(t *testing.T) {
 	s, m, _ := externalFixture(t)
 	exec(t, s, domain.Command{Action: "create_product", ID: "second", Data: map[string]any{"name": "Second"}})
 	exec(t, s, domain.Command{Action: "create_github_connection", ID: "second-conn", ProductID: "second", Data: map[string]any{"name": "Second app", "app_id": 3, "installation_id": 4, "private_key_ref": "env:OTHER_KEY", "owner": "owner"}})
-	exec(t, s, domain.Command{Action: "import_repository", ID: "second-source", ProductID: "second", Data: map[string]any{"connection_id": "second-conn", "full_name": "owner/source", "role": "SOURCE", "default_branch": "main"}})
+	exec(t, s, domain.Command{Action: "import_repository", ID: "second-source", ProductID: "second", Data: map[string]any{"connection_id": "second-conn", "full_name": "owner/source", "role": "APPLICATION", "default_branch": "main"}})
 	if len(m.state.RegisteredRepositories) != 2 {
 		t.Fatalf("same instance repository duplicated: %d", len(m.state.RegisteredRepositories))
 	}
@@ -212,7 +212,7 @@ func TestInstanceRegistrySharedAcrossProductsAndConnections(t *testing.T) {
 			t.Fatal("instance connection owned exclusively by product")
 		}
 	}
-	reject(t, s, domain.Command{Action: "import_repository", ProductID: "second", Data: map[string]any{"connection_id": "conn", "full_name": "owner/other", "role": "SOURCE", "default_branch": "main"}})
+	reject(t, s, domain.Command{Action: "import_repository", ProductID: "second", Data: map[string]any{"connection_id": "conn", "full_name": "owner/other", "role": "APPLICATION", "default_branch": "main"}})
 	exec(t, s, domain.Command{Action: "grant_connection", ProductID: "second", Data: map[string]any{"connection_id": "conn"}})
 }
 func TestDeployCapturesBoundBranchWithoutManualSHA(t *testing.T) {
