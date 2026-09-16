@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -80,11 +82,49 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	if op.Kind == "REFRESH_GIT" {
 		return true, s.observeGit(callCtx, *op, token)
 	}
+	if op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION" {
+		return true, s.tickFlow(callCtx, *op, token)
+	}
 	if op.Kind != "DEPLOY" || op.Snapshot == nil {
 		return true, s.finish(ctx, *op, token, "FAILED", "invalid operation snapshot", nil)
 	}
 	snapshot := op.Snapshot
+	if op.ParentID != "" {
+		state, e := s.State(ctx)
+		if e != nil {
+			return true, e
+		}
+		if e = flowChildAllowed(&state, *op); e != nil {
+			return true, s.finish(ctx, *op, token, "CANCELLED", e.Error(), nil)
+		}
+	}
+	if op.BuildOnly && op.Phase == "APPLY" {
+		return true, s.finish(ctx, *op, token, "ARTIFACT_READY", "main artifact ready; candidate verification required before any production deployment", nil)
+	}
 	switch op.Phase {
+	case "PROMOTION_PREFLIGHT":
+		if e := s.verifyPromotionSource(callCtx, *op); e != nil {
+			return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+		}
+		base, e := s.provider.ReadGitOps(callCtx, snapshot.GitOpsConnection, snapshot.GitOpsRequest)
+		if e != nil {
+			return true, s.retry(ctx, *op, token, e.Error())
+		}
+		if base.HeadSHA == "" || base.BlobSHA == "" {
+			return true, s.finish(ctx, *op, token, "BLOCKED", "GitOps evidence missing", nil)
+		}
+		op.GitOpsBase = &base
+		// A private GHCR report expires in ten minutes. Run a fresh correlated probe
+		// after human verification; keep the approved digest immutable even if CI
+		// must reconstruct missing bytes under the configured rebuild policy.
+		if snapshot.Build.RebuildMissing {
+			snapshot.BuildRequest.OperationID = op.ID
+			snapshot.BuildRequest.RequestedAt = time.Now().UTC()
+			snapshot.BuildRequest.Inputs["operation_id"] = op.ID
+			op.Run = nil
+			return true, s.advance(ctx, *op, token, "DISPATCH", "WAITING_FOR_ARTIFACT", "refresh registry proof for approved main digest; different rebuild digest will block", nil)
+		}
+		return true, s.advance(ctx, *op, token, "INSPECT", "WAITING_FOR_ARTIFACT", "recheck exact verified main artifact before promotion", nil)
 	case "PREFLIGHT":
 		branches, e := s.provider.Branches(callCtx, snapshot.SourceConnection, snapshot.BuildRequest.Repository)
 		if e != nil {
@@ -108,7 +148,11 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		if snapshot.Revision.HeadCommit != "" && snapshot.Revision.HeadCommit != head {
 			return true, s.finish(ctx, *op, token, "BLOCKED", "source branch moved; capture a new revision or deploy the currently bound branch", nil)
 		}
-		comparison, e := s.provider.Compare(callCtx, snapshot.SourceConnection, snapshot.BuildRequest.Repository, baseSHA, head)
+		comparisonBase := baseSHA
+		if op.ParentID != "" && !op.BuildOnly {
+			comparisonBase = snapshot.Revision.BaseCommit
+		}
+		comparison, e := s.provider.Compare(callCtx, snapshot.SourceConnection, snapshot.BuildRequest.Repository, comparisonBase, head)
 		if e != nil {
 			return true, s.finish(ctx, *op, token, "FAILED", "source comparison failed: "+e.Error(), nil)
 		}
@@ -177,7 +221,7 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 				}
 			}
 		}
-		if knownProvenance && e == nil && artifact.Available && validArtifactDigest(artifact.Digest) && !artifact.ObservedAt.IsZero() {
+		if !op.BuildOnly && knownProvenance && e == nil && artifact.Available && validArtifactDigest(artifact.Digest) && !artifact.ObservedAt.IsZero() {
 			if op.ExpectedDigest != "" && artifact.Digest != op.ExpectedDigest {
 				return true, s.finish(ctx, *op, token, "BLOCKED", "observed artifact differs from requested digest; explicit new operation required", nil)
 			}
@@ -245,7 +289,7 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		if op.Run != nil {
 			request.EvidenceRepository = snapshot.BuildRequest.Repository
 			request.EvidenceRunID = op.Run.ID
-			request.EvidenceOperationID = op.ID
+			request.EvidenceOperationID = snapshot.BuildRequest.OperationID
 			request.SourceSHA = snapshot.Revision.HeadCommit
 		}
 		artifact, e := s.provider.InspectArtifact(callCtx, snapshot.SourceConnection, request)
@@ -264,13 +308,18 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		op.Artifact = &artifact
 		return true, s.advance(ctx, *op, token, "APPLY", "ARTIFACT_READY", "artifact digest observed; GitOps update pending", map[string]string{"digest": artifact.Digest})
 	case "APPLY", "APPLY_UNCERTAIN":
+		if op.ParentID != "" {
+			if e := s.verifyPromotionSource(callCtx, *op); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
+		}
 		currentState, stateErr := s.State(ctx)
 		if stateErr != nil {
 			return true, stateErr
 		}
 		currentTarget := environmentBinding(&currentState, op.EnvironmentID, op.ApplicationID)
 		currentEnv := environmentByID(&currentState, op.EnvironmentID)
-		if currentTarget == nil || currentTarget.ID != snapshot.Target.ID || !currentTarget.AllowDeploy || currentEnv == nil || currentEnv.Cluster != snapshot.Environment.Cluster || currentEnv.Namespace != snapshot.Environment.Namespace {
+		if currentTarget == nil || !reflect.DeepEqual(*currentTarget, snapshot.Target) || !currentTarget.AllowDeploy || currentEnv == nil || currentEnv.Cluster != snapshot.Environment.Cluster || currentEnv.Namespace != snapshot.Environment.Namespace {
 			return true, s.finish(ctx, *op, token, "BLOCKED", "environment target or policy changed; create a new operation", nil)
 		}
 		if op.Artifact == nil || op.GitOpsBase == nil {
@@ -286,10 +335,14 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			op.GitOpsResult = &delivery.GitOpsResult{CommitSHA: current.HeadSHA, BlobSHA: current.BlobSHA, AlreadyApplied: true}
 			return true, s.finish(ctx, *op, token, "GITOPS_APPLIED", "PENDING_RECONCILIATION: desired digest is in GitOps; Flux and runtime are not observed", map[string]string{"commit": current.HeadSHA, "digest": op.Artifact.Digest})
 		}
-		if current.HeadSHA != op.GitOpsBase.HeadSHA || current.BlobSHA != op.GitOpsBase.BlobSHA {
+		if (op.ParentID == "" && current.HeadSHA != op.GitOpsBase.HeadSHA) || current.BlobSHA != op.GitOpsBase.BlobSHA {
 			return true, s.finish(ctx, *op, token, "BLOCKED", "GitOps changed since planning; create a new operation", nil)
 		}
+		op.GitOpsBase.HeadSHA = current.HeadSHA
 		if e := s.save(ctx, *op, token, "APPLY_UNCERTAIN", "GITOPS_PENDING", "GitOps CAS intent committed", nil, false); e != nil {
+			if errors.Is(e, ErrValidation) {
+				return true, s.finish(ctx, *op, token, "CANCELLED", e.Error(), nil)
+			}
 			return true, e
 		}
 		applied, e := s.provider.ApplyGitOps(callCtx, snapshot.GitOpsConnection, delivery.GitOpsApply{Request: snapshot.GitOpsRequest, ExpectedHeadSHA: op.GitOpsBase.HeadSHA, ExpectedBlobSHA: op.GitOpsBase.BlobSHA, Digest: op.Artifact.Digest, OperationID: op.ID, Message: "release-control: " + op.ID})
@@ -338,12 +391,28 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
 		}
+		if phase == "APPLY_UNCERTAIN" && op.ParentID != "" && status != "CANCELLED" && status != "BLOCKED" {
+			if err := flowChildAllowed(st, op); err != nil {
+				return err
+			}
+		}
+		if (op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION") && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if e := flowGuard(st, op); e != nil {
+				status = "BLOCKED"
+				detail = e.Error()
+			}
+		}
 		now := time.Now().UTC()
 		op.Phase = phase
 		op.DeploymentState = status
 		switch status {
-		case "GITOPS_APPLIED", "SUCCEEDED":
+		case "GITOPS_APPLIED", "SUCCEEDED", "READY_FOR_VERIFICATION", "DEPLOYED":
 			op.Status = "SUCCEEDED"
+		case "ARTIFACT_READY":
+			op.Status = "RUNNING"
+			if op.BuildOnly && phase == "APPLY" && release {
+				op.Status = "SUCCEEDED"
+			}
 		case "FAILED", "BLOCKED":
 			op.Status = "FAILED"
 			op.Error = detail
@@ -356,7 +425,7 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		op.Detail = detail
 		op.UpdatedAt = now
 		op.NextAttemptAt = now.Add(2 * time.Second)
-		if phase == "BUILD_LOOKUP" {
+		if phase == "BUILD_LOOKUP" || phase == "WAIT_CHILDREN" || phase == "WAIT_RUNTIME" {
 			op.NextAttemptAt = now.Add(10 * time.Second)
 		}
 		if release {

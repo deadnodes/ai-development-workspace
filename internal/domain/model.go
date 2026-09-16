@@ -42,6 +42,8 @@ type PullRequest struct {
 	Status       string `json:"status"`
 }
 type Integration struct {
+	Kind           string `json:"kind,omitempty"`
+	FixesFindingID string `json:"fixes_finding_id,omitempty"`
 	Meta
 	Title              string        `json:"title"`
 	Objective          string        `json:"objective"`
@@ -128,6 +130,7 @@ type Finding struct {
 	FixCommit      string   `json:"fix_commit"`
 }
 type Environment struct {
+	DesiredOperationID   string `json:"desired_operation_id,omitempty"`
 	Cluster              string `json:"cluster"`
 	Namespace            string `json:"namespace"`
 	DesiredCompositionID string `json:"desired_composition_id"`
@@ -178,8 +181,13 @@ type Repository struct {
 	Provider string `json:"provider"`
 }
 type Release struct {
-	Status    string        `json:"status"`
-	Snapshots []Integration `json:"snapshots"`
+	ExecutionOperationID string            `json:"execution_operation_id,omitempty"`
+	CandidateOperationID string            `json:"candidate_operation_id,omitempty"`
+	SourceCommits        map[string]string `json:"source_commits,omitempty"`
+	ArtifactDigests      map[string]string `json:"artifact_digests,omitempty"`
+	GitOpsCommits        map[string]string `json:"gitops_commits,omitempty"`
+	Status               string            `json:"status"`
+	Snapshots            []Integration     `json:"snapshots"`
 	Meta
 	Name                   string   `json:"name"`
 	IntegrationIDs         []string `json:"integration_ids"`
@@ -197,6 +205,9 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
+	ScenarioVersions       []ScenarioVersion      `json:"scenario_versions"`
+	ScenarioRuns           []ScenarioRun          `json:"scenario_runs"`
+	RuntimeObservations    []RuntimeObservation   `json:"runtime_observations"`
 	ReviewSyncs            []ReviewSync           `json:"review_syncs"`
 	DeliveryArtifacts      []DeliveryArtifact     `json:"delivery_artifacts"`
 	DeliveryBuildRuns      []DeliveryBuildRun     `json:"delivery_build_runs"`
@@ -230,7 +241,7 @@ type State struct {
 }
 
 func EmptyState() State {
-	return State{ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {
@@ -246,4 +257,4 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-var Actions = []string{"create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release"}
+var Actions = []string{"reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release"}

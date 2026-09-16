@@ -50,3 +50,13 @@ The local running instance was exported through `scripts/backup.mjs` (31,503 com
 The implementation reads GitHub inline, conversation and review comments using App authentication and imports recognized Codex P1/P2 evidence without fabricated test failures. Tests cover reviewer identity, shared-PR preview/selection, deduplication, unchanged resolved comments, edited-comment reopening, context/attention and PostgreSQL reopen followed by MCP resync. Full make check and additional race-enabled application/transport checks passed. Renderer checks verify review source/commit display and escaped comment text.
 
 A real Codex P2 inline-comment format was inspected through authorized read-only gh access. Control Plane live App review sync remains unverified until App credentials and review permissions are configured. The updated local container was built and applied. Native browser verification could not run because browser connection timed out twice; renderer checks are not presented as browser validation.
+
+## Executable compositions, selected main releases and hotfixes
+
+2026-09-16: PostgreSQL-backed `make check` passes, including formatting/vet, frontend render/serialization checks, workflow contract tests, all Go race tests and binary build. Deterministic Git/CI/GitOps tests execute independent A+B compositions, removal without changing another environment, conflicts, concurrent selection changes, worker restart, selected main candidates, exact-candidate scenario verification, promotion and subsequent hotfix releases within the original Feature. A newly rebuilt digest cannot replace the approved digest during promotion.
+
+Real PostgreSQL reopen and gzip transfer tests retain parent/child operations, frozen source/provider snapshots, ordered scenario versions/results, runtime evidence and immutable releases. Restoring active operations cancels them and preserves the interruption audit; the destination does not execute them.
+
+Native Chrome validation inspected the candidate approval dialog, scenario target/evidence form and saved an advisory scenario with actor/history. No deployment was submitted from the browser. HTTP/MCP parity tests cover all eight new commands and reject contradictory references.
+
+These are implementation checks, not live GitHub acceptance. Live App → Actions → GHCR → GitOps execution remains unverified until the installation is configured. Runtime confirmation currently records attributed human/agent evidence; an automatic Flux/Kubernetes observer is not implemented. Main advancement is non-force fast-forward and can be refused by protected branches; it is not an atomic transaction across repositories.

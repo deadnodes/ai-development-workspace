@@ -74,6 +74,15 @@ type DeliverySnapshot struct {
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
 type ExternalOperation struct {
+	PreparedDeployments []DeliverySnapshot `json:"prepared_deployments,omitempty"`
+	ParentID            string             `json:"parent_id,omitempty"`
+	ChildIDs            []string           `json:"child_ids,omitempty"`
+	IntegrationIDs      []string           `json:"integration_ids,omitempty"`
+	CompositionSnapshot *Composition       `json:"composition_snapshot,omitempty"`
+	Sources             []FlowSource       `json:"sources,omitempty"`
+	BuildOnly           bool               `json:"build_only,omitempty"`
+	ReleaseCandidateID  string             `json:"release_candidate_id,omitempty"`
+
 	DeploymentState string     `json:"deployment_state"`
 	RequestedBy     string     `json:"requested_by"`
 	StartedAt       *time.Time `json:"started_at,omitempty"`

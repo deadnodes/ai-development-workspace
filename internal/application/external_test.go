@@ -173,7 +173,8 @@ func TestDeliveryBlocksSourceDriftAndRequiresExplicitPolicy(t *testing.T) {
 	if m.state.Operations[0].DeploymentState != "BLOCKED" || f.dispatches != 0 {
 		t.Fatal("source drift not blocked")
 	}
-	reject(t, s, domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": "dev", "application_id": "component", "purpose": "PROD", "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": "app.yaml", "image_field": "image.repository", "allow_deploy": true}})
+	exec(t, s, domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": "dev", "application_id": "component", "purpose": "PROD", "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": "app.yaml", "image_field": "image.repository", "allow_deploy": true}})
+	reject(t, s, deployCommand()) // PROD requires verified main candidate, never direct integration deployment.
 	reject(t, s, domain.Command{Action: "create_github_connection", ProductID: "p", Data: map[string]any{"name": "bad", "app_id": 1, "installation_id": 2, "private_key_ref": "-----BEGIN PRIVATE KEY-----", "owner": "owner"}})
 }
 func TestGitObservationDoesNotModifyBranchOrCommits(t *testing.T) {

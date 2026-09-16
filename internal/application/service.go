@@ -335,7 +335,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	if !slices.Contains(domain.Actions, c.Action) {
 		return nil, invalid("unknown action")
 	}
-	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id"} {
+	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id"} {
 		if _, exists := c.Data[key]; exists {
 			return nil, invalid("field %s cannot be supplied in data", key)
 		}
@@ -369,7 +369,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	}
 	m.ProductID = c.ProductID
 	m.FeatureID = c.FeatureID
-	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system"}, c.Action) {
+	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation"}, c.Action) {
 		b, _ := json.Marshal(st)
 		var arrays map[string][]map[string]any
 		_ = json.Unmarshal(b, &arrays)
@@ -382,6 +382,18 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	}
 	switch c.Action {
+	case "create_test_scenario", "revise_test_scenario", "record_scenario_run":
+		var err error
+		out, m, err = applyScenario(st, c, m)
+		if err != nil {
+			return nil, err
+		}
+	case "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
+		var err error
+		out, m, err = applyFlow(st, c, m)
+		if err != nil {
+			return nil, err
+		}
 	case "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope":
 		var err error
 		out, m, err = applyExternalSystems(st, c, m)
@@ -748,7 +760,11 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 			}
 		}
 		if old != nil && (old.Cluster != v.Cluster || old.Namespace != v.Namespace) {
+			if e := selectionAllowed(st, old.ID); e != nil {
+				return nil, e
+			}
 			v.DesiredCompositionID = ""
+			v.DesiredOperationID = ""
 		}
 		if old != nil {
 			*old = v

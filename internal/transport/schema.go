@@ -12,13 +12,13 @@ func CommandSchema() map[string]any {
 	}
 	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution for this engineering action; a human or agent identifier."}
 	data := map[string]any{}
-	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id expected_digest team contact component_id external_system_id type base_branch") {
+	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id") {
 		data[k] = str()
 	}
-	for _, k := range strings.Fields("requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids") {
+	for _, k := range strings.Fields("requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
 		data[k] = map[string]any{"type": "array", "items": str()}
 	}
-	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing"} {
+	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "approve", "approve_main_update"} {
 		data[k] = map[string]any{"type": "boolean"}
 	}
 	for _, k := range []string{"app_id", "installation_id"} {
@@ -45,12 +45,26 @@ func CommandSchema() map[string]any {
 		component[key] = str()
 	}
 	component["revision_ids"] = map[string]any{"type": "array", "items": str()}
-	data["components"] = map[string]any{"type": "array", "items": map[string]any{
+	compositionComponents := map[string]any{"type": "array", "items": map[string]any{
 		"type": "object", "properties": component, "additionalProperties": false,
 		"required": []string{"application_id", "base_ref", "base_commit", "target_branch", "revision_ids"},
 	}}
+	scenarioComponent := map[string]any{}
+	for _, key := range []string{"application_id", "operation_id", "source_sha", "artifact_digest", "deployment_evidence"} {
+		scenarioComponent[key] = str()
+	}
+	data["components"] = map[string]any{"anyOf": []any{compositionComponents, map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": scenarioComponent, "additionalProperties": false, "required": []string{"application_id", "operation_id", "source_sha", "artifact_digest"}}}}}
+	data["observations"] = map[string]any{"anyOf": []any{str(), map[string]any{"type": "array", "items": str()}}}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"reconcile_composition", "id", ""},
+		{"prepare_release_candidate", "product_id", "name environment_id components approve_main_update"},
+		{"promote_release_candidate", "id", "approve"},
+		{"create_hotfix", "feature_id", "title objective"},
+		{"record_runtime_observation", "id", "gitops_commit artifact_digest healthy environment_id details"},
+		{"create_test_scenario", "product_id", "title objective mechanism steps expected_outcomes"},
+		{"revise_test_scenario", "product_id", "scenario_id title objective mechanism steps expected_outcomes"},
+		{"record_scenario_run", "product_id", "scenario_version_id components result"},
 		{"create_external_system", "", "name"}, {"update_external_system", "id", ""}, {"create_system_relationship", "product_id", "external_system_id type"}, {"set_external_scope", "", ""},
 		{"grant_connection", "product_id", "connection_id"},
 		{"create_github_connection", "", "name app_id installation_id private_key_ref owner"},

@@ -8,11 +8,11 @@ Application identifies a deployable part of a product, linked to a repository an
 ## Source identity versus integration branch history
 IntegrationRevision is an immutable capture of one integration's source for one repository: branch, pinned base SHA, head SHA, and ordered commit identifiers. A new capture creates a new revision; it never replaces an earlier revision. Multiple repositories yield separate captures for the same integration.
 
-A composition pins a base commit and an ordered selection of revision IDs for every application's repository. The future Git worker derives a disposable `generated/...` branch from those inputs. Multiple features may therefore coexist in the same integration branch while their individual source history remains independent of merge commits. Applications sharing a repository must agree on its base, target branch and ordered revision selection.
+A composition pins a base commit and an ordered selection of revision IDs for every application's repository. The Git worker derives a disposable `generated/...` branch from those inputs. Multiple features may therefore coexist in the same integration branch while their individual source history remains independent of merge commits. Applications sharing a repository must agree on its base, target branch and ordered revision selection.
 
 Example: DEV revision 12 contains main@M + PAY/INT-03@P + AUTH/INT-02@A. DEV revision 13 can contain main@M2 + PAY/INT-03@P2, excluding AUTH. Revision 12 and the P/A source captures remain unchanged. Recomposition starts from the chosen base; removing AUTH is not a chain of guessed revert commits.
 
-Recording SHAs alone does not retain Git objects. The Git adapter must keep protected immutable refs for captured source versions (for example refs/rcp/integrations/<integration>/<revision>) before branches are deleted or rewritten. Capture is currently client-reported, not verified against a Git provider. Ancestor relationships, exact feature commit membership and merge conflict freedom remain unverified until that adapter exists. A feature branch that imports unrelated dev work cannot be cleanly separated merely from its name; feature source branches should start from main and dependencies must be declared.
+Recording SHAs alone does not retain Git objects. The Git adapter must keep protected immutable refs for captured source versions (for example refs/rcp/integrations/<integration>/<revision>) before branches are deleted or rewritten. Capture alone is client-reported. Execution verifies pinned source/base relationships through the Git provider and rejects moved bases or failed merges; this does not prove semantic independence or preserve every captured object forever. A feature branch that imports unrelated dev work cannot be cleanly separated merely from its name; feature source branches should start from main and dependencies must be declared.
 
 ## Planning slice implemented now
 - Create applications and arbitrary environment targets.
@@ -27,12 +27,12 @@ Selecting an older plan changes only desired intent. It is not a verified runtim
 
 ## Independent release boundary
 
-Shared test compositions are not promoted as production artifacts. Production candidates are built from pinned main commits after only selected completed integrations are merged there by external Git workflows. Verification of a mixed DEV composition does not automatically verify that narrower main candidate. See [test scenarios and release flow](TEST_AND_RELEASE_FLOW.md).
+Shared test compositions are not promoted as production artifacts. Production candidates are built from pinned main commits after only selected completed integrations are integrated by an explicitly approved branch-only merge/fast-forward operation. Verification of a mixed DEV composition does not automatically verify that narrower main candidate. See [test scenarios and release flow](TEST_AND_RELEASE_FLOW.md).
 
-## Execution slice next
-On a deployment request: resolve and verify immutable source refs → isolated composition/merge preview → conflict report or generated commit → build each affected application → retain image digests and test evidence → update GitOps desired state → observe Flux reconciliation → observe Kubernetes rollout. A Deployment record must link the composition ID, repository outputs, artifact digests and observed outcome. Merge conflicts stop the operation for a human/agent resolution; they are not automatically guessed away. Partial rollout remains distinguishable from success.
+## Execution slice
+On a deployment request: resolve and verify immutable source refs → isolated composition/merge preview → conflict report or generated commit → build each affected application → retain image digests and test evidence → update GitOps desired state → record attributed runtime evidence. Automatic Flux/Kubernetes collection remains future work. A Deployment record must link the composition ID, repository outputs, artifact digests and observed outcome. Merge conflicts stop the operation for a human/agent resolution; they are not automatically guessed away. Partial rollout remains distinguishable from success.
 
-The current composition UI/API/MCP implement planning and source attribution. They do not execute multi-feature Git composition. The separate GitHub DEV command can build/deploy one bound Integration; it is not a composition executor. Discover current implementation work from your instance.
+The UI/API/MCP expose `reconcile_composition`, which queues a durable COMPOSE parent and per-component deployment children. Release candidate preparation and exact-digest promotion use separate operations and explicit approvals. Commands, evidence requirements and current limitations are documented in [test scenarios and release flow](TEST_AND_RELEASE_FLOW.md#commands-and-evidence).
 
 ## Independent environment reconciliation
 
@@ -64,6 +64,8 @@ Generated branches are disposable materializations of the database definition. G
 
 Production keeps the distinct policy: build from pinned main source after selected work has landed there. Test-like targets use composition sources regardless of their display names. Supporting arbitrary environment names does not enable arbitrary production writes.
 
-### Current gap
+### Current behavior and limits
 
-Independent desired composition planning exists. The running worker currently executes only `REFRESH_GIT` and a single-integration `DEPLOY`; selecting or changing a composition does **not yet** start the operation above. Implementing that operation requires external Git branch composition, component fan-out/build tracking, superseded-plan guards and Flux/runtime observation. This is the next execution slice, not an already-working automatic behavior.
+Planning and `select_composition` change desired intent only. Explicit `reconcile_composition` starts Git composition, component builds and configured DEV/TEST GitOps updates. Superseded-operation guards check desired identity before publishing. A GitOps write is not deployment success: the parent requires matching healthy observations for all child outputs. Observations are currently caller-attested; the service does not query Flux/Kubernetes or execute test scenarios automatically.
+
+Production uses `prepare_release_candidate` with explicit main-update approval, fresh exact-candidate scenario evidence, and `promote_release_candidate` with explicit promotion approval. Multi-repository Git updates and multi-component rollouts are not atomic; inspect child/source evidence after partial failure. Deterministic tests establish implementation behavior, not a live installation’s deployment success. See [the operational guide](TEST_AND_RELEASE_FLOW.md).

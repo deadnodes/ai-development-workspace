@@ -215,6 +215,10 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 			if environment.Cluster != v.EnvironmentSnapshot.Cluster || environment.Namespace != v.EnvironmentSnapshot.Namespace {
 				return nil, m, invalid("environment target changed; create a new composition plan")
 			}
+			if err := selectionAllowed(st, environment.ID); err != nil {
+				return nil, m, err
+			}
+			environment.DesiredOperationID = ""
 			environment.DesiredCompositionID = v.ID
 			environment.UpdatedAt = m.UpdatedAt
 			environment.Actor = c.Actor

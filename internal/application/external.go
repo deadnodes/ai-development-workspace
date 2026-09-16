@@ -300,8 +300,8 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if _, e := scopedConnection(st, input.ConnectionID, c.ProductID); e != nil {
 			return nil, m, e
 		}
-		if input.Purpose != "DEV" || !safeBranch(input.Ref) || input.Path == "" || path.IsAbs(input.Path) || path.Clean(input.Path) != input.Path || strings.HasPrefix(input.Path, "../") || input.ImageField == "" {
-			return nil, m, invalid("only explicit DEV purpose with ref, clean relative path and image_field supported")
+		if !slices.Contains([]string{"DEV", "TEST", "PROD"}, input.Purpose) || !safeBranch(input.Ref) || input.Path == "" || path.IsAbs(input.Path) || path.Clean(input.Path) != input.Path || strings.HasPrefix(input.Path, "../") || input.ImageField == "" {
+			return nil, m, invalid("explicit DEV/TEST/PROD purpose with ref, clean relative path and image_field required")
 		}
 		v := domain.EnvironmentBinding{Meta: m, EnvironmentID: input.EnvironmentID, ApplicationID: input.ApplicationID, Purpose: input.Purpose, ConnectionID: input.ConnectionID, RepositoryID: input.RepositoryID, Ref: input.Ref, Path: input.Path, ImageField: input.ImageField, DigestField: input.DigestField, AllowDeploy: input.AllowDeploy}
 		st.EnvironmentBindings = append(st.EnvironmentBindings, v)

@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"releasecontrol/internal/domain"
+	"slices"
 	"sort"
 	"time"
 )
@@ -145,7 +146,13 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				operations = append(operations, op)
 			}
 		}
-		return map[string]any{"environment": env, "bindings": bindings, "operations": operations, "reconciliation": "not_observed_by_this_milestone"}, nil
+		observations := []domain.RuntimeObservation{}
+		for _, r := range st.RuntimeObservations {
+			if r.EnvironmentID == id {
+				observations = append(observations, r)
+			}
+		}
+		return map[string]any{"environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "external_executor_attestation; no direct Flux observer"}, nil
 	case "get_operation":
 		for _, op := range st.Operations {
 			if op.ID == id {
@@ -155,7 +162,27 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 						steps = append(steps, step)
 					}
 				}
-				return map[string]any{"operation": op, "steps": steps}, nil
+				children := []domain.ExternalOperation{}
+				for _, child := range st.Operations {
+					if child.ParentID == id {
+						children = append(children, child)
+					}
+				}
+				contexts := map[string]any{}
+				for _, iid := range op.IntegrationIDs {
+					in := integration(&st, iid)
+					if in == nil {
+						continue
+					}
+					if _, found := contexts[in.FeatureID]; !found {
+						value, err := s.Resume(ctx, in.FeatureID)
+						if err != nil {
+							return nil, err
+						}
+						contexts[in.FeatureID] = value
+					}
+				}
+				return map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts}, nil
 			}
 		}
 		return nil, missing("operation", id)
@@ -182,10 +209,26 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				if op.Phase == "BUILD_LOOKUP" || op.Phase == "DISPATCH" {
 					reason = "BUILD_FAILED"
 				}
+				if op.Phase == "COMPOSE_SOURCE" {
+					for _, source := range op.Sources {
+						if source.Result != nil && source.Result.Conflict {
+							reason = "MERGE_CONFLICT"
+						}
+					}
+				}
 				if op.Phase == "INSPECT" {
 					reason = "ARTIFACT_MISSING"
 				}
 				if op.DeploymentState == "GITOPS_APPLIED" {
+					observed := false
+					for _, r := range st.RuntimeObservations {
+						if r.OperationID == op.ID {
+							observed = r.Healthy && op.Artifact != nil && op.GitOpsResult != nil && r.ArtifactDigest == op.Artifact.Digest && r.GitOpsCommit == op.GitOpsResult.CommitSHA
+						}
+					}
+					if observed {
+						continue
+					}
 					reason = "PENDING_RECONCILIATION"
 				}
 				items = append(items, map[string]any{"id": op.ID, "reason": reason, "detail": op.Detail, "integration_id": op.IntegrationID, "environment_id": op.EnvironmentID})
@@ -219,8 +262,24 @@ func addDeliveryContext(out map[string]any, st domain.State, featureID, integrat
 	artifacts := []domain.DeliveryArtifact{}
 	builds := []domain.DeliveryBuildRun{}
 	operationIDs := map[string]bool{}
+	relevantIntegrations := map[string]bool{}
+	for _, in := range st.Integrations {
+		if in.FeatureID == featureID && (integrationID == "" || in.ID == integrationID) {
+			relevantIntegrations[in.ID] = true
+		}
+	}
 	for _, op := range st.Operations {
-		if op.FeatureID == featureID && (integrationID == "" || op.IntegrationID == integrationID) {
+		for _, iid := range op.IntegrationIDs {
+			if relevantIntegrations[iid] {
+				operationIDs[op.ID] = true
+				for _, cid := range op.ChildIDs {
+					operationIDs[cid] = true
+				}
+			}
+		}
+	}
+	for _, op := range st.Operations {
+		if operationIDs[op.ID] || (op.FeatureID == featureID && (integrationID == "" || op.IntegrationID == integrationID)) {
 			operations = append(operations, op)
 			operationIDs[op.ID] = true
 		}
@@ -246,6 +305,39 @@ func addDeliveryContext(out map[string]any, st domain.State, featureID, integrat
 			reviewSyncs = append(reviewSyncs, v)
 		}
 	}
+	scenarios := []domain.ScenarioVersion{}
+	scenarioIDs := []string{}
+	f := feature(&st, featureID)
+	for _, v := range st.ScenarioVersions {
+		if f == nil || v.ProductID != f.ProductID {
+			continue
+		}
+		relevant := len(v.IntegrationIDs) == 0
+		for _, iid := range v.IntegrationIDs {
+			if relevantIntegrations[iid] {
+				relevant = true
+			}
+		}
+		if relevant {
+			scenarios = append(scenarios, v)
+			scenarioIDs = append(scenarioIDs, v.ID)
+		}
+	}
+	runs := []domain.ScenarioRun{}
+	for _, r := range st.ScenarioRuns {
+		if slices.Contains(scenarioIDs, r.ScenarioVersionID) {
+			runs = append(runs, r)
+		}
+	}
+	runtime := []domain.RuntimeObservation{}
+	for _, r := range st.RuntimeObservations {
+		if operationIDs[r.OperationID] {
+			runtime = append(runtime, r)
+		}
+	}
+	out["scenario_versions"] = scenarios
+	out["scenario_runs"] = runs
+	out["runtime_observations"] = runtime
 	out["review_syncs"] = reviewSyncs
 	out["git_observations"] = observations
 	out["operations"] = operations

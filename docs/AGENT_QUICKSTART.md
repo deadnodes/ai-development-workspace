@@ -145,7 +145,7 @@ image:
 
 Вызови `deploy_integration` и сохрани ID возвращённой операции. Опрашивай `get_operation` примерно раз в 5–10 секунд до `SUCCEEDED`, `FAILED` или `CANCELLED`. Не отправляй повторный deploy вместо ожидания.
 
-Проверь evidence: source SHA → Actions run → GHCR digest → GitOps commit. `SUCCEEDED` с `GITOPS_APPLIED` означает, что desired state записан. Это **не** подтверждение работающих pods: Flux/runtime observation пока не реализована.
+Проверь evidence: source SHA → Actions run → GHCR digest → GitOps commit. `SUCCEEDED` с `GITOPS_APPLIED` означает, что desired state записан. Это **не** подтверждение работающих pods: автоматического Flux/runtime collector пока нет. Для parent/child composition flow доступен `record_runtime_observation` — явное свидетельство человека/агента с точным commit/digest, а не серверная проверка кластера.
 
 При ошибке читай шаг/error и `get_attention_required`. Исправь конкретную причину. BEHIND/DIVERGED блокируют deploy; реальный SOURCE branch надо обновить отдельно. Missing artifact запускает CI только при `rebuild_missing: true`. GitOps изменяется только при `allow_deploy: true`.
 
@@ -166,3 +166,17 @@ TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/rele
 Граница ответственности: Control Plane — metastore и control plane. Изменяй исходники во внешней рабочей среде, а в сервис записывай контекст, коммиты и evidence. Не используй его для доступа к бизнес-данным или произвольного выполнения кода. [Подробности](RESPONSIBILITY_BOUNDARY.md).
 
 Codex P1/P2 review comments can become persistent findings through MCP `sync_pull_request_review`. Shared PRs use preview and explicit comment selection. See [PR review workflow](PR_REVIEWS.md).
+
+## 7. Совместное тестирование и независимый релиз
+
+Полный контракт: [TEST_AND_RELEASE_FLOW.md](TEST_AND_RELEASE_FLOW.md). В UI доступны reconcile composition, выбранный release candidate, сценарии/результаты и hotfix. Эти операции также доступны отдельными MCP tools и через `execute`.
+
+1. Создай immutable composition из выбранных revision IDs и вызови `reconcile_composition` с actor и composition_id. Цель должна иметь enabled DEV/TEST mapping. Полли parent через `get_operation`, проверяй child_ids и evidence.
+2. После реального наблюдения окружения вызови `record_runtime_observation` для каждого child: operation_id, environment_id, gitops_commit, artifact_digest, healthy, details. GitOps commit сам по себе не доказывает здоровье runtime.
+3. Опиши `create_test_scenario`: product_id, title, objective, mechanism, steps, expected_outcomes, integration_ids, blocking, optional preconditions. `revise_test_scenario` создаёт новую полную версию с scenario_id.
+4. `record_scenario_run` фиксирует реальное выполнение: product_id, scenario_version_id, composition_id **либо** candidate_operation_id, полный components с child operation_id/source_sha/artifact_digest, result и observations/artifacts. Для composition также обязательна deployment_evidence каждого component.
+5. Для релиза выбери ready/released integrations и вызови `prepare_release_candidate`: product_id, name, PROD environment_id, components и **approve_main_update: true**. Это реальное изменение main до проверки кандидата; не подставляй approval автоматически. При конфликте/base drift исправляй исходники снаружи.
+6. Дождись `SUCCEEDED / READY_FOR_VERIFICATION`. Проверь этот exact main-derived candidate свежими blocking scenarios. Затем `promote_release_candidate` с candidate_operation_id и **approve: true** переносит те же digests в configured PROD target. Для parent DEPLOYED требуется exact runtime evidence всех children.
+7. `create_hotfix` с feature_id, title, objective и optional finding_id сохраняет связь исправления с исходной проблемой; оно проходит обычные проверки и выбранный релиз.
+
+Все примеры выше — flat arguments named tools. Через `execute` используй `action`, `actor`, соответствующий `product_id`/`feature_id` или `id`, а остальные поля помести в `data`. Не объявляй live-прогон успешным по unit/fixture тестам: нужны реальные refs, Actions/report, digest, GitOps и runtime evidence.

@@ -64,6 +64,7 @@ func New(service Service, options Options) http.Handler {
 	registerQueryRoutes(mux, service)
 	registerBackupRoutes(mux, service)
 	registerReviewRoutes(mux, service)
+	registerFlowRoutes(mux, service)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_state", Description: "Read products, features, integration/work claims, verification, findings, applications, environments, immutable source revisions, composition plans, releases, GitHub connections, delivery operations, provider observations and audit history."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		v, e := service.State(ctx)
@@ -82,6 +83,7 @@ func New(service Service, options Options) http.Handler {
 	registerProviderTools(server, service)
 	registerBackupTools(server, service)
 	registerReviewTools(server, service)
+	registerFlowTools(server, service)
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20}))
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 	return protect(mux, options)
