@@ -114,6 +114,7 @@ type CheckResult struct {
 	Artifacts     []Artifact `json:"artifacts"`
 }
 type Finding struct {
+	ReviewSource *ReviewSource `json:"review_source,omitempty"`
 	Meta
 	ResultID       string   `json:"result_id"`
 	Title          string   `json:"title"`
@@ -196,6 +197,7 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
+	ReviewSyncs            []ReviewSync           `json:"review_syncs"`
 	DeliveryArtifacts      []DeliveryArtifact     `json:"delivery_artifacts"`
 	DeliveryBuildRuns      []DeliveryBuildRun     `json:"delivery_build_runs"`
 	ExternalSystems        []ExternalSystem       `json:"external_systems"`
@@ -228,7 +230,7 @@ type State struct {
 }
 
 func EmptyState() State {
-	return State{DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {

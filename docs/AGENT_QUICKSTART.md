@@ -164,3 +164,5 @@ TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/rele
 Полный перенос истории: MCP `create_backup` / `restore_backup` или `scripts/backup.mjs`. Архив сжимает и распаковывает сервер. Целевой экземпляр должен быть пустым. [Инструкция по backup](BACKUP.md).
 
 Граница ответственности: Control Plane — metastore и control plane. Изменяй исходники во внешней рабочей среде, а в сервис записывай контекст, коммиты и evidence. Не используй его для доступа к бизнес-данным или произвольного выполнения кода. [Подробности](RESPONSIBILITY_BOUNDARY.md).
+
+Codex P1/P2 review comments can become persistent findings through MCP `sync_pull_request_review`. Shared PRs use preview and explicit comment selection. See [PR review workflow](PR_REVIEWS.md).

@@ -83,6 +83,10 @@ func (f *persistedDeliveryFixture) ApplyGitOps(_ context.Context, _ delivery.Con
 	return delivery.GitOpsResult{}, errors.New("simulated lost successful commit response")
 }
 
+func (f *persistedDeliveryFixture) PullRequestReview(context.Context, delivery.Connection, string, int) (delivery.PullRequestReview, error) {
+	return delivery.PullRequestReview{Number: 5, Head: "feature/work", Base: "dev", HeadSHA: deliveryHead, Comments: []delivery.ReviewComment{{ID: 123, Kind: "inline", Author: "chatgpt-codex-connector[bot]", Body: "[P2] Preserve compatibility", Commit: deliveryHead}}}, nil
+}
+
 func TestPostgresExternalRegistryAndDeliveryRestart(t *testing.T) {
 	ctx := context.Background()
 	db := isolatedDatabase(t)
@@ -238,6 +242,17 @@ func TestPostgresExternalRegistryAndDeliveryRestart(t *testing.T) {
 	if len(state.Environments[0].Reconciled) != 0 || len(state.Environments[0].Runtime) != 0 {
 		t.Fatal("GitOps completion invented Flux/runtime health")
 	}
+	// Import real-provider-shaped review evidence before persistence/reopen comparison.
+	if _, err = service.SyncReview(ctx, "agent/review", "integration", "source", 5, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	state, err = service.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Findings) != 1 || len(state.ReviewSyncs) != 1 {
+		t.Fatal("review import missing")
+	}
 	// Final reopen compares every persisted record including append-only histories.
 	before := state
 	configurationBefore, err := service.Query(ctx, "get_product_configuration", "p1")
@@ -268,6 +283,15 @@ func TestPostgresExternalRegistryAndDeliveryRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
+	reviewResult, reviewErr := session.CallTool(ctx, &mcp.CallToolParams{Name: "sync_pull_request_review", Arguments: map[string]any{"actor": "agent/review", "integration_id": "integration", "repository_id": "source", "pull_request": 5}})
+	if reviewErr != nil || reviewResult.IsError {
+		t.Fatalf("review MCP: %v %+v", reviewErr, reviewResult)
+	}
+	reviewState, reviewErr := service.State(ctx)
+	if reviewErr != nil || len(reviewState.Findings) != 1 || len(reviewState.ReviewSyncs) != 2 {
+		t.Fatal("review dedup/history after restart failed")
+	}
+
 	for _, call := range []struct {
 		name     string
 		args     map[string]any

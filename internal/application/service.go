@@ -667,6 +667,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		m.FeatureID = r.FeatureID
 		v.Meta = m
 		v.ResultID = r.ID
+		v.ReviewSource = nil
 		v.Status = "open"
 		v.Resolution = ""
 		v.FixCommit = ""

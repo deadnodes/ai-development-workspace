@@ -70,3 +70,5 @@ Project configuration and history are persisted in PostgreSQL. UI/API/MCP are th
 ## Backup and migration
 
 Export/import the complete instance history as gzip through API/MCP or `scripts/backup.mjs`. Restore is atomic and requires an empty destination; active operations are cancelled with original evidence retained. See [agent backup and migration guide](docs/BACKUP.md).
+
+Codex P1/P2 review comments can become persistent findings through MCP `sync_pull_request_review`. Shared PRs use preview and explicit comment selection. See [PR review workflow](docs/PR_REVIEWS.md).

@@ -158,3 +158,8 @@ assert.ok(attentionHTML.includes('Open feature & integration'));
 assert.ok(attentionHTML.includes('Raw attention record'));
 assert.ok(evaluate('attentionView([])').includes('No attention items reported'));
 console.log('Actionable attention cards include reason, evidence, entity navigation and optional raw details.');
+evaluate(`state.findings=[{id:'review',feature_id:'f',title:'Codex P2',body:'<script>untrusted review</script>',severity:'P2',status:'open',integration_ids:['i'],review_source:{pull_request:5,comment:{url:'https://github.com/example/source/pull/5#discussion_r1',path:'src/api.go',commit:'reviewed-sha'}}}];`);
+const reviewHTML=evaluate('featureView(selectedFeature())');
+for(const text of ['Codex PR #5','src/api.go','reviewed-sha','&lt;script&gt;untrusted review&lt;/script&gt;'])assert.ok(reviewHTML.includes(text),text);
+assert.ok(!reviewHTML.includes('<script>untrusted'));
+console.log('Review findings retain source/commit attribution and escape untrusted comment bodies.');

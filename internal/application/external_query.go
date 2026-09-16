@@ -164,6 +164,15 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, missing("product", id)
 		}
 		items := []map[string]any{}
+		for _, finding := range st.Findings {
+			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {
+				integrationID := ""
+				if len(finding.IntegrationIDs) > 0 {
+					integrationID = finding.IntegrationIDs[0]
+				}
+				items = append(items, map[string]any{"id": finding.ID, "reason": "CODE_REVIEW_FINDING", "detail": finding.Body, "feature_id": finding.FeatureID, "integration_ids": finding.IntegrationIDs, "integration_id": integrationID, "priority": finding.ReviewSource.Priority, "url": finding.ReviewSource.Comment.URL})
+			}
+		}
 		for _, op := range st.Operations {
 			if op.ProductID == id && (op.Status == "FAILED" || op.DeploymentState == "GITOPS_APPLIED") {
 				reason := "DEPLOY_FAILED"
@@ -231,6 +240,13 @@ func addDeliveryContext(out map[string]any, st domain.State, featureID, integrat
 			builds = append(builds, v)
 		}
 	}
+	reviewSyncs := []domain.ReviewSync{}
+	for _, v := range st.ReviewSyncs {
+		if v.FeatureID == featureID && (integrationID == "" || v.IntegrationID == integrationID) {
+			reviewSyncs = append(reviewSyncs, v)
+		}
+	}
+	out["review_syncs"] = reviewSyncs
 	out["git_observations"] = observations
 	out["operations"] = operations
 	out["artifacts"] = artifacts
