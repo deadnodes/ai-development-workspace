@@ -1,5 +1,7 @@
 # Release Control Plane
 
+Start with [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md) for startup, MCP connection and GitHub setup.
+
 Standalone Go modular monolith. Read docs/ARCHITECTURE.md and docs/CONTRACT.md first. Domain/application behavior is shared by HTTP, embedded UI and MCP; never fork business logic in a transport.
 
 During bootstrap consult docs/IMPLEMENTATION_STATE.md. After migration use the tracked project feature and resume MCP operation as the source of development context. The file will contain only the locator and recovery instructions.

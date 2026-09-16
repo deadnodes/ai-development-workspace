@@ -1,86 +1,50 @@
 # Release Control Plane
 
-A Go modular monolith for human developers and coding agents. Git stores source history; Release Control Plane stores development intent, integration plans, decisions, discoveries, verification evidence and handoffs.
+Go modular monolith for development intent, integrations, verification, handoffs and DEV delivery. One process serves the embedded UI, HTTP API and MCP; PostgreSQL stores state and audit history.
 
-## Run locally
+**Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Start there for MCP connection, exact setup commands, GitHub App credentials, repository attachment and the first DEV operation.
 
-Requires Go 1.25+, Docker Compose and Node.js for the JavaScript syntax check. PostgreSQL is the only database implementation.
+## Start
 
-```sh
-make db
-make run
-```
-
-Open **http://127.0.0.1:8090**. The same process serves `/`, `/api/*` and `/mcp`. Start with **Create product**, then add a feature and integrations. No demo data is silently inserted. PostgreSQL data survives app and container restarts in a named volume.
-
-Alternatively, run the application and database in containers:
+Requires Docker with Compose. From the repository root:
 
 ```sh
 docker compose --profile app up --build -d
+curl --fail http://127.0.0.1:8090/healthz
 ```
 
-Do not run the container app and local app on port 8090 simultaneously.
+- UI: `http://127.0.0.1:8090`
+- MCP: `http://127.0.0.1:8090/mcp` (Streamable HTTP)
+- API state: `GET /api/state`
+- Command schemas: `GET /api/schema`
+- Commands: `POST /api/commands`
 
-## Interfaces
+First agent calls: `get_state {}`, then `resume {"feature_id":"…"}`. Fresh databases contain no demo data. Record a structured `handoff` before stopping work.
 
-- `GET /api/state` — full workspace state and audit history.
-- `GET /api/features/{id}/context` — deterministic agent resume package.
-- `GET /api/schema` — discover command inputs.
-- `POST /api/commands` — one attributed engineering action.
-- `/mcp` — official Go SDK Streamable HTTP server, with `get_state`, `resume`, `execute` plus semantic Git/deployment/operation tools. Tools advertise JSON schemas; execute shares the HTTP/UI application service.
+The default Compose setup is loopback-only, without an API token. PostgreSQL data survives restarts in a named volume. `docker compose --profile app down` stops the services; do not add `-v` unless intentionally deleting data.
+
+For development outside the app container, use `make db` then `make run` (Go 1.25+). Do not run both app modes on port 8090 simultaneously.
+
+## Current execution boundary
+
+Implemented: shared Repository Registry, Product/Feature/Integration scopes, unmanaged external dependencies, GitHub App authentication, Git observation, asynchronous Actions/GHCR operations and explicit DEV GitOps changes. The server does not use the local `gh` token. GitHub credentials and workflow/mapping configuration are required.
+
+A successful GitOps operation records desired state and remains pending reconciliation. Flux/Kubernetes runtime observation, automatic branch composition and production deployment are not implemented. Local tests are not evidence of a successful live deployment.
+
+## References
+
+- [Agent quickstart](docs/AGENT_QUICKSTART.md) — run, connect, configure, deploy, resume.
+- [GitHub build and GitOps contract](docs/GITHUB_DEV.md) — workflow, private GHCR and evidence details.
+- [Application commands](docs/CONTRACT.md) — shared HTTP/MCP/domain contract.
+- [Architecture](docs/ARCHITECTURE.md) and [roadmap](docs/ROADMAP.md).
+- [Validation](docs/VALIDATION.md) — tested behavior and live acceptance limits.
+
+## Checks
+
+With Compose database running, Go 1.25+, Node.js and Python 3:
 
 ```sh
-curl -s http://127.0.0.1:8090/api/commands \
-  -H 'Content-Type: application/json' \
-  -d '{"action":"create_product","actor":"human/developer","data":{"name":"Payments","description":"Payment platform"}}'
+TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/releasecontrol?sslmode=disable' make check
 ```
 
-Use the returned product ID as top-level `product_id` in `create_feature`; use the returned feature ID in `create_integration`. See [command contract](docs/CONTRACT.md) for the entire workflow.
-
-Configure any Streamable HTTP MCP client with URL `http://127.0.0.1:8090/mcp`. If `RC_TOKEN` is configured, send `Authorization: Bearer <token>`. A new agent should first call `get_state`, select a feature and call `resume` with `feature_id`. `execute` can record a structured `handoff` with completed/current/remaining/next/warnings so the next agent does not need conversation history.
-
-## Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | local Compose database on port 55432 | PostgreSQL connection string |
-| `LISTEN_ADDR` | `127.0.0.1:8090` | HTTP listener |
-| `RC_TOKEN` | unset | Optional shared bearer token for API/MCP |
-| `ALLOWED_HOSTS` | localhost and loopback addresses | Additional comma-separated HTTP hostnames |
-| `TEST_DATABASE_URL` | unset | Enable real PostgreSQL transport/persistence tests |
-
-This MVP is a trusted workspace application. Actor attribution is not authentication or RBAC. It binds loopback by default, rejects cross-origin requests and unexpected Host headers, and limits command sizes. Use a token and TLS ingress before intentionally sharing it. The UI can supply the configured token. No Git provider, Flux, Kubernetes or production mutations are performed.
-
-## Dynamic environments and feature composition
-
-Each product has its own arbitrary environment set. Add repositories and applications, record immutable integration source revisions, then plan a composition for an environment. Several features can target one generated branch; applications sharing a repository must use the same branch composition. **Set desired** records the intended composition and never claims that a merge or deployment happened. See [composition design and execution boundary](docs/ENVIRONMENT_COMPOSITION.md).
-
-## Intent-to-runtime architecture
-
-The [updated architecture](docs/ARCHITECTURE.md) extends the current phase-1/2 MVP toward managed branches, semantic conflicts, external CI and artifact recovery, policy-controlled GitOps deployment, and observed Flux/Kubernetes runtime. New typed lifecycle/provider contracts are design foundations only; no additional live providers or execution tools are enabled. Component is the domain name for the existing Application; existing API/data stay compatible. See [bounded delivery phases and migrations](docs/ROADMAP.md).
-
-## Development
-
-```sh
-make check
-TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/releasecontrol?sslmode=disable' go test -race ./...
-```
-
-Tests using PostgreSQL isolate their data. `make check` runs Go formatting checks, vet, JavaScript syntax and renderer checks, race tests and binary build. The frontend is embedded directly: no node_modules or separate build/deployment needed.
-
-## Semantics and scope
-
-Integrations are independently implementable/releasable. Completing an integration makes it **ready**, not deployed. Blocking gates require passing latest check results and no applicable open findings or blockers. Resolving a finding preserves failed evidence; rerun the check. Results, structured handoffs and events preserve provenance. Release plans are immutable records of intent; they do not claim a production deployment.
-
-Environment desired, reconciled and runtime state are distinct. Unknown means unknown. Repository/branch/commit references and desired integration composition are modelled; provider interfaces are prepared for Git/Flux/Kubernetes adapters. Automated branch composition, executors, production promotion, RBAC and multi-tenancy are deliberately outside this slice.
-
-To seed the project’s own tracked bootstrap feature explicitly, run `node scripts/dogfood.mjs`. See [validation evidence](docs/VALIDATION.md).
-
-See [architecture and invariants](docs/ARCHITECTURE.md), [shared contract](docs/CONTRACT.md), and [bootstrap handoff](docs/IMPLEMENTATION_STATE.md). Once dogfooding is seeded, the application feature and handoff replace the bootstrap file as the development state authority.
-
-
-### Real GitHub DEV execution
-
-The GitHub App adapter, asynchronous operation worker, Actions/GHCR build contract and DEV GitOps mutation path are implemented. Configure a real App installation and source/build/GitOps mappings using [GITHUB_DEV.md](docs/GITHUB_DEV.md). Installation tokens stay in memory; the local `gh` credential is not used by the server. The UI exposes connections, shared repository discovery/attachment, Git state, operations and unmanaged external dependencies.
-
-A successful GitOps operation ends at pending reconciliation; this slice does not claim Flux/runtime DEPLOYED. Live acceptance needs actual App credentials and an observed Actions → GHCR → GitOps operation; local fake-provider tests alone do not satisfy that milestone.
+Runs formatting, vet, frontend checks, workflow-contract tests, race-enabled Go/PostgreSQL tests and binary build. No frontend dependency install or separate deployment is needed.
