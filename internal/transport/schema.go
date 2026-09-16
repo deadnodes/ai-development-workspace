@@ -27,6 +27,7 @@ func CommandSchema() map[string]any {
 	for _, k := range []string{"app_id", "installation_id"} {
 		data[k] = map[string]any{"type": "integer"}
 	}
+	data["parameters"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Nonsecret component or environment configuration; values are context only, never executed."}
 	data["inputs"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 	data["position"] = map[string]any{"type": "integer"}
 	data["steps"] = map[string]any{"type": "array", "items": str()}

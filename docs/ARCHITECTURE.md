@@ -146,3 +146,11 @@ PostgreSQL is authoritative for project configuration and development history. G
 ## Testing versus production source
 
 Test environments host selected integration compositions. Production release candidates are built from main after explicitly selected work is integrated there; shared DEV images/branches are not promoted wholesale. Exact composition-bound test evidence is distinct from main-candidate verification. See [test/release flow and scenario model](TEST_AND_RELEASE_FLOW.md).
+
+## Local workspace mode
+
+The same domain/application/UI/MCP run against an embedded bbolt file by default or PostgreSQL when DATABASE_URL is configured. Both implement the same transactional Store interface; transport and business rules do not branch by backend. Local storage is single-process and bounded; the shared deployment uses PostgreSQL.
+
+An operator-configured workspace root enables read-only Git/AGENTS discovery. The scanner never clones or executes repository commands. Local checkout observations are distinct from portable repository URLs. Curated ProductKnowledge contains nested product areas, repository scope, interface relationships and nonsecret parameters independently of Feature history. AGENTS documents remain attributed source context, never implicit execution authorization.
+
+Portable workspace configuration contains current setup and documentation, excludes history and deployment authorizations, and imports atomically as a new Product. Full gzip backup remains the whole-instance history transfer. No new compatibility versions or alternate domain implementation were introduced. See LOCAL_WORKSPACE.md.

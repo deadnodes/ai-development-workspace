@@ -1,5 +1,7 @@
 # Инструкция для агента
 
+Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](LOCAL_WORKSPACE.md).
+
 Цель: запустить Control Plane, получить контекст работы через MCP и подключить GitHub → Actions → GHCR → DEV GitOps. Все действия доступны без UI.
 
 Для выделенного сервиса на продукт в Kubernetes используй [KUBERNETES.md](KUBERNETES.md). MCP/API и команды настройки те же.

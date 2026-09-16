@@ -56,10 +56,11 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 	switch c.Action {
 	case "create_application":
 		var input struct {
-			Name         string `json:"name"`
-			Kind         string `json:"kind"`
-			RepositoryID string `json:"repository_id"`
-			Path         string `json:"path"`
+			Parameters   map[string]string `json:"parameters"`
+			Name         string            `json:"name"`
+			Kind         string            `json:"kind"`
+			RepositoryID string            `json:"repository_id"`
+			Path         string            `json:"path"`
 		}
 		if e := decode(c.Data, &input); e != nil {
 			return nil, m, e
@@ -85,7 +86,7 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		if !domain.RepositoryAllows(repositoryRole(st, input.RepositoryID), input.Kind) {
 			return nil, m, invalid("repository purpose does not support this component kind")
 		}
-		v := domain.Application{Meta: m, Kind: input.Kind, Name: input.Name, RepositoryID: input.RepositoryID, Path: input.Path}
+		v := domain.Application{Parameters: input.Parameters, Meta: m, Kind: input.Kind, Name: input.Name, RepositoryID: input.RepositoryID, Path: input.Path}
 		st.Applications = append(st.Applications, v)
 		return v, m, nil
 	case "record_integration_revision":

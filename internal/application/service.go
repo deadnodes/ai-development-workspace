@@ -23,9 +23,10 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
-	store    Store
-	provider delivery.Provider
-	workerID string
+	workspaceRoot string
+	store         Store
+	provider      delivery.Provider
+	workerID      string
 }
 
 func New(store Store) *Service { return &Service{store: store, workerID: id()} }

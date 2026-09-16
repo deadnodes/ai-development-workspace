@@ -130,10 +130,11 @@ type Finding struct {
 	FixCommit      string   `json:"fix_commit"`
 }
 type Environment struct {
-	DesiredOperationID   string `json:"desired_operation_id,omitempty"`
-	Cluster              string `json:"cluster"`
-	Namespace            string `json:"namespace"`
-	DesiredCompositionID string `json:"desired_composition_id"`
+	Parameters           map[string]string `json:"parameters,omitempty"`
+	DesiredOperationID   string            `json:"desired_operation_id,omitempty"`
+	Cluster              string            `json:"cluster"`
+	Namespace            string            `json:"namespace"`
+	DesiredCompositionID string            `json:"desired_composition_id"`
 	Meta
 	Name        string         `json:"name"`
 	Desired     map[string]any `json:"desired"`
@@ -142,7 +143,8 @@ type Environment struct {
 	Composition map[string]any `json:"composition"`
 }
 type Application struct {
-	Kind string `json:"kind"`
+	Parameters map[string]string `json:"parameters,omitempty"`
+	Kind       string            `json:"kind"`
 	Meta
 	Name         string `json:"name"`
 	RepositoryID string `json:"repository_id"`
@@ -207,6 +209,9 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
+	ProjectKnowledge       []ProjectKnowledge     `json:"project_knowledge"`
+	LocalCheckouts         []LocalCheckout        `json:"local_checkouts"`
+	WorkspaceDocuments     []WorkspaceDocument    `json:"workspace_documents"`
 	PublicationTargets     []PublicationTarget    `json:"publication_targets"`
 	PackageArtifacts       []PackageArtifact      `json:"package_artifacts"`
 	ScenarioVersions       []ScenarioVersion      `json:"scenario_versions"`
@@ -245,7 +250,7 @@ type State struct {
 }
 
 func EmptyState() State {
-	return State{PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {

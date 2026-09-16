@@ -3,15 +3,18 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/providers/github"
 	"releasecontrol/internal/transport"
@@ -26,13 +29,29 @@ func main() {
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://releasecontrol:releasecontrol@localhost:55432/releasecontrol?sslmode=disable"
-	}
 	boot, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	store, err := persistence.Open(boot, dbURL)
+	var store interface {
+		application.Store
+		Close()
+	}
+	var err error
+	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
+		store, err = persistence.Open(boot, dbURL)
+	} else {
+		dataPath := os.Getenv("RCP_DATA_PATH")
+		if dataPath == "" {
+			directory, pathErr := os.UserConfigDir()
+			if pathErr != nil {
+				return pathErr
+			}
+			dataPath = filepath.Join(directory, "release-control", "state.db")
+		}
+		store, err = persistence.OpenLocal(boot, dataPath)
+		if err == nil {
+			slog.Info("using local database", "path", dataPath)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -42,6 +61,13 @@ func run() error {
 		addr = "127.0.0.1:8090"
 	}
 	service := application.NewWithProvider(store, github.New())
+	workspaceRoot := os.Getenv("RCP_WORKSPACE_ROOT")
+	service.SetWorkspaceRoot(workspaceRoot)
+	if os.Getenv("DATABASE_URL") == "" && workspaceRoot != "" {
+		if err := bootstrapWorkspace(boot, service, workspaceRoot); err != nil {
+			slog.Warn("initial workspace scan incomplete; server will remain available", "error", err)
+		}
+	}
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
@@ -64,4 +90,41 @@ func run() error {
 		defer cancel()
 		return server.Shutdown(shutdown)
 	}
+}
+
+// Bootstrap is local-only and runs once. A failed scan retains the Product so a
+// restart cannot silently rescan or overwrite work recorded after startup.
+func bootstrapWorkspace(ctx context.Context, service *application.Service, root string) error {
+	state, err := service.State(ctx)
+	if err != nil {
+		return err
+	}
+	if len(state.Products) != 0 {
+		return nil
+	}
+	canonical, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	canonical, err = filepath.EvalSymlinks(canonical)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace root must be a directory")
+	}
+	value, err := service.Execute(ctx, domain.Command{Action: "create_product", Actor: "system/workspace", Data: map[string]any{"name": filepath.Base(canonical)}})
+	if err != nil {
+		return err
+	}
+	product, ok := value.(domain.Product)
+	if !ok || product.ID == "" {
+		return fmt.Errorf("initial Product creation returned no identity")
+	}
+	_, err = service.ScanWorkspace(ctx, product.ID, "system/workspace")
+	return err
 }

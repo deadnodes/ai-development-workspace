@@ -1,14 +1,16 @@
 # Release Control Plane
 
+Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](docs/LOCAL_WORKSPACE.md).
+
 A development metastore and control plane: intent, integrations, commit provenance, verification, agent context and delivery orchestration. It does not edit managed application source code or business data. See [responsibility boundary](docs/RESPONSIBILITY_BOUNDARY.md).
 
-Go modular monolith. One process serves the embedded UI, HTTP API and MCP; PostgreSQL stores state and audit history.
+Go modular monolith. One process serves the embedded UI, HTTP API and MCP; embedded bbolt or configured PostgreSQL stores state and audit history.
 
 **Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Start there for MCP connection, exact setup commands, GitHub App credentials, repository attachment and the first DEV operation.
 
 ## Product-independent by design
 
-A fresh instance contains no products or company configuration. Add any number of unrelated Products, each with its own components, repository selections, environments and external dependencies. Provider connections and the Repository Registry are instance-level; Products receive explicit access and attachments. No organization, repository name, team or GitOps layout is built into the runtime.
+A fresh instance contains no company configuration. With a configured workspace root, the first local startup discovers repositories and creates a Product named after that workspace. Add any number of unrelated Products, each with its own components, repository selections, environments and external dependencies. Provider connections and the Repository Registry are instance-level; Products receive explicit access and attachments. No organization, repository name, team or GitOps layout is built into the runtime.
 
 GitHub is the first implemented provider stack, not a product identity. The current deployment executor supports explicit DEV policies; arbitrary environment names are supported by the domain. Credentials and instance data stay outside source control. The optional `scripts/dogfood.mjs` seeds historical context for this project only and never runs automatically.
 
@@ -33,11 +35,11 @@ curl --fail http://127.0.0.1:8090/healthz
 - Command schemas: `GET /api/schema`
 - Commands: `POST /api/commands`
 
-First agent calls: `get_state {}`, then `resume {"feature_id":"…"}`. Fresh databases contain no demo data. Record a structured `handoff` before stopping work.
+First agent calls: `get_state {}`, `get_project_context {"product_id":"…"}`, then `resume {"feature_id":"…"}`. Fresh databases contain no demo data. Record a structured `handoff` before stopping work.
 
 The default Compose setup is loopback-only, without an API token. PostgreSQL data survives restarts in a named volume. `docker compose --profile app down` stops the services; do not add `-v` unless intentionally deleting data.
 
-For development outside the app container, use `make db` then `make run` (Go 1.25+). Do not run both app modes on port 8090 simultaneously.
+For local development, use `make run` (Go 1.25+), optionally setting `RCP_DATA_PATH` and `RCP_WORKSPACE_ROOT`. To use PostgreSQL, run `make db` and supply `DATABASE_URL` explicitly. Do not run both app modes on port 8090 simultaneously.
 
 ## Current execution boundary
 
