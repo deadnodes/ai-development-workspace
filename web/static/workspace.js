@@ -5,8 +5,8 @@ function workspacePanel() {
  const context = projectContextCache.get(productID);
  return `<section class="panel"><div class="section-heading"><h2>Local workspace & project context</h2><div class="actions"><button data-workspace="context">Project context</button><button data-workspace="knowledge">Edit project knowledge</button></div></div><p class="muted">Remote repository URLs, curated project areas and contracts, and local checkout observations help a new agent orient itself. Scanning reads only the server’s configured workspace; it does not clone, execute AGENTS instructions, build or deploy.</p><p class="meta">${context ? (context.filesystem_enabled ? 'Filesystem scanning enabled on the server.' : 'Filesystem scanning unavailable: RCP_WORKSPACE_ROOT is not configured.') : 'Open project context to check filesystem scanning availability.'}</p><div class="actions"><button data-workspace="scan">Scan configured workspace</button><button data-workspace="export">Export workspace configuration</button><button data-workspace="import">Import as new product</button></div></section>`;
 }
-const workspaceOriginalOverview = overview;
-overview = function(){return workspaceOriginalOverview()+(productID?workspacePanel():`<section class="panel"><h2>Portable project workspace</h2><button data-workspace="import">Import as new product</button></section>`);};
+const workspaceOriginalConfiguration = productConfiguration;
+productConfiguration = function(){return workspaceOriginalConfiguration()+(productID?workspacePanel():`<section class="panel"><h2>Portable project workspace</h2><button data-workspace="import">Import as new product</button></section>`);};
 function workspaceRemote(url) {
  try { const parsed=new URL(url); if(['http:','https:'].includes(parsed.protocol))return `<a href="${esc(parsed.href)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`; } catch {}
  return esc(url||'Not recorded');

@@ -15,6 +15,8 @@ const one=browser('http://localhost/?product=a#delivery','b');
 const two=browser(one.w.location.href,'b');
 for(const b of [one,two]){assert.equal(b.run('productID'),'a');assert.match(b.w.document.querySelector('#main').textContent,/Environments/);}
 one.w.history.replaceState(null,'','/?product=a');one.run('render()');
+assert.equal(one.w.document.querySelector('[data-action=delete_product]'),null);
+one.w.history.replaceState(null,'','/?product=a#configuration');one.run('render()');
 assert.ok(one.w.document.querySelector('[data-action=delete_product]'));
 assert.equal(one.run("forms.delete_product.fields[0].name"),'name');
 one.w.history.replaceState(null,'','/?product=a#delivery');one.run('render()');

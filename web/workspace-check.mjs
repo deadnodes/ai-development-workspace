@@ -11,7 +11,7 @@ vm.createContext(sandbox);
 for(const file of ['app','external','flow','library','workspace'])vm.runInContext(fs.readFileSync(new URL(`./static/${file}.js`,import.meta.url),'utf8'),sandbox);
 const run=source=>vm.runInContext(source,sandbox);
 run(`state={products:[{id:'p',name:'Product'}]};productID='p'`);
-assert.ok(run('overview()').includes('Local workspace &amp; project context')||run('overview()').includes('Local workspace & project context'));
+assert.ok(run('productConfiguration()').includes('Local workspace &amp; project context')||run('productConfiguration()').includes('Local workspace & project context'));
 assert.ok(!run(`workspaceRemote('javascript:alert(1)')`).includes('<a'));
 assert.ok(run(`workspaceRemote('https://example.test/a?x=<script>')`).includes('rel="noopener noreferrer"'));
 const context={product:{name:'<img>'},filesystem_enabled:false,repositories:[{name:'Repo',role:'APPLICATION',url:'javascript:alert(1)'}],knowledge:{overview:'<script>',instructions:'Keep state',areas:[{id:'core',name:'Core',repository_ids:['r']}],relationships:[{from:'core',to:'api',type:'calls',contract:'<img>'}]},local_checkouts:[{relative_path:'repo',branch:'feature/x',commit:'abc',agents:{path:'AGENTS.md',content:'<script>alert(1)</script>',sha256:'digest',truncated:true},errors:['Skipped link']}],workspace_agents:[]};
