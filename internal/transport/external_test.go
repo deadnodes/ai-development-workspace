@@ -39,6 +39,7 @@ func TestProviderSemanticTransportsDelegate(t *testing.T) {
 	server := httptest.NewServer(transport.New(svc, transport.Options{}))
 	defer server.Close()
 	for _, tc := range []struct{ path, name, id string }{
+		{"/api/products/p/configuration", "get_product_configuration", "p"},
 		{"/api/integrations/i/context", "get_integration_context", "i"}, {"/api/integrations/i/git", "get_integration_git", "i"}, {"/api/environments/dev/state", "get_environment_state", "dev"}, {"/api/operations/op", "get_operation", "op"}, {"/api/attention?product_id=p", "list_attention", "p"}, {"/api/connections/c/repositories", "discover_repositories", "c"}, {"/api/repositories/r/branches", "list_branches", "r"},
 	} {
 		response, err := http.Get(server.URL + tc.path)
@@ -73,6 +74,7 @@ func TestProviderSemanticTransportsDelegate(t *testing.T) {
 	}
 	defer session.Close()
 	for _, tc := range []struct{ tool, field, id, query string }{
+		{"get_product_configuration", "product_id", "p", "get_product_configuration"},
 		{"get_integration_context", "integration_id", "i", "get_integration_context"}, {"get_git_state", "integration_id", "i", "get_integration_git"}, {"get_environment_state", "environment_id", "dev", "get_environment_state"}, {"get_operation", "operation_id", "op", "get_operation"}, {"get_attention_required", "product_id", "p", "list_attention"},
 	} {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.tool, Arguments: map[string]any{tc.field: tc.id}})

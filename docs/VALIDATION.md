@@ -34,3 +34,7 @@ Live acceptance remains incomplete: a configured GitHub App, workflow and target
 ## Dedicated Kubernetes installation manifests
 
 The generic Kustomize base and two independent product overlays render successfully with `kubectl kustomize`. Checked distinct namespaces, immutable image substitutions, generated ConfigMap references, external Secret references and probe Host header. The normal PostgreSQL-backed `make check` passed. No target Kubernetes cluster, published image or deployment database was configured for a live rollout; these checks do not claim Kubernetes deployment success. See KUBERNETES.md for the required inputs and agent commands.
+
+## Authoritative configuration mirror
+
+Configuration export tests cover Product isolation, effective configuration selection, deterministic revisions, observation exclusion and preservation of historical records. PostgreSQL reopen tests preserve the generated snapshot; HTTP and MCP delegation tests cover the export query. Full `make check` passed. The updated local container successfully exported existing Product configuration twice with byte-identical results. Export is one-way; automatic Git push, restore/import and full-history backup are not claimed.

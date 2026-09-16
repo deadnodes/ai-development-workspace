@@ -136,3 +136,7 @@ An ExternalSystem ID is never accepted as a repository, managed Component or dep
 ## Dedicated product deployments
 
 A supported deployment topology is one instance per Product: its own Kubernetes namespace, Deployment/Service, API token, provider secrets and PostgreSQL database/user. All product environments share that instance. Instance scope remains the boundary for repository registry and provider connections; no cross-instance synchronization is implied. Multiple Products in one instance remain supported. See [Kubernetes deployment](KUBERNETES.md).
+
+## Authoritative project configuration
+
+PostgreSQL is authoritative for project configuration and development history. Git mirrors are generated projections with no implicit reverse import. Source Git and executable GitOps retain their separate responsibilities. See [authority and current export contract](CONFIGURATION_AUTHORITY.md).

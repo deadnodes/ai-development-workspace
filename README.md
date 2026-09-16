@@ -60,3 +60,7 @@ TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/rele
 ```
 
 Runs formatting, vet, frontend checks, workflow-contract tests, race-enabled Go/PostgreSQL tests and binary build. No frontend dependency install or separate deployment is needed.
+
+## Configuration authority
+
+Project configuration and history are persisted in PostgreSQL. UI/API/MCP are the primary interface; Git can hold a generated, one-way configuration mirror. Containers do not import project state from Git on startup. See [configuration authority and export](docs/CONFIGURATION_AUTHORITY.md).

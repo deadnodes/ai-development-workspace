@@ -15,6 +15,7 @@ check:
 	go vet ./...
 	node --check web/static/app.js
 	node --check web/static/external.js
+	node --check scripts/export-configuration.mjs
 	node web/check.mjs
 	python3 -m unittest discover -s examples/github-actions -p 'test_*.py'
 	go test -race ./...

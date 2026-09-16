@@ -13,6 +13,8 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return nil, e
 	}
 	switch name {
+	case "get_product_configuration":
+		return productConfiguration(st, id)
 	case "test_connection", "discover_repositories":
 		c := connection(&st, id)
 		if c == nil {

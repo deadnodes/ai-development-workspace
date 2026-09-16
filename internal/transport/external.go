@@ -14,6 +14,7 @@ import (
 // All semantic reads and mutations share the application layer with execute.
 func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
+		"GET /api/products/{id}/configuration":   "get_product_configuration",
 		"GET /api/integrations/{id}/context":     "get_integration_context",
 		"GET /api/integrations/{id}/git":         "get_integration_git",
 		"GET /api/environments/{id}/state":       "get_environment_state",
@@ -76,6 +77,12 @@ func (in deployInput) command() domain.Command {
 	return domain.Command{Action: "deploy_integration", Actor: in.Actor, IntegrationID: in.IntegrationID, Data: data}
 }
 func registerProviderTools(server *mcp.Server, service Service) {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_product_configuration", Description: "Export the effective product configuration from the authoritative database for a one-way Git mirror. Includes secret references, never secret resolution. This is not a backup or import format."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_product_configuration", in.ProductID)
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_integration_context", Description: "Read implementation context with provider observations and deployment operations for one integration."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		IntegrationID string `json:"integration_id"`
 	}) (*mcp.CallToolResult, any, error) {

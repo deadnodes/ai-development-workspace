@@ -109,3 +109,7 @@ Probes проверяют `/healthz` с `Host: localhost`, чтобы пройт
 Манифесты можно рендерить офлайн через `kubectl kustomize deploy/kubernetes`. Реальный rollout требует вашего image, БД, credentials и выбранного кластера; успешный render не равен успешному deployment.
 
 Справка: [Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/), [HTTP probes и Host header](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/).
+
+## Persistent project configuration
+
+Project configuration is loaded from PostgreSQL, not from the Kubernetes overlay. The overlay only bootstraps the service and its DB/secret connectivity. Replacing the Pod preserves all configuration/history when the same database is retained. Git mirrors are optional one-way exports: [configuration authority](CONFIGURATION_AUTHORITY.md).

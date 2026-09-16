@@ -240,6 +240,10 @@ func TestPostgresExternalRegistryAndDeliveryRestart(t *testing.T) {
 	}
 	// Final reopen compares every persisted record including append-only histories.
 	before := state
+	configurationBefore, err := service.Query(ctx, "get_product_configuration", "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	server.Close()
 	store.Close()
 	store, err = persistence.Open(ctx, db)
@@ -254,6 +258,10 @@ func TestPostgresExternalRegistryAndDeliveryRestart(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("external state changed after reopen")
+	}
+	configurationAfter, err := service.Query(ctx, "get_product_configuration", "p1")
+	if err != nil || !reflect.DeepEqual(configurationBefore, configurationAfter) {
+		t.Fatalf("configuration mirror changed after database reopen: %v", err)
 	}
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "external-restart", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
