@@ -1,0 +1,13 @@
+'use strict';
+forms.configure_artifact_retention={label:'Artifact retention policy',help:'Advisory policy for recorded container images. Keep counts protect immutable digests; current and previous refer to GitOps-applied versions per environment. No images are deleted. Availability reflects the last observation, not a live registry check.',fields:[field('application_id','Component','application',true),field('keep_last','Keep newest images','number',true),field('keep_current','Keep current desired version per environment','boolean'),field('keep_previous','Keep previous versions per environment','number',true)]};
+const deliveryWithoutRetention=deliveryView;
+deliveryView=function(){return deliveryWithoutRetention()+`<section class="panel"><h2>Artifact retention</h2><p class="muted">Advisory expectations only. Registry observations can be stale; this service never deletes images.</p>${productItems('applications').map(a=>`<article class="row"><h3>${esc(a.name)}</h3><p>${a.retention?`Keep newest: ${esc(a.retention.keep_last)} · Keep current: ${a.retention.keep_current?'yes':'no'} · Previous per environment: ${esc(a.retention.keep_previous)}`:'No retention policy configured.'}</p>${button('configure_artifact_retention','Configure retention',{application:a.id})}</article>`).join('')}<button data-provider-query="/api/products/${encodeURIComponent(productID)}/retention" data-query-title="Artifact retention evaluation">Evaluate recorded artifacts</button><a href="#operations">Availability warnings →</a></section>`;};
+
+const formValuesWithoutRetention=externalFormValues;
+externalFormValues=function(action,attrs){if(action==='configure_artifact_retention'){const app=productItems('applications').find(a=>a.id===attrs.application);return {application_id:attrs.application,keep_last:3,keep_current:true,keep_previous:2,...app?.retention};}return formValuesWithoutRetention(action,attrs);};
+
+forms.configure_environment.fields.push(field('gitops_mode','GitOps change delivery','select',true,['DIRECT','PR']));
+const environmentDefaultsWithRetention=externalFormValues;
+externalFormValues=function(action,attrs){const values=environmentDefaultsWithRetention(action,attrs);if(action==='configure_environment')return {gitops_mode:'DIRECT',...values};return values;};
+const operationWithoutPR=operationCard;
+operationCard=function(op){return operationWithoutPR(op)+(op.gitops_pr?`<section class="panel"><h3>GitOps pull request</h3><p>PR #${esc(op.gitops_pr.number)} · ${esc(op.gitops_pr.state)} · ${op.gitops_pr.merged?'merged':'awaiting external review'}</p><p>${esc(op.gitops_pr.url)}</p><p class="muted">Opening a PR does not deploy the image. The operation checks the merged target digest before reporting GitOps applied.</p></section>`:'');};

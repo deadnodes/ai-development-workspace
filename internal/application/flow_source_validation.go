@@ -97,5 +97,19 @@ func validateFlowSource(ctx context.Context, provider delivery.Provider, op doma
 	if len(seen) != len(expected) {
 		return invalid("source plan omitted recorded integration revisions")
 	}
+	if source.Plan.ResolutionSHA != "" {
+		if !fullSHA.MatchString(source.Plan.ResolutionSHA) || source.Plan.ResolutionConflictID == "" {
+			return invalid("invalid conflict resolution identity")
+		}
+		for _, ancestor := range append([]string{source.Plan.BaseSHA}, source.Plan.HeadSHAs...) {
+			proof, err := provider.Compare(ctx, source.Connection, source.Plan.Repository, ancestor, source.Plan.ResolutionSHA)
+			if err != nil {
+				return err
+			}
+			if proof.BaseSHA != ancestor || proof.HeadSHA != source.Plan.ResolutionSHA || proof.Behind != 0 {
+				return invalid("resolution must preserve base and every selected integration")
+			}
+		}
+	}
 	return nil
 }

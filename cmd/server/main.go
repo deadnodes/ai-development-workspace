@@ -15,9 +15,11 @@ import (
 
 	"releasecontrol/internal/agentconnect"
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/providers/github"
+	"releasecontrol/internal/providers/runtimeobserver"
 	"releasecontrol/internal/transport"
 )
 
@@ -71,6 +73,33 @@ func run() error {
 		if err := bootstrapWorkspace(boot, service, workspaceRoot); err != nil {
 			slog.Warn("initial workspace scan incomplete; server will remain available", "error", err)
 		}
+	}
+	if path := os.Getenv("RCP_OBSERVERS_FILE"); path != "" {
+		configuredObservers, err := runtimeobserver.Load(path)
+		if err != nil {
+			return fmt.Errorf("load runtime observers: %w", err)
+		}
+		observers := make([]delivery.RuntimeObserver, len(configuredObservers))
+		for i, o := range configuredObservers {
+			observers[i] = o
+		}
+		observerDone := make(chan struct{})
+		go func() {
+			defer close(observerDone)
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				if err := service.ObserveRuntimeOnce(ctx, observers); err != nil && ctx.Err() == nil {
+					slog.Warn("runtime observation failed", "error", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		defer func() { stop(); <-observerDone }()
 	}
 	workerDone := make(chan struct{})
 	go func() {

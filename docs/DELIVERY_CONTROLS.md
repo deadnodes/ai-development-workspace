@@ -55,3 +55,45 @@ records are removed atomically; audit events, instance repository registry and
 shared provider connections remain. External repositories, images, files and
 running applications are untouched. Unfinished operations prevent deletion.
 Export a backup first if you need to restore the removed development context.
+
+## Advisory artifact retention
+
+Delivery → Artifact retention configures a policy per component. `keep_last`
+protects the newest distinct immutable images, `keep_current` protects the last
+GitOps-applied image for each environment, and `keep_previous` protects previous
+distinct images for rollback. This uses recorded observations, not a fresh registry
+probe. No registry bytes or provenance are removed.
+
+Agents use `execute` with action `configure_artifact_retention`, `product_id` and
+`data: {application_id, keep_last, keep_current, keep_previous}`. Read evaluation
+through MCP `get_artifact_retention {product_id}` or
+`GET /api/products/{id}/retention`. Protected missing/unknown images produce
+attention items in UI and MCP `get_attention_required`. A warning asks for registry
+verification or an explicit rebuild; it never triggers cleanup or CI itself.
+
+## GitOps pull requests
+
+Configure an environment mapping with `gitops_mode: PR` (or choose PR in the UI).
+The default DIRECT mode retains the existing commit behavior. PR mode builds and
+validates the same pinned source/artifact, then writes only the configured image
+fields on `rcp/gitops/<operation-id>` and opens a GitHub PR to the configured ref.
+The GitHub App needs Pull requests write as well as Contents write for this mode.
+
+The persistent deployment operation stays RUNNING / GITOPS_PENDING while the PR
+awaits external review. `gitops_pr` contains the PR number, URL and pinned head;
+UI/API/MCP operation reads show the same evidence. The service never merges it.
+A closed unmerged PR cancels the operation. An altered PR head or unexpected
+post-merge image prevents acceptance. After merge, the target branch must contain
+the exact expected image repository and digest before GITOPS_APPLIED is recorded;
+Flux/runtime observation is still required for DEPLOYED. Production keeps the
+existing explicit release-candidate approval and verification requirements.
+
+Multi-document Flux files are supported for the HelmRelease image mapping. The
+writer selects all HelmRelease documents whose `spec.values.image.repository`
+exactly matches the configured component image, requires their current tags to
+agree, and updates them together in one file commit. Other images and non-target
+resources (for example Service) are untouched. Scalar replacement preserves
+comments and unrelated file bytes. Missing targets, mixed current versions,
+anchors, aliases and multiline image values fail closed. Head/blob concurrency
+checks still cover the complete shared file. This does not enable a mapping or
+launch a deployment automatically.

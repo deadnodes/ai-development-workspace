@@ -110,6 +110,29 @@ func (p *Provider) ComposeSource(ctx context.Context, c delivery.Connection, pla
 	if err != nil {
 		return out, err
 	}
+	if plan.ResolutionSHA != "" {
+		if !fullSHA.MatchString(plan.ResolutionSHA) || plan.ResolutionConflictID == "" {
+			return out, errors.New("invalid resolution")
+		}
+		for _, ancestor := range append([]string{plan.BaseSHA}, plan.HeadSHAs...) {
+			ok, e := p.sourceAncestor(ctx, c, repo, ancestor, plan.ResolutionSHA)
+			if e != nil {
+				return out, e
+			}
+			if !ok {
+				return out, errors.New("resolution omits selected history")
+			}
+		}
+		sha, e := p.ensureSourceRef(ctx, c, repo, plan.TargetBranch, plan.ResolutionSHA)
+		if e != nil {
+			return out, e
+		}
+		if sha != plan.ResolutionSHA {
+			return out, errors.New("resolution target changed")
+		}
+		out.SHA = sha
+		return out, nil
+	}
 	encoded, _ := json.Marshal(plan)
 	fingerprint := fmt.Sprintf("%x", sha256.Sum256(encoded))
 	previous := plan.BaseSHA

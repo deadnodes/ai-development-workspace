@@ -48,7 +48,7 @@ function transformExternalCommand(command,fd){
  if(command.action==='deploy_integration')for(const key of ['application_id','revision_id','expected_digest'])if(!command.data[key])delete command.data[key];
  if(['create_external_system','update_external_system'].includes(command.action)){delete command.product_id;delete command.feature_id;}
  if(command.action==='create_system_relationship'){command.product_id=productID;delete command.feature_id;}
- if(['create_github_connection','import_repository','configure_component','configure_environment','grant_connection'].includes(command.action)){command.product_id=productID;delete command.feature_id;}
+ if(['create_github_connection','import_repository','configure_component','configure_environment','configure_artifact_retention','grant_connection'].includes(command.action)){command.product_id=productID;delete command.feature_id;}
  if(command.action==='configure_component'){
   const inputs={};for(const line of String(fd.get('inputs_text')||'').split('\n').filter(x=>x.trim())){const separator=line.indexOf('=');if(separator<1)throw new Error('Workflow inputs must use name=value, one per line.');inputs[line.slice(0,separator).trim()]=line.slice(separator+1).trim();}
   delete command.data.inputs_text;command.data.inputs=inputs;

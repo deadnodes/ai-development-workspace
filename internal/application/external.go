@@ -274,6 +274,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		return v, m, nil
 	case "configure_environment":
 		var input struct {
+			GitOpsMode    string `json:"gitops_mode"`
 			EnvironmentID string `json:"environment_id"`
 			ApplicationID string `json:"application_id"`
 			Purpose       string `json:"purpose"`
@@ -303,7 +304,13 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if !slices.Contains([]string{"DEV", "TEST", "PROD"}, input.Purpose) || !safeBranch(input.Ref) || input.Path == "" || path.IsAbs(input.Path) || path.Clean(input.Path) != input.Path || strings.HasPrefix(input.Path, "../") || input.ImageField == "" {
 			return nil, m, invalid("explicit DEV/TEST/PROD purpose with ref, clean relative path and image_field required")
 		}
-		v := domain.EnvironmentBinding{Meta: m, EnvironmentID: input.EnvironmentID, ApplicationID: input.ApplicationID, Purpose: input.Purpose, ConnectionID: input.ConnectionID, RepositoryID: input.RepositoryID, Ref: input.Ref, Path: input.Path, ImageField: input.ImageField, DigestField: input.DigestField, AllowDeploy: input.AllowDeploy}
+		if input.GitOpsMode == "" {
+			input.GitOpsMode = "DIRECT"
+		}
+		if input.GitOpsMode != "DIRECT" && input.GitOpsMode != "PR" {
+			return nil, m, invalid("gitops_mode must be DIRECT or PR")
+		}
+		v := domain.EnvironmentBinding{GitOpsMode: input.GitOpsMode, Meta: m, EnvironmentID: input.EnvironmentID, ApplicationID: input.ApplicationID, Purpose: input.Purpose, ConnectionID: input.ConnectionID, RepositoryID: input.RepositoryID, Ref: input.Ref, Path: input.Path, ImageField: input.ImageField, DigestField: input.DigestField, AllowDeploy: input.AllowDeploy}
 		st.EnvironmentBindings = append(st.EnvironmentBindings, v)
 		return v, m, nil
 	case "refresh_integration_git":

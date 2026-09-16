@@ -1,12 +1,10 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"path"
 	"strings"
@@ -44,32 +42,39 @@ func mappingValue(n *yaml.Node, key string) (*yaml.Node, error) {
 	return found, nil
 }
 func imageFields(content string, request delivery.GitOpsRequest) (*yaml.Node, *yaml.Node, *yaml.Node, error) {
-	var doc yaml.Node
-	decoder := yaml.NewDecoder(strings.NewReader(content))
-	if e := decoder.Decode(&doc); e != nil || len(doc.Content) != 1 {
-		return nil, nil, nil, errors.New("invalid GitOps YAML")
+	docs, e := imageDocuments(content, request)
+	if e != nil {
+		return nil, nil, nil, e
 	}
-	var extra yaml.Node
-	if decoder.Decode(&extra) != io.EOF {
-		return nil, nil, nil, errors.New("GitOps supports exactly one YAML document")
-	}
+	return docs[0].doc, docs[0].image, docs[0].digest, nil
+}
+func documentImageFields(doc *yaml.Node, request delivery.GitOpsRequest) (*yaml.Node, *yaml.Node, error) {
 	parent := doc.Content[0]
+	if parent.Anchor != "" {
+		return nil, nil, errors.New("anchored GitOps image parent unsupported")
+	}
 	if request.ImageField == "spec.values.image.repository" {
 		for _, key := range []string{"spec", "values"} {
 			var err error
 			parent, err = mappingValue(parent, key)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, err
+			}
+			if parent.Anchor != "" {
+				return nil, nil, errors.New("anchored GitOps image parent unsupported")
 			}
 		}
 	}
 	image, e := mappingValue(parent, "image")
 	if e != nil {
-		return nil, nil, nil, e
+		return nil, nil, e
+	}
+	if image.Anchor != "" {
+		return nil, nil, errors.New("anchored GitOps image unsupported")
 	}
 	repo, e := mappingValue(image, "repository")
 	if e != nil {
-		return nil, nil, nil, e
+		return nil, nil, e
 	}
 	digestKey := "digest"
 	if request.DigestField == "spec.values.image.tag" {
@@ -77,12 +82,12 @@ func imageFields(content string, request delivery.GitOpsRequest) (*yaml.Node, *y
 	}
 	digest, e := mappingValue(image, digestKey)
 	if e != nil {
-		return nil, nil, nil, e
+		return nil, nil, e
 	}
 	if repo.Kind != yaml.ScalarNode || digest.Kind != yaml.ScalarNode || repo.Anchor != "" || digest.Anchor != "" {
-		return nil, nil, nil, errors.New("GitOps image fields must be direct scalar values")
+		return nil, nil, errors.New("GitOps image fields must be direct scalar values")
 	}
-	return &doc, repo, digest, nil
+	return repo, digest, nil
 }
 func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
 	var out delivery.GitOpsSnapshot
@@ -143,29 +148,24 @@ func (p *Provider) ApplyGitOps(ctx context.Context, c delivery.Connection, r del
 	if snapshot.BlobSHA != r.ExpectedBlobSHA {
 		return out, ErrConflict
 	}
-	doc, image, digest, e := imageFields(snapshot.Content, request)
+	docs, e := imageDocuments(snapshot.Content, request)
 	if e != nil {
 		return out, e
 	}
+	image, digest := docs[0].image, docs[0].digest
 	desiredRepo, _ := registryRepository(request.ImageRepository)
 	desiredRepo = "ghcr.io/" + desiredRepo
 	if image.Value == desiredRepo && digestValue(digest.Value, request) == r.Digest {
 		return delivery.GitOpsResult{CommitSHA: snapshot.HeadSHA, BlobSHA: snapshot.BlobSHA, AlreadyApplied: true}, nil
 	}
-	image.Value = desiredRepo
-	image.Tag = "!!str"
-	digest.Value = r.Digest
+	value := r.Digest
 	if request.DigestField == "spec.values.image.tag" {
-		digest.Value = "rcp@" + r.Digest
+		value = "rcp@" + r.Digest
 	}
-	digest.Tag = "!!str"
-	var b bytes.Buffer
-	encoder := yaml.NewEncoder(&b)
-	encoder.SetIndent(2)
-	if e = encoder.Encode(doc); e != nil {
-		return out, errors.New("cannot encode GitOps YAML")
+	updated, e := replaceImageScalars(snapshot.Content, docs, desiredRepo, value)
+	if e != nil {
+		return out, e
 	}
-	encoder.Close()
 	repo, e := p.repository(ctx, c, request.Repository)
 	if e != nil {
 		return out, e
@@ -184,7 +184,7 @@ func (p *Provider) ApplyGitOps(ctx context.Context, c delivery.Connection, r del
 			URL string `json:"html_url"`
 		} `json:"commit"`
 	}
-	e = p.request(ctx, c, "PUT", "/repos/"+repo+"/contents/"+url.PathEscape(request.Path), map[string]any{"branch": request.Ref, "sha": r.ExpectedBlobSHA, "content": base64.StdEncoding.EncodeToString(b.Bytes()), "message": message}, &response)
+	e = p.request(ctx, c, "PUT", "/repos/"+repo+"/contents/"+url.PathEscape(request.Path), map[string]any{"branch": request.Ref, "sha": r.ExpectedBlobSHA, "content": base64.StdEncoding.EncodeToString([]byte(updated)), "message": message}, &response)
 	if e != nil {
 		return out, e
 	}

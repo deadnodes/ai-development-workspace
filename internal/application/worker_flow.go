@@ -96,6 +96,9 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 			source.Result = &result
 			evidence := map[string]string{"repository_id": source.RepositoryID, "branch": result.Branch, "source_sha": result.SHA}
 			if result.Conflict {
+				if err := s.saveCompositionConflict(ctx, op, *source, token); err != nil {
+					return err
+				}
 				return s.finish(ctx, op, token, "BLOCKED", "source conflict: "+result.Detail, evidence)
 			}
 			if !fullSHA.MatchString(result.SHA) || result.Branch != source.Plan.TargetBranch {

@@ -15,20 +15,21 @@ func CommandSchema() map[string]any {
 	}
 	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution for this engineering action; a human or agent identifier."}
 	data := map[string]any{}
-	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit version checksum uri build_url") {
+	for _, k := range strings.Fields("conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit version checksum uri build_url") {
 		data[k] = str()
 	}
-	for _, k := range strings.Fields("requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
+	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
 		data[k] = map[string]any{"type": "array", "items": str()}
 	}
-	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "approve", "approve_main_update"} {
+	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "keep_current", "approve", "approve_main_update"} {
 		data[k] = map[string]any{"type": "boolean"}
 	}
-	for _, k := range []string{"app_id", "installation_id"} {
+	for _, k := range []string{"app_id", "installation_id", "keep_last", "keep_previous"} {
 		data[k] = map[string]any{"type": "integer"}
 	}
 	data["parameters"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Nonsecret component or environment configuration; values are context only, never executed."}
 	data["inputs"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
+	data["gitops_mode"] = map[string]any{"type": "string", "enum": []string{"DIRECT", "PR"}}
 	data["position"] = map[string]any{"type": "integer"}
 	data["steps"] = map[string]any{"type": "array", "items": str()}
 	for _, k := range []string{"desired", "reconciled", "runtime", "composition"} {
@@ -67,6 +68,11 @@ func CommandSchema() map[string]any {
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"claim_composition_conflict", "product_id", "conflict_id"},
+		{"record_conflict_resolution", "product_id", "conflict_id commit rationale"},
+		{"verify_conflict_resolution", "product_id", "conflict_id result_ids"},
+		{"create_integration_branch", "integration_id", "application_id base_commit approve"},
+		{"protect_integration_revision", "integration_id", "application_id revision_id approve"},
 		{"delete_product", "product_id", "name"},
 		{"reconcile_composition", "id", ""},
 		{"prepare_release_candidate", "product_id", "name environment_id components approve_main_update"},
@@ -83,6 +89,7 @@ func CommandSchema() map[string]any {
 		{"classify_repository", "id", "role"},
 		{"configure_publication", "product_id", "application_id format registry_url package_name"},
 		{"record_package_artifact", "product_id", "application_id publication_target_id source_commit version checksum uri"},
+		{"configure_artifact_retention", "product_id", "application_id keep_last keep_current keep_previous"},
 		{"configure_component", "product_id", "application_id connection_id workflow image_repository"},
 		{"configure_environment", "product_id", "environment_id purpose connection_id repository_id ref path image_field application_id allow_deploy"},
 		{"refresh_integration_git", "integration_id", ""},

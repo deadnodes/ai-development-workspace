@@ -225,3 +225,25 @@ console.log('Delivery navigation, scoped mappings/images, exact source selection
 evaluate(`state.github_connections=[{id:'connected',name:'Saved GitHub',connected:true}];state.environment_bindings[1].purpose='TEST'`);
 assert.ok(evaluate('externalProductPanels()').includes('Connected'));
 assert.ok(evaluate('deliveryView()').includes('TEST writes enabled'));
+
+vm.runInContext(fs.readFileSync(new URL('./static/retention.js',import.meta.url),'utf8'),sandbox);
+evaluate("state.applications=[{id:'ret-app',product_id:productID,name:'<unsafe>',retention:{keep_last:7,keep_current:true,keep_previous:2}}]");
+assert.equal(evaluate("externalFormValues('configure_artifact_retention',{application:'ret-app'}).keep_last"),7);
+assert.ok(evaluate('deliveryView()').includes('Artifact retention'));
+assert.ok(evaluate('deliveryView()').includes('&lt;unsafe&gt;'));
+vm.runInContext(fs.readFileSync(new URL('./static/branches.js',import.meta.url),'utf8'),sandbox);
+evaluate(`state.integrations=[{id:'managed-i',product_id:productID,status:'working',title:'<source>'}];state.composition_conflicts=[{id:'conflict',product_id:productID,repository_id:'<repo>',status:'resolved',composition_id:'composition',resolution_commit:'sha'}]`);
+const branchHTML=evaluate('deliveryView()');
+assert.ok(branchHTML.includes('Managed integration branches'));
+assert.ok(branchHTML.includes('Rebuild with verified resolution'));
+assert.ok(branchHTML.includes('&lt;repo&gt;'));
+assert.equal(evaluate("externalFormValues('claim_composition_conflict',{conflict:'c'}).conflict_id"),'c');
+console.log('Managed branch controls and semantic conflict cards passed.');
+
+formValues={_actor:'test/operator',application_id:'ret-app',keep_last:'7',keep_current:'on',keep_previous:'2'};
+evaluate("currentForm={action:'configure_artifact_retention',attrs:{application:'ret-app'},fields:forms.configure_artifact_retention.fields}");
+elements.get('#command-form').onsubmit({preventDefault(){},target:{}});
+assert.equal(capturedCommand.action,'configure_artifact_retention');
+assert.equal(capturedCommand.product_id,evaluate('productID'));
+assert.equal(Object.hasOwn(capturedCommand,'feature_id'),false);
+assert.deepEqual(capturedCommand.data,{application_id:'ret-app',keep_last:7,keep_current:true,keep_previous:2});

@@ -60,3 +60,29 @@ Real PostgreSQL reopen and gzip transfer tests retain parent/child operations, f
 Native Chrome validation inspected the candidate approval dialog, scenario target/evidence form and saved an advisory scenario with actor/history. No deployment was submitted from the browser. HTTP/MCP parity tests cover all eight new commands and reject contradictory references.
 
 These are implementation checks, not live GitHub acceptance. Live App → Actions → GHCR → GitOps execution remains unverified until the installation is configured. Runtime confirmation currently records attributed human/agent evidence; an automatic Flux/Kubernetes observer is not implemented. Main advancement is non-force fast-forward and can be refused by protected branches; it is not an atomic transaction across repositories.
+
+## Lifecycle completion — 2026-09-16
+
+The earlier live-acceptance limitations above describe previous milestones. The
+current implementation has now passed a real private GitHub App → Actions → GHCR
+→ GitOps → existing Flux → Kubernetes DEV run. The first operation built an absent
+image and wrote GitOps; a second operation used a Control Plane-created feature
+branch and obtained exact Flux revision plus runtime image-digest evidence.
+Instance-specific operation IDs and evidence remain in Product `rcp`, Features
+`rcp-github-dev`, `rcp-bootstrap` and `rcp-lifecycle`, not in portable configuration.
+
+Full `make check` passed with PostgreSQL and race tests. Browser validation covered
+retention policy persistence, the direct/PR delivery selector, and creation of a
+captured-source reference. MCP integration/environment/operation/attention queries
+returned the same persisted state. The local Compose application was rebuilt and
+restarted with its existing database.
+
+Managed branch creation, create-only revision references and conflict
+claim/resolution/verification/rebuild are implemented. Resolution ancestry and
+per-integration verification are tested deterministically. Retention evaluates
+expectations without deleting registry content. GitOps PR mode is tested against
+deterministic GitHub HTTP fixtures; it never merges a PR automatically. Live PR
+creation still requires the installation's Pull requests write permission; the
+successful live acceptance used direct DEV commits. No production release was
+performed. Runtime observation intentionally rejects unmatched revisions/digests,
+including unproven multi-architecture index/platform relationships.

@@ -14,6 +14,7 @@ import (
 // All semantic reads and mutations share the application layer with execute.
 func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
+		"GET /api/products/{id}/retention":       "get_artifact_retention",
 		"GET /api/products/{id}/configuration":   "get_product_configuration",
 		"GET /api/integrations/{id}/context":     "get_integration_context",
 		"GET /api/integrations/{id}/git":         "get_integration_git",
@@ -90,6 +91,7 @@ func (in deployExistingInput) command() domain.Command {
 	return domain.Command{Action: "deploy_existing_artifact", Actor: in.Actor, IntegrationID: in.IntegrationID, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID, "revision_id": in.RevisionID, "artifact_id": in.ArtifactID}}
 }
 func registerProviderTools(server *mcp.Server, service Service) {
+	registerBranchTools(server, service)
 	mcp.AddTool(server, &mcp.Tool{Name: "deploy_existing_artifact", Description: "Deploy a previously recorded successful build artifact to an enabled DEV GitOps mapping. Requires exact integration revision, fresh registry evidence and matching immutable digest. Never launches CI or rebuilds. Returns a persistent operation; GitOps success is not runtime health."}, func(ctx context.Context, _ *mcp.CallToolRequest, in deployExistingInput) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, in.command())
 		return nil, v, e
@@ -122,6 +124,12 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		OperationID string `json:"operation_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_operation", in.OperationID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_artifact_retention", Description: "Evaluate component retention against recorded availability; advisory only, never deletes artifacts."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_artifact_retention", in.ProductID)
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_attention_required", Description: "Read failed or blocked operations and other attention required for a product."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

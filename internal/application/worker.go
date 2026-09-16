@@ -79,6 +79,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
+	if op.Kind == "CREATE_BRANCH" || op.Kind == "PIN_REVISION" {
+		return true, s.tickManagedBranch(callCtx, *op, token)
+	}
 	if op.Kind == "REFRESH_GIT" {
 		return true, s.observeGit(callCtx, *op, token)
 	}
@@ -105,6 +108,8 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		return true, s.finish(ctx, *op, token, "ARTIFACT_READY", "main artifact ready; candidate verification required before any production deployment", nil)
 	}
 	switch op.Phase {
+	case "WAIT_GITOPS_PR":
+		return true, s.waitGitOpsPR(callCtx, ctx, *op, token)
 	case "PROMOTION_PREFLIGHT":
 		if e := s.verifyPromotionSource(callCtx, *op); e != nil {
 			return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
@@ -367,6 +372,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			}
 			return true, e
 		}
+		if snapshot.Target.GitOpsMode == "PR" {
+			return true, s.proposeGitOpsPR(callCtx, ctx, *op, token)
+		}
 		applied, e := s.provider.ApplyGitOps(callCtx, snapshot.GitOpsConnection, delivery.GitOpsApply{Request: snapshot.GitOpsRequest, ExpectedHeadSHA: op.GitOpsBase.HeadSHA, ExpectedBlobSHA: op.GitOpsBase.BlobSHA, Digest: op.Artifact.Digest, OperationID: op.ID, Message: "release-control: " + op.ID})
 		if e != nil {
 			return true, s.advance(ctx, *op, token, "APPLY_UNCERTAIN", "GITOPS_PENDING", "GitOps outcome uncertain; reread before retry: "+e.Error(), nil)
@@ -447,7 +455,7 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		op.Detail = detail
 		op.UpdatedAt = now
 		op.NextAttemptAt = now.Add(2 * time.Second)
-		if phase == "BUILD_LOOKUP" || phase == "WAIT_CHILDREN" || phase == "WAIT_RUNTIME" {
+		if phase == "BUILD_LOOKUP" || phase == "WAIT_CHILDREN" || phase == "WAIT_RUNTIME" || phase == "WAIT_GITOPS_PR" {
 			op.NextAttemptAt = now.Add(10 * time.Second)
 		}
 		if release {

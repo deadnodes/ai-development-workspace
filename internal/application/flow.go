@@ -169,6 +169,7 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.M
 		return v, m, nil
 	case "reconcile_composition", "prepare_release_candidate":
 		var comp *domain.Composition
+		var resolutions []string
 		production := c.Action == "prepare_release_candidate"
 		if production {
 			var input struct {
@@ -195,10 +196,13 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.M
 				return nil, m, err
 			}
 		} else {
-			var input struct{}
+			var input struct {
+				ResolutionConflictIDs []string `json:"resolution_conflict_ids"`
+			}
 			if err := decode(c.Data, &input); err != nil {
 				return nil, m, err
 			}
+			resolutions = input.ResolutionConflictIDs
 			comp = compositionByID(st, c.ID)
 			if comp == nil {
 				return nil, m, missing("composition", c.ID)
@@ -221,6 +225,9 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.M
 		m.FeatureID = ""
 		sources, err := flowSources(st, *comp, m.ID, production)
 		if err != nil {
+			return nil, m, err
+		}
+		if err := attachConflictResolutions(st, *comp, sources, resolutions); err != nil {
 			return nil, m, err
 		}
 		prepared, err := prepareFlowDeployments(st, *comp, m)

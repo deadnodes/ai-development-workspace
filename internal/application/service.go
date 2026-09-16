@@ -397,6 +397,18 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	}
 	switch c.Action {
+	case "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution":
+		var err error
+		out, m, err = applyCompositionConflict(st, c, m)
+		if err != nil {
+			return nil, err
+		}
+	case "create_integration_branch", "protect_integration_revision":
+		var err error
+		out, m, err = applyManagedBranch(st, c, m)
+		if err != nil {
+			return nil, err
+		}
 	case "classify_repository":
 		var input struct {
 			Role string `json:"role"`
@@ -441,6 +453,12 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 			st.RepositoryBindings = append(st.RepositoryBindings, next)
 		}
 		out = *repo
+	case "configure_artifact_retention":
+		var err error
+		out, m, err = applyRetention(st, c, m)
+		if err != nil {
+			return nil, err
+		}
 	case "configure_publication", "record_package_artifact":
 		var err error
 		out, m, err = applyPublication(st, c, m)

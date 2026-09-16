@@ -14,6 +14,11 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return nil, e
 	}
 	switch name {
+	case "get_artifact_retention":
+		if !productExists(&st, id) {
+			return nil, missing("product", id)
+		}
+		return domain.EvaluateRetention(st, id), nil
 	case "get_product_configuration":
 		return productConfiguration(st, id)
 	case "test_connection", "discover_repositories":
@@ -152,7 +157,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				observations = append(observations, r)
 			}
 		}
-		return map[string]any{"environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "external_executor_attestation; no direct Flux observer"}, nil
+		return map[string]any{"environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."}, nil
 	case "get_operation":
 		for _, op := range st.Operations {
 			if op.ID == id {
@@ -190,7 +195,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		items := []map[string]any{}
+		items := retentionAttention(st, id)
 		for _, finding := range st.Findings {
 			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {
 				integrationID := ""
@@ -257,6 +262,16 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 
 func generateRegistryID() string { return id() }
 func addDeliveryContext(out map[string]any, st domain.State, featureID, integrationID string) {
+	conflicts := []domain.CompositionConflict{}
+	for _, conflict := range st.CompositionConflicts {
+		for _, in := range conflict.Integrations {
+			if in.FeatureID == featureID && (integrationID == "" || in.ID == integrationID) {
+				conflicts = append(conflicts, conflict)
+				break
+			}
+		}
+	}
+	out["composition_conflicts"] = conflicts
 	observations := []domain.GitObservation{}
 	operations := []domain.ExternalOperation{}
 	artifacts := []domain.DeliveryArtifact{}

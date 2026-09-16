@@ -4,12 +4,14 @@ import "context"
 
 // SourcePlan pins every input. Generated branches are disposable outputs, never inputs.
 type SourcePlan struct {
-	Repository   string   `json:"repository"`
-	BaseRef      string   `json:"base_ref"`
-	BaseSHA      string   `json:"base_sha"`
-	TargetBranch string   `json:"target_branch"`
-	OperationID  string   `json:"operation_id"`
-	HeadSHAs     []string `json:"head_shas"`
+	ResolutionSHA        string   `json:"resolution_sha,omitempty"`
+	ResolutionConflictID string   `json:"resolution_conflict_id,omitempty"`
+	Repository           string   `json:"repository"`
+	BaseRef              string   `json:"base_ref"`
+	BaseSHA              string   `json:"base_sha"`
+	TargetBranch         string   `json:"target_branch"`
+	OperationID          string   `json:"operation_id"`
+	HeadSHAs             []string `json:"head_shas"`
 }
 type SourceResult struct {
 	Branch   string `json:"branch"`

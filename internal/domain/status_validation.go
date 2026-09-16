@@ -22,6 +22,11 @@ func ValidateStateStatuses(st State) error {
 		}
 		return nil
 	}
+	for _, c := range st.CompositionConflicts {
+		if err := check("composition_conflict", c.ID, c.Status, false); err != nil {
+			return err
+		}
+	}
 	integration := func(v Integration, scope string) error {
 		if err := check("integration", scope+v.ID, v.Status, false); err != nil {
 			return err
