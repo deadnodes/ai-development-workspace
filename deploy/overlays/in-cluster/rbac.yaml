@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: release-control-runtime
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: release-control-runtime
+subjects:
+  - kind: ServiceAccount
+    name: release-control-runtime
+    namespace: release-control
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: release-control-runtime

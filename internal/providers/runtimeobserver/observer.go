@@ -18,6 +18,7 @@ import (
 )
 
 type Target struct {
+	InCluster      bool   `json:"in_cluster,omitempty"`
 	Kubeconfig     string `json:"kubeconfig,omitempty"`
 	Context        string `json:"context,omitempty"`
 	ProductID      string `json:"product_id"`
@@ -61,13 +62,13 @@ func Load(path string) ([]*Observer, error) {
 	return out, nil
 }
 func New(t Target) (*Observer, error) {
-	var material kubeMaterial
-	if t.Kubeconfig != "" || t.Context != "" || t.APIURL == "" {
-		var err error
-		material, err = resolveKubeconfig(&t)
-		if err != nil {
-			return nil, err
-		}
+	return newObserver(t, serviceAccountDirectory)
+}
+
+func newObserver(t Target, accountDirectory string) (*Observer, error) {
+	material, err := resolveAuthentication(&t, os.Getenv, accountDirectory)
+	if err != nil {
+		return nil, err
 	}
 	u, e := url.Parse(t.APIURL)
 	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -133,7 +134,11 @@ func (o *Observer) get(ctx context.Context, path string, out any) error {
 		if e != nil {
 			return fmt.Errorf("observer token unavailable")
 		}
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(b)))
+		token := strings.TrimSpace(string(b))
+		if token == "" {
+			return fmt.Errorf("observer token unavailable")
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	r, e := o.client.Do(req)
 	if e != nil {

@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-control
+spec:
+  template:
+    spec:
+      serviceAccountName: release-control-runtime
+      automountServiceAccountToken: true
+      containers:
+        - name: release-control
+          env:
+            - name: RCP_OBSERVERS_FILE
+              value: /etc/release-control/runtime-observers.json
+          volumeMounts:
+            - name: runtime-targets
+              mountPath: /etc/release-control
+              readOnly: true
+      volumes:
+        - name: runtime-targets
+          configMap:
+            name: release-control-runtime

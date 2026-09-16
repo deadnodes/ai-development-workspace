@@ -69,3 +69,34 @@ Optionally supply `application_id` to limit the observation to one component. Re
 Matching mutable tags alone cannot establish image-byte identity. Missing data stays UNKNOWN; failed/partial API reads preserve errors and do not reuse old health as current. Digest comparisons are conservative about multi-platform image indexes versus per-platform runtime digests. Snapshots never authorize deployment or advance release readiness.
 
 Validation: `make check`, `node web/runtime-check.mjs`; normal tests use deterministic HTTPS fixtures and require no live Kubernetes credentials.
+
+## Inside Kubernetes: Pod ServiceAccount
+
+Use `deploy/overlays/in-cluster` instead of the base deployment. It selects a dedicated ServiceAccount, enables the projected Pod credentials, mounts the target configuration and grants read-only access in the installation namespace. Fill `runtime-observers.json` with real Product/Environment/Component IDs before rendering the overlay; its initial empty list intentionally observes nothing. The usual image, database/access settings and namespace must still be configured as described in the deployment guide.
+
+A target for the current cluster needs no kubeconfig, API URL or credential paths:
+
+```json
+{
+  "in_cluster": true,
+  "product_id": "your-product",
+  "environment_id": "your-dev",
+  "application_id": "your-component-id",
+  "namespace": "release-control",
+  "deployment": "your-deployment",
+  "container": "your-container"
+}
+```
+
+The service connects directly to `KUBERNETES_SERVICE_HOST:KUBERNETES_SERVICE_PORT`, validates TLS against `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt` and reads the projected `token` file for **every request**, including after rotation. No kubeconfig or kubectl is needed inside the Pod. See [Kubernetes API access from a Pod](https://kubernetes.io/docs/tasks/run-application/access-api-from-pod/).
+
+Selection rules:
+
+- Explicit kubeconfig/context or API credentials keep their existing behavior; failures never silently switch clusters.
+- `in_cluster: true` explicitly selects the Pod identity and cannot be mixed with explicit connection fields.
+- With no explicit target connection and no `KUBECONFIG` environment variable, Kubernetes service environment variables automatically select in-cluster authentication. Outside a Pod the existing system kubeconfig path remains the fallback.
+- Target namespace remains explicit. The service does not scan every namespace or grant itself permissions.
+
+For workloads in another namespace, create the same Role **in that target namespace** and a RoleBinding there whose subject is `release-control-runtime` in the Control Plane's namespace. Do not use a ClusterRoleBinding merely to observe one namespace. The optional Flux observation additionally needs a Role in its namespace granting `get` on `kustomizations` in API group `kustomize.toolkit.fluxcd.io`, ideally restricted with `resourceNames` to configured Kustomizations, and a matching RoleBinding. No Secrets, exec, writes, or application data permissions are required.
+
+Render for review with `kubectl kustomize deploy/overlays/in-cluster` (this is an operator-side manifest tool; the service never invokes it). Apply through your existing GitOps deployment process after filling configuration. The base deployment still disables ServiceAccount token mounting unless this overlay is selected.
