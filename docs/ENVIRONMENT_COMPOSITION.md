@@ -25,7 +25,11 @@ Recording SHAs alone does not retain Git objects. The Git adapter must keep prot
 
 Selecting an older plan changes only desired intent. It is not a verified runtime rollback. Creating an empty revision selection allows a base-only application version. Feature gates/readiness do not prohibit planning unfinished work on DEV. Production eligibility is not inferred from an environment's name; execution/promotion policy must be configured before production automation is enabled.
 
+## Independent release boundary
+
+Shared test compositions are not promoted as production artifacts. Production candidates are built from pinned main commits after only selected completed integrations are merged there by external Git workflows. Verification of a mixed DEV composition does not automatically verify that narrower main candidate. See [test scenarios and release flow](TEST_AND_RELEASE_FLOW.md).
+
 ## Execution slice next
 On a deployment request: resolve and verify immutable source refs → isolated composition/merge preview → conflict report or generated commit → build each affected application → retain image digests and test evidence → update GitOps desired state → observe Flux reconciliation → observe Kubernetes rollout. A Deployment record must link the composition ID, repository outputs, artifact digests and observed outcome. Merge conflicts stop the operation for a human/agent resolution; they are not automatically guessed away. Partial rollout remains distinguishable from success.
 
-The current UI/API/MCP implement planning and source attribution. They do not perform Git merges, builds or external deployments. Work is tracked in Feature `rcp-environments`, integrations `rcp-env-plan` and `rcp-env-execution`.
+The current composition UI/API/MCP implement planning and source attribution. They do not execute multi-feature Git composition. The separate GitHub DEV command can build/deploy one bound Integration; it is not a composition executor. Discover current implementation work from your instance.

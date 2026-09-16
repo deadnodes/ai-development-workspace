@@ -142,3 +142,7 @@ A supported deployment topology is one instance per Product: its own Kubernetes 
 ## Authoritative project configuration
 
 PostgreSQL is authoritative for project configuration and development history. Git mirrors are generated projections with no implicit reverse import. Source Git and executable GitOps retain their separate responsibilities. See [authority and current export contract](CONFIGURATION_AUTHORITY.md).
+
+## Testing versus production source
+
+Test environments host selected integration compositions. Production release candidates are built from main after explicitly selected work is integrated there; shared DEV images/branches are not promoted wholesale. Exact composition-bound test evidence is distinct from main-candidate verification. See [test/release flow and scenario model](TEST_AND_RELEASE_FLOW.md).

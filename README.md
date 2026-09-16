@@ -72,3 +72,7 @@ Project configuration and history are persisted in PostgreSQL. UI/API/MCP are th
 Export/import the complete instance history as gzip through API/MCP or `scripts/backup.mjs`. Restore is atomic and requires an empty destination; active operations are cancelled with original evidence retained. See [agent backup and migration guide](docs/BACKUP.md).
 
 Codex P1/P2 review comments can become persistent findings through MCP `sync_pull_request_review`. Shared PRs use preview and explicit comment selection. See [PR review workflow](docs/PR_REVIEWS.md).
+
+## Shared testing, independent release
+
+Test selected features together on a versioned environment composition. Release selected ready integrations through main, then build production artifacts from pinned main commits. DEV composition images are not production promotion inputs. See [scenario and release design / implementation status](docs/TEST_AND_RELEASE_FLOW.md).

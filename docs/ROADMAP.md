@@ -8,6 +8,10 @@ This is an architectural implementation sequence, not a mutable progress log. Di
 
 **Phase 2 — product topology and desired composition:** working product-local applications/repositories/environments, arbitrary environment names, target metadata, immutable caller-reported integration revisions, ordered composition snapshots and desired selection. Multiple products can coexist; this is logical scope consistency in a trusted workspace, not per-user access isolation. The existing `Application` is the requested Component. This phase originally stopped at intent. The subsequent GitHub slice adds source observation and DEV GitOps execution as explicit opt-in operations.
 
+## Updated delivery priority
+
+Next product slice: reusable test scenarios and immutable runs bound to existing environment composition snapshots. Then external execution of shared test compositions. Production follows selected-work integration into main, main-derived artifact build and explicit release-candidate verification, never blind DEV image promotion. See [source and verification rules](TEST_AND_RELEASE_FLOW.md). The provider rollout below supplies these workflows; it does not define a linear environment promotion chain.
+
 ## Next bounded slices
 
 1. **Connections + observation:** persist connection grants/product bindings/secret references and topology policy; implement one read-only Git adapter (select GitHub or GitLab from the first real product). Observe branches/compare/checks, retain freshness and expose branch/attention queries in UI/MCP. Acceptance: a product cannot use another product's ungranted connection; compare against pinned refs; credentials never appear in state/audit.
