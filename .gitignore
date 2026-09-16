@@ -18,3 +18,8 @@ __pycache__/
 *.rcp.json.gz.sha256
 
 node_modules/
+
+# Agent connection generated for this checkout
+.agents/
+.codex/
+.release-control.json

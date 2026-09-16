@@ -1,4 +1,4 @@
-# Release Control Plane
+# AI Development Workspace
 
 Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](docs/DOCKER_LOCAL.md).
 
@@ -84,3 +84,21 @@ Codex P1/P2 review comments can become persistent findings through MCP `sync_pul
 Test selected features together on a versioned environment composition. Release selected ready integrations through main, then build production artifacts from pinned main commits. DEV composition images are not production promotion inputs. See [scenario and release design / implementation status](docs/TEST_AND_RELEASE_FLOW.md).
 
 Frontend verification uses test-only jsdom. Run `npm ci` once before `make check`; the shipped UI remains dependency-free plain JavaScript. See [live UI updates](docs/LIVE_UI.md).
+
+## Published Docker image
+
+GitHub Actions runs checks first, then publishes `ghcr.io/deadnodes/ai-development-workspace`
+for `linux/amd64` and `linux/arm64`. Main publishes `latest` and `sha-<full commit>`;
+`v*` tags publish the matching version tag. Pull requests run checks without publishing.
+The repository and its initial GHCR package are private. Authenticate Docker to GHCR
+with an account allowed to read the package before pulling.
+
+```sh
+docker run -d --name ai-development-workspace \
+  -p 127.0.0.1:8090:8080 \
+  -v ai-development-workspace-data:/data \
+  ghcr.io/deadnodes/ai-development-workspace:latest
+```
+
+This starts embedded persistence. For a workspace mount or PostgreSQL, follow
+[the Docker guide](docs/DOCKER_LOCAL.md). Use a version tag or digest to pin deployments.
