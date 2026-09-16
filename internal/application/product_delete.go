@@ -60,5 +60,12 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, st)
+	// Decode into fresh storage: omitted fields must not survive from records
+	// that previously occupied the same slice positions.
+	var next domain.State
+	if err = json.Unmarshal(b, &next); err != nil {
+		return err
+	}
+	*st = next
+	return nil
 }

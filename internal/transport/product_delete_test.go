@@ -3,6 +3,7 @@ package transport_test
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
@@ -29,17 +30,28 @@ func TestProductDeletionPersists(t *testing.T) {
 			}
 			defer store.Close()
 			s := application.New(store)
-			for _, c := range []domain.Command{{Action: "create_product", ID: "delete-me", Data: map[string]any{"name": "Temporary"}}, {Action: "create_feature", ProductID: "delete-me", Data: map[string]any{"title": "History", "goal": "Persist"}}, {Action: "delete_product", ProductID: "delete-me", Data: map[string]any{"name": "Temporary"}}} {
+			for _, c := range []domain.Command{{Action: "create_product", ID: "delete-me", Data: map[string]any{"name": "Temporary"}}, {Action: "create_feature", ProductID: "delete-me", Data: map[string]any{"title": "History", "goal": "Persist"}}, {Action: "create_product", ID: "keep", Data: map[string]any{"name": "Keep"}}} {
 				c.Actor = "test"
 				if _, err = s.Execute(ctx, c); err != nil {
 					t.Fatal(err)
 				}
 			}
+			kept := domain.Memory{Meta: domain.Meta{ID: "kept-memory", ProductID: "keep"}, Kind: "decision", Reason: "unchanged"}
+			err = store.Update(ctx, func(st *domain.State) error {
+				st.Memories = append(st.Memories, domain.Memory{Meta: domain.Meta{ID: "removed-memory", ProductID: "delete-me"}, Kind: "blocker", Status: "resolved", Resolution: "old"}, kept)
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.Execute(ctx, domain.Command{Action: "delete_product", Actor: "test", ProductID: "delete-me", Data: map[string]any{"name": "Temporary"}}); err != nil {
+				t.Fatal(err)
+			}
 			st, err := store.Read(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(st.Products) != 0 || len(st.Features) != 0 || len(st.Events) != 3 {
+			if len(st.Products) != 1 || st.Products[0].ID != "keep" || len(st.Features) != 0 || len(st.Events) != 4 || len(st.Memories) != 1 || !reflect.DeepEqual(st.Memories[0], kept) {
 				t.Fatal("deletion not persisted or audit lost")
 			}
 		})
