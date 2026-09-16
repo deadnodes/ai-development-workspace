@@ -42,3 +42,7 @@ State adds `applications`, `integration_revisions`, `compositions` arrays. Appli
 Resume includes feature-linked integration_revisions, relevant applications, and compositions containing revision snapshots for that feature. Automatic branch construction, Git verification, Flux reconciliation and Kubernetes changes remain pending provider work.
 
 Environment names are trimmed and unique case-insensitively within each product (the same name in different products is allowed). Changing cluster or namespace clears desired_composition_id; selecting an older plan whose captured cluster/namespace differs is rejected and requires replanning. Revision capture must use an integration's declared repository when its repositories list is nonempty; otherwise any repository in the product is permitted.
+
+## Target architecture boundary
+
+The lifecycle/provider contracts in `internal/domain/lifecycle.go` and `providers.go` are not persisted State arrays or additional execute actions yet. See [architecture](ARCHITECTURE.md) and [rollout](ROADMAP.md). Current `Application` maps to the domain term Component without JSON/storage renames. Current `Release` remains an immutable planned selection; future final `ReleaseRecord` requires verified deployment evidence. Current global get_state is trusted-instance visibility, not per-user product authorization.

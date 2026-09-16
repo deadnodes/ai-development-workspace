@@ -14,3 +14,9 @@ Known MVP limits: one trusted workspace; full-state reads and serialized writes 
 ## Dynamic environment compositions
 
 The next slice adds application mappings, arbitrary product-local environment targets, immutable integration revision capture and versioned composition plans. Race-enabled PostgreSQL/MCP tests cover separate products with two and four environments, two features in one repository composition, later source recapture without rewriting old snapshots, desired-only selection, target changes invalidating stale plans, context retrieval and restart persistence. Domain tests additionally reject invalid Git refs, incompatible ordered selections for applications sharing a repository, missing dependencies and cross-product references. Frontend checks exercise multi-application form serialization and exact snapshot rendering. Browser validation covers application/DEV/PROD creation, base-only composition planning and desired selection while runtime remains unknown.
+
+## Intent-to-runtime architecture contracts
+
+Architecture revision 2 preserves existing State, persisted kinds and commands. New target-only domain contracts cover scoped connections/topology, branch divergence, multi-sided conflicts, artifact provenance/rebuild replacement, retention representation, deployments and final release records. Pure tests reject diverged fast-forward, unobserved artifact presence, silent digest replacement, invalid conflict verification and incomplete/mismatched deployment evidence. These guards validate evidence structure; live application authorization, freshness and provider behavior are not implemented or claimed.
+
+`TEST_DATABASE_URL=... make check` passed with real PostgreSQL, race tests, vet, formatting, frontend regression checks and binary build. No UI behavior changed in this revision. No provider adapter or external mutation was exercised.

@@ -55,6 +55,10 @@ This MVP is a trusted workspace application. Actor attribution is not authentica
 
 Each product has its own arbitrary environment set. Add repositories and applications, record immutable integration source revisions, then plan a composition for an environment. Several features can target one generated branch; applications sharing a repository must use the same branch composition. **Set desired** records the intended composition and never claims that a merge or deployment happened. See [composition design and execution boundary](docs/ENVIRONMENT_COMPOSITION.md).
 
+## Intent-to-runtime architecture
+
+The [updated architecture](docs/ARCHITECTURE.md) extends the current phase-1/2 MVP toward managed branches, semantic conflicts, external CI and artifact recovery, policy-controlled GitOps deployment, and observed Flux/Kubernetes runtime. New typed lifecycle/provider contracts are design foundations only; no additional live providers or execution tools are enabled. Component is the domain name for the existing Application; existing API/data stay compatible. See [bounded delivery phases and migrations](docs/ROADMAP.md).
+
 ## Development
 
 ```sh
