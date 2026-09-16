@@ -64,3 +64,7 @@ Runs formatting, vet, frontend checks, workflow-contract tests, race-enabled Go/
 ## Configuration authority
 
 Project configuration and history are persisted in PostgreSQL. UI/API/MCP are the primary interface; Git can hold a generated, one-way configuration mirror. Containers do not import project state from Git on startup. See [configuration authority and export](docs/CONFIGURATION_AUTHORITY.md).
+
+## Backup and migration
+
+Export/import the complete instance history as gzip through API/MCP or `scripts/backup.mjs`. Restore is atomic and requires an empty destination; active operations are cancelled with original evidence retained. See [agent backup and migration guide](docs/BACKUP.md).

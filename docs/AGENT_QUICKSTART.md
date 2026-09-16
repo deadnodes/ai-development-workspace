@@ -160,3 +160,5 @@ TEST_DATABASE_URL='postgres://releasecontrol:releasecontrol@localhost:55432/rele
 Для этой команды нужны Go 1.25+, Node.js и Python 3, а также запущенный Compose db. UI-изменения дополнительно проверь в браузере. Реальные GitHub тесты opt-in; не объявляй живой DEV-прогон успешным по результатам fake-provider тестов.
 
 Конфигурацию проекта изменяй через API/MCP: БД — источник истины. Для Git-зеркала: `get_product_configuration {"product_id":"…"}` или `node scripts/export-configuration.mjs PRODUCT_ID OUTPUT.json`. Правила и границы экспорта: [CONFIGURATION_AUTHORITY.md](CONFIGURATION_AUTHORITY.md).
+
+Полный перенос истории: MCP `create_backup` / `restore_backup` или `scripts/backup.mjs`. Архив сжимает и распаковывает сервер. Целевой экземпляр должен быть пустым. [Инструкция по backup](BACKUP.md).

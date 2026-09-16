@@ -113,7 +113,7 @@ func (s *Store) Read(ctx context.Context) (domain.State, error) {
 func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
 	st := domain.EmptyState()
 	groups := map[string][]json.RawMessage{}
-	rows, e := tx.Query(ctx, "SELECT kind, document FROM records ORDER BY created_at,id")
+	rows, e := tx.Query(ctx, "SELECT kind, document FROM records ORDER BY kind,position,id")
 	if e != nil {
 		return st, e
 	}
@@ -182,7 +182,7 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 		return e
 	}
 	for kind, records := range after {
-		for _, r := range records {
+		for position, r := range records {
 			var obj struct {
 				ID        string `json:"id"`
 				ProductID string `json:"product_id"`
@@ -201,7 +201,7 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 			if unchanged {
 				continue
 			}
-			if _, e = tx.Exec(ctx, "INSERT INTO records(id,kind,product_id,feature_id,document) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET document=EXCLUDED.document,product_id=EXCLUDED.product_id,feature_id=EXCLUDED.feature_id", obj.ID, kind, obj.ProductID, obj.FeatureID, []byte(r)); e != nil {
+			if _, e = tx.Exec(ctx, "INSERT INTO records(id,kind,product_id,feature_id,document,position) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET document=EXCLUDED.document,product_id=EXCLUDED.product_id,feature_id=EXCLUDED.feature_id,position=EXCLUDED.position", obj.ID, kind, obj.ProductID, obj.FeatureID, []byte(r), position); e != nil {
 				return e
 			}
 		}

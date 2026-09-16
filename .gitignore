@@ -13,3 +13,6 @@ __pycache__/
 *.pem
 *.key
 *.dump
+
+*.rcp.json.gz
+*.rcp.json.gz.sha256

@@ -43,3 +43,5 @@ The export is a mirror, not a full backup/import format. A mirror outage or fail
 ## Agent rule
 
 Read context from MCP/API → change configuration through commands → observe operation results → record verification and handoff in the service. Export the mirror when needed. Never use the mirror as a competing mutable project state file.
+
+Full application-state backup/restore is now available separately from this configuration mirror: [backup and migration](BACKUP.md). It does not turn mirror JSON into an import format.

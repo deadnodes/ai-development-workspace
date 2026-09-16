@@ -38,3 +38,9 @@ The generic Kustomize base and two independent product overlays render successfu
 ## Authoritative configuration mirror
 
 Configuration export tests cover Product isolation, effective configuration selection, deterministic revisions, observation exclusion and preservation of historical records. PostgreSQL reopen tests preserve the generated snapshot; HTTP and MCP delegation tests cover the export query. Full `make check` passed. The updated local container successfully exported existing Product configuration twice with byte-identical results. Export is one-way; automatic Git push, restore/import and full-history backup are not claimed.
+
+## Full compressed backup and migration
+
+`TEST_DATABASE_URL=... make check` passed with gzip/checksum/version/duplicate-ID/expanded-limit rejection, atomic nonempty-target rejection, active-operation cancellation with original audit evidence, and concurrent restores (exactly one succeeds). A two-schema PostgreSQL HTTP-export/MCP-restore test verifies all persisted state and append ordering after reopening the destination. Migration 002 adds explicit record positions so a bulk restore does not reorder effective configuration.
+
+The local running instance was exported through `scripts/backup.mjs` (31,503 compressed bytes) and restored through binary HTTP into a separate temporary process/database schema. Configuration, memory and original audit matched; the target had the additional restore event. The temporary target was stopped and its test schema removed; source data was retained. The updated Compose application is running with the migration. No external Git/CI/deployment actions were triggered by the restore.

@@ -113,3 +113,5 @@ Probes проверяют `/healthz` с `Host: localhost`, чтобы пройт
 ## Persistent project configuration
 
 Project configuration is loaded from PostgreSQL, not from the Kubernetes overlay. The overlay only bootstraps the service and its DB/secret connectivity. Replacing the Pod preserves all configuration/history when the same database is retained. Git mirrors are optional one-way exports: [configuration authority](CONFIGURATION_AUTHORITY.md).
+
+Для переноса на другую установку используй [полный gzip backup/restore](BACKUP.md) через два port-forward. Секреты и подключение к БД создаются отдельно; целевая application DB должна быть пустой.
