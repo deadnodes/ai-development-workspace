@@ -14,6 +14,8 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return nil, e
 	}
 	switch name {
+	case "get_feature_graph":
+		return featureGraph(st, id)
 	case "get_artifact_retention":
 		if !productExists(&st, id) {
 			return nil, missing("product", id)

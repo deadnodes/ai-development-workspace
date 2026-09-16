@@ -14,6 +14,7 @@ import (
 // All semantic reads and mutations share the application layer with execute.
 func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
+		"GET /api/features/{id}/graph":           "get_feature_graph",
 		"GET /api/products/{id}/retention":       "get_artifact_retention",
 		"GET /api/products/{id}/configuration":   "get_product_configuration",
 		"GET /api/integrations/{id}/context":     "get_integration_context",
@@ -92,6 +93,12 @@ func (in deployExistingInput) command() domain.Command {
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_feature_graph", Description: "Read a feature delivery graph: repository-scoped PR source/target branches, merge evidence, source revisions, compositions, artifacts and deployment observations. Historical reports are distinct from observed runtime; missing runtime is unknown."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		FeatureID string `json:"feature_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_feature_graph", in.FeatureID)
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "deploy_existing_artifact", Description: "Deploy a previously recorded successful build artifact to an enabled DEV GitOps mapping. Requires exact integration revision, fresh registry evidence and matching immutable digest. Never launches CI or rebuilds. Returns a persistent operation; GitOps success is not runtime health."}, func(ctx context.Context, _ *mcp.CallToolRequest, in deployExistingInput) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, in.command())
 		return nil, v, e
