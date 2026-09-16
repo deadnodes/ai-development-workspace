@@ -2,6 +2,11 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"releasecontrol/internal/delivery"
+	"strconv"
+	"strings"
 	"time"
 
 	"releasecontrol/internal/domain"
@@ -28,8 +33,37 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 			seen[key] = true
 		}
 	}
-	if len(branches) == 0 {
-		return s.finish(ctx, op, token, "BLOCKED", "link a branch or capture an integration revision first", nil)
+	if len(branches) == 0 && len(in.PullRequests) == 0 {
+		return s.finish(ctx, op, token, "BLOCKED", "link a branch, pull request, or capture an integration revision first", nil)
+	}
+	prs := []GraphPullRequest{}
+	if len(in.PullRequests) > 0 {
+		provider, ok := s.provider.(delivery.PullRequestObserver)
+		if !ok {
+			return s.finish(ctx, op, token, "BLOCKED", "provider does not support pull request observation", nil)
+		}
+		for _, pr := range in.PullRequests {
+			binding := repositoryBinding(&st, pr.RepositoryID)
+			if binding == nil || binding.ProductID != in.ProductID {
+				return s.finish(ctx, op, token, "BLOCKED", "pull request repository has no imported provider binding", nil)
+			}
+			conn, err := scopedConnection(&st, binding.ConnectionID, in.ProductID)
+			if err != nil {
+				return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+			}
+			number, err := strconv.Atoi(pr.ID)
+			if err != nil || number <= 0 {
+				return s.finish(ctx, op, token, "BLOCKED", "linked pull request requires a positive numeric ID", nil)
+			}
+			v, err := provider.ObservePullRequest(ctx, conn.Config, repositoryLocator(&st, *binding), number)
+			if err != nil {
+				return s.finish(ctx, op, token, "FAILED", fmt.Sprintf("pull request %s observation failed: %v", pr.ID, err), nil)
+			}
+			if v.Number != number || v.Head == "" || v.Base == "" || v.HeadSHA == "" {
+				return s.finish(ctx, op, token, "FAILED", "incomplete or mismatched pull request observation", nil)
+			}
+			prs = append(prs, GraphPullRequest{ID: pr.ID, URL: pr.URL, RepositoryID: pr.RepositoryID, Title: v.Title, Status: v.State, SourceBranch: v.Head, TargetBranch: v.Base, HeadSHA: v.HeadSHA, MergeSHA: v.MergeSHA, CreatedAt: gitTime(v.CreatedAt), MergedAt: gitTime(v.MergedAt), ObservedAt: gitTime(time.Now().UTC()), Evidence: "provider"})
+		}
 	}
 	observations := []domain.GitObservation{}
 	for _, b := range branches {
@@ -89,11 +123,39 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 				st.IntegrationRevisions = append(st.IntegrationRevisions, domain.IntegrationRevision{Meta: rm, IntegrationID: op.IntegrationID, RepositoryID: observation.RepositoryID, Branch: observation.Branch, BaseCommit: observation.MainCommit, HeadCommit: observation.HeadCommit, Commits: commits})
 			}
 		}
+		if len(prs) > 0 {
+			now := time.Now().UTC()
+			body, err := json.Marshal(prs)
+			if err != nil {
+				return err
+			}
+			st.Memories = append(st.Memories, domain.Memory{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, FeatureID: in.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, IntegrationID: in.ID, Kind: "progress", Title: "GitHub pull requests synchronized", Body: string(body), Session: op.ID})
+			live := integration(st, in.ID)
+			if live == nil {
+				return invalid("integration removed during observation")
+			}
+			if live.Status != "released" {
+				for n := range live.PullRequests {
+					for _, p := range prs {
+						if live.PullRequests[n].RepositoryID == p.RepositoryID && live.PullRequests[n].ID == p.ID && live.PullRequests[n].URL == p.URL {
+							live.PullRequests[n].Status = strings.ToLower(p.Status)
+						}
+					}
+				}
+			}
+		}
 		st.GitObservations = append(st.GitObservations, observations...)
 		return nil
 	})
 	if e != nil {
 		return e
 	}
-	return s.finish(ctx, op, token, "SUCCEEDED", "Git branches observed without modifying source history", nil)
+	return s.finish(ctx, op, token, "SUCCEEDED", fmt.Sprintf("Observed %d branches and %d pull requests without modifying source history", len(observations), len(prs)), map[string]string{"branches": strconv.Itoa(len(observations)), "pull_requests": strconv.Itoa(len(prs))})
+}
+
+func gitTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }

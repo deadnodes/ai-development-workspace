@@ -135,7 +135,19 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				revisions = append(revisions, r)
 			}
 		}
-		return map[string]any{"integration_id": id, "branches": in.Branches, "commits": in.Commits, "revisions": revisions, "observations": obs}, nil
+		prs := []GraphPullRequest{}
+		graph, err := featureGraph(st, in.FeatureID)
+		if err != nil {
+			return nil, err
+		}
+		for _, repository := range graph.Repositories {
+			for _, pr := range repository.PullRequests {
+				if graphContains(pr.IntegrationIDs, id) {
+					prs = append(prs, pr)
+				}
+			}
+		}
+		return map[string]any{"integration_id": id, "branches": in.Branches, "commits": in.Commits, "revisions": revisions, "observations": obs, "pull_requests": prs}, nil
 	case "get_environment_state":
 		env := environmentByID(&st, id)
 		if env == nil {
@@ -209,6 +221,18 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		}
 		for _, op := range st.Operations {
 			if op.ProductID == id && (op.Status == "FAILED" || op.DeploymentState == "GITOPS_APPLIED") {
+				if op.Kind == "REFRESH_GIT" && op.Status == "FAILED" {
+					superseded := false
+					for _, later := range st.Operations {
+						if later.ProductID == op.ProductID && later.IntegrationID == op.IntegrationID && later.Kind == "REFRESH_GIT" && later.Status == "SUCCEEDED" && later.CreatedAt.After(op.CreatedAt) && later.FinishedAt != nil && op.FinishedAt != nil && later.FinishedAt.After(*op.FinishedAt) {
+							superseded = true
+							break
+						}
+					}
+					if superseded {
+						continue
+					}
+				}
 				reason := "DEPLOY_FAILED"
 				if op.Kind == "REFRESH_GIT" {
 					reason = "GIT_SYNC_FAILED"

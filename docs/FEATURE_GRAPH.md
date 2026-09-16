@@ -18,3 +18,9 @@ Imported production snapshots remain explicitly **reported / not live**. GitOps 
 The graph is scoped to the Feature's Product and related integrations. Multi-repository operations retain source repository identities. Source compositions remain immutable selections, distinct from generated branch names.
 
 Run `node web/graph-check.mjs` for browser DOM interaction/security/race tests, and `go test ./internal/application ./internal/transport` for projection and transport behavior. UI acceptance also requires checking the real page in the browser.
+
+## Refreshing GitHub evidence
+
+Use **Work & history → Git & delivery → Refresh Git** to queue an actual GitHub App observation. It refreshes linked PR metadata even if there is no working branch binding or the PR's source branch has been deleted. Configured working branches are still compared against their configured base. The operation reports failures explicitly and retains previous audit evidence.
+
+Refreshing a historical PR does not bind its source branch for deployment and does not create a deployable integration revision. Select deployment source explicitly. **Refresh graph** only reloads the persisted graph projection.

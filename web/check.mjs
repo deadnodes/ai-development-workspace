@@ -247,3 +247,11 @@ assert.equal(capturedCommand.action,'configure_artifact_retention');
 assert.equal(capturedCommand.product_id,evaluate('productID'));
 assert.equal(Object.hasOwn(capturedCommand,'feature_id'),false);
 assert.deepEqual(capturedCommand.data,{application_id:'ret-app',keep_last:7,keep_current:true,keep_previous:2});
+// PR-only integrations can be inspected without implying deployable branch bindings.
+vm.runInContext(`state.operations=[{id:'pr-refresh',integration_id:'pr-only',kind:'REFRESH_GIT',status:'SUCCEEDED',finished_at:'2026-09-16T10:00:00Z',detail:'Observed linked pull requests'}]`,sandbox);
+const prOnlyHTML=vm.runInContext(`externalIntegrationPanel({id:'pr-only',pull_requests:[{id:'42',repository_id:'repo',url:'https://github.com/org/repo/pull/42',status:'merged'}]})`,sandbox);
+assert.match(prOnlyHTML,/Linked pull requests \(1\)/);
+assert.match(prOnlyHTML,/Last Git refresh/);
+assert.match(prOnlyHTML,/PR history does not select deployment source/);
+assert.doesNotMatch(prOnlyHTML,/Not resolved|Desired GitOps update/);
+console.log('PR-only Git refresh UI exposes references and observation time without deployment claims.');
