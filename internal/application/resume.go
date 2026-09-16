@@ -37,6 +37,10 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 	findings := []domain.Finding{}
 	envs := []domain.Environment{}
 	repos := []domain.Repository{}
+	apps := []domain.Application{}
+	revisions := []domain.IntegrationRevision{}
+	compositions := []domain.Composition{}
+	relevantRepos := map[string]bool{}
 	events := []EventSummary{}
 	latestHandoffs := map[string]domain.Memory{}
 	next := []string{}
@@ -127,6 +131,44 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 			repos = append(repos, v)
 		}
 	}
+	for _, rid := range f.Repositories {
+		relevantRepos[rid] = true
+	}
+	for _, in := range ins {
+		for _, rid := range in.Repositories {
+			relevantRepos[rid] = true
+		}
+	}
+	for _, rev := range st.IntegrationRevisions {
+		if rev.FeatureID == featureID {
+			revisions = append(revisions, rev)
+			relevantRepos[rev.RepositoryID] = true
+		}
+	}
+	relevantApps := map[string]bool{}
+	for _, composition := range st.Compositions {
+		if composition.ProductID != f.ProductID {
+			continue
+		}
+		relevant := false
+		for _, rev := range composition.RevisionSnapshots {
+			if rev.FeatureID == featureID {
+				relevant = true
+				break
+			}
+		}
+		if relevant {
+			compositions = append(compositions, composition)
+			for _, app := range composition.ApplicationSnapshots {
+				relevantApps[app.ID] = true
+			}
+		}
+	}
+	for _, app := range st.Applications {
+		if app.ProductID == f.ProductID && (relevantRepos[app.RepositoryID] || relevantApps[app.ID]) {
+			apps = append(apps, app)
+		}
+	}
 	for _, v := range st.Events {
 		if v.FeatureID == featureID {
 			events = append(events, EventSummary{ID: v.ID, Action: v.Action, Actor: v.Actor, At: v.At, EntityID: v.EntityID, ProductID: v.ProductID, FeatureID: v.FeatureID})
@@ -136,5 +178,5 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 	if eventsTotal > 20 {
 		events = events[eventsTotal-20:]
 	}
-	return map[string]any{"feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}, nil
+	return map[string]any{"applications": apps, "integration_revisions": revisions, "compositions": compositions, "feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}, nil
 }

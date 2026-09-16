@@ -297,7 +297,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	if !slices.Contains(domain.Actions, c.Action) {
 		return nil, invalid("unknown action")
 	}
-	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit"} {
+	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id"} {
 		if _, exists := c.Data[key]; exists {
 			return nil, invalid("field %s cannot be supplied in data", key)
 		}
@@ -331,7 +331,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	}
 	m.ProductID = c.ProductID
 	m.FeatureID = c.FeatureID
-	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment"}, c.Action) {
+	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition"}, c.Action) {
 		b, _ := json.Marshal(st)
 		var arrays map[string][]map[string]any
 		_ = json.Unmarshal(b, &arrays)
@@ -344,6 +344,12 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	}
 	switch c.Action {
+	case "create_application", "record_integration_revision", "plan_composition", "select_composition":
+		var err error
+		out, m, err = applyComposition(st, c, m)
+		if err != nil {
+			return nil, err
+		}
 	case "create_product":
 		v := domain.Product{}
 		if e := decode(c.Data, &v); e != nil {
@@ -672,8 +678,19 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 			return nil, e
 		}
 		v.Meta = m
+		v.Name = strings.TrimSpace(v.Name)
+		v.Cluster = strings.TrimSpace(v.Cluster)
+		v.Namespace = strings.TrimSpace(v.Namespace)
 		if v.Name == "" {
 			return nil, invalid("name required")
+		}
+		for _, existing := range st.Environments {
+			if existing.ID != v.ID && existing.ProductID == v.ProductID && strings.EqualFold(strings.TrimSpace(existing.Name), v.Name) {
+				return nil, invalid("environment name already exists in product")
+			}
+		}
+		if old != nil && (old.Cluster != v.Cluster || old.Namespace != v.Namespace) {
+			v.DesiredCompositionID = ""
 		}
 		if old != nil {
 			*old = v

@@ -127,12 +127,47 @@ type Finding struct {
 	FixCommit      string   `json:"fix_commit"`
 }
 type Environment struct {
+	Cluster              string `json:"cluster"`
+	Namespace            string `json:"namespace"`
+	DesiredCompositionID string `json:"desired_composition_id"`
 	Meta
 	Name        string         `json:"name"`
 	Desired     map[string]any `json:"desired"`
 	Reconciled  map[string]any `json:"reconciled"`
 	Runtime     map[string]any `json:"runtime"`
 	Composition map[string]any `json:"composition"`
+}
+type Application struct {
+	Meta
+	Name         string `json:"name"`
+	RepositoryID string `json:"repository_id"`
+	Path         string `json:"path"`
+}
+type IntegrationRevision struct {
+	Meta
+	IntegrationID string   `json:"integration_id"`
+	RepositoryID  string   `json:"repository_id"`
+	Branch        string   `json:"branch"`
+	BaseCommit    string   `json:"base_commit"`
+	HeadCommit    string   `json:"head_commit"`
+	Commits       []string `json:"commits"`
+}
+type CompositionComponent struct {
+	ApplicationID string   `json:"application_id"`
+	BaseRef       string   `json:"base_ref"`
+	BaseCommit    string   `json:"base_commit"`
+	TargetBranch  string   `json:"target_branch"`
+	RevisionIDs   []string `json:"revision_ids"`
+}
+type Composition struct {
+	Meta
+	EnvironmentID        string                 `json:"environment_id"`
+	Name                 string                 `json:"name"`
+	Status               string                 `json:"status"`
+	Components           []CompositionComponent `json:"components"`
+	ApplicationSnapshots []Application          `json:"application_snapshots"`
+	RevisionSnapshots    []IntegrationRevision  `json:"revision_snapshots"`
+	EnvironmentSnapshot  Environment            `json:"environment_snapshot"`
 }
 type Repository struct {
 	Meta
@@ -160,22 +195,25 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
-	Products     []Product     `json:"products"`
-	Features     []Feature     `json:"features"`
-	Integrations []Integration `json:"integrations"`
-	Gates        []Gate        `json:"gates"`
-	Checks       []Check       `json:"checks"`
-	Results      []CheckResult `json:"results"`
-	Findings     []Finding     `json:"findings"`
-	Memories     []Memory      `json:"memories"`
-	Environments []Environment `json:"environments"`
-	Repositories []Repository  `json:"repositories"`
-	Releases     []Release     `json:"releases"`
-	Events       []Event       `json:"events"`
+	Applications         []Application         `json:"applications"`
+	IntegrationRevisions []IntegrationRevision `json:"integration_revisions"`
+	Compositions         []Composition         `json:"compositions"`
+	Products             []Product             `json:"products"`
+	Features             []Feature             `json:"features"`
+	Integrations         []Integration         `json:"integrations"`
+	Gates                []Gate                `json:"gates"`
+	Checks               []Check               `json:"checks"`
+	Results              []CheckResult         `json:"results"`
+	Findings             []Finding             `json:"findings"`
+	Memories             []Memory              `json:"memories"`
+	Environments         []Environment         `json:"environments"`
+	Repositories         []Repository          `json:"repositories"`
+	Releases             []Release             `json:"releases"`
+	Events               []Event               `json:"events"`
 }
 
 func EmptyState() State {
-	return State{Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {
@@ -191,4 +229,4 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-var Actions = []string{"create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release"}
+var Actions = []string{"create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release"}

@@ -51,6 +51,10 @@ Configure any Streamable HTTP MCP client with URL `http://127.0.0.1:8090/mcp`. I
 
 This MVP is a trusted workspace application. Actor attribution is not authentication or RBAC. It binds loopback by default, rejects cross-origin requests and unexpected Host headers, and limits command sizes. Use a token and TLS ingress before intentionally sharing it. The UI can supply the configured token. No Git provider, Flux, Kubernetes or production mutations are performed.
 
+## Dynamic environments and feature composition
+
+Each product has its own arbitrary environment set. Add repositories and applications, record immutable integration source revisions, then plan a composition for an environment. Several features can target one generated branch; applications sharing a repository must use the same branch composition. **Set desired** records the intended composition and never claims that a merge or deployment happened. See [composition design and execution boundary](docs/ENVIRONMENT_COMPOSITION.md).
+
 ## Development
 
 ```sh
