@@ -15,7 +15,7 @@ func CommandSchema() map[string]any {
 	}
 	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution for this engineering action; a human or agent identifier."}
 	data := map[string]any{}
-	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id") {
+	for _, k := range strings.Fields("name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit version checksum uri build_url") {
 		data[k] = str()
 	}
 	for _, k := range strings.Fields("requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
@@ -61,6 +61,9 @@ func CommandSchema() map[string]any {
 	}
 	data["components"] = map[string]any{"anyOf": []any{compositionComponents, map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": scenarioComponent, "additionalProperties": false, "required": []string{"application_id", "operation_id", "source_sha", "artifact_digest"}}}}}
 	data["observations"] = map[string]any{"anyOf": []any{str(), map[string]any{"type": "array", "items": str()}}}
+	data["role"] = map[string]any{"type": "string", "enum": domain.RepositoryRoles()}
+	data["kind"] = map[string]any{"type": "string", "enum": domain.ComponentKinds()}
+	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
 		{"reconcile_composition", "id", ""},
@@ -75,6 +78,9 @@ func CommandSchema() map[string]any {
 		{"grant_connection", "product_id", "connection_id"},
 		{"create_github_connection", "", "name app_id installation_id private_key_ref owner"},
 		{"import_repository", "product_id", "connection_id full_name role default_branch"},
+		{"classify_repository", "id", "role"},
+		{"configure_publication", "product_id", "application_id format registry_url package_name"},
+		{"record_package_artifact", "product_id", "application_id publication_target_id source_commit version checksum uri"},
 		{"configure_component", "product_id", "application_id connection_id workflow image_repository"},
 		{"configure_environment", "product_id", "environment_id purpose connection_id repository_id ref path image_field application_id allow_deploy"},
 		{"refresh_integration_git", "integration_id", ""},

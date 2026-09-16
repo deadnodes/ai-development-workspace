@@ -383,7 +383,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	}
 	m.ProductID = c.ProductID
 	m.FeatureID = c.FeatureID
-	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation"}, c.Action) {
+	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action) {
 		b, _ := json.Marshal(st)
 		var arrays map[string][]map[string]any
 		_ = json.Unmarshal(b, &arrays)
@@ -396,6 +396,56 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	}
 	switch c.Action {
+	case "classify_repository":
+		var input struct {
+			Role string `json:"role"`
+		}
+		if err := decode(c.Data, &input); err != nil {
+			return nil, err
+		}
+		if !slices.Contains(domain.RepositoryRoles(), input.Role) {
+			return nil, invalid("invalid repository role")
+		}
+		var repo *domain.Repository
+		for i := range st.Repositories {
+			if st.Repositories[i].ID == c.ID {
+				repo = &st.Repositories[i]
+			}
+		}
+		if repo == nil {
+			return nil, missing("repository", c.ID)
+		}
+		if c.ProductID != "" && repo.ProductID != c.ProductID {
+			return nil, invalid("repository outside product")
+		}
+		for _, app := range st.Applications {
+			if app.RepositoryID == repo.ID && !domain.RepositoryAllows(input.Role, domain.ComponentKind(app)) {
+				return nil, invalid("role conflicts with existing component %s", app.ID)
+			}
+		}
+		for _, target := range st.EnvironmentBindings {
+			if target.RepositoryID == repo.ID && input.Role != "GITOPS" {
+				return nil, invalid("repository has GitOps deployment mappings")
+			}
+		}
+		repo.Role = input.Role
+		repo.Actor = c.Actor
+		repo.UpdatedAt = m.UpdatedAt
+		m.ProductID = repo.ProductID
+		if old := repositoryBinding(st, repo.ID); old != nil {
+			next := *old
+			next.Meta = m
+			next.ID = id()
+			next.Role = input.Role
+			st.RepositoryBindings = append(st.RepositoryBindings, next)
+		}
+		out = *repo
+	case "configure_publication", "record_package_artifact":
+		var err error
+		out, m, err = applyPublication(st, c, m)
+		if err != nil {
+			return nil, err
+		}
 	case "create_test_scenario", "revise_test_scenario", "record_scenario_run":
 		var err error
 		out, m, err = applyScenario(st, c, m)
@@ -832,11 +882,14 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if !productExists(st, c.ProductID) {
 			return nil, missing("product", c.ProductID)
 		}
-		v := domain.Repository{}
+		v := domain.Repository{Role: "SOURCE"}
 		if e := decode(c.Data, &v); e != nil {
 			return nil, e
 		}
 		v.Meta = m
+		if !slices.Contains(domain.RepositoryRoles(), v.Role) {
+			return nil, invalid("invalid repository role")
+		}
 		if v.Name == "" || v.URL == "" {
 			return nil, invalid("name and url required")
 		}

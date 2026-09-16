@@ -34,7 +34,7 @@ func productConfiguration(st domain.State, productID string) (ProductConfigurati
 	out := map[string][]map[string]any{}
 	// These are configuration records only. Never export operations, reports or audit
 	// wholesale: those can contain unrelated product and provider data.
-	for _, kind := range []string{"products", "applications", "repositories", "repository_bindings", "component_builds", "environment_bindings", "environments", "connection_grants", "system_relationships"} {
+	for _, kind := range []string{"products", "applications", "repositories", "repository_bindings", "component_builds", "publication_targets", "environment_bindings", "environments", "connection_grants", "system_relationships"} {
 		out[kind] = []map[string]any{}
 		for _, row := range all[kind] {
 			if (kind == "products" && row["id"] == productID) || (kind != "products" && row["product_id"] == productID) {
@@ -47,7 +47,7 @@ func productConfiguration(st domain.State, productID string) (ProductConfigurati
 		}
 	}
 	// Configuration changes are append-only in storage. Mirror only effective values.
-	for kind, keys := range map[string][]string{"component_builds": {"application_id"}, "environment_bindings": {"environment_id", "application_id"}, "repository_bindings": {"repository_id"}} {
+	for kind, keys := range map[string][]string{"publication_targets": {"application_id"}, "component_builds": {"application_id"}, "environment_bindings": {"environment_id", "application_id"}, "repository_bindings": {"repository_id"}} {
 		seen := map[string]bool{}
 		rows := out[kind]
 		out[kind] = []map[string]any{}

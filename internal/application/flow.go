@@ -68,13 +68,13 @@ func flowSources(st *domain.State, comp domain.Composition, opID string, product
 	seen := map[string]bool{}
 	for _, component := range comp.Components {
 		app := applicationByID(st, component.ApplicationID)
-		if app == nil {
+		if app == nil || domain.ComponentKind(*app) != "APPLICATION" {
 			return nil, invalid("component missing")
 		}
 		source := repositoryBinding(st, app.RepositoryID)
 		build := componentBuild(st, app.ID)
 		target := environmentBinding(st, comp.EnvironmentID, app.ID)
-		if source == nil || source.Role != "SOURCE" || build == nil || target == nil || !target.AllowDeploy {
+		if source == nil || !domain.IsSourceRole(source.Role) || build == nil || target == nil || !target.AllowDeploy {
 			return nil, invalid("source/build and enabled target required for %s", app.ID)
 		}
 		if production && target.Purpose != "PROD" {
@@ -296,7 +296,7 @@ func prepareFlowDeployments(st *domain.State, comp domain.Composition, m domain.
 	out := []domain.DeliverySnapshot{}
 	for _, component := range comp.Components {
 		app := applicationByID(st, component.ApplicationID)
-		if app == nil {
+		if app == nil || domain.ComponentKind(*app) != "APPLICATION" {
 			return nil, invalid("component missing")
 		}
 		source := repositoryBinding(st, app.RepositoryID)

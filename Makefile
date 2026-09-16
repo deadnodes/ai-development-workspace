@@ -16,6 +16,7 @@ check:
 	node --check web/static/app.js
 	node --check web/static/external.js
 	node --check web/static/flow.js
+	node --check web/static/library.js
 	node --check scripts/export-configuration.mjs
 	node --check scripts/backup.mjs
 	node web/check.mjs

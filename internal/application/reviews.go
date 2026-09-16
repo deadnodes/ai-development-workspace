@@ -41,7 +41,7 @@ func (s *Service) SyncReview(ctx context.Context, actor, integrationID, reposito
 	}
 	in := integration(&st, integrationID)
 	binding := repositoryBinding(&st, repositoryID)
-	if in == nil || binding == nil || binding.ProductID != in.ProductID || binding.Role != "SOURCE" {
+	if in == nil || binding == nil || binding.ProductID != in.ProductID || !domain.IsSourceRole(binding.Role) {
 		return nil, invalid("integration and SOURCE repository must belong to product")
 	}
 	f := feature(&st, in.FeatureID)

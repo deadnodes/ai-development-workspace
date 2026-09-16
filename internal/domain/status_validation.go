@@ -9,6 +9,9 @@ import (
 // snapshots. Opaque provider responses and append-only event payloads retain
 // their original vocabulary and are deliberately not interpreted as our state.
 func ValidateStateStatuses(st State) error {
+	if err := ValidateRepositoryKinds(st); err != nil {
+		return err
+	}
 	catalog := StatusCatalog()
 	check := func(kind, id, value string, optional bool) error {
 		if value == "" && optional {

@@ -207,8 +207,8 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if e != nil {
 			return nil, m, e
 		}
-		if !repositoryName.MatchString(input.FullName) || !strings.EqualFold(strings.Split(input.FullName, "/")[0], conn.Config.Owner) || !slices.Contains([]string{"SOURCE", "GITOPS"}, input.Role) || !safeBranch(input.DefaultBranch) {
-			return nil, m, invalid("repository owner, SOURCE/GITOPS role and default_branch required")
+		if !repositoryName.MatchString(input.FullName) || !strings.EqualFold(strings.Split(input.FullName, "/")[0], conn.Config.Owner) || !slices.Contains(domain.RepositoryRoles(), input.Role) || !safeBranch(input.DefaultBranch) {
+			return nil, m, invalid("repository owner, valid role and default_branch required")
 		}
 		for _, r := range st.RepositoryBindings {
 			if r.ProductID == c.ProductID && strings.EqualFold(r.FullName, input.FullName) {
@@ -224,7 +224,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 			registered = &st.RegisteredRepositories[len(st.RegisteredRepositories)-1]
 		}
 		associateRegistryConnection(registered, conn)
-		repo := domain.Repository{RegisteredRepositoryID: registered.ID, Meta: m, Name: input.FullName, URL: input.URL, Provider: "github"}
+		repo := domain.Repository{Role: input.Role, RegisteredRepositoryID: registered.ID, Meta: m, Name: input.FullName, URL: input.URL, Provider: "github"}
 		if repo.URL == "" {
 			repo.URL = "https://github.com/" + input.FullName
 		}
@@ -248,11 +248,11 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 			return nil, m, e
 		}
 		app := applicationByID(st, input.ApplicationID)
-		if app == nil || app.ProductID != c.ProductID {
+		if app == nil || app.ProductID != c.ProductID || domain.ComponentKind(*app) != "APPLICATION" {
 			return nil, m, invalid("application must belong to product")
 		}
 		binding := repositoryBinding(st, app.RepositoryID)
-		if binding == nil || binding.Role != "SOURCE" || binding.ConnectionID != input.ConnectionID {
+		if binding == nil || !domain.IsSourceRole(binding.Role) || binding.ConnectionID != input.ConnectionID {
 			return nil, m, invalid("component requires SOURCE repository and its connection")
 		}
 		if _, e := scopedConnection(st, input.ConnectionID, c.ProductID); e != nil {
@@ -290,7 +290,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		}
 		env := environmentByID(st, input.EnvironmentID)
 		app := applicationByID(st, input.ApplicationID)
-		if env == nil || app == nil || env.ProductID != c.ProductID || app.ProductID != c.ProductID {
+		if env == nil || app == nil || env.ProductID != c.ProductID || app.ProductID != c.ProductID || domain.ComponentKind(*app) != "APPLICATION" {
 			return nil, m, invalid("environment and application must belong to product")
 		}
 		binding := repositoryBinding(st, input.RepositoryID)
@@ -348,7 +348,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		}
 		app := applicationByID(st, input.ApplicationID)
 		env := environmentByID(st, input.EnvironmentID)
-		if app == nil || app.ProductID != in.ProductID || env == nil || env.ProductID != in.ProductID {
+		if app == nil || app.ProductID != in.ProductID || env == nil || env.ProductID != in.ProductID || domain.ComponentKind(*app) != "APPLICATION" {
 			return nil, m, invalid("component and environment must belong to integration product")
 		}
 		if len(in.Repositories) > 0 && !slices.Contains(in.Repositories, app.RepositoryID) {

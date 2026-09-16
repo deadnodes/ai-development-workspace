@@ -89,6 +89,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		return true, s.finish(ctx, *op, token, "FAILED", "invalid operation snapshot", nil)
 	}
 	snapshot := op.Snapshot
+	if domain.ComponentKind(snapshot.Application) != "APPLICATION" {
+		return true, s.finish(ctx, *op, token, "BLOCKED", "library components use publication, not environment deployment", nil)
+	}
 	if op.ParentID != "" {
 		state, e := s.State(ctx)
 		if e != nil {

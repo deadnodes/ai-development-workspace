@@ -335,6 +335,50 @@ func addDeliveryContext(out map[string]any, st domain.State, featureID, integrat
 			runtime = append(runtime, r)
 		}
 	}
+	publicationTargets := []domain.PublicationTarget{}
+	packageArtifacts := []domain.PackageArtifact{}
+	relevantRepos := map[string]bool{}
+	for _, in := range st.Integrations {
+		if relevantIntegrations[in.ID] {
+			for _, rid := range in.Repositories {
+				relevantRepos[rid] = true
+			}
+			for _, b := range in.Branches {
+				relevantRepos[b.RepositoryID] = true
+			}
+		}
+	}
+	if integrationID == "" && f != nil {
+		for _, rid := range f.Repositories {
+			relevantRepos[rid] = true
+		}
+	}
+	for _, artifact := range st.PackageArtifacts {
+		if f != nil && artifact.ProductID == f.ProductID && relevantIntegrations[artifact.IntegrationID] {
+			relevantRepos[artifact.RepositoryID] = true
+		}
+	}
+	libraries := map[string]bool{}
+	components := []domain.Application{}
+	for _, app := range st.Applications {
+		if f != nil && app.ProductID == f.ProductID && relevantRepos[app.RepositoryID] {
+			components = append(components, app)
+			libraries[app.ID] = true
+		}
+	}
+	for _, v := range st.PublicationTargets {
+		if libraries[v.ApplicationID] {
+			publicationTargets = append(publicationTargets, v)
+		}
+	}
+	for _, v := range st.PackageArtifacts {
+		if libraries[v.ApplicationID] && (v.IntegrationID == "" || relevantIntegrations[v.IntegrationID]) {
+			packageArtifacts = append(packageArtifacts, v)
+		}
+	}
+	out["components"] = components
+	out["publication_targets"] = publicationTargets
+	out["package_artifacts"] = packageArtifacts
 	out["scenario_versions"] = scenarios
 	out["scenario_runs"] = runs
 	out["runtime_observations"] = runtime

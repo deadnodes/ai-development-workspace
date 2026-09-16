@@ -57,6 +57,7 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 	case "create_application":
 		var input struct {
 			Name         string `json:"name"`
+			Kind         string `json:"kind"`
 			RepositoryID string `json:"repository_id"`
 			Path         string `json:"path"`
 		}
@@ -75,7 +76,16 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		if input.Path != "" && (path.IsAbs(input.Path) || path.Clean(input.Path) != input.Path || input.Path == ".." || strings.HasPrefix(input.Path, "../") || strings.Contains(input.Path, "\\")) {
 			return nil, m, invalid("application path must be a clean repository-relative path")
 		}
-		v := domain.Application{Meta: m, Name: input.Name, RepositoryID: input.RepositoryID, Path: input.Path}
+		if input.Kind == "" {
+			input.Kind = "APPLICATION"
+		}
+		if !slices.Contains(domain.ComponentKinds(), input.Kind) {
+			return nil, m, invalid("invalid component kind")
+		}
+		if !domain.RepositoryAllows(repositoryRole(st, input.RepositoryID), input.Kind) {
+			return nil, m, invalid("repository purpose does not support this component kind")
+		}
+		v := domain.Application{Meta: m, Kind: input.Kind, Name: input.Name, RepositoryID: input.RepositoryID, Path: input.Path}
 		st.Applications = append(st.Applications, v)
 		return v, m, nil
 	case "record_integration_revision":
@@ -148,7 +158,7 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		integrationRepo := map[string]string{}
 		for _, component := range input.Components {
 			app := applicationByID(st, component.ApplicationID)
-			if app == nil || app.ProductID != c.ProductID || apps[app.ID] {
+			if app == nil || app.ProductID != c.ProductID || apps[app.ID] || domain.ComponentKind(*app) != "APPLICATION" {
 				return nil, m, invalid("component applications must be unique and belong to product")
 			}
 			apps[app.ID] = true
@@ -228,4 +238,19 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		return nil, m, missing("composition", c.ID)
 	}
 	return nil, m, invalid("unknown composition action")
+}
+
+func repositoryRole(st *domain.State, repoID string) string {
+	if binding := repositoryBinding(st, repoID); binding != nil {
+		return binding.Role
+	}
+	for _, r := range st.Repositories {
+		if r.ID == repoID {
+			if r.Role != "" {
+				return r.Role
+			}
+			return "SOURCE"
+		}
+	}
+	return ""
 }
