@@ -477,6 +477,12 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "delete_product":
+		if err := deleteProduct(st, c); err != nil {
+			return nil, err
+		}
+		m.ID = c.ProductID
+		out = map[string]string{"deleted_product_id": c.ProductID}
 	case "create_product":
 		v := domain.Product{}
 		if e := decode(c.Data, &v); e != nil {

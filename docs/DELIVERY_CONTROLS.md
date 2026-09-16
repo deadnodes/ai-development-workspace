@@ -46,3 +46,12 @@ Browser links include `?product=PRODUCT_ID` before the section hash, for example
 `/?product=deadnodes#delivery`. Share the complete address. Product selection
 preserves the Delivery/Operations section; browser Back/Forward restores the product.
 Legacy links acquire an explicit product after opening.
+
+## Delete a product
+
+Overview → Delete product requires the exact product name. The shared API/MCP
+command is `delete_product` with `product_id` and `data.name`. Product-owned
+records are removed atomically; audit events, instance repository registry and
+shared provider connections remain. External repositories, images, files and
+running applications are untouched. Unfinished operations prevent deletion.
+Export a backup first if you need to restore the removed development context.

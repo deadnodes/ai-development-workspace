@@ -67,6 +67,7 @@ func CommandSchema() map[string]any {
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"delete_product", "product_id", "name"},
 		{"reconcile_composition", "id", ""},
 		{"prepare_release_candidate", "product_id", "name environment_id components approve_main_update"},
 		{"promote_release_candidate", "id", "approve"},

@@ -184,6 +184,21 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 	if e != nil {
 		return e
 	}
+	for kind, records := range before {
+		for _, raw := range records {
+			if productRecordRemoved(before, after, kind, raw) {
+				var meta struct {
+					ID string `json:"id"`
+				}
+				if e = json.Unmarshal(raw, &meta); e != nil {
+					return e
+				}
+				if _, e = tx.Exec(ctx, "DELETE FROM records WHERE id=$1 AND kind=$2", meta.ID, kind); e != nil {
+					return e
+				}
+			}
+		}
+	}
 	for kind, records := range after {
 		for position, r := range records {
 			var obj struct {
@@ -229,4 +244,46 @@ func documents(st domain.State) (map[string][]json.RawMessage, error) {
 	e = json.Unmarshal(b, &m)
 	delete(m, "events")
 	return m, e
+}
+
+// Only a deleted product permits deletion of its owned records.
+func productRecordRemoved(before, after map[string][]json.RawMessage, kind string, raw json.RawMessage) bool {
+	var m struct {
+		ID        string `json:"id"`
+		ProductID string `json:"product_id"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	owner := m.ProductID
+	if kind == "products" {
+		owner = m.ID
+	}
+	if owner == "" {
+		return false
+	}
+	exists := func(rows []json.RawMessage, id string) bool {
+		for _, r := range rows {
+			var v struct {
+				ID string `json:"id"`
+			}
+			_ = json.Unmarshal(r, &v)
+			if v.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	for _, rows := range after {
+		for _, row := range rows {
+			var v struct {
+				ProductID string `json:"product_id"`
+			}
+			_ = json.Unmarshal(row, &v)
+			if v.ProductID == owner {
+				return false
+			}
+		}
+	}
+	return exists(before["products"], owner) && !exists(after["products"], owner) && !exists(after[kind], m.ID)
 }

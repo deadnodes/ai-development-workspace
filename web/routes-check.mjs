@@ -14,6 +14,10 @@ function browser(url,stored){
 const one=browser('http://localhost/?product=a#delivery','b');
 const two=browser(one.w.location.href,'b');
 for(const b of [one,two]){assert.equal(b.run('productID'),'a');assert.match(b.w.document.querySelector('#main').textContent,/Environments/);}
+one.w.history.replaceState(null,'','/?product=a');one.run('render()');
+assert.ok(one.w.document.querySelector('[data-action=delete_product]'));
+assert.equal(one.run("forms.delete_product.fields[0].name"),'name');
+one.w.history.replaceState(null,'','/?product=a#delivery');one.run('render()');
 const selector=one.w.document.querySelector('#product');selector.value='b';selector.dispatchEvent(new one.w.Event('change'));
 assert.equal(one.w.location.search,'?product=b');assert.equal(one.w.location.hash,'#delivery');
 one.w.history.back();await new Promise(r=>setTimeout(r,30));assert.equal(one.run('productID'),'a');

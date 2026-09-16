@@ -201,7 +201,7 @@ func (s *LocalStore) Update(ctx context.Context, fn func(*domain.State) error) e
 				if err = json.Unmarshal(raw, &meta); err != nil {
 					return err
 				}
-				if ids[meta.ID] != kind {
+				if ids[meta.ID] != kind && !productRecordRemoved(before, after, kind, raw) {
 					return errors.New("existing records cannot be removed or change kind")
 				}
 			}
