@@ -51,3 +51,7 @@ The application owns selection, scenarios/plans, source/artifact provenance, pol
 Implemented foundations: versioned environment composition plans, per-integration source revisions, Gates/Checks/results, review Findings, immutable release selection plans, and one explicit GitHub DEV integration deployment path.
 
 Still to implement: reusable versioned scenarios/runs, automatic external execution of multi-integration compositions, selected-work merge-to-main orchestration, main-source release provenance enforcement and release-candidate verification/execution. The current DEV deployment command operates on one bound integration and does not execute a multi-feature composition. Production execution remains unavailable. This document sets the target behavior; it does not claim those operations are already shipped.
+
+## Multiple independent test targets
+
+The testing flow applies independently to any number of configured environments, not one mandatory DEV branch. Each target selects its own integrations. Removing work requests a new base-plus-selection composition, fresh generated branch/CI build and deployment to that target only. See [environment reconciliation contract](ENVIRONMENT_COMPOSITION.md#independent-environment-reconciliation). The current planner does not yet execute that sequence automatically.

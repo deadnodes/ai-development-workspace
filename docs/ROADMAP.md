@@ -10,7 +10,7 @@ This is an architectural implementation sequence, not a mutable progress log. Di
 
 ## Updated delivery priority
 
-Next product slice: reusable test scenarios and immutable runs bound to existing environment composition snapshots. Then external execution of shared test compositions. Production follows selected-work integration into main, main-derived artifact build and explicit release-candidate verification, never blind DEV image promotion. See [source and verification rules](TEST_AND_RELEASE_FLOW.md). The provider rollout below supplies these workflows; it does not define a linear environment promotion chain.
+Next product slice: reusable test scenarios and immutable runs bound to existing environment composition snapshots. Next execution capability: independent environment reconciliation on selection changes (including feature removal): pinned base → fresh generated branch → CI → immutable artifacts → GitOps → runtime observation, with dependency/conflict and superseded-plan guards. It must work for any number of independently configured targets. Production follows selected-work integration into main, main-derived artifact build and explicit release-candidate verification, never blind DEV image promotion. See [source and verification rules](TEST_AND_RELEASE_FLOW.md). The provider rollout below supplies these workflows; it does not define a linear environment promotion chain.
 
 ## Next bounded slices
 

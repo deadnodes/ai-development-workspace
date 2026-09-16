@@ -33,3 +33,37 @@ Shared test compositions are not promoted as production artifacts. Production ca
 On a deployment request: resolve and verify immutable source refs → isolated composition/merge preview → conflict report or generated commit → build each affected application → retain image digests and test evidence → update GitOps desired state → observe Flux reconciliation → observe Kubernetes rollout. A Deployment record must link the composition ID, repository outputs, artifact digests and observed outcome. Merge conflicts stop the operation for a human/agent resolution; they are not automatically guessed away. Partial rollout remains distinguishable from success.
 
 The current composition UI/API/MCP implement planning and source attribution. They do not execute multi-feature Git composition. The separate GitHub DEV command can build/deploy one bound Integration; it is not a composition executor. Discover current implementation work from your instance.
+
+## Independent environment reconciliation
+
+Environment count is unbounded configuration: one, two, three or more targets. Targets do not form an implicit DEV → TEST → STAGE → PROD promotion pipeline. Each owns an independent desired composition and reconciliation operation.
+
+Example:
+
+| Target | Desired source |
+| --- | --- |
+| test-a | main@M + A@A1 + B@B2 |
+| test-b | main@M + B@B2 + C@C1 |
+| test-c | main@M + A@A1 |
+| production | pinned main commits only |
+
+Adding/removing selected work changes only the chosen environment's desired composition. Removing A from test-a produces a new immutable definition `main@M + B@B2`; test-b/test-c are unchanged. No application data is deleted. A feature already included in the chosen main baseline cannot be removed merely by deselecting an active integration: that requires an explicit different baseline or a source change by an agent/developer.
+
+### Required execution operation
+
+1. Validate selected revision scope, dependencies and test-data/migration constraints. Removing a required dependency is rejected or requires an explicit revised plan; do not silently cascade-remove unrelated work.
+2. Freeze a new composition revision: exact base commit and ordered integration source revisions for each repository, component build definitions, environment mapping and policy.
+3. Ask the external Git executor to create a fresh generated branch from the pinned base, for example `generated/<environment-id>/<composition-id>`. Apply only selected work. Do not mutate developer branches or try to remove work by a chain of guessed reverts.
+4. On conflicts, preserve the previous running environment, record conflict evidence and give an agent both contexts. Do not attempt semantic source fixes in the Control Plane.
+5. Record generated commit(s), trigger external CI on those exact SHAs and resolve immutable artifact digests.
+6. Before publishing desired GitOps, verify that this operation still targets the latest desired composition. A slow old build must not reintroduce a feature removed by a newer request.
+7. Publish the pinned component artifacts through the configured environment mapping, then observe Flux/runtime separately. Failures and partial multi-component rollouts remain explicit; a GitOps commit is not runtime success.
+8. Retain the prior composition, generated commits, artifacts and test evidence for diagnosis/rollback. Do not silently change business data or undo migrations when removing a feature; incompatible persisted data can block rollback/recomposition.
+
+Generated branches are disposable materializations of the database definition. Git stores their code/history; the Control Plane records how to reconstruct them. Build caching is allowed only for matching recorded source/build provenance and immutable digest, never by mutable branch/tag name alone.
+
+Production keeps the distinct policy: build from pinned main source after selected work has landed there. Test-like targets use composition sources regardless of their display names. Supporting arbitrary environment names does not enable arbitrary production writes.
+
+### Current gap
+
+Independent desired composition planning exists. The running worker currently executes only `REFRESH_GIT` and a single-integration `DEPLOY`; selecting or changing a composition does **not yet** start the operation above. Implementing that operation requires external Git branch composition, component fan-out/build tracking, superseded-plan guards and Flux/runtime observation. This is the next execution slice, not an already-working automatic behavior.
