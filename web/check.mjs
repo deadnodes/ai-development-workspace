@@ -213,3 +213,8 @@ assert.ok(!evaluate("inputField(forms.transition_integration.fields[0],'banana')
 console.log('Controlled feature/integration selectors use domain metadata and exclude client-assigned released.');
 
 assert.ok(!evaluate("inputField(forms.transition_integration.fields[0],'working')").includes('Unspecified'));
+
+evaluate("state.integrations[0].status='planned'");
+assert.ok(!evaluate('featureView(selectedFeature())').includes('Mark ready'));
+evaluate("state.integrations[0].status='working'");
+assert.ok(evaluate('featureView(selectedFeature())').includes('Mark ready'));
