@@ -177,6 +177,9 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 	if e = fn(&st); e != nil {
 		return e
 	}
+	if e = domain.ValidateStateStatuses(st); e != nil {
+		return e
+	}
 	after, e := documents(st)
 	if e != nil {
 		return e

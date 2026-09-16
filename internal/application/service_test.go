@@ -49,12 +49,15 @@ func TestFailedGateRequiresResolutionAndRerun(t *testing.T) {
 	s, m := fixture(t)
 	exec(t, s, domain.Command{Action: "create_gate", ID: "g", FeatureID: "f", Data: map[string]any{"title": "gate", "reason": "risk", "integration_ids": []string{"i"}}})
 	exec(t, s, domain.Command{Action: "add_check", ID: "c", GateID: "g", Data: map[string]any{"title": "test", "mechanism": "unit"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "record_check_result", ID: "r", CheckID: "c", Data: map[string]any{"result": "failed", "commit": "abc"}})
 	exec(t, s, domain.Command{Action: "record_finding", ID: "finding", ResultID: "r", Data: map[string]any{"title": "broken", "severity": "major", "integration_ids": []string{"i"}}})
 	exec(t, s, domain.Command{Action: "resolve_finding", ID: "finding", Data: map[string]any{"body": "fixed", "commit": "def"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "record_check_result", CheckID: "c", Data: map[string]any{"result": "passed", "commit": "def"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	if len(m.state.Results) != 2 || m.state.Results[0].Result != "failed" {
 		t.Fatal("history overwritten")
@@ -68,12 +71,14 @@ func TestDependencyCycleAndAtomicFailure(t *testing.T) {
 	if len(m.state.Events) != n || len(m.state.Integrations[0].Dependencies) != 0 {
 		t.Fatal("failure persisted")
 	}
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "j"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "j"})
 	reject(t, s, domain.Command{Action: "update_feature", FeatureID: "f", Data: map[string]any{"id": "pwn"}})
 }
 func TestBlockerAndHandoffHistory(t *testing.T) {
 	s, m := fixture(t)
 	exec(t, s, domain.Command{Action: "add_blocker", ID: "b", FeatureID: "f", Data: map[string]any{"body": "Need specification"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "resolve_blocker", ID: "b", Data: map[string]any{"body": "specified"}})
 	exec(t, s, domain.Command{Action: "handoff", FeatureID: "f", IntegrationID: "i", Data: map[string]any{"current": "API", "next": []string{"test"}, "warnings": []string{"keep v1"}}})
@@ -94,6 +99,7 @@ func TestCrossFeatureAndEvidenceValidation(t *testing.T) {
 	exec(t, s, domain.Command{Action: "add_check", ID: "c", GateID: "g", Data: map[string]any{"title": "test", "mechanism": "unit"}})
 	reject(t, s, domain.Command{Action: "record_check_result", CheckID: "c", Data: map[string]any{"result": "passed"}})
 	exec(t, s, domain.Command{Action: "record_check_result", CheckID: "c", Data: map[string]any{"result": "passed", "commit": "old"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 }
 func TestRejectCaseBypassAndDuplicateHistoryID(t *testing.T) {
@@ -107,8 +113,10 @@ func TestRejectCaseBypassAndDuplicateHistoryID(t *testing.T) {
 }
 func TestReleaseSnapshotAndDependencySelection(t *testing.T) {
 	s, m := fixture(t)
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "create_integration", ID: "j", FeatureID: "f", Data: map[string]any{"title": "second", "objective": "ship", "dependencies": []string{"i"}}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "j"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "j"})
 	reject(t, s, domain.Command{Action: "plan_release", ProductID: "p", Data: map[string]any{"name": "incomplete", "integration_ids": []string{"j"}}})
 	exec(t, s, domain.Command{Action: "plan_release", ProductID: "p", Data: map[string]any{"name": "intent", "integration_ids": []string{"i", "j"}}})

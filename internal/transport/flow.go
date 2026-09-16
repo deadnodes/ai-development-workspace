@@ -34,6 +34,9 @@ func flowSchema(spec flowAction) map[string]any {
 	for _, key := range strings.Fields(spec.fields) {
 		properties[key] = data[key]
 	}
+	if spec.action == "record_scenario_run" {
+		properties["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
+	}
 	required := append([]string{"actor", spec.refName}, strings.Fields(spec.required)...)
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }

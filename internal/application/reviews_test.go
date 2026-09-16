@@ -42,6 +42,7 @@ func TestReviewImportDedupResolutionAndContext(t *testing.T) {
 	if finding.ResultID != "" || finding.ReviewSource.Priority != "P2" {
 		t.Fatal("review faked verification evidence")
 	}
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "resolve_finding", ID: finding.ID, Data: map[string]any{"body": "Fixed and verified", "commit": "fix-sha"}})
 	sync()

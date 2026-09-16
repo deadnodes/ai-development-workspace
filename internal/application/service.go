@@ -250,6 +250,14 @@ func readiness(st *domain.State, in domain.Integration) error {
 	return nil
 }
 func validateIntegration(st *domain.State, in domain.Integration) error {
+	if !domain.ValidStatus("integration", in.Status) {
+		return invalid("invalid integration status %q", in.Status)
+	}
+	for _, pr := range in.PullRequests {
+		if !domain.ValidStatus("pull_request", pr.Status) {
+			return invalid("invalid pull request status %q", pr.Status)
+		}
+	}
 	if strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Objective) == "" {
 		return invalid("title and objective required")
 	}
@@ -344,6 +352,12 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if key != strings.ToLower(key) {
 			return nil, invalid("data field %s must use snake_case", key)
 		}
+	}
+	if _, ok := c.Data["status"]; ok && !slices.Contains([]string{"create_feature", "update_feature", "transition_integration"}, c.Action) {
+		return nil, invalid("status is server-managed for %s", c.Action)
+	}
+	if _, ok := c.Data["result"]; ok && !slices.Contains([]string{"record_check_result", "record_scenario_run"}, c.Action) {
+		return nil, invalid("result is server-managed for %s", c.Action)
 	}
 	m := meta(c)
 	var out any
@@ -446,6 +460,34 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 		v.Meta = m
 		v.FeatureID = ""
+		if !domain.ValidStatus("feature", v.Status) {
+			return nil, invalid("invalid feature status %q", v.Status)
+		}
+		if old == nil && v.Status != "planned" && v.Status != "active" {
+			return nil, invalid("new feature must be planned or active")
+		}
+		if old != nil && !domain.CanTransition("feature", old.Status, v.Status) {
+			return nil, invalid("feature transition %s -> %s is not allowed", old.Status, v.Status)
+		}
+		if v.Status == "completed" {
+			count := 0
+			for _, in := range st.Integrations {
+				if in.FeatureID == v.ID {
+					count++
+					if in.Status != "ready" && in.Status != "released" {
+						return nil, invalid("feature completion requires all integrations ready or released")
+					}
+					if in.Status == "ready" {
+						if err := readiness(st, in); err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+			if count == 0 {
+				return nil, invalid("feature completion requires integrations")
+			}
+		}
 		if strings.TrimSpace(v.Title) == "" || strings.TrimSpace(v.Goal) == "" {
 			return nil, invalid("title and goal required")
 		}
@@ -501,11 +543,19 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 		if old != nil && v.Status == "ready" {
 			v.Status = "working"
+			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
+				parent.Status = "active"
+				parent.UpdatedAt = m.UpdatedAt
+			}
 		}
 		if old != nil {
 			*old = v
 		} else {
 			st.Integrations = append(st.Integrations, v)
+			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
+				parent.Status = "active"
+				parent.UpdatedAt = m.UpdatedAt
+			}
 		}
 		out = v
 	case "start_integration", "complete_integration", "transition_integration":
@@ -523,8 +573,8 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if c.Action == "complete_integration" {
 			status = "ready"
 		}
-		if !slices.Contains([]string{"planned", "working", "implemented", "verifying", "ready"}, status) {
-			return nil, invalid("unsupported status")
+		if !domain.CanTransition("integration", v.Status, status) || status == "released" {
+			return nil, invalid("integration transition %s -> %s is not allowed", v.Status, status)
 		}
 		if status == "ready" {
 			if e := readiness(st, *v); e != nil {
@@ -532,6 +582,12 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 			}
 		}
 		v.Status = status
+		if status != "ready" {
+			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
+				parent.Status = "active"
+				parent.UpdatedAt = time.Now().UTC()
+			}
+		}
 		if status == "working" {
 			v.Owner = c.Actor
 		}
@@ -655,7 +711,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if v.Commit == "" && v.Deployment == "" {
 			return nil, invalid("tested commit or deployment required")
 		}
-		if !slices.Contains([]string{"passed", "failed", "blocked", "skipped"}, v.Result) {
+		if !domain.ValidStatus("check_result", v.Result) {
 			return nil, invalid("invalid check result")
 		}
 		if e := env(st, v.EnvironmentID, v.ProductID); e != nil {

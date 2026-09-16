@@ -30,7 +30,7 @@ func TestPostgresFlowHistoryRestartAndBackupMigration(t *testing.T) {
 	}
 	seed := domain.EmptyState()
 	seed.Products = append(seed.Products, domain.Product{Meta: meta("p"), Name: "Portable product"})
-	seed.Features = append(seed.Features, domain.Feature{Meta: meta("feature"), Title: "Payment", Goal: "Independent release"})
+	seed.Features = append(seed.Features, domain.Feature{Meta: meta("feature"), Title: "Payment", Status: "active", Goal: "Independent release"})
 	integrationMeta := meta("integration")
 	integrationMeta.FeatureID = "feature"
 	seed.Integrations = append(seed.Integrations, domain.Integration{Meta: integrationMeta, Title: "Callback fix", Kind: "hotfix", Status: "released", Repositories: []string{"repository"}})
@@ -39,7 +39,7 @@ func TestPostgresFlowHistoryRestartAndBackupMigration(t *testing.T) {
 	seed.Environments = append(seed.Environments, domain.Environment{Meta: meta("environment"), Name: "TEST", Cluster: "cluster", Namespace: "test", DesiredCompositionID: "composition", DesiredOperationID: "active-parent"})
 	revision := domain.IntegrationRevision{Meta: meta("revision"), IntegrationID: "integration", RepositoryID: "repository", Branch: "feature/fix", BaseCommit: deliveryBase, HeadCommit: deliveryHead, Commits: []string{deliveryHead}}
 	seed.IntegrationRevisions = append(seed.IntegrationRevisions, revision)
-	composition := domain.Composition{Meta: meta("composition"), Name: "Selected work", EnvironmentID: "environment", Components: []domain.CompositionComponent{{ApplicationID: "component", BaseRef: "main", BaseCommit: deliveryBase, RevisionIDs: []string{"revision"}}}, RevisionSnapshots: []domain.IntegrationRevision{revision}, ApplicationSnapshots: seed.Applications, EnvironmentSnapshot: seed.Environments[0]}
+	composition := domain.Composition{Meta: meta("composition"), Name: "Selected work", Status: "planned", EnvironmentID: "environment", Components: []domain.CompositionComponent{{ApplicationID: "component", BaseRef: "main", BaseCommit: deliveryBase, RevisionIDs: []string{"revision"}}}, RevisionSnapshots: []domain.IntegrationRevision{revision}, ApplicationSnapshots: seed.Applications, EnvironmentSnapshot: seed.Environments[0]}
 	seed.Compositions = append(seed.Compositions, composition)
 	snapshot := domain.DeliverySnapshot{Revision: revision, Application: seed.Applications[0], Environment: seed.Environments[0], BuildRequest: delivery.BuildRequest{OperationID: "built-child", SourceSHA: deliveryHead, WorkflowSHA: deliveryBase, Inputs: map[string]string{"source_sha": deliveryHead, "operation_id": "built-child"}}}
 	sources := []domain.FlowSource{{RepositoryID: "repository", Plan: delivery.SourcePlan{Repository: "11", BaseRef: "main", BaseSHA: deliveryBase, TargetBranch: "generated/test/op", HeadSHAs: []string{deliveryHead}, OperationID: "candidate"}, Result: &delivery.SourceResult{Branch: "generated/test/op", SHA: deliveryHead}, MainAdvanced: true}}

@@ -219,6 +219,7 @@ func TestFlowConflictAndSupersessionDoNotDeploy(t *testing.T) {
 }
 func TestFlowHotfixKeepsFeatureAndReleaseHistory(t *testing.T) {
 	s, m, _ := flowFixture(t)
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	// Seed an already released integration; release completion owns this transition.
 	integration(&m.state, "i").Status = "released"
@@ -232,6 +233,7 @@ func TestFlowHotfixKeepsFeatureAndReleaseHistory(t *testing.T) {
 func TestFlowSelectedMainCandidateRequiresOwnVerification(t *testing.T) {
 	s, m, f := flowFixture(t)
 	flowEnvironment(t, s, "prod", "PROD")
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "prepare_release_candidate", ID: "candidate", ProductID: "p", Data: map[string]any{"name": "Selected release", "environment_id": "prod", "components": []domain.CompositionComponent{component("component", "rev")}, "approve_main_update": true}})
 	flowTickUntil(t, s, m, "candidate", func(o domain.ExternalOperation) bool { return o.DeploymentState == "READY_FOR_VERIFICATION" })
@@ -274,6 +276,7 @@ func TestFlowSelectedMainCandidateRequiresOwnVerification(t *testing.T) {
 	fixTest := flowStart(t, s, m, "fix-test")
 	flowTickUntil(t, s, m, fixTest, flowApplied)
 	flowConfirmRuntime(t, s, m, fixTest)
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "hotfix"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "hotfix"})
 	exec(t, s, domain.Command{Action: "prepare_release_candidate", ID: "fix-candidate", ProductID: "p", Data: map[string]any{"name": "Hotfix release", "environment_id": "prod", "components": []domain.CompositionComponent{fixComponent}, "approve_main_update": true}})
 	flowTickUntil(t, s, m, "fix-candidate", func(o domain.ExternalOperation) bool { return o.DeploymentState == "READY_FOR_VERIFICATION" })
@@ -400,6 +403,7 @@ func TestFlowPromotionRefreshesRegistryProofAndPinsApprovedDigest(t *testing.T) 
 		t.Run(fmt.Sprintf("rebuilt_digest_changes_%t", changedDigest), func(t *testing.T) {
 			s, m, f := flowFixture(t)
 			flowEnvironment(t, s, "prod", "PROD")
+			exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 			exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 			exec(t, s, domain.Command{Action: "prepare_release_candidate", ID: "candidate", ProductID: "p", Data: map[string]any{"name": "Selected main", "environment_id": "prod", "components": []domain.CompositionComponent{component("component", "rev")}, "approve_main_update": true}})
 			flowTickUntil(t, s, m, "candidate", func(op domain.ExternalOperation) bool { return op.DeploymentState == "READY_FOR_VERIFICATION" })

@@ -101,7 +101,7 @@ func applyScenario(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if definition == nil || definition.ProductID != c.ProductID {
 			return nil, m, invalid("scenario version must belong to product")
 		}
-		if !slices.Contains([]string{"passed", "failed", "blocked"}, input.Result) {
+		if !domain.ValidStatus("scenario_result", input.Result) {
 			return nil, m, invalid("result must be passed, failed or blocked")
 		}
 		if len(input.Observations) == 0 && len(input.Artifacts) == 0 {

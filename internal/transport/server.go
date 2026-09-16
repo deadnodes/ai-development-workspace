@@ -36,6 +36,7 @@ func New(service Service, options Options) http.Handler {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { v, e := service.State(r.Context()); respond(w, v, e) })
+	mux.HandleFunc("GET /api/statuses", func(w http.ResponseWriter, r *http.Request) { write(w, http.StatusOK, StatusSchema()) })
 	mux.HandleFunc("GET /api/schema", func(w http.ResponseWriter, r *http.Request) { write(w, http.StatusOK, CommandSchema()) })
 	mux.HandleFunc("GET /api/features/{id}/context", func(w http.ResponseWriter, r *http.Request) {
 		v, e := service.Resume(r.Context(), r.PathValue("id"))
@@ -79,6 +80,9 @@ func New(service Service, options Options) http.Handler {
 	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. Use create_github_connection/import_repository/configure_component/configure_environment to configure explicit DEV delivery. refresh_integration_git queues observation; deploy_integration queues a real build/artifact/GitOps operation. Poll get_operation; GitOps application does not imply runtime health. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, _ *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, in)
 		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_status_schema", Description: "Controlled status catalog and allowed lifecycle transitions. Server-owned statuses cannot be assigned by clients; readiness checks still apply."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+		return nil, StatusSchema(), nil
 	})
 	registerProviderTools(server, service)
 	registerBackupTools(server, service)

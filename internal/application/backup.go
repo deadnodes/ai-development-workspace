@@ -144,6 +144,9 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 	return map[string]any{"restored": true, "sha256": expected, "restore_event_id": restoreID, "cancelled_operation_ids": cancelled}, nil
 }
 func validateBackupState(st domain.State) error {
+	if err := domain.ValidateStateStatuses(st); err != nil {
+		return invalid("backup status validation: %s", err)
+	}
 	b, _ := json.Marshal(st)
 	var groups map[string][]json.RawMessage
 	if err := json.Unmarshal(b, &groups); err != nil {

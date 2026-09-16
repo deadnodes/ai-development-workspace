@@ -180,3 +180,5 @@ Codex P1/P2 review comments can become persistent findings through MCP `sync_pul
 7. `create_hotfix` с feature_id, title, objective и optional finding_id сохраняет связь исправления с исходной проблемой; оно проходит обычные проверки и выбранный релиз.
 
 Все примеры выше — flat arguments named tools. Через `execute` используй `action`, `actor`, соответствующий `product_id`/`feature_id` или `id`, а остальные поля помести в `data`. Не объявляй live-прогон успешным по unit/fixture тестам: нужны реальные refs, Actions/report, digest, GitOps и runtime evidence.
+
+Статусы конечны: перед изменением состояния используй MCP `get_status_schema {}` или `GET /api/statuses`. Значения и переходы задаёт domain, произвольные строки запрещены; `ready` не означает `released`, а released нельзя назначить через обычное редактирование. [Контракт статусов](STATUSES.md).

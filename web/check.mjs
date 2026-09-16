@@ -203,3 +203,13 @@ evaluate("currentForm={action:'create_hotfix',attrs:{},fields:forms.create_hotfi
 elements.get('#command-form').onsubmit({preventDefault(){},target:{}});
 assert.equal(capturedCommand.feature_id,'f');assert.equal(capturedCommand.data.finding_id,'review');assert.deepEqual(capturedCommand.data.remaining,['Add regression check']);
 console.log('Execution flow approvals, ready-work selection, exact scenario provenance and hotfix form checks passed.');
+// Lifecycle controls consume the server catalog; they never accept arbitrary text.
+evaluate(`statusMetadata={catalog:{feature:['planned','active','blocked','completed','archived'],integration:['planned','working','implemented','verifying','ready','released']},transitions:{feature:{active:['blocked','completed']},integration:{working:['planned','implemented','verifying','ready','released']}}};state.features=[{id:'f',product_id:'p',status:'active'}];state.integrations=[{id:'i',feature_id:'f',status:'working'}];productID='p';location.hash='#f';currentForm={action:'transition_integration',attrs:{integration:'i'}}`);
+assert.equal(evaluate("forms.update_feature.fields.find(f=>f.name==='status').type"),'feature_status');
+assert.deepEqual(Array.from(evaluate("lifecycleOptions('feature').map(s=>s.id)")),['active','blocked','completed']);
+assert.ok(!evaluate("lifecycleOptions('integration').some(s=>s.id==='released')"));
+assert.ok(evaluate("inputField(forms.transition_integration.fields[0],'working')").includes('<select'));
+assert.ok(!evaluate("inputField(forms.transition_integration.fields[0],'banana')").includes('banana'));
+console.log('Controlled feature/integration selectors use domain metadata and exclude client-assigned released.');
+
+assert.ok(!evaluate("inputField(forms.transition_integration.fields[0],'working')").includes('Unspecified'));

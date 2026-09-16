@@ -23,13 +23,16 @@ func TestExternalSystemInstanceSharingScopeAndGateReadiness(t *testing.T) {
 	exec(t, s, domain.Command{Action: "create_gate", ID: "external-gate", FeatureID: "f", Data: map[string]any{"title": "Partner contract", "reason": "API compatibility", "integration_ids": []string{"i"}}})
 	exec(t, s, domain.Command{Action: "add_check", ID: "external-check", GateID: "external-gate", Data: map[string]any{"title": "Provider contract check", "mechanism": "integration"}})
 	exec(t, s, domain.Command{Action: "record_check_result", CheckID: "external-check", Data: map[string]any{"result": "passed", "commit": "abc"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "set_external_scope", GateID: "external-gate", Data: map[string]any{"external_system_ids": []string{"billing"}}})
 	if m.state.Integrations[0].Status != "working" {
 		t.Fatal("changed blocking gate kept stale readiness")
 	}
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "record_check_result", CheckID: "external-check", Data: map[string]any{"result": "passed", "commit": "abc"}})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
 	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
 	value, err := s.Resume(context.Background(), "f")
 	if err != nil {

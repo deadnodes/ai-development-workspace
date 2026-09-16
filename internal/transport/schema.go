@@ -1,6 +1,9 @@
 package transport
 
-import "strings"
+import (
+	"releasecontrol/internal/domain"
+	"strings"
+)
 
 // CommandSchema is shared by HTTP discovery and MCP. The domain remains the
 // authority for relationship and lifecycle validation.
@@ -34,6 +37,9 @@ func CommandSchema() map[string]any {
 		item := map[string]any{}
 		for _, f := range strings.Fields(fields) {
 			item[f] = str()
+		}
+		if k == "pull_requests" {
+			item["status"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["pull_request"]}
 		}
 		data[k] = map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": item, "additionalProperties": false}}
 	}
@@ -94,6 +100,34 @@ func CommandSchema() map[string]any {
 			if a.required != "" {
 				branch["properties"].(map[string]any)["data"] = map[string]any{"required": strings.Fields(a.required)}
 			}
+
+			dataRule := map[string]any{}
+			if a.required != "" {
+				dataRule["required"] = strings.Fields(a.required)
+			}
+			switch name {
+			case "create_feature":
+				dataRule["properties"] = map[string]any{"status": map[string]any{"type": "string", "enum": []string{"planned", "active"}}}
+			case "update_feature":
+				dataRule["properties"] = map[string]any{"status": map[string]any{"type": "string", "enum": domain.StatusCatalog()["feature"]}}
+			case "transition_integration":
+				statuses := []string{}
+				for _, status := range domain.StatusCatalog()["integration"] {
+					if status != "released" {
+						statuses = append(statuses, status)
+					}
+				}
+				dataRule["properties"] = map[string]any{"status": map[string]any{"type": "string", "enum": statuses}}
+			default:
+				dataRule["properties"] = map[string]any{"status": false}
+			}
+			if name == "record_check_result" {
+				dataRule["properties"].(map[string]any)["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["check_result"]}
+			}
+			if name == "record_scenario_run" {
+				dataRule["properties"].(map[string]any)["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
+			}
+			branch["properties"].(map[string]any)["data"] = dataRule
 			variants = append(variants, branch)
 		}
 	}
