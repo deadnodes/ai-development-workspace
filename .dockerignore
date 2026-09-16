@@ -9,6 +9,9 @@ __pycache__/
 
 # Instance-local configuration, backups and credentials
 .local/
+.agents/
+.codex/
+.release-control.json
 .env.*
 *.pem
 *.key

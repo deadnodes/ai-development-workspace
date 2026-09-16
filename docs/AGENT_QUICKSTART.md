@@ -1,5 +1,7 @@
 # Инструкция для агента
 
+Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](DOCKER_LOCAL.md).
+
 Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](LOCAL_WORKSPACE.md).
 
 Цель: запустить Control Plane, получить контекст работы через MCP и подключить GitHub → Actions → GHCR → DEV GitOps. Все действия доступны без UI.

@@ -1,5 +1,7 @@
 # Release Control Plane
 
+Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](docs/DOCKER_LOCAL.md).
+
 Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](docs/LOCAL_WORKSPACE.md).
 
 A development metastore and control plane: intent, integrations, commit provenance, verification, agent context and delivery orchestration. It does not edit managed application source code or business data. See [responsibility boundary](docs/RESPONSIBILITY_BOUNDARY.md).
