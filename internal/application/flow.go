@@ -167,11 +167,34 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.M
 		v := domain.RuntimeObservation{Meta: m, OperationID: op.ID, EnvironmentID: in.EnvironmentID, GitOpsCommit: in.GitOpsCommit, ArtifactDigest: in.ArtifactDigest, Healthy: in.Healthy, Details: in.Details}
 		st.RuntimeObservations = append(st.RuntimeObservations, v)
 		return v, m, nil
-	case "reconcile_composition", "prepare_release_candidate":
+	case "assemble_environment", "reconcile_composition", "prepare_release_candidate":
 		var comp *domain.Composition
 		var resolutions []string
 		production := c.Action == "prepare_release_candidate"
-		if production {
+		if c.Action == "assemble_environment" {
+			var input struct {
+				EnvironmentID  string   `json:"environment_id"`
+				Name           string   `json:"name"`
+				IntegrationIDs []string `json:"integration_ids"`
+			}
+			if err := decode(c.Data, &input); err != nil {
+				return nil, m, err
+			}
+			if strings.TrimSpace(input.Name) == "" {
+				input.Name = "Active work · " + input.EnvironmentID + " · " + m.CreatedAt.Format("2006-01-02 15:04")
+			}
+			components, err := assembleComponents(st, c.ProductID, input.EnvironmentID, m.ID, input.IntegrationIDs)
+			if err != nil {
+				return nil, m, err
+			}
+			result, _, err := applyComposition(st, domain.Command{Action: "plan_composition", Actor: c.Actor, ProductID: c.ProductID, Data: map[string]any{"name": input.Name, "environment_id": input.EnvironmentID, "components": components}}, m)
+			if err != nil {
+				return nil, m, err
+			}
+			value := result.(domain.Composition)
+			comp = &value
+			m.ID = id()
+		} else if production {
 			var input struct {
 				Name          string                        `json:"name"`
 				EnvironmentID string                        `json:"environment_id"`

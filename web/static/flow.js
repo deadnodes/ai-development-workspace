@@ -2,6 +2,7 @@
 // Flow forms submit the same commands as MCP; readiness is decided by the server.
 const scenarioDefinitionFields=[field('title','Scenario title','text',true),field('objective','Behavior to verify','textarea',true),field('mechanism','Execution mechanism','select',true,['manual','browser','e2e','integration','unit','regression','smoke','migration','custom']),field('preconditions','Preconditions','lines'),field('steps','Execution steps','lines',true),field('expected_outcomes','Expected outcomes','lines',true),field('integration_ids','Integrations covered','product_integrations'),field('blocking','Required for release verification','boolean')];
 Object.assign(forms,{
+ assemble_environment:{label:'Assemble active work',help:'Creates a new immutable DEV/TEST composition from the latest captured branch revisions. Leave integrations empty to include all active captured work. The generated branches are disposable; the composition and operation remain the source of truth. A merge conflict pauses the operation and asks for resolution.',fields:[field('environment_id','Target environment','environment',true),field('name','Composition name'),field('integration_ids','Integrations (empty = all active captured work)','product_integrations')]},
  reconcile_composition:{label:'Reconcile this composition',help:'Starts real Git composition, builds and configured environment updates for these exact revisions. Parent and child operations preserve evidence. Runtime still requires an attributed observation.',fields:[]},
  prepare_release_candidate:{label:'Prepare release candidate',help:'Select ready integration revisions. This action advances the configured main branches to the selected candidate and builds exact artifacts. Scenario verification is required before promotion. Recheck the pinned base and selected revisions before approving.',fields:[field('name','Candidate name','text',true),field('environment_id','Promotion target environment','environment',true),field('approve_main_update','I approve advancing configured main branches to these exact selected revisions','boolean')]},
  promote_release_candidate:{label:'Promote this candidate',help:'Promotes the exact verified candidate artifacts. The server checks current scenario versions, complete component evidence and open findings. This can update the configured production GitOps target. Runtime health is recorded separately.',fields:[field('approve','I approve promoting this exact candidate to its configured environment','boolean')]},
@@ -29,6 +30,7 @@ function scenarioTargets(){
  return [...candidates,...compositions.values()];
 }
 function flowFormValues(action,attrs){
+ if(action==='assemble_environment')return {environment_id:productItems('environments').find(e=>['DEV','TEST'].includes(String(e.name).toUpperCase()))?.id};
  if(action==='prepare_release_candidate')return {approve_main_update:false};
  if(action==='promote_release_candidate')return {approve:false};
  if(action==='record_runtime_observation'){const op=productItems('operations').find(o=>o.id===attrs.id);return {healthy:false,environment_id:op?.environment_id,gitops_commit:op?.gitops_result?.commit_sha,artifact_digest:op?.artifact?.digest};}
@@ -51,7 +53,7 @@ function renderScenarioEvidence(){
 }
 function transformFlowCommand(command,fd,attrs,form){
  const action=command.action;
- if(['prepare_release_candidate','create_test_scenario','revise_test_scenario','record_scenario_run'].includes(action)){command.product_id=productID;delete command.feature_id;delete command.integration_id;}
+ if(['assemble_environment','prepare_release_candidate','create_test_scenario','revise_test_scenario','record_scenario_run'].includes(action)){command.product_id=productID;delete command.feature_id;delete command.integration_id;}
  if(['reconcile_composition','promote_release_candidate','record_runtime_observation'].includes(action)){delete command.feature_id;delete command.integration_id;delete command.product_id;}
  if(action==='prepare_release_candidate'&&!command.data.approve_main_update)throw new Error('Review the exact revisions and explicitly approve advancing main before preparing this candidate.');
  if(action==='promote_release_candidate'&&!command.data.approve)throw new Error('Explicit approval is required to promote this exact candidate.');

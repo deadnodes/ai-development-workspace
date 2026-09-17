@@ -4,9 +4,42 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"releasecontrol/internal/domain"
 )
+
+func TestAssembleComponentsGroupsMultipleIntegrationsByRepository(t *testing.T) {
+	now := time.Now().UTC()
+	meta := func(id string) domain.Meta {
+		return domain.Meta{ID: id, ProductID: "p", Actor: "test", CreatedAt: now, UpdatedAt: now}
+	}
+	st := domain.EmptyState()
+	st.Products = append(st.Products, domain.Product{Meta: meta("p"), Name: "Product"})
+	st.Environments = append(st.Environments, domain.Environment{Meta: meta("env"), Name: "DEV", Cluster: "cluster", Namespace: "dev"})
+	st.Repositories = append(st.Repositories, domain.Repository{Meta: meta("repo"), Name: "backend", Role: "APPLICATION", URL: "https://github.com/acme/backend"})
+	st.RepositoryBindings = append(st.RepositoryBindings, domain.RepositoryBinding{Meta: meta("binding"), RepositoryID: "repo", Role: "APPLICATION", FullName: "acme/backend", DefaultBranch: "main"})
+	st.Applications = append(st.Applications, domain.Application{Meta: meta("app"), Name: "Backend", Kind: "APPLICATION", RepositoryID: "repo"})
+	st.Integrations = append(st.Integrations,
+		domain.Integration{Meta: meta("i1"), Status: "working", Repositories: []string{"repo"}},
+		domain.Integration{Meta: meta("i2"), Status: "verifying", Repositories: []string{"repo"}},
+	)
+	st.IntegrationRevisions = append(st.IntegrationRevisions,
+		domain.IntegrationRevision{Meta: meta("r1"), IntegrationID: "i1", RepositoryID: "repo", Branch: "feature/one", BaseCommit: shaBase, HeadCommit: shaHead, Commits: []string{shaHead}},
+		domain.IntegrationRevision{Meta: meta("r2"), IntegrationID: "i2", RepositoryID: "repo", Branch: "feature/two", BaseCommit: shaBase, HeadCommit: strings.Repeat("c", 40), Commits: []string{strings.Repeat("c", 40)}},
+	)
+	st.GitObservations = append(st.GitObservations, domain.GitObservation{Meta: meta("obs"), RepositoryID: "repo", MainCommit: strings.Repeat("d", 40), ObservedAt: now})
+	components, err := assembleComponents(&st, "p", "env", "composition", []string{"i1", "i2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 || len(components[0].RevisionIDs) != 2 || components[0].RevisionIDs[0] != "r1" || components[0].RevisionIDs[1] != "r2" {
+		t.Fatalf("expected one ordered component with two revisions, got %#v", components)
+	}
+	if components[0].BaseCommit != strings.Repeat("d", 40) {
+		t.Fatalf("expected latest observed main commit, got %s", components[0].BaseCommit)
+	}
+}
 
 var shaBase = strings.Repeat("a", 40)
 var shaHead = strings.Repeat("b", 40)

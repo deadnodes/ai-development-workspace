@@ -16,6 +16,7 @@ import (
 type flowAction struct{ action, pattern, refName, refField, fields, required, description string }
 
 var flowActions = []flowAction{
+	{"assemble_environment", "POST /api/products/{id}/assemble-environment", "product_id", "product_id", "environment_id name integration_ids", "environment_id", "Assemble current captured active integration revisions into disposable generated branches, build artifacts and apply the configured environment GitOps targets. Returns immediately with a persistent operation; conflicts require resolution."},
 	{"claim_composition_conflict", "POST /api/products/{id}/conflicts/claim", "product_id", "product_id", "conflict_id", "conflict_id", "Claim responsibility for externally resolving a composition conflict."},
 	{"record_conflict_resolution", "POST /api/products/{id}/conflicts/resolution", "product_id", "product_id", "conflict_id commit rationale", "conflict_id commit rationale", "Record the claim owner resolution commit; this does not deploy or imply verification."},
 	{"verify_conflict_resolution", "POST /api/products/{id}/conflicts/verify", "product_id", "product_id", "conflict_id result_ids", "conflict_id result_ids", "Verify exact-commit passing evidence for each affected integration and all blocking checks."},

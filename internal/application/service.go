@@ -472,7 +472,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-	case "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
+	case "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
 		var err error
 		out, m, err = applyFlow(st, c, m)
 		if err != nil {

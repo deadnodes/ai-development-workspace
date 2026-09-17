@@ -32,6 +32,34 @@ Shared test compositions are not promoted as production artifacts. Production ca
 ## Execution slice
 On a deployment request: resolve and verify immutable source refs → isolated composition/merge preview → conflict report or generated commit → build each affected application → retain image digests and test evidence → update GitOps desired state → record attributed runtime evidence. Automatic Flux/Kubernetes collection remains future work. A Deployment record must link the composition ID, repository outputs, artifact digests and observed outcome. Merge conflicts stop the operation for a human/agent resolution; they are not automatically guessed away. Partial rollout remains distinguishable from success.
 
+### Assemble active work (the normal DEV path)
+
+Agents and the UI can use `assemble_environment` when several developers need one
+shared test target. The command accepts `product_id` and `data.environment_id`,
+with optional `name` and `integration_ids`. If the list is empty, the service
+selects all active integrations that have captured Git revisions. For every
+selected repository it chooses the newest captured revision, pins the latest
+observed `main` commit as the base, groups all integrations for that repository
+in the requested order, and creates one immutable Composition. It then queues
+the normal asynchronous `COMPOSE` operation and returns its operation ID.
+
+The worker creates disposable `generated/<environment>/<operation>/<repository>`
+branches, merges the pinned integration heads, builds the resulting source,
+updates the configured GitOps file and records the commit. The generated branch
+name is an output, never the source of truth. Poll `get_operation` until the
+parent and child steps finish. A source conflict changes the operation to
+`BLOCKED` and creates a semantic conflict record; claim and resolve that record
+through MCP before retrying. New pushes are picked up by the background Git
+refresh. When an environment already has this composition selected, the
+background scheduler automatically queues one new assembly after a newer
+revision is observed; otherwise run `assemble_environment` again to produce a
+new immutable snapshot that includes the push. Older compositions and their
+operation evidence remain available for rollback or comparison.
+
+Production stays separate: use the main-derived release-candidate flow and an
+explicit promotion click. A DEV composition never becomes a production release
+merely because its generated branch was built.
+
 The UI/API/MCP expose `reconcile_composition`, which queues a durable COMPOSE parent and per-component deployment children. Release candidate preparation and exact-digest promotion use separate operations and explicit approvals. Commands, evidence requirements and current limitations are documented in [test scenarios and release flow](TEST_AND_RELEASE_FLOW.md#commands-and-evidence).
 
 ## Independent environment reconciliation

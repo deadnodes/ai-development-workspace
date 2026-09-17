@@ -8,6 +8,7 @@ import (
 )
 
 const autoGitActor = "system/git-sync"
+const autoComposeActor = "system/environment-compose"
 
 func repositoryGitInventoryRole(role string) bool {
 	switch strings.ToUpper(strings.TrimSpace(role)) {
@@ -187,6 +188,74 @@ func (s *Service) ScheduleRepositoryGitRefresh(ctx context.Context, now time.Tim
 	})
 }
 
+// ScheduleCompositionRefresh rematerializes a selected DEV/TEST composition
+// when background Git observation captures a newer revision. The operation is
+// deliberately bounded to one environment per tick and never touches PROD.
+func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time, interval time.Duration) error {
+	if interval <= 0 || s.provider == nil {
+		return nil
+	}
+	st, err := s.State(ctx)
+	if err != nil {
+		return err
+	}
+	for _, env := range st.Environments {
+		if env.DesiredCompositionID == "" {
+			continue
+		}
+		composition := compositionByID(&st, env.DesiredCompositionID)
+		if composition == nil || composition.ProductID != env.ProductID {
+			continue
+		}
+		compositionTarget := false
+		for _, target := range st.EnvironmentBindings {
+			if target.EnvironmentID == env.ID && target.AllowDeploy && (target.Purpose == "DEV" || target.Purpose == "TEST") {
+				compositionTarget = true
+				break
+			}
+		}
+		if !compositionTarget || len(composition.RevisionSnapshots) == 0 {
+			continue
+		}
+		selected := selectedIntegrations(*composition)
+		stale := false
+		for _, snapshot := range composition.RevisionSnapshots {
+			for n := len(st.IntegrationRevisions) - 1; n >= 0; n-- {
+				latest := st.IntegrationRevisions[n]
+				if latest.IntegrationID == snapshot.IntegrationID && latest.RepositoryID == snapshot.RepositoryID {
+					if latest.ID != snapshot.ID {
+						stale = true
+					}
+					break
+				}
+			}
+			if stale {
+				break
+			}
+		}
+		if !stale {
+			continue
+		}
+		pending := false
+		for _, operation := range st.Operations {
+			if operation.Kind == "COMPOSE" && operation.EnvironmentID == env.ID && !terminalOperation(operation.Status) {
+				pending = true
+				break
+			}
+		}
+		if pending {
+			continue
+		}
+		_, err := s.Execute(ctx, domain.Command{Action: "assemble_environment", Actor: autoComposeActor, ProductID: env.ProductID, Data: map[string]any{
+			"environment_id":  env.ID,
+			"name":            composition.Name + " (refresh)",
+			"integration_ids": selected,
+		}})
+		return err
+	}
+	return nil
+}
+
 func (s *Service) RunGitScheduler(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return nil
@@ -198,6 +267,9 @@ func (s *Service) RunGitScheduler(ctx context.Context, interval time.Duration) e
 			return err
 		}
 		if err := s.ScheduleRepositoryGitRefresh(ctx, time.Now().UTC(), interval); err != nil {
+			return err
+		}
+		if err := s.ScheduleCompositionRefresh(ctx, time.Now().UTC(), interval); err != nil {
 			return err
 		}
 		select {

@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"releasecontrol/internal/domain"
 )
@@ -50,6 +51,102 @@ func safeBranch(ref string) bool {
 		}
 	}
 	return true
+}
+
+// assembleComponents materializes a fresh immutable composition from the latest
+// captured revisions. Generated branches are disposable; the composition is the
+// durable source of truth for what should be assembled in an environment.
+func assembleComponents(st *domain.State, productID, environmentID, compositionID string, requested []string) ([]domain.CompositionComponent, error) {
+	env := environmentByID(st, environmentID)
+	if env == nil || env.ProductID != productID {
+		return nil, invalid("environment must belong to product")
+	}
+	selected := append([]string(nil), requested...)
+	if len(selected) == 0 {
+		for _, in := range st.Integrations {
+			if in.ProductID != productID || !slices.Contains([]string{"working", "implemented", "verifying", "ready"}, in.Status) {
+				continue
+			}
+			for _, rev := range st.IntegrationRevisions {
+				if rev.IntegrationID == in.ID {
+					selected = append(selected, in.ID)
+					break
+				}
+			}
+		}
+	}
+	seenIntegrations := map[string]bool{}
+	// Keep the caller's integration order. It is the merge order for every
+	// application that shares a repository.
+	orderedRevisions := map[string][]string{}
+	baseRefs := map[string]string{}
+	baseCommits := map[string]string{}
+	for _, iid := range selected {
+		if seenIntegrations[iid] {
+			continue
+		}
+		seenIntegrations[iid] = true
+		in := integration(st, iid)
+		if in == nil || in.ProductID != productID {
+			return nil, invalid("integration must belong to product: %s", iid)
+		}
+		if in.Status == "released" {
+			return nil, invalid("released integration is already part of the base: %s", iid)
+		}
+		repos := append([]string(nil), in.Repositories...)
+		if len(repos) == 0 {
+			for _, rev := range st.IntegrationRevisions {
+				if rev.IntegrationID == iid && !slices.Contains(repos, rev.RepositoryID) {
+					repos = append(repos, rev.RepositoryID)
+				}
+			}
+		}
+		for _, repoID := range repos {
+			var rev *domain.IntegrationRevision
+			for n := len(st.IntegrationRevisions) - 1; n >= 0; n-- {
+				candidate := &st.IntegrationRevisions[n]
+				if candidate.IntegrationID == iid && candidate.RepositoryID == repoID {
+					rev = candidate
+					break
+				}
+			}
+			if rev == nil {
+				return nil, invalid("no captured revision for %s in repository %s; refresh Git first", iid, repoID)
+			}
+			binding := repositoryBinding(st, repoID)
+			if binding == nil || !domain.IsSourceRole(binding.Role) {
+				return nil, invalid("source repository configuration missing: %s", repoID)
+			}
+			baseRef := configuredBase(*binding)
+			baseCommit := rev.BaseCommit
+			var observedAt time.Time
+			for n := len(st.GitObservations) - 1; n >= 0; n-- {
+				observation := st.GitObservations[n]
+				if observation.ProductID == productID && observation.RepositoryID == repoID && observation.MainCommit != "" && (observedAt.IsZero() || observation.ObservedAt.After(observedAt)) {
+					baseCommit = observation.MainCommit
+					observedAt = observation.ObservedAt
+				}
+			}
+			if prior, exists := baseCommits[repoID]; exists && prior != baseCommit {
+				return nil, invalid("selected revisions for repository %s have different main bases", repoID)
+			}
+			baseRefs[repoID], baseCommits[repoID] = baseRef, baseCommit
+			orderedRevisions[repoID] = append(orderedRevisions[repoID], rev.ID)
+		}
+	}
+	components := []domain.CompositionComponent{}
+	for repoID, revisions := range orderedRevisions {
+		for _, app := range st.Applications {
+			if app.ProductID != productID || app.RepositoryID != repoID || domain.ComponentKind(app) != "APPLICATION" {
+				continue
+			}
+			components = append(components, domain.CompositionComponent{ApplicationID: app.ID, BaseRef: baseRefs[repoID], BaseCommit: baseCommits[repoID], TargetBranch: "generated/" + environmentID + "/" + compositionID + "/" + repoID, RevisionIDs: append([]string(nil), revisions...)})
+		}
+	}
+	if len(components) == 0 {
+		return nil, invalid("selected integrations have no deployable application revisions")
+	}
+	return components, nil
 }
 
 func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
