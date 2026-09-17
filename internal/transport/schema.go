@@ -28,6 +28,10 @@ func CommandSchema() map[string]any {
 		data[k] = map[string]any{"type": "integer"}
 	}
 	data["parameters"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Nonsecret component or environment configuration; values are context only, never executed."}
+	for _, k := range []string{"source_commits", "artifact_digests", "gitops_commits"} {
+		data[k] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
+	}
+	data["evidence"] = map[string]any{"type": "array", "items": str()}
 	data["inputs"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 	data["gitops_mode"] = map[string]any{"type": "string", "enum": []string{"DIRECT", "PR"}}
 	data["position"] = map[string]any{"type": "integer"}
@@ -107,7 +111,7 @@ func CommandSchema() map[string]any {
 		{"record_integration_revision", "integration_id", "repository_id branch base_commit head_commit commits"},
 		{"plan_composition", "product_id", "environment_id name components"},
 		{"select_composition", "id", ""},
-		{"create_repository", "product_id", "name url"}, {"plan_release", "product_id", "name integration_ids"},
+		{"create_repository", "product_id", "name url"}, {"plan_release", "product_id", "name integration_ids"}, {"record_release", "product_id", "name environment_id integration_ids"},
 	}
 	var variants []any
 	for _, a := range actions {

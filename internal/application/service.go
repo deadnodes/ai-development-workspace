@@ -962,6 +962,56 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 		st.Releases = append(st.Releases, v)
 		out = v
+	case "record_release":
+		if !productExists(st, c.ProductID) {
+			return nil, missing("product", c.ProductID)
+		}
+		v := domain.Release{Status: "released", RecordedExternally: true}
+		if e := decode(c.Data, &v); e != nil {
+			return nil, e
+		}
+		if v.Name == "" || len(v.IntegrationIDs) == 0 || v.EnvironmentID == "" {
+			return nil, invalid("name, environment_id and integration_ids required")
+		}
+		foundEnvironment := false
+		for _, environment := range st.Environments {
+			if environment.ID != v.EnvironmentID {
+				continue
+			}
+			if environment.ProductID != c.ProductID {
+				return nil, invalid("release environment outside product")
+			}
+			foundEnvironment = true
+			break
+		}
+		if !foundEnvironment {
+			return nil, missing("environment", v.EnvironmentID)
+		}
+		v.Meta = m
+		v.ProductID = c.ProductID
+		v.Status = "released"
+		v.RecordedExternally = true
+		v.Snapshots = []domain.Integration{}
+		seen := map[string]bool{}
+		for _, integrationID := range v.IntegrationIDs {
+			if seen[integrationID] {
+				return nil, invalid("duplicate release integration")
+			}
+			seen[integrationID] = true
+			in := integration(st, integrationID)
+			if in == nil || in.ProductID != c.ProductID {
+				return nil, invalid("release integration outside product")
+			}
+			v.Snapshots = append(v.Snapshots, *in)
+		}
+		for _, integrationID := range v.ExcludedIntegrationIDs {
+			in := integration(st, integrationID)
+			if in == nil || in.ProductID != c.ProductID || seen[integrationID] {
+				return nil, invalid("invalid excluded integration")
+			}
+		}
+		st.Releases = append(st.Releases, v)
+		out = v
 	}
 	if c.Action == "create_feature" || c.Action == "update_feature" {
 		m.FeatureID = m.ID

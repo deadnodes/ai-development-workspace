@@ -126,6 +126,28 @@ func TestReleaseSnapshotAndDependencySelection(t *testing.T) {
 		t.Fatal("release intent snapshot changed")
 	}
 }
+
+func TestExternalReleaseRecordPreservesEvidence(t *testing.T) {
+	s, m := fixture(t)
+	exec(t, s, domain.Command{Action: "create_environment", ID: "prod", ProductID: "p", Data: map[string]any{"name": "PROD"}})
+	v := exec(t, s, domain.Command{Action: "record_release", ID: "external-release", ProductID: "p", Data: map[string]any{
+		"name":            "Production rollout from MCP",
+		"environment_id":  "prod",
+		"integration_ids": []string{"i"},
+		"source_commits":  map[string]string{"api": "abc123"},
+		"gitops_commits":  map[string]string{"flux": "def456"},
+		"evidence":        []string{"https://github.com/example/pull/1", "flux:ready"},
+		"notes":           "Executed outside the Control Plane; imported as historical evidence.",
+	}})
+	release := v.(domain.Release)
+	if release.Status != "released" || !release.RecordedExternally || release.EnvironmentID != "prod" || release.SourceCommits["api"] != "abc123" {
+		t.Fatalf("unexpected external release: %+v", release)
+	}
+	if len(m.state.Releases) != 1 || len(m.state.Releases[0].Snapshots) != 1 || m.state.Releases[0].Snapshots[0].Status != "planned" {
+		t.Fatalf("external record should preserve current integration snapshot: %+v", m.state.Releases)
+	}
+}
+
 func TestFeatureAuditIsInResume(t *testing.T) {
 	s, _ := fixture(t)
 	exec(t, s, domain.Command{Action: "update_feature", FeatureID: "f", Data: map[string]any{"goal": "Revised"}})

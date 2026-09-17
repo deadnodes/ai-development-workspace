@@ -78,6 +78,8 @@ Control Plane также сам сканирует подключённые к P
 
 Если нужно запустить сканирование сразу, вызови `execute` с `action: refresh_repository_git`, `product_id` и `data: {"repository_id":"…"}`. Команда возвращает operation ID и не блокирует запрос.
 
+Если агент выполнил production rollout через внешние GitHub Actions/Flux/operator ручки, не оставляй результат только в handoff. Сразу запиши его через `execute` с `action: record_release`: `product_id`, `data.name`, `data.environment_id`, `data.integration_ids`, а также известные `source_commits`, `artifact_digests`, `gitops_commits`, `evidence` и `notes`. Это сохраняет immutable release history с пометкой `recorded_externally=true`; Control Plane не будет приписывать себе внешнюю операцию.
+
 Перед остановкой запиши handoff:
 
 ```json
