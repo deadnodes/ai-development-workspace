@@ -4,6 +4,7 @@ import (
 	"context"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,36 @@ func TestAutomaticGitDiscoversPRAndObservesBoundBranch(t *testing.T) {
 	in = integration(&m.state, "i")
 	if len(in.PullRequests) != 1 || in.PullRequests[0].ID != "7" || len(m.state.GitObservations) != 1 || m.state.Operations[0].Status != "SUCCEEDED" {
 		t.Fatalf("PR=%+v op=%+v", in.PullRequests, m.state.Operations)
+	}
+}
+
+type inventoryGitFake struct{ *fakeDelivery }
+
+func (f *inventoryGitFake) Branches(context.Context, delivery.Connection, string) ([]delivery.BranchInfo, error) {
+	return []delivery.BranchInfo{{Name: "feature/work", SHA: strings.Repeat("c", 40)}, {Name: "main", SHA: shaBase}}, nil
+}
+
+func (f *inventoryGitFake) Compare(_ context.Context, _ delivery.Connection, _ string, base, head string) (delivery.CompareResult, error) {
+	return delivery.CompareResult{BaseSHA: base, HeadSHA: head, Ahead: 1, Status: "ahead", Commits: []delivery.CommitInfo{{SHA: head, Message: "Unlinked repository work", URL: "https://example.test/commit/" + head}}}, nil
+}
+
+func TestRepositoryGitRefreshFindsUnlinkedCommit(t *testing.T) {
+	s, m, f := externalFixture(t)
+	s.provider = &inventoryGitFake{f}
+	if err := s.ScheduleRepositoryGitRefresh(context.Background(), time.Now().UTC(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.state.Operations) != 1 || m.state.Operations[0].Kind != "REFRESH_REPOSITORY_GIT" {
+		t.Fatalf("operations=%+v", m.state.Operations)
+	}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.state.GitObservations) != 1 || m.state.GitObservations[0].IntegrationID != "" {
+		t.Fatalf("observations=%+v", m.state.GitObservations)
+	}
+	items := unlinkedGitCommits(m.state, "p")
+	if len(items) != 1 || items[0]["reason"] != "UNLINKED_GIT_COMMIT" {
+		t.Fatalf("unlinked=%v", items)
 	}
 }

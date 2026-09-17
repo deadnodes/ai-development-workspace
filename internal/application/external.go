@@ -347,6 +347,26 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_GIT", IntegrationID: in.ID, Status: "PENDING", RequestedBy: c.Actor, Phase: "OBSERVE", NextAttemptAt: m.CreatedAt}
 		st.Operations = append(st.Operations, v)
 		return v, m, nil
+	case "refresh_repository_git":
+		var input struct {
+			RepositoryID string `json:"repository_id"`
+		}
+		if e := decode(c.Data, &input); e != nil {
+			return nil, m, e
+		}
+		if input.RepositoryID == "" {
+			return nil, m, invalid("repository_id required")
+		}
+		binding := repositoryBinding(st, input.RepositoryID)
+		if binding == nil || binding.ProductID != c.ProductID || !repositoryGitInventoryRole(binding.Role) {
+			return nil, m, invalid("attached SOURCE repository required")
+		}
+		if _, e := scopedConnection(st, binding.ConnectionID, c.ProductID); e != nil {
+			return nil, m, e
+		}
+		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_REPOSITORY_GIT", RepositoryID: input.RepositoryID, Status: "PENDING", RequestedBy: c.Actor, Phase: "SCAN", NextAttemptAt: m.CreatedAt}
+		st.Operations = append(st.Operations, v)
+		return v, m, nil
 	case "deploy_integration", "deploy_existing_artifact":
 		var input struct {
 			ArtifactID     string `json:"artifact_id"`

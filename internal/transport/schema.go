@@ -93,7 +93,7 @@ func CommandSchema() map[string]any {
 		{"configure_component", "product_id", "application_id connection_id workflow image_repository"},
 		{"configure_environment", "product_id", "environment_id purpose connection_id repository_id ref path image_field application_id allow_deploy"},
 		{"refresh_environment_runtime", "product_id", "environment_id"},
-		{"refresh_integration_git", "integration_id", ""},
+		{"refresh_integration_git", "integration_id", ""}, {"refresh_repository_git", "product_id", "repository_id"},
 		{"deploy_integration", "integration_id", "environment_id"},
 		{"deploy_existing_artifact", "integration_id", "environment_id application_id revision_id artifact_id"},
 		{"create_product", "", "name"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},

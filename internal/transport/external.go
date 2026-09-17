@@ -14,16 +14,17 @@ import (
 // All semantic reads and mutations share the application layer with execute.
 func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
-		"GET /api/features/{id}/graph":           "get_feature_graph",
-		"GET /api/products/{id}/retention":       "get_artifact_retention",
-		"GET /api/products/{id}/configuration":   "get_product_configuration",
-		"GET /api/integrations/{id}/context":     "get_integration_context",
-		"GET /api/integrations/{id}/git":         "get_integration_git",
-		"GET /api/environments/{id}/state":       "get_environment_state",
-		"GET /api/operations/{id}":               "get_operation",
-		"GET /api/connections/{id}/repositories": "discover_repositories",
-		"POST /api/connections/{id}/test":        "test_connection",
-		"GET /api/repositories/{id}/branches":    "list_branches",
+		"GET /api/features/{id}/graph":                "get_feature_graph",
+		"GET /api/products/{id}/retention":            "get_artifact_retention",
+		"GET /api/products/{id}/configuration":        "get_product_configuration",
+		"GET /api/integrations/{id}/context":          "get_integration_context",
+		"GET /api/integrations/{id}/git":              "get_integration_git",
+		"GET /api/products/{id}/unlinked-git-commits": "get_unlinked_git_commits",
+		"GET /api/environments/{id}/state":            "get_environment_state",
+		"GET /api/operations/{id}":                    "get_operation",
+		"GET /api/connections/{id}/repositories":      "discover_repositories",
+		"POST /api/connections/{id}/test":             "test_connection",
+		"GET /api/repositories/{id}/branches":         "list_branches",
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			v, e := service.Query(r.Context(), name, r.PathValue("id"))
@@ -119,6 +120,12 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		IntegrationID string `json:"integration_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_integration_git", in.IntegrationID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_unlinked_git_commits", Description: "Read commits discovered in attached repositories that are not linked to a Feature or Integration. Ask the agent to attach them."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_unlinked_git_commits", in.ProductID)
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "refresh_environment_runtime", Description: "Queue read-only Kubernetes/Flux and GitOps/Actions inventory. Returns persistent operation immediately; never changes cluster resources or advances deployment readiness."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

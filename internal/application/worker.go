@@ -98,6 +98,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	if op.Kind == "REFRESH_GIT" {
 		return true, s.observeGit(callCtx, *op, token)
 	}
+	if op.Kind == "REFRESH_REPOSITORY_GIT" {
+		return true, s.observeRepositoryGit(callCtx, *op, token)
+	}
 	if op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION" {
 		return true, s.tickFlow(callCtx, *op, token)
 	}

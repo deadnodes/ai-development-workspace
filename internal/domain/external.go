@@ -94,6 +94,7 @@ type ExternalOperation struct {
 	Meta
 	Kind           string                   `json:"kind"`
 	IntegrationID  string                   `json:"integration_id"`
+	RepositoryID   string                   `json:"repository_id,omitempty"`
 	EnvironmentID  string                   `json:"environment_id,omitempty"`
 	ApplicationID  string                   `json:"application_id,omitempty"`
 	Status         string                   `json:"status"`

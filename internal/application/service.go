@@ -484,7 +484,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-	case "refresh_environment_runtime", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "deploy_integration", "deploy_existing_artifact":
+	case "refresh_environment_runtime", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact":
 		var err error
 		out, m, err = applyExternal(st, c, m)
 		if err != nil {

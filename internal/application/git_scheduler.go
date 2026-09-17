@@ -9,6 +9,15 @@ import (
 
 const autoGitActor = "system/git-sync"
 
+func repositoryGitInventoryRole(role string) bool {
+	switch strings.ToUpper(strings.TrimSpace(role)) {
+	case "SOURCE", "APPLICATION", "LIBRARY", "MIXED":
+		return true
+	default:
+		return false
+	}
+}
+
 // Active scope is explicit work ownership + bound branches, or an open linked PR.
 // A whole repository registration alone never enables polling.
 func autoGitEligible(st *domain.State, in domain.Integration) bool {
@@ -93,6 +102,71 @@ func (s *Service) ScheduleGitRefresh(ctx context.Context, now time.Time, interva
 		return nil
 	})
 }
+
+// ScheduleRepositoryGitRefresh keeps the repository registry observable even
+// when no Integration has been linked yet. It is deliberately bounded: one
+// repository scan is a durable operation and the worker performs the provider
+// calls outside the state transaction.
+func (s *Service) ScheduleRepositoryGitRefresh(ctx context.Context, now time.Time, interval time.Duration) error {
+	if interval <= 0 || s.provider == nil {
+		return nil
+	}
+	return s.store.Update(ctx, func(st *domain.State) error {
+		queued := 0
+		seen := map[string]bool{}
+		for _, binding := range st.RepositoryBindings {
+			if !repositoryGitInventoryRole(binding.Role) || binding.ProductID == "" || seen[binding.ProductID+"/"+binding.RepositoryID] {
+				continue
+			}
+			if _, err := scopedConnection(st, binding.ConnectionID, binding.ProductID); err != nil {
+				continue
+			}
+			seen[binding.ProductID+"/"+binding.RepositoryID] = true
+			var last *domain.ExternalOperation
+			pending := false
+			for i := range st.Operations {
+				op := &st.Operations[i]
+				if op.Kind != "REFRESH_REPOSITORY_GIT" || op.ProductID != binding.ProductID || op.RepositoryID != binding.RepositoryID {
+					continue
+				}
+				if !terminalOperation(op.Status) {
+					pending = true
+				}
+				if last == nil || op.CreatedAt.After(last.CreatedAt) {
+					last = op
+				}
+			}
+			if pending {
+				continue
+			}
+			wait := interval
+			if last != nil {
+				if last.Status == "FAILED" || last.Status == "BLOCKED" {
+					wait = 5 * interval
+				}
+				since := last.UpdatedAt
+				if last.FinishedAt != nil {
+					since = *last.FinishedAt
+				}
+				if since.IsZero() {
+					since = last.CreatedAt
+				}
+				if now.Sub(since) < wait {
+					continue
+				}
+			}
+			m := domain.Meta{ID: id(), ProductID: binding.ProductID, Actor: autoGitActor, CreatedAt: now, UpdatedAt: now}
+			st.Operations = append(st.Operations, domain.ExternalOperation{Meta: m, Kind: "REFRESH_REPOSITORY_GIT", RepositoryID: binding.RepositoryID, Status: "PENDING", RequestedBy: autoGitActor, Phase: "SCAN", NextAttemptAt: now})
+			st.Events = append(st.Events, domain.Event{ID: id(), Action: "refresh_repository_git", Actor: autoGitActor, At: now, EntityID: m.ID, ProductID: binding.ProductID, Data: domain.Command{Action: "refresh_repository_git", Actor: autoGitActor, ProductID: binding.ProductID, Data: map[string]any{"repository_id": binding.RepositoryID}}})
+			queued++
+			if queued >= 3 {
+				break
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Service) RunGitScheduler(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return nil
@@ -101,6 +175,9 @@ func (s *Service) RunGitScheduler(ctx context.Context, interval time.Duration) e
 	defer ticker.Stop()
 	for {
 		if err := s.ScheduleGitRefresh(ctx, time.Now().UTC(), interval); err != nil {
+			return err
+		}
+		if err := s.ScheduleRepositoryGitRefresh(ctx, time.Now().UTC(), interval); err != nil {
 			return err
 		}
 		select {

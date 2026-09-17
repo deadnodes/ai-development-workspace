@@ -61,6 +61,7 @@ function render(preserve=false){
  const f=selectedFeature(), route=featureID();$('#breadcrumb').textContent=route==='configuration'?'Product configuration':route==='operations'?'Operations':route==='delivery'?'Environments & delivery':f?.title||'Overview';$('.nav-overview').classList.toggle('active',!f&&!['operations','delivery','configuration'].includes(route));$('.nav-delivery').classList.toggle('active',route==='delivery');$('.nav-operations').classList.toggle('active',route==='operations');
  $('.nav-configuration')?.classList.toggle('active',route==='configuration');
  paint($('#main'),route==='configuration'?productConfiguration():route==='delivery'&&typeof deliveryView==='function'?deliveryView():featureID()==='operations'&&typeof operationsView==='function'?operationsView():f?featureView(f):overview());
+ if(route==='operations'&&typeof loadAttention==='function'&&!attentionResults.has(productID)) queueMicrotask(loadAttention);
 }
 function featureUpdated(f){return f.updated_at||f.created_at||'';}
 function sortedFeatures(){return productItems('features').slice().sort((a,b)=>(Date.parse(featureUpdated(b))||0)-(Date.parse(featureUpdated(a))||0)||a.id.localeCompare(b.id));}

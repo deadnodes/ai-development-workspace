@@ -184,7 +184,7 @@ func (s *Service) Resume(ctx context.Context, featureID string) (any, error) {
 	if eventsTotal > 20 {
 		events = events[eventsTotal-20:]
 	}
-	response := map[string]any{"applications": apps, "integration_revisions": revisions, "compositions": compositions, "feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}
+	response := map[string]any{"applications": apps, "integration_revisions": revisions, "compositions": compositions, "feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "unlinked_git_commits": unlinkedGitCommits(st, f.ProductID), "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}
 	response["project_context"], e = s.ProjectContext(ctx, f.ProductID)
 	if e != nil {
 		return nil, e

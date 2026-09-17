@@ -148,6 +148,11 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 		}
 		return map[string]any{"integration_id": id, "branches": in.Branches, "commits": in.Commits, "revisions": revisions, "observations": obs, "pull_requests": prs}, nil
+	case "get_unlinked_git_commits":
+		if !productExists(&st, id) {
+			return nil, missing("product", id)
+		}
+		return unlinkedGitCommits(st, id), nil
 	case "get_environment_state":
 		env := environmentByID(&st, id)
 		if env == nil {
@@ -216,6 +221,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, missing("product", id)
 		}
 		items := retentionAttention(st, id)
+		items = append(items, unlinkedGitCommits(st, id)...)
 		for _, finding := range st.Findings {
 			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {
 				integrationID := ""
