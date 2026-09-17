@@ -38,6 +38,15 @@ func operationByID(st *domain.State, id string) *domain.ExternalOperation {
 	return nil
 }
 
+func operationPriority(kind string) int {
+	switch kind {
+	case "REFRESH_GIT", "REFRESH_REPOSITORY_GIT", "REFRESH_RUNTIME":
+		return 10
+	default:
+		return 0
+	}
+}
+
 // Tick claims one durable operation step. Network I/O happens outside the store
 // transaction. A persisted dispatch intent is never blindly dispatched again.
 func (s *Service) Tick(ctx context.Context) (bool, error) {
@@ -57,7 +66,8 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			if terminalOperation(v.Status) || v.NextAttemptAt.After(now) || v.LeaseUntil.After(now) {
 				continue
 			}
-			if candidate == nil || v.NextAttemptAt.Before(candidate.NextAttemptAt) || (v.NextAttemptAt.Equal(candidate.NextAttemptAt) && v.ID < candidate.ID) {
+			if candidate == nil || operationPriority(v.Kind) < operationPriority(candidate.Kind) ||
+				(operationPriority(v.Kind) == operationPriority(candidate.Kind) && (v.NextAttemptAt.Before(candidate.NextAttemptAt) || (v.NextAttemptAt.Equal(candidate.NextAttemptAt) && v.ID < candidate.ID))) {
 				candidate = v
 			}
 		}

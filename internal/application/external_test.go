@@ -287,6 +287,24 @@ func TestSchedulerSelectsEarliestEligibleOperation(t *testing.T) {
 	}
 }
 
+func TestSchedulerPrioritizesDeliveryOverBackgroundRefresh(t *testing.T) {
+	s, m, _ := externalFixture(t)
+	exec(t, s, domain.Command{Action: "refresh_repository_git", ID: "background", ProductID: "p", Data: map[string]any{"repository_id": "source"}})
+	exec(t, s, deployCommand())
+	for i := range m.state.Operations {
+		m.state.Operations[i].NextAttemptAt = time.Time{}
+	}
+	worked, e := s.Tick(context.Background())
+	if e != nil || !worked {
+		t.Fatal(e)
+	}
+	background := operationByID(&m.state, "background")
+	deploy := operationByID(&m.state, "deploy")
+	if background.Status != "PENDING" || deploy.Status == "PENDING" {
+		t.Fatalf("background=%+v deploy=%+v", background, deploy)
+	}
+}
+
 func TestDisabledRebuildPolicyNeverDispatchesMissingArtifact(t *testing.T) {
 	s, m, f := externalFixture(t)
 	exec(t, s, domain.Command{Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component", "connection_id": "conn", "workflow": "build.yml", "image_repository": "ghcr.io/owner/component"}})
