@@ -43,7 +43,7 @@ func TestUnlinkedBranchDriftIsNotActionableAttention(t *testing.T) {
 	}
 }
 
-func TestActiveIntegrationBranchDriftRemainsActionableAttention(t *testing.T) {
+func TestBranchDriftRemainsGitContextNotOperationsAttention(t *testing.T) {
 	s, m, _ := externalFixture(t)
 	now := time.Now().UTC()
 	in := integration(&m.state, "i")
@@ -58,13 +58,13 @@ func TestActiveIntegrationBranchDriftRemainsActionableAttention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
 	for _, item := range value.([]map[string]any) {
-		if item["id"] == "active-drift" && item["reason"] == "BRANCH_DIVERGED" {
-			found = true
+		if item["id"] == "active-drift" || item["reason"] == "BRANCH_BEHIND" || item["reason"] == "BRANCH_DIVERGED" {
+			t.Fatalf("branch drift became an Operations attention item: %v", item)
 		}
 	}
-	if !found {
-		t.Fatalf("active integration drift disappeared from attention: %v", value)
+	gitState, err := s.Query(context.Background(), "get_integration_git", "i")
+	if err != nil || len(gitState.(map[string]any)["observations"].([]domain.GitObservation)) != 1 {
+		t.Fatalf("branch drift was lost from Git context: %v", gitState)
 	}
 }

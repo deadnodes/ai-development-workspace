@@ -283,46 +283,13 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				items = append(items, map[string]any{"id": op.ID, "reason": reason, "detail": op.Detail, "integration_id": op.IntegrationID, "environment_id": op.EnvironmentID})
 			}
 		}
-		latest := map[string]domain.GitObservation{}
-		for _, o := range st.GitObservations {
-			if o.ProductID == id {
-				latest[o.IntegrationID+"/"+o.RepositoryID+"/"+o.Branch] = o
-			}
-		}
-		for _, o := range latest {
-			// Repository inventory deliberately records every branch so agents can
-			// recover work that was never reported. That historical inventory is
-			// not an Operations problem: only an active integration's bound branch
-			// can block delivery. Stale/unlinked Codex branches remain available in
-			// Git context and the unlinked-commit queue, without noisy attention.
-			if !actionableBranchObservation(st, o) || o.Behind <= 0 {
-				continue
-			}
-			reason := "BRANCH_BEHIND"
-			if o.Ahead > 0 {
-				reason = "BRANCH_DIVERGED"
-			}
-			items = append(items, map[string]any{"id": o.ID, "reason": reason, "integration_id": o.IntegrationID, "repository_id": o.RepositoryID, "branch": o.Branch, "ahead": o.Ahead, "behind": o.Behind})
-		}
+		// Git branch drift is read-only context, not an Operations task. It is
+		// available through get_git_state / the feature graph; a concrete deploy
+		// operation still performs its own freshness and divergence checks.
 		sort.Slice(items, func(i, j int) bool { return items[i]["id"].(string) < items[j]["id"].(string) })
 		return items, nil
 	}
 	return nil, invalid("unknown query")
-}
-
-func actionableBranchObservation(st domain.State, observation domain.GitObservation) bool {
-	if observation.IntegrationID == "" {
-		return false
-	}
-	in := integration(&st, observation.IntegrationID)
-	if in == nil || in.ProductID != observation.ProductID || in.Status == "released" {
-		return false
-	}
-	f := feature(&st, in.FeatureID)
-	if f == nil || f.ProductID != observation.ProductID || f.Status == "completed" || f.Status == "archived" {
-		return false
-	}
-	return slices.Contains([]string{"working", "implemented", "verifying"}, in.Status)
 }
 
 func generateRegistryID() string { return id() }
