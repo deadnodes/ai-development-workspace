@@ -93,7 +93,7 @@ evaluate(`state.github_connections=[{id:'conn',product_id:'p',name:'App install'
 const opsHTML=evaluate('operationsView()');
 for(const text of ['PENDING_RECONCILIATION','Exact artifact evidence','sha256:exact',shaA])assert.ok(opsHTML.includes(text),text);
 assert.ok(evaluate('externalIntegrationPanel(state.integrations[0])').includes('Git state unknown'));
-assert.ok(evaluate('externalProductPanels()').includes('Accessible repositories'));
+assert.ok(evaluate('externalProductPanels()').includes('Discover repositories'));
 assert.equal(evaluate("externalFormValues('configure_environment',{environment:'env'}).allow_deploy"),false);
 formValues={_actor:'test/operator',application_id:'app-a',connection_id:'conn',workflow:'build.yml',image_repository:'ghcr.io/example/app',workflow_ref:'',inputs_text:'platform=linux/amd64\nmode=dev'};
 evaluate("currentForm={action:'configure_component',attrs:{},fields:forms.configure_component.fields}");
@@ -256,7 +256,7 @@ assert.deepEqual(capturedCommand.data,{application_id:'ret-app',keep_last:7,keep
 vm.runInContext(`state.operations=[{id:'pr-refresh',integration_id:'pr-only',kind:'REFRESH_GIT',status:'SUCCEEDED',finished_at:'2026-09-16T10:00:00Z',detail:'Observed linked pull requests'}]`,sandbox);
 const prOnlyHTML=vm.runInContext(`externalIntegrationPanel({id:'pr-only',pull_requests:[{id:'42',repository_id:'repo',url:'https://github.com/org/repo/pull/42',status:'merged'}]})`,sandbox);
 assert.match(prOnlyHTML,/Linked pull requests \(1\)/);
-assert.match(prOnlyHTML,/Last Git refresh/);
+assert.match(prOnlyHTML,/Last Git observation/);
 assert.match(prOnlyHTML,/PR history does not select deployment source/);
 assert.doesNotMatch(prOnlyHTML,/Not resolved|Desired GitOps update/);
 console.log('PR-only Git refresh UI exposes references and observation time without deployment claims.');
