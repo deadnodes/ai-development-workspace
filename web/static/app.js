@@ -38,6 +38,7 @@ async function request(path, body) {
 function notice(message,error=false){$('#notice').textContent=message;$('#notice').className=error?'error':'';}
 let statusMetadata={catalog:{},transitions:{}};
 let refreshInFlight=0;
+let refreshAllInFlight=false;
 async function refresh(){
  if(typeof invalidateLive==='function')invalidateLive();
  const ticket=typeof liveEpoch==='number'?liveEpoch:null;refreshInFlight++;
@@ -49,6 +50,39 @@ async function refresh(){
   const f=selectedFeature();if(f)productID=f.product_id;render(typeof patchLiveHTML==='function');
  }catch(e){notice(e.message,true);if(!list(state.products).length){$('#main').innerHTML='<div class="empty"><h2>Workspace unavailable</h2><p>Check the server connection or configure your access token using Settings.</p><button id="retry">Try again</button></div>';$('#retry').onclick=refresh;}}
  finally{refreshInFlight--;}
+}
+async function refreshEverything(){
+ if(refreshAllInFlight)return;
+ if(!productID){await refresh();return;}
+ const control=$('#refresh');
+ refreshAllInFlight=true;
+ if(control){control.disabled=true;control.textContent='Queueing refresh…';}
+ try{
+  // The server owns the actual observations. This button only queues bounded,
+  // read-only operations; every command returns immediately and the worker
+  // performs GitHub/GitOps/Flux/Kubernetes calls asynchronously.
+  const product=productID, actor='human/local', commands=[], seenRepos=new Set(), seenIntegrations=new Set();
+  const bindings=list(state.repository_bindings).filter(b=>b.product_id===product&&['SOURCE','APPLICATION','LIBRARY','MIXED'].includes(String(b.role||'').toUpperCase())&&b.connection_id);
+  for(const binding of bindings){
+   if(seenRepos.has(binding.repository_id))continue;
+   seenRepos.add(binding.repository_id);
+   commands.push({action:'refresh_repository_git',actor,product_id:product,data:{repository_id:binding.repository_id}});
+  }
+  for(const integration of list(state.integrations).filter(i=>i.product_id===product&&i.status!=='released'&&(list(i.branches).length||list(i.pull_requests).length||list(i.commits).length||list(i.repositories).length))){
+   if(seenIntegrations.has(integration.id))continue;
+   seenIntegrations.add(integration.id);
+   commands.push({action:'refresh_integration_git',actor,product_id:product,feature_id:integration.feature_id,integration_id:integration.id,data:{}});
+  }
+  const environments=productItems('environments');
+  for(const environment of environments)commands.push({action:'refresh_environment_runtime',actor,product_id:product,data:{environment_id:environment.id}});
+  if(!commands.length){await refresh();notice('Nothing is configured to refresh for this product.');return;}
+  const results=await Promise.allSettled(commands.map(command=>request('/api/commands',command)));
+  const accepted=results.filter(result=>result.status==='fulfilled').length;
+  const failed=results.length-accepted;
+  await refresh();
+  notice(`Refresh queued: ${accepted} read-only operation${accepted===1?'':'s'}${failed?`; ${failed} could not be queued`:''}. Git, runtime and provider observations run asynchronously.` ,failed>0);
+ }catch(error){notice(`Could not queue refresh: ${error.message}`,true);}
+ finally{refreshAllInFlight=false;if(control){control.disabled=false;control.textContent='Refresh all';}}
 }
 function render(preserve=false){
  const linkedProduct=urlProduct();if(linkedProduct!==null)productID=linkedProduct;
@@ -160,7 +194,7 @@ $('#command-form').onsubmit=async e=>{e.preventDefault();if(!currentForm)return;
  if(action==='create_feature')location.hash=encodeURIComponent(result.id);await refresh();notice('Saved. Shared context and activity history are up to date.');
  }catch(error){$('#form-error').textContent=error.message;}finally{$('#save').disabled=false;$('#save').textContent=forms[action].label;}};
 $('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['configuration','delivery','operations'].includes(featureID())?location.hash:'');render();};
-$('#refresh').onclick=refresh;
+$('#refresh').onclick=refreshEverything;
 $('.skip').onclick=e=>{e.preventDefault();$('#main').focus();};
 $('#identity').onclick=()=>{currentForm=null;$('#dialog-title').textContent='Settings';$('#form-help').textContent='Settings apply only to this browser tab. This is not a sign-in form.';$('#fields').innerHTML='<p class="hint">Web actions are recorded as human/local. API and MCP actions default to agent. These labels are attribution, not authentication.</p>'+inputField(field('token','Control Plane access token (optional)','password'),sessionStorage.getItem('rc-token')||'')+'<p id="token-help" class="hint">Enter the token configured by the Control Plane operator only if this server requires one. This is not a GitHub token. Leave blank for a local server without access protection.</p><button type="button" class="primary" id="save-identity">Save settings</button>';$('#save').hidden=true;$('#form-error').textContent='';$('#dialog').showModal();$('#input-token').setAttribute('aria-describedby','token-help');$('#save-identity').onclick=()=>{sessionStorage.setItem('rc-token',$('#input-token').value);closeDialog();refresh();};};
 document.addEventListener('click',async e=>{const tab=e.target.closest('[data-config-tab]');if(tab){configurationTab=tab.dataset.configTab||'topology';render();return;}const b=e.target.closest('[data-action]');if(b){openForm(b.dataset.action,b.dataset);return;}if(e.target.closest('[data-resume]')){try{const context=await request(`/api/features/${encodeURIComponent(featureID())}/context`);currentForm=null;$('#dialog-title').textContent='Agent resume context';$('#form-help').textContent='This deterministic context is also available to coding agents through MCP resume.';$('#fields').innerHTML=`<pre>${esc(JSON.stringify(context,null,2))}</pre>`;$('#form-error').textContent='';$('#save').hidden=true;$('#dialog').showModal();}catch(error){notice(error.message,true);}}});

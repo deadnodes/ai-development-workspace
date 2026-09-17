@@ -58,7 +58,28 @@ assert.ok(prevented && focused);
 assert.equal(sandbox.location.hash,'#f');
 console.log('Command serialization and skip-link focus regression checks passed.');
 
+// The header action queues every read-only observation for the selected
+// product in parallel, then reloads state without waiting for workers.
+evaluate(`state.repository_bindings=[{product_id:'p',repository_id:'repo',role:'APPLICATION',connection_id:'conn'}];state.environments=[{id:'env',product_id:'p',name:'DEV'}];state.integrations=[{id:'i',product_id:'p',feature_id:'f',status:'working',branches:[{name:'feature/a'}]}];productID='p'`);
+const refreshRequests=[];
+const stateForRefresh=JSON.parse(evaluate('JSON.stringify(state)'));
+sandbox.fetch=async(path,options)=>{
+ refreshRequests.push({path,body:options?.body?JSON.parse(options.body):null});
+ if(path==='/api/commands')return {ok:true,status:200,json:async()=>({id:'queued'})};
+ if(path==='/api/statuses')return {ok:true,status:200,json:async()=>({catalog:{},transitions:{}})};
+ return {ok:true,status:200,json:async()=>stateForRefresh};
+};
+await evaluate('refreshEverything()');
+const queued=refreshRequests.filter(r=>r.path==='/api/commands').map(r=>r.body.action);
+assert.deepEqual(queued.sort(),['refresh_environment_runtime','refresh_integration_git','refresh_repository_git']);
+assert.ok(refreshRequests.some(r=>r.path==='/api/state'));
+assert.equal(elements.get('#refresh').textContent,'Refresh all');
+console.log('Header Refresh all queues Git, integration and runtime observations asynchronously.');
+
 // Composition planning serializes multiple independent application rows and keeps immutable snapshots visible.
+// Keep command requests pending in the renderer harness so submit assertions can
+// inspect the serialized envelope before a response-driven re-render.
+sandbox.fetch=(_path,options)=>{capturedCommand=JSON.parse(options.body);return new Promise(()=>{});};
 const shaA='a'.repeat(40),shaB='b'.repeat(40);
 sandbox.fixtureSHA=shaA;
 evaluate(`state.applications=[{id:'app-a',product_id:'p',name:'API',repository_id:'repo',path:'api'},{id:'app-b',product_id:'p',name:'Worker',repository_id:'repo',path:'worker'}];state.integration_revisions=[{id:'rev-a',product_id:'p',feature_id:'f',integration_id:'i',repository_id:'repo',head_commit:fixtureSHA,base_commit:fixtureSHA,commits:[fixtureSHA]}];state.environments=[{id:'env',product_id:'p',name:'QA West',cluster:'west',namespace:'qa',desired_composition_id:'composition'}];state.compositions=[{id:'composition',product_id:'p',name:'QA selection',environment_id:'env',environment_snapshot:{id:'env',name:'Original QA',cluster:'old-cluster'},application_snapshots:[{id:'app-a',name:'Captured API',repository_id:'repo',path:'api'}],revision_snapshots:[{id:'rev-a',integration_id:'i',branch:'feature/example',base_commit:fixtureSHA,head_commit:fixtureSHA,commits:[fixtureSHA]}],components:[{application_id:'app-a',base_ref:'main',base_commit:fixtureSHA,target_branch:'generated/qa',revision_ids:['rev-a']}]}]`);
