@@ -30,7 +30,7 @@ function scenarioTargets(){
  return [...candidates,...compositions.values()];
 }
 function flowFormValues(action,attrs){
- if(action==='assemble_environment')return {environment_id:productItems('environments').find(e=>['DEV','TEST'].includes(String(e.name).toUpperCase()))?.id};
+ if(action==='assemble_environment')return {environment_id:attrs.environment||productItems('environments').find(e=>['DEV','TEST'].includes(String(e.name).toUpperCase()))?.id};
  if(action==='prepare_release_candidate')return {approve_main_update:false};
  if(action==='promote_release_candidate')return {approve:false};
  if(action==='record_runtime_observation'){const op=productItems('operations').find(o=>o.id===attrs.id);return {healthy:false,environment_id:op?.environment_id,gitops_commit:op?.gitops_result?.commit_sha,artifact_digest:op?.artifact?.digest};}
