@@ -234,6 +234,12 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		for _, op := range st.Operations {
 			if op.ProductID == id && (op.Status == "FAILED" || op.DeploymentState == "GITOPS_APPLIED") {
 				if op.Kind == "REFRESH_GIT" && op.Status == "FAILED" {
+					// A feature branch commonly disappears after its PR is merged.
+					// Keep that observation in audit history, but do not turn the
+					// expected 404 into an actionable attention item.
+					if isDeletedBranchObservation(op.Detail) {
+						continue
+					}
 					superseded := false
 					for _, later := range st.Operations {
 						if later.ProductID == op.ProductID && later.IntegrationID == op.IntegrationID && later.Kind == "REFRESH_GIT" && later.Status == "SUCCEEDED" && later.CreatedAt.After(op.CreatedAt) && later.FinishedAt != nil && op.FinishedAt != nil && later.FinishedAt.After(*op.FinishedAt) {

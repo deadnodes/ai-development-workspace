@@ -73,9 +73,15 @@ func TestAutomaticGitScopeAndBackoff(t *testing.T) {
 	}
 }
 
-type scopedGitFake struct{ *fakeDelivery }
+type scopedGitFake struct {
+	*fakeDelivery
+	deletedBranch bool
+}
 
 func (f *scopedGitFake) ObserveBranch(_ context.Context, _ delivery.Connection, _ string, branch string) (delivery.BranchInfo, error) {
+	if f.deletedBranch && branch == "feature/work" {
+		return delivery.BranchInfo{}, delivery.ErrNotFound
+	}
 	sha := shaHead
 	if branch == "main" {
 		sha = shaBase
@@ -83,6 +89,9 @@ func (f *scopedGitFake) ObserveBranch(_ context.Context, _ delivery.Connection, 
 	return delivery.BranchInfo{Name: branch, SHA: sha}, nil
 }
 func (f *scopedGitFake) DiscoverBranchPullRequests(context.Context, delivery.Connection, string, string) ([]delivery.PullRequestObservation, error) {
+	if f.deletedBranch {
+		return nil, nil
+	}
 	return []delivery.PullRequestObservation{{Number: 7, URL: "https://github.com/owner/source/pull/7", State: "OPEN"}}, nil
 }
 func (f *scopedGitFake) ObservePullRequest(context.Context, delivery.Connection, string, int) (delivery.PullRequestObservation, error) {
@@ -90,7 +99,7 @@ func (f *scopedGitFake) ObservePullRequest(context.Context, delivery.Connection,
 }
 func TestAutomaticGitDiscoversPRAndObservesBoundBranch(t *testing.T) {
 	s, m, f := externalFixture(t)
-	s.provider = &scopedGitFake{f}
+	s.provider = &scopedGitFake{fakeDelivery: f}
 	in := integration(&m.state, "i")
 	in.Owner = "agent/test"
 	in.Status = "working"
@@ -104,6 +113,49 @@ func TestAutomaticGitDiscoversPRAndObservesBoundBranch(t *testing.T) {
 	in = integration(&m.state, "i")
 	if len(in.PullRequests) != 1 || in.PullRequests[0].ID != "7" || len(m.state.GitObservations) != 1 || m.state.Operations[0].Status != "SUCCEEDED" {
 		t.Fatalf("PR=%+v op=%+v", in.PullRequests, m.state.Operations)
+	}
+}
+
+func TestAutomaticGitTreatsDeletedBranchAsBenign(t *testing.T) {
+	s, m, f := externalFixture(t)
+	s.provider = &scopedGitFake{fakeDelivery: f, deletedBranch: true}
+	in := integration(&m.state, "i")
+	in.Owner = "agent/test"
+	in.Status = "working"
+	in.Branches = []domain.Branch{{RepositoryID: "source", Name: "feature/work"}}
+	if err := s.ScheduleGitRefresh(context.Background(), time.Now().UTC(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	op := m.state.Operations[0]
+	if op.Status != "SUCCEEDED" || !strings.Contains(op.Detail, "skipped 1 deleted branch") {
+		t.Fatalf("deleted branch treated as failure: %+v", op)
+	}
+	value, err := s.Query(context.Background(), "list_attention", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.([]map[string]any)) != 0 {
+		t.Fatalf("deleted branch created attention: %v", value)
+	}
+}
+
+func TestDeletedBranch404IsNotAttention(t *testing.T) {
+	s, m, _ := externalFixture(t)
+	now := time.Now().UTC()
+	m.state.Operations = []domain.ExternalOperation{{
+		Meta: domain.Meta{ID: "deleted", ProductID: "p", CreatedAt: now},
+		Kind: "REFRESH_GIT", Status: "FAILED", FinishedAt: &now,
+		Detail: "branch observation failed: GitHub GET returned HTTP 404",
+	}}
+	value, err := s.Query(context.Background(), "list_attention", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.([]map[string]any)) != 0 {
+		t.Fatalf("deleted branch 404 remained actionable: %v", value)
 	}
 }
 

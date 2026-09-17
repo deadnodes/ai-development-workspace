@@ -175,6 +175,8 @@ image:
 
 В UI `Operations & attention` важные deploy/build/conflict/error операции показываются отдельно. `REFRESH_GIT`, `REFRESH_REPOSITORY_GIT` и `REFRESH_RUNTIME` — внутренние фоновые read-only наблюдения: они только читают GitHub, Flux/Kubernetes или инвентарь репозитория и не являются задачами пользователя. `PENDING` означает очередь worker’а, а не ошибку доставки. Полная append-only история сохраняется в БД и доступна через API/MCP, но в пользовательском Operations UI эти refresh-записи скрыты.
 
+Удалённая feature-ветка после merge — нормальное состояние. Если GitHub возвращает `404` именно для такой исходной ветки, Control Plane сохраняет наблюдение для истории, пропускает ветку и не создаёт actionable attention. Ошибки доступа, сети, отсутствия репозитория или base-ветки остаются ошибками.
+
 ## 6. Работа над самим Control Plane
 
 Контекст и handoff хранятся в приложении; `IMPLEMENTATION_STATE.md` — только recovery locator. Архитектура: [ARCHITECTURE.md](ARCHITECTURE.md). Перед сдачей изменений кода:

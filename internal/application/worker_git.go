@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"releasecontrol/internal/delivery"
 	"strconv"
@@ -120,6 +121,7 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 		}
 	}
 	observations := []domain.GitObservation{}
+	deletedBranches := 0
 	for _, b := range branches {
 		binding := repositoryBinding(&st, b.RepositoryID)
 		if binding == nil || binding.ProductID != in.ProductID {
@@ -133,6 +135,10 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 		if scoped, ok := s.provider.(delivery.ScopedGitObserver); ok {
 			v, err := scoped.ObserveBranch(ctx, conn.Config, repositoryLocator(&st, *binding), b.Name)
 			if err != nil {
+				if b.Name != configuredBase(*binding) && errors.Is(err, delivery.ErrNotFound) {
+					deletedBranches++
+					continue
+				}
 				closed := false
 				for _, p := range prs {
 					if p.RepositoryID == b.RepositoryID && p.SourceBranch == b.Name && (p.Status == "MERGED" || p.Status == "CLOSED") {
@@ -170,6 +176,10 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 					main = v.SHA
 				}
 			}
+		}
+		if head == "" && b.Name != configuredBase(*binding) {
+			deletedBranches++
+			continue
 		}
 		if head == "" || main == "" {
 			return s.finish(ctx, op, token, "BLOCKED", "source or default branch missing", nil)
@@ -245,7 +255,11 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 	if e != nil {
 		return e
 	}
-	return s.finish(ctx, op, token, "SUCCEEDED", fmt.Sprintf("Observed %d branches and %d pull requests without modifying source history", len(observations), len(prs)), map[string]string{"branches": strconv.Itoa(len(observations)), "pull_requests": strconv.Itoa(len(prs))})
+	detail := fmt.Sprintf("Observed %d branches and %d pull requests without modifying source history", len(observations), len(prs))
+	if deletedBranches > 0 {
+		detail += fmt.Sprintf("; skipped %d deleted branch(es)", deletedBranches)
+	}
+	return s.finish(ctx, op, token, "SUCCEEDED", detail, map[string]string{"branches": strconv.Itoa(len(observations)), "pull_requests": strconv.Itoa(len(prs)), "deleted_branches": strconv.Itoa(deletedBranches)})
 }
 
 func gitTime(t time.Time) string {
@@ -253,4 +267,10 @@ func gitTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func isDeletedBranchObservation(detail string) bool {
+	detail = strings.ToLower(detail)
+	return strings.Contains(detail, "branch observation failed:") &&
+		(strings.Contains(detail, "http 404") || strings.Contains(detail, "not found"))
 }

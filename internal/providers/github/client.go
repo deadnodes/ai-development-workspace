@@ -30,7 +30,10 @@ import (
 
 var ErrUnauthorized = errors.New("provider authorization failed")
 var ErrConflict = errors.New("provider expected state changed")
-var ErrNotFound = errors.New("provider resource not found")
+
+// ErrNotFound is kept as a provider-level alias for compatibility with
+// callers that already use the GitHub adapter directly.
+var ErrNotFound = delivery.ErrNotFound
 var ErrUnsupported = errors.New("unsupported provider operation")
 
 // APIError intentionally excludes response bodies, credentials, and signed URLs.
