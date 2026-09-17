@@ -7,3 +7,12 @@
 .repository-catalog{display:grid;gap:16px}.repository-group{border:1px solid var(--line);border-radius:10px;padding:16px 18px;background:#fafbfe}.repository-group .section-heading{margin-bottom:8px}.repository-entry{display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid var(--line);padding:12px 0}.repository-entry:first-of-type{border-top:0}.repository-entry p{margin:3px 0 0}.repository-entry strong{overflow-wrap:anywhere}
 
 .config-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 20px;padding:6px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.config-tab{flex:1 1 145px;text-align:left;background:transparent;color:var(--muted);border-color:transparent;min-height:52px}.config-tab strong,.config-tab small{display:block}.config-tab small{font-size:11px;font-weight:400;margin-top:2px}.config-tab.active{background:var(--accent-soft);color:var(--accent);border-color:#d9dcff}.config-tab:focus-visible{border-color:var(--accent)}.config-tab-panel{min-width:0}@media(max-width:720px){.config-tabs{overflow-x:auto;flex-wrap:nowrap}.config-tab{flex:0 0 160px;white-space:normal}}
+
+/* Keep long feature breadcrumbs from pushing header actions off-screen. */
+header > .muted { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+header .header-actions { flex: 0 0 auto; min-width: 0; }
+header .header-actions button { white-space: nowrap; }
+@media (max-width: 720px) {
+  header > .muted { flex-basis: 100%; }
+  header .header-actions { width: 100%; justify-content: flex-end; }
+}
