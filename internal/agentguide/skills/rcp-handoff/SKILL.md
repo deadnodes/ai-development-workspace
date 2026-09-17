@@ -7,6 +7,32 @@ description: Record a structured handoff in Release Control Plane when pausing f
 
 Use this skill for work tracked in the connected Control Plane. Read the workspace `.release-control.json` binding for the MCP server and Product; do not guess identities from branch names. User instructions determine the scope. This skill does not authorize deployments, pushes, production changes or new tasks.
 
+## Keep the active plan synchronized
+
+The Control Plane keeps history append-only and does not infer that a product decision
+changed the Feature plan. A progress event alone is not enough when scope changes.
+
+When the user changes a commercial rule, credit amount, UX flow, entitlement rule,
+status matrix, or other acceptance behavior:
+
+1. Stop and update the Feature's active `goal`, `requirements`, `constraints`, and
+   `context` through `update_feature`.
+2. Update every affected Integration's `title`, `objective`,
+   `acceptance_criteria`, and `remaining` through `update_integration`.
+3. Record the decision or discovery explaining what replaced the old contract.
+   Historical checks, progress, and handoffs remain immutable, but stale requirements
+   must not remain in the active plan. If the API has no superseded marker, remove the
+   old requirement from the active arrays and reference it as historical context.
+4. Re-read `resume` before continuing implementation. Do not proceed while the active
+   Feature or Integration criteria still describe the old behavior.
+
+After a merge, deployment, or meaningful verification checkpoint, record concrete
+`completed` and `remaining` work and transition the Integration to the truthful status
+(`working`, `implemented`, `verifying`, or `ready`). `ready` requires the normal gates;
+do not use it as a progress label. The Feature workspace's `ready/released` count is a
+readiness metric, not a productivity metric, so communicate implementation progress
+through Integration statuses and progress events.
+
 ## Record the handoff
 
 1. Read `get_project_context` for the configured Product and `resume` for the current Feature. Find the Integration actually worked on. If there is no tracked work, explain that instead of creating a fictitious Feature merely to satisfy this skill.
@@ -35,6 +61,10 @@ Use this skill for work tracked in the connected Control Plane. Read the workspa
 Omit optional Integration/commit fields when unknown. Redact credentials and irrelevant personal information. Distinguish test evidence from assumptions and recorded deployment intent from observed runtime. Include the user's intended next-session focus when provided.
 
 4. Read `resume` again and verify the handoff is visible with the correct scope and next actions. Report the Feature/Integration and saved handoff ID. If a response was lost, inspect stored handoffs before retrying to avoid duplicates.
+
+Before the final handoff, audit `resume` for stale active requirements, stale next
+actions, and incorrect Integration statuses. Reconcile them before recording the
+handoff; do not leave a current plan that contradicts the user's latest decision.
 
 ## Resume and failure handling
 
