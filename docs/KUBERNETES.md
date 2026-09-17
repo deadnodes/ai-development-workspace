@@ -25,7 +25,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   -t ghcr.io/ORG/release-control:VERSION --push .
 ```
 
-Сохрани опубликованный manifest digest. Готовый публичный образ пока не предполагается. Для private registry настрой `imagePullSecrets` в Deployment overlay.
+Сохрани опубликованный manifest digest. Образ Control Plane публикуется в GHCR и доступен публично, поэтому для него `imagePullSecrets` не нужны. Для private registry продукта настрой `imagePullSecrets` в Deployment overlay.
 
 ## 2. Создай overlay продукта
 

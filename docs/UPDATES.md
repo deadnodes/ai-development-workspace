@@ -41,8 +41,9 @@ main or a version tag. Tags include `sha-<full-commit>` and `latest`; deployment
 should pin the published digest from the CI summary. Do not infer the running
 version from `latest` or from the checkout: inspect the actual container image.
 For this repository the package is `ghcr.io/deadnodes/ai-development-workspace`.
-It is private; registry login and package access are separate from the server's
-GitHub App connection. Never place registry credentials in project knowledge.
+This package is public; Docker pulls do not require registry credentials. Registry
+login and package access are still separate from the server's GitHub App connection
+for private product artifacts. Never place registry credentials in project knowledge.
 
 Before applying:
 

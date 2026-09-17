@@ -56,7 +56,7 @@ A successful GitOps operation records desired state and remains pending reconcil
 ## References
 
 - [Agent quickstart](docs/AGENT_QUICKSTART.md) — run, connect, configure, deploy, resume.
-- [GitHub build and GitOps contract](docs/GITHUB_DEV.md) — workflow, private GHCR and evidence details.
+- [GitHub build and GitOps contract](docs/GITHUB_DEV.md) — workflow, GHCR and evidence details.
 - [Application commands](docs/CONTRACT.md) — shared HTTP/MCP/domain contract.
 - [Architecture](docs/ARCHITECTURE.md) and [roadmap](docs/ROADMAP.md).
 - [Validation](docs/VALIDATION.md) — tested behavior and live acceptance limits.
@@ -92,8 +92,8 @@ Frontend verification uses test-only jsdom. Run `npm ci` once before `make check
 GitHub Actions runs checks first, then publishes `ghcr.io/deadnodes/ai-development-workspace`
 for `linux/amd64` and `linux/arm64`. Main publishes `latest` and `sha-<full commit>`;
 `v*` tags publish the matching version tag. Pull requests run checks without publishing.
-The repository and its initial GHCR package are private. Authenticate Docker to GHCR
-with an account allowed to read the package before pulling.
+The repository and this GHCR package are public. Docker can pull the image without
+registry credentials. Pin a version tag or immutable digest for deployments.
 
 ```sh
 docker run -d --name ai-development-workspace \
