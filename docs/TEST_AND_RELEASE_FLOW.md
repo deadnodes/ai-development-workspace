@@ -58,6 +58,7 @@ Both named MCP tools and `execute` reach the same application commands. HTTP has
 
 | Command | Envelope and data | Outcome |
 | --- | --- | --- |
+| `assemble_environment` | `product_id`, `environment_id`, optional `integration_ids` | Create a fresh composition from latest active revisions and queue its COMPOSE parent; empty integration_ids means all active captured work |
 | `reconcile_composition` | `id`: composition ID; `data: {}` | COMPOSE parent with child Git/build/GitOps work for the immutable selection |
 | `prepare_release_candidate` | `product_id`; `data`: name, PROD environment_id, components, **approve_main_update: true** | Advances configured main branches and builds selected candidate artifacts |
 | `promote_release_candidate` | `id`: candidate operation; `data: {approve: true}` | Reuses the verified candidate digests for the frozen PROD target |
