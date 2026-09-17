@@ -218,6 +218,17 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 			continue
 		}
 		selected := selectedIntegrations(*composition)
+		activeSelection := true
+		for _, iid := range selected {
+			in := integration(&st, iid)
+			if in == nil || in.Status == "released" {
+				activeSelection = false
+				break
+			}
+		}
+		if !activeSelection {
+			continue
+		}
 		stale := false
 		for _, snapshot := range composition.RevisionSnapshots {
 			for n := len(st.IntegrationRevisions) - 1; n >= 0; n-- {
