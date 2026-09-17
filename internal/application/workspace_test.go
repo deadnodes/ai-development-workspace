@@ -148,3 +148,44 @@ func TestMatchWorkspacePreservesRegisteredIdentityAndScope(t *testing.T) {
 		t.Fatal("rebound unrelated remote by directory")
 	}
 }
+
+func TestKnowledgeGraphUpsertSearchAndCorrection(t *testing.T) {
+	s, m := fixture(t)
+	ctx := context.Background()
+	node := domain.KnowledgeNode{
+		Meta:     domain.Meta{ID: "api-contract"},
+		Kind:     "contract",
+		Title:    "Learning event contract",
+		Content:  "Run lifecycle events are delivered through the integration API.",
+		Keywords: []string{"learning", "events", "api"},
+	}
+	if _, err := s.UpsertKnowledgeNode(ctx, "p", "agent/one", node); err != nil {
+		t.Fatal(err)
+	}
+	node.Content = "Run lifecycle events use the versioned integration API."
+	if _, err := s.UpsertKnowledgeNode(ctx, "p", "agent/two", node); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.SearchKnowledge(ctx, "p", "versioned api", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.(map[string]any)["nodes"].([]domain.KnowledgeNode)
+	if len(got) != 1 || got[0].Content != node.Content || got[0].Actor != "agent/two" {
+		t.Fatalf("unexpected search result: %+v", got)
+	}
+	if len(m.state.ProjectKnowledge) != 2 {
+		t.Fatalf("expected append-only snapshots, got %d", len(m.state.ProjectKnowledge))
+	}
+	if m.state.Events[len(m.state.Events)-1].Action != "upsert_knowledge_node" {
+		t.Fatalf("missing graph audit event: %+v", m.state.Events[len(m.state.Events)-1])
+	}
+	// The legacy overview editor omits graph fields; that edit must preserve nodes.
+	if _, err := s.SetProjectKnowledge(ctx, "p", "human/local", domain.ProjectKnowledge{Overview: "Updated overview"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err = s.SearchKnowledge(ctx, "p", "learning", 20)
+	if err != nil || len(result.(map[string]any)["nodes"].([]domain.KnowledgeNode)) != 1 {
+		t.Fatalf("overview edit erased graph: %v %+v", err, result)
+	}
+}

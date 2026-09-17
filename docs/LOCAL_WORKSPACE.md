@@ -43,6 +43,38 @@ AGENTS content is displayed as escaped text. Scanning does not execute it. Impor
 
 Use actual Product repository IDs in areas; parent and relationship references use area IDs. Relationship types are finite: DEPENDS_ON, CONSUMES, PROVIDES_TO and SHARES_DATA_WITH.
 
+### Product knowledge graph
+
+The overview document is complemented by a small append-only knowledge graph. A
+node is one durable product fact that an agent may need in a later session: a
+decision, contract, architecture constraint, discovery or runbook fact. Nodes
+have a stable `id`, `kind`, `title`, `content`, optional `keywords`, area and
+repository references, and `active`/`archived` status. Edges connect node IDs
+with a short relationship type and description. This is deterministic keyword
+search, not a vector database or an execution engine.
+
+Use a stable node ID when correcting a fact. The Control Plane replaces the
+current node, keeps the previous project-knowledge snapshot in the audit
+history, and records who changed it. Archive a node instead of deleting it if
+the fact is no longer current. Never store tokens, passwords or permission
+instructions in graph content.
+
+```json
+{
+  "id": "learning-events-contract",
+  "kind": "contract",
+  "title": "Learning event delivery",
+  "content": "Run lifecycle events are delivered through the Learning integration API.",
+  "keywords": ["learning", "events", "run", "integration"],
+  "status": "active"
+}
+```
+
+Agents search with `search_product_knowledge {product_id, query, limit}` and
+create or correct one fact with
+`upsert_product_knowledge {product_id, node, actor}`. Empty search returns the
+newest active nodes. The same operations are available as HTTP for local tools.
+
 ## Portable configuration
 
 Export creates a portable JSON configuration for review/download. Import creates a new Product preserving configured IDs and rejects conflicts; it is not an upsert. It does not clone source or prove local checkout availability. Scan the destination instance’s configured root to establish actual local observations.
@@ -54,6 +86,8 @@ Configuration export/import is distinct from full backup/restore. Use [backup to
 | `GET /api/products/{id}/context` | `get_project_context` |
 | `POST /api/workspaces/scan` with product_id, actor | `scan_workspace` |
 | `POST /api/products/{id}/knowledge` with actor, knowledge | `set_project_knowledge` |
+| `GET /api/products/{id}/knowledge/search?q=events&limit=20` | `search_product_knowledge` |
+| `POST /api/products/{id}/knowledge/nodes` with actor, node | `upsert_product_knowledge` |
 | `GET /api/products/{id}/workspace-config` | `export_workspace_configuration` |
 | `POST /api/workspaces/import` with actor, configuration | `import_workspace_configuration` |
 

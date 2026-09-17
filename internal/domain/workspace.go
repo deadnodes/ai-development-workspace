@@ -7,6 +7,8 @@ type ProjectKnowledge struct {
 	Instructions  string             `json:"instructions"`
 	Areas         []ProductArea      `json:"areas"`
 	Relationships []AreaRelationship `json:"relationships"`
+	Nodes         []KnowledgeNode    `json:"nodes"`
+	Edges         []KnowledgeEdge    `json:"edges"`
 	Parameters    map[string]string  `json:"parameters"`
 }
 type ProductArea struct {
@@ -21,6 +23,29 @@ type AreaRelationship struct {
 	To       string `json:"to"`
 	Type     string `json:"type"`
 	Contract string `json:"contract"`
+}
+
+// KnowledgeNode is a durable, searchable product fact. It is intentionally
+// smaller than a generic document or service catalog entry: agents should use
+// it for decisions, contracts, architecture constraints and runbook facts
+// that need to survive across feature conversations.
+type KnowledgeNode struct {
+	Meta
+	Kind           string   `json:"kind"`
+	Title          string   `json:"title"`
+	Content        string   `json:"content"`
+	Keywords       []string `json:"keywords"`
+	AreaID         string   `json:"area_id,omitempty"`
+	RepositoryIDs  []string `json:"repository_ids"`
+	RelatedNodeIDs []string `json:"related_node_ids"`
+	Status         string   `json:"status"`
+}
+
+type KnowledgeEdge struct {
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
 }
 type RepositoryDocument struct {
 	Path      string `json:"path"`

@@ -34,11 +34,18 @@ func TestEmbeddedWorkspaceMCPEntryAndConfigImport(t *testing.T) {
 		t.Helper()
 		r, e := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 		if e != nil || r.IsError {
-			t.Fatalf("%s: %v %+v", name, e, r)
+			raw, _ := json.Marshal(r.Content)
+			t.Fatalf("%s: %v %+v content=%s", name, e, r, raw)
 		}
 		return r
 	}
 	call("set_project_knowledge", map[string]any{"product_id": "p", "actor": "agent", "knowledge": map[string]any{"overview": "Shared architecture", "instructions": "Check contracts", "areas": []any{}, "relationships": []any{}}})
+	call("upsert_product_knowledge", map[string]any{"product_id": "p", "actor": "agent/knowledge", "node": map[string]any{"id": "contract", "kind": "contract", "title": "API contract", "content": "Keep versioned callbacks", "keywords": []string{"api", "callback"}}})
+	search := call("search_product_knowledge", map[string]any{"product_id": "p", "query": "callbacks"})
+	searchJSON, _ := json.Marshal(search)
+	if !json.Valid(searchJSON) || len(searchJSON) == 0 {
+		t.Fatal("missing knowledge search result")
+	}
 	r := call("get_project_context", map[string]any{"product_id": "p"})
 	b, _ := json.Marshal(r)
 	if len(b) == 0 {
@@ -61,7 +68,7 @@ func TestEmbeddedWorkspaceMCPEntryAndConfigImport(t *testing.T) {
 	}
 	defer reopened.Close()
 	st, e := reopened.Read(ctx)
-	if e != nil || len(st.ProjectKnowledge) != 2 || len(st.Products) != 2 || len(st.Features) != 0 {
+	if e != nil || len(st.ProjectKnowledge) != 3 || len(st.Products) != 2 || len(st.Features) != 0 {
 		t.Fatalf("restart lost knowledge: %v %+v", e, st)
 	}
 }

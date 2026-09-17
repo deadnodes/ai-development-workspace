@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"io"
 	"net/http"
@@ -15,6 +16,8 @@ type workspaceService interface {
 	ScanWorkspace(context.Context, string, string) (any, error)
 	MatchWorkspace(context.Context, string, string) (any, error)
 	SetProjectKnowledge(context.Context, string, string, domain.ProjectKnowledge) (any, error)
+	UpsertKnowledgeNode(context.Context, string, string, domain.KnowledgeNode) (any, error)
+	SearchKnowledge(context.Context, string, string, int) (any, error)
 	ExportWorkspace(context.Context, string) (application.WorkspaceConfiguration, error)
 	ImportWorkspace(context.Context, string, application.WorkspaceConfiguration) (any, error)
 }
@@ -27,6 +30,45 @@ type knowledgeInput struct {
 	Actor     string                  `json:"actor,omitempty"`
 	Knowledge domain.ProjectKnowledge `json:"knowledge"`
 }
+type knowledgeNodeInput struct {
+	Actor string               `json:"actor,omitempty"`
+	Node  domain.KnowledgeNode `json:"node"`
+}
+type knowledgeNodeInputWithProduct struct {
+	ProductID string               `json:"product_id"`
+	Actor     string               `json:"actor,omitempty"`
+	Node      knowledgeNodePayload `json:"node"`
+}
+
+// knowledgeNodePayload deliberately omits server-owned provenance fields. If
+// this were domain.KnowledgeNode directly, the generated MCP schema would make
+// actor/timestamps/repository arrays mandatory for every agent write.
+type knowledgeNodePayload struct {
+	ID             string   `json:"id,omitempty"`
+	Kind           string   `json:"kind"`
+	Title          string   `json:"title"`
+	Content        string   `json:"content"`
+	Keywords       []string `json:"keywords,omitempty"`
+	AreaID         string   `json:"area_id,omitempty"`
+	RepositoryIDs  []string `json:"repository_ids,omitempty"`
+	RelatedNodeIDs []string `json:"related_node_ids,omitempty"`
+	Status         string   `json:"status,omitempty"`
+}
+
+func (n knowledgeNodePayload) domain() domain.KnowledgeNode {
+	return domain.KnowledgeNode{
+		Meta:           domain.Meta{ID: n.ID},
+		Kind:           n.Kind,
+		Title:          n.Title,
+		Content:        n.Content,
+		Keywords:       n.Keywords,
+		AreaID:         n.AreaID,
+		RepositoryIDs:  n.RepositoryIDs,
+		RelatedNodeIDs: n.RelatedNodeIDs,
+		Status:         n.Status,
+	}
+}
+
 type workspaceImport struct {
 	Actor         string                             `json:"actor,omitempty"`
 	Configuration application.WorkspaceConfiguration `json:"configuration"`
@@ -78,6 +120,25 @@ func registerWorkspaceRoutes(mux *http.ServeMux, service Service) {
 		v, e := s.SetProjectKnowledge(r.Context(), r.PathValue("id"), defaultActor(in.Actor), in.Knowledge)
 		respond(w, v, e)
 	})
+	mux.HandleFunc("GET /api/products/{id}/knowledge/search", func(w http.ResponseWriter, r *http.Request) {
+		limit := 20
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if _, err := fmt.Sscanf(raw, "%d", &limit); err != nil {
+				write(w, http.StatusBadRequest, map[string]string{"error": "limit must be an integer"})
+				return
+			}
+		}
+		v, e := s.SearchKnowledge(r.Context(), r.PathValue("id"), r.URL.Query().Get("q"), limit)
+		respond(w, v, e)
+	})
+	mux.HandleFunc("POST /api/products/{id}/knowledge/nodes", func(w http.ResponseWriter, r *http.Request) {
+		var in knowledgeNodeInput
+		if !workspaceJSON(w, r, &in) {
+			return
+		}
+		v, e := s.UpsertKnowledgeNode(r.Context(), r.PathValue("id"), defaultActor(in.Actor), in.Node)
+		respond(w, v, e)
+	})
 	mux.HandleFunc("GET /api/products/{id}/workspace-config", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.ExportWorkspace(r.Context(), r.PathValue("id"))
 		respond(w, v, e)
@@ -112,6 +173,18 @@ func registerWorkspaceTools(server *mcp.Server, service Service) {
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "set_project_knowledge", InputSchema: map[string]any{"type": "object", "required": []string{"product_id", "knowledge"}, "properties": map[string]any{"product_id": map[string]any{"type": "string"}, "actor": map[string]any{"type": "string"}, "knowledge": map[string]any{"type": "object"}}, "additionalProperties": false}, Description: "Set current product overview, agent instructions, hierarchical areas and typed relationships, separately from feature memory. Repository references must belong to Product. Parameters are nonsecret documentation; never store credentials here."}, func(ctx context.Context, _ *mcp.CallToolRequest, in knowledgeInput) (*mcp.CallToolResult, any, error) {
 		v, e := s.SetProjectKnowledge(ctx, in.ProductID, defaultActor(in.Actor), in.Knowledge)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "search_product_knowledge", Description: "Search the product knowledge graph by keywords across active node kind, title, content, area and keywords. Empty query returns the newest active nodes. Results include connected graph edges and never execute repository or deployment actions."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id"`
+		Query     string `json:"query,omitempty"`
+		Limit     int    `json:"limit,omitempty"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := s.SearchKnowledge(ctx, in.ProductID, in.Query, in.Limit)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "upsert_product_knowledge", Description: "Create or update one product knowledge graph node. Use stable node IDs when correcting knowledge; the previous project knowledge snapshot remains in audit history. Nodes are concise facts, decisions, contracts, architecture constraints or runbook context, never secrets or executable authorization."}, func(ctx context.Context, _ *mcp.CallToolRequest, in knowledgeNodeInputWithProduct) (*mcp.CallToolResult, any, error) {
+		v, e := s.UpsertKnowledgeNode(ctx, in.ProductID, defaultActor(in.Actor), in.Node.domain())
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "export_workspace_configuration", Description: "Export portable product setup and agent documentation without feature history, machine paths, provider credentials or deployment authorizations. Includes repositories/clone URLs, component parameters, environments, areas and observed repo-root AGENTS docs. Full history uses create_backup instead."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

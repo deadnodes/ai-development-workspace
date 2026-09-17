@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ func knowledgeFor(st domain.State, product string) domain.ProjectKnowledge {
 			return st.ProjectKnowledge[n]
 		}
 	}
-	return domain.ProjectKnowledge{Areas: []domain.ProductArea{}, Relationships: []domain.AreaRelationship{}, Parameters: map[string]string{}}
+	return domain.ProjectKnowledge{Areas: []domain.ProductArea{}, Relationships: []domain.AreaRelationship{}, Nodes: []domain.KnowledgeNode{}, Edges: []domain.KnowledgeEdge{}, Parameters: map[string]string{}}
 }
 func validateKnowledge(st *domain.State, product string, k domain.ProjectKnowledge) error {
 	areas := map[string]domain.ProductArea{}
@@ -63,6 +64,40 @@ func validateKnowledge(st *domain.State, product string, k domain.ProjectKnowled
 			return invalid("invalid area relationship")
 		}
 	}
+	nodes := map[string]domain.KnowledgeNode{}
+	for _, n := range k.Nodes {
+		if n.ID == "" || n.Title == "" || strings.TrimSpace(n.Content) == "" || n.Kind == "" {
+			return invalid("knowledge node id, kind, title and content required")
+		}
+		if n.Status == "" {
+			n.Status = "active"
+		}
+		if !slices.Contains([]string{"active", "archived"}, n.Status) {
+			return invalid("invalid knowledge node status")
+		}
+		if _, ok := nodes[n.ID]; ok {
+			return invalid("duplicate knowledge node")
+		}
+		nodes[n.ID] = n
+		if n.AreaID != "" {
+			if _, ok := areas[n.AreaID]; !ok {
+				return invalid("knowledge node area not found")
+			}
+		}
+		if err := repositories(st, n.RepositoryIDs, product); err != nil {
+			return err
+		}
+		for _, related := range n.RelatedNodeIDs {
+			if related == n.ID {
+				return invalid("knowledge node cannot relate to itself")
+			}
+		}
+	}
+	for _, e := range k.Edges {
+		if e.From == "" || e.To == "" || e.From == e.To || e.Type == "" || nodes[e.From].ID == "" || nodes[e.To].ID == "" {
+			return invalid("invalid knowledge edge")
+		}
+	}
 	return nil
 }
 func (s *Service) SetProjectKnowledge(ctx context.Context, product, actor string, k domain.ProjectKnowledge) (any, error) {
@@ -73,6 +108,22 @@ func (s *Service) SetProjectKnowledge(ctx context.Context, product, actor string
 		if !productExists(st, product) {
 			return missing("product", product)
 		}
+		// The original editor predates the graph fields and omits them. Preserve
+		// the current graph in that case so editing overview/instructions cannot
+		// accidentally erase agent-maintained knowledge nodes and edges.
+		current := knowledgeFor(*st, product)
+		if k.Nodes == nil {
+			k.Nodes = current.Nodes
+		}
+		if k.Edges == nil {
+			k.Edges = current.Edges
+		}
+		for i := range k.Nodes {
+			if k.Nodes[i].ProductID != "" && k.Nodes[i].ProductID != product {
+				return invalid("knowledge node belongs to another product")
+			}
+			k.Nodes[i].ProductID = product
+		}
 		if err := validateKnowledge(st, product, k); err != nil {
 			return err
 		}
@@ -82,6 +133,117 @@ func (s *Service) SetProjectKnowledge(ctx context.Context, product, actor string
 		return nil
 	})
 	return k, err
+}
+
+func normalizeKnowledgeNode(product, actor string, node domain.KnowledgeNode) domain.KnowledgeNode {
+	now := time.Now().UTC()
+	if node.ID == "" {
+		node.ID = id()
+	}
+	if node.Status == "" {
+		node.Status = "active"
+	}
+	node.ProductID = product
+	node.Actor = actor
+	if node.CreatedAt.IsZero() {
+		node.CreatedAt = now
+	}
+	node.UpdatedAt = now
+	return node
+}
+
+func (s *Service) UpsertKnowledgeNode(ctx context.Context, product, actor string, node domain.KnowledgeNode) (any, error) {
+	if strings.TrimSpace(actor) == "" {
+		return nil, invalid("actor required")
+	}
+	var result domain.KnowledgeNode
+	err := s.store.Update(ctx, func(st *domain.State) error {
+		if !productExists(st, product) {
+			return missing("product", product)
+		}
+		current := knowledgeFor(*st, product)
+		for i := range current.Nodes {
+			if current.Nodes[i].ID == node.ID {
+				node.CreatedAt = current.Nodes[i].CreatedAt
+				break
+			}
+		}
+		node = normalizeKnowledgeNode(product, actor, node)
+		found := false
+		for i := range current.Nodes {
+			if current.Nodes[i].ID == node.ID {
+				current.Nodes[i] = node
+				found = true
+				break
+			}
+		}
+		if !found {
+			current.Nodes = append(current.Nodes, node)
+		}
+		if err := validateKnowledge(st, product, current); err != nil {
+			return err
+		}
+		current.Meta = workspaceMeta(product, actor)
+		st.ProjectKnowledge = append(st.ProjectKnowledge, current)
+		workspaceAudit(st, current.Meta, "upsert_knowledge_node", map[string]any{"node": node, "replaced": found})
+		result = node
+		return nil
+	})
+	return result, err
+}
+
+func knowledgeMatch(node domain.KnowledgeNode, query string) bool {
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return node.Status != "archived"
+	}
+	text := strings.ToLower(strings.Join([]string{node.Kind, node.Title, node.Content, node.AreaID, strings.Join(node.Keywords, " ")}, " "))
+	for _, token := range strings.Fields(q) {
+		if !strings.Contains(text, token) {
+			return false
+		}
+	}
+	return node.Status != "archived"
+}
+
+func (s *Service) SearchKnowledge(ctx context.Context, product, query string, limit int) (any, error) {
+	st, err := s.State(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !productExists(&st, product) {
+		return nil, missing("product", product)
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	k := knowledgeFor(st, product)
+	nodes := make([]domain.KnowledgeNode, 0, len(k.Nodes))
+	for _, node := range k.Nodes {
+		if knowledgeMatch(node, query) {
+			nodes = append(nodes, node)
+		}
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].UpdatedAt.Equal(nodes[j].UpdatedAt) {
+			return nodes[i].ID < nodes[j].ID
+		}
+		return nodes[i].UpdatedAt.After(nodes[j].UpdatedAt)
+	})
+	if len(nodes) > limit {
+		nodes = nodes[:limit]
+	}
+	selected := map[string]bool{}
+	for _, node := range nodes {
+		selected[node.ID] = true
+	}
+	edges := make([]domain.KnowledgeEdge, 0)
+	for _, edge := range k.Edges {
+		if selected[edge.From] || selected[edge.To] {
+			edges = append(edges, edge)
+		}
+	}
+	return map[string]any{"product_id": product, "query": query, "nodes": nodes, "edges": edges, "total": len(nodes)}, nil
 }
 func (s *Service) ProjectContext(ctx context.Context, product string) (any, error) {
 	st, err := s.State(ctx)
@@ -377,6 +539,9 @@ func (s *Service) ImportWorkspace(ctx context.Context, actor string, in Workspac
 		}
 		if err := validateKnowledge(st, product, in.Knowledge); err != nil {
 			return err
+		}
+		for i := range in.Knowledge.Nodes {
+			in.Knowledge.Nodes[i].ProductID = product
 		}
 		in.Knowledge.Meta = m
 		st.ProjectKnowledge = append(st.ProjectKnowledge, in.Knowledge)
