@@ -173,7 +173,7 @@ image:
 
 При ошибке читай шаг/error и `get_attention_required`. Исправь конкретную причину. BEHIND/DIVERGED блокируют deploy; реальный SOURCE branch надо обновить отдельно. Missing artifact запускает CI только при `rebuild_missing: true`. GitOps изменяется только при `allow_deploy: true`.
 
-В UI `Operations & attention` важные deploy/build/conflict/error операции показываются отдельно. `REFRESH_GIT`, `REFRESH_REPOSITORY_GIT` и `REFRESH_RUNTIME` — фоновые read-only наблюдения: они только читают GitHub, Flux/Kubernetes или инвентарь репозитория. `PENDING` означает очередь worker’а, а не ошибку доставки. Полная append-only история сохраняется в БД, но UI показывает фоновые refresh сгруппированно — по последней операции на integration, repository или environment.
+В UI `Operations & attention` важные deploy/build/conflict/error операции показываются отдельно. `REFRESH_GIT`, `REFRESH_REPOSITORY_GIT` и `REFRESH_RUNTIME` — внутренние фоновые read-only наблюдения: они только читают GitHub, Flux/Kubernetes или инвентарь репозитория и не являются задачами пользователя. `PENDING` означает очередь worker’а, а не ошибку доставки. Полная append-only история сохраняется в БД и доступна через API/MCP, но в пользовательском Operations UI эти refresh-записи скрыты.
 
 ## 6. Работа над самим Control Plane
 

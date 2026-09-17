@@ -20,7 +20,7 @@ func (s *Service) observeRepositoryGit(ctx context.Context, op domain.ExternalOp
 	}
 	binding := repositoryBinding(&st, op.RepositoryID)
 	if binding == nil || binding.ProductID != op.ProductID || !repositoryGitInventoryRole(binding.Role) {
-		return s.finish(ctx, op, token, "BLOCKED", "attached source repository missing", nil)
+		return s.finish(ctx, op, token, "BLOCKED", "attached code repository missing", nil)
 	}
 	conn, err := scopedConnection(&st, binding.ConnectionID, op.ProductID)
 	if err != nil {

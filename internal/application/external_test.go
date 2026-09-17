@@ -274,8 +274,11 @@ func TestArtifactTagAloneCannotProveSourceButTrustedDigestIsReused(t *testing.T)
 }
 func TestSchedulerSelectsEarliestEligibleOperation(t *testing.T) {
 	s, m, _ := externalFixture(t)
-	exec(t, s, domain.Command{Action: "refresh_integration_git", ID: "late", IntegrationID: "i"})
-	exec(t, s, domain.Command{Action: "refresh_integration_git", ID: "early", IntegrationID: "i"})
+	now := time.Now().UTC()
+	m.state.Operations = append(m.state.Operations,
+		domain.ExternalOperation{Meta: domain.Meta{ID: "late", ProductID: "p", FeatureID: "f", CreatedAt: now}, Kind: "REFRESH_GIT", IntegrationID: "i", Status: "PENDING", NextAttemptAt: now},
+		domain.ExternalOperation{Meta: domain.Meta{ID: "early", ProductID: "p", FeatureID: "f", CreatedAt: now.Add(time.Second)}, Kind: "REFRESH_GIT", IntegrationID: "i", Status: "PENDING", NextAttemptAt: now},
+	)
 	m.state.Operations[0].NextAttemptAt = time.Now().Add(-time.Minute)
 	m.state.Operations[1].NextAttemptAt = time.Now().Add(-2 * time.Minute)
 	worked, e := s.Tick(context.Background())
@@ -302,6 +305,20 @@ func TestSchedulerPrioritizesDeliveryOverBackgroundRefresh(t *testing.T) {
 	deploy := operationByID(&m.state, "deploy")
 	if background.Status != "PENDING" || deploy.Status == "PENDING" {
 		t.Fatalf("background=%+v deploy=%+v", background, deploy)
+	}
+}
+
+func TestRefreshCommandsReusePendingObservation(t *testing.T) {
+	s, m, _ := externalFixture(t)
+	first := exec(t, s, domain.Command{Action: "refresh_repository_git", ID: "background-1", ProductID: "p", Data: map[string]any{"repository_id": "source"}})
+	second := exec(t, s, domain.Command{Action: "refresh_repository_git", ID: "background-2", ProductID: "p", Data: map[string]any{"repository_id": "source"}})
+	firstOp, ok := first.(domain.ExternalOperation)
+	if !ok {
+		t.Fatalf("first result=%T", first)
+	}
+	secondOp, ok := second.(domain.ExternalOperation)
+	if !ok || firstOp.ID != secondOp.ID || len(m.state.Operations) != 1 {
+		t.Fatalf("first=%+v second=%+v operations=%+v", firstOp, secondOp, m.state.Operations)
 	}
 }
 

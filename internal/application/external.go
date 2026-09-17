@@ -127,6 +127,15 @@ func secretRef(ref string) bool {
 func terminalOperation(status string) bool {
 	return slices.Contains([]string{"GITOPS_APPLIED", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"}, status)
 }
+func pendingRefresh(st *domain.State, kind, productID, integrationID, repositoryID, environmentID, applicationID string) *domain.ExternalOperation {
+	for i := range st.Operations {
+		op := &st.Operations[i]
+		if op.Kind == kind && op.ProductID == productID && op.IntegrationID == integrationID && op.RepositoryID == repositoryID && op.EnvironmentID == environmentID && op.ApplicationID == applicationID && !terminalOperation(op.Status) {
+			return op
+		}
+	}
+	return nil
+}
 func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
 	switch c.Action {
 	case "refresh_environment_runtime":
@@ -146,6 +155,9 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 			if a == nil || a.ProductID != c.ProductID {
 				return nil, m, invalid("component must belong to product")
 			}
+		}
+		if existing := pendingRefresh(st, "REFRESH_RUNTIME", c.ProductID, "", "", input.EnvironmentID, input.ApplicationID); existing != nil {
+			return *existing, existing.Meta, nil
 		}
 		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_RUNTIME", EnvironmentID: input.EnvironmentID, ApplicationID: input.ApplicationID, Status: "PENDING", RequestedBy: c.Actor, Phase: "OBSERVE_RUNTIME", CurrentStep: "OBSERVE_RUNTIME", NextAttemptAt: m.CreatedAt}
 		st.Operations = append(st.Operations, v)
@@ -344,6 +356,12 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if in == nil {
 			return nil, m, missing("integration", c.IntegrationID)
 		}
+		if in.ProductID != c.ProductID {
+			return nil, m, invalid("integration must belong to product")
+		}
+		if existing := pendingRefresh(st, "REFRESH_GIT", c.ProductID, in.ID, "", "", ""); existing != nil {
+			return *existing, existing.Meta, nil
+		}
 		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_GIT", IntegrationID: in.ID, Status: "PENDING", RequestedBy: c.Actor, Phase: "OBSERVE", NextAttemptAt: m.CreatedAt}
 		st.Operations = append(st.Operations, v)
 		return v, m, nil
@@ -359,10 +377,13 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		}
 		binding := repositoryBinding(st, input.RepositoryID)
 		if binding == nil || binding.ProductID != c.ProductID || !repositoryGitInventoryRole(binding.Role) {
-			return nil, m, invalid("attached SOURCE repository required")
+			return nil, m, invalid("attached code repository required")
 		}
 		if _, e := scopedConnection(st, binding.ConnectionID, c.ProductID); e != nil {
 			return nil, m, e
+		}
+		if existing := pendingRefresh(st, "REFRESH_REPOSITORY_GIT", c.ProductID, "", input.RepositoryID, "", ""); existing != nil {
+			return *existing, existing.Meta, nil
 		}
 		v := domain.ExternalOperation{Meta: m, Kind: "REFRESH_REPOSITORY_GIT", RepositoryID: input.RepositoryID, Status: "PENDING", RequestedBy: c.Actor, Phase: "SCAN", NextAttemptAt: m.CreatedAt}
 		st.Operations = append(st.Operations, v)

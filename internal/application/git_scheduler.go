@@ -54,6 +54,15 @@ func (s *Service) ScheduleGitRefresh(ctx context.Context, now time.Time, interva
 	}
 	return s.store.Update(ctx, func(st *domain.State) error {
 		queued := 0
+		active := 0
+		for _, op := range st.Operations {
+			if op.Kind == "REFRESH_GIT" && !terminalOperation(op.Status) {
+				active++
+			}
+		}
+		if active >= 5 {
+			return nil
+		}
 		for _, in := range st.Integrations {
 			if !autoGitEligible(st, in) {
 				continue
@@ -95,7 +104,8 @@ func (s *Service) ScheduleGitRefresh(ctx context.Context, now time.Time, interva
 			st.Operations = append(st.Operations, domain.ExternalOperation{Meta: m, Kind: "REFRESH_GIT", IntegrationID: in.ID, Status: "PENDING", RequestedBy: autoGitActor, Phase: "OBSERVE", NextAttemptAt: now})
 			st.Events = append(st.Events, domain.Event{ID: id(), Action: "refresh_integration_git", Actor: autoGitActor, At: now, EntityID: m.ID, ProductID: in.ProductID, FeatureID: in.FeatureID, Data: domain.Command{Action: "refresh_integration_git", Actor: autoGitActor, IntegrationID: in.ID}})
 			queued++
-			if queued >= 5 {
+			active++
+			if queued >= 5 || active >= 5 {
 				break
 			}
 		}
@@ -113,6 +123,15 @@ func (s *Service) ScheduleRepositoryGitRefresh(ctx context.Context, now time.Tim
 	}
 	return s.store.Update(ctx, func(st *domain.State) error {
 		queued := 0
+		active := 0
+		for _, op := range st.Operations {
+			if op.Kind == "REFRESH_REPOSITORY_GIT" && !terminalOperation(op.Status) {
+				active++
+			}
+		}
+		if active >= 3 {
+			return nil
+		}
 		seen := map[string]bool{}
 		for _, binding := range st.RepositoryBindings {
 			if !repositoryGitInventoryRole(binding.Role) || binding.ProductID == "" || seen[binding.ProductID+"/"+binding.RepositoryID] {
@@ -159,7 +178,8 @@ func (s *Service) ScheduleRepositoryGitRefresh(ctx context.Context, now time.Tim
 			st.Operations = append(st.Operations, domain.ExternalOperation{Meta: m, Kind: "REFRESH_REPOSITORY_GIT", RepositoryID: binding.RepositoryID, Status: "PENDING", RequestedBy: autoGitActor, Phase: "SCAN", NextAttemptAt: now})
 			st.Events = append(st.Events, domain.Event{ID: id(), Action: "refresh_repository_git", Actor: autoGitActor, At: now, EntityID: m.ID, ProductID: binding.ProductID, Data: domain.Command{Action: "refresh_repository_git", Actor: autoGitActor, ProductID: binding.ProductID, Data: map[string]any{"repository_id": binding.RepositoryID}}})
 			queued++
-			if queued >= 3 {
+			active++
+			if queued >= 3 || active >= 3 {
 				break
 			}
 		}
