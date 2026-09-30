@@ -25,11 +25,38 @@ const featureID = () => decodeURIComponent(location.hash.slice(1));
 const selectedFeature = () => list(state.features).find(f=>f.id===featureID());
 const inFeature = name => list(state[name]).filter(x=>x.feature_id===featureID());
 const productItems = name => list(state[name]).filter(x=>x.product_id===productID);
+let authMode='local',authPrincipal=null,authCSRF='',authExpired=false;
+function browserToken(){return authMode==='oidc'?null:sessionStorage.getItem('rc-token');}
+function requireSignIn(){
+ authExpired=true;authPrincipal=null;authCSRF='';state={};
+ if(typeof invalidateLive==='function')invalidateLive();
+ $('#identity').textContent='Sign in';
+ $('#notice').textContent='Your session has expired. Sign in to continue.';$('#notice').className='error';
+ const link=document.createElement('a');link.href='/auth/login';link.textContent=' Sign in';$('#notice').append(link);
+ $('#main').innerHTML='<div class="empty"><h2>Sign in to Release Control</h2><p>Your workspace is protected by your organization’s sign-in.</p><a href="/auth/login">Sign in</a></div>';
+ $('#feature-nav').replaceChildren();$('#product').replaceChildren();
+ if($('#dialog').open)closeDialog();
+}
+async function loadIdentity(){
+ try{
+  const response=await fetch('/auth/me',{credentials:'same-origin',cache:'no-store'});
+  if(response.status===404)return; // Explicit local/legacy mode.
+  const identity=await response.json();
+  if(identity.auth_mode==='oidc'){
+   authMode='oidc';sessionStorage.removeItem('rc-token');
+   if(response.status===401){requireSignIn();return;}
+   if(!response.ok)throw new Error('Unable to load your session.');
+   authPrincipal=identity.principal;authCSRF=identity.csrf_token||'';authExpired=false;
+   $('#identity').textContent=authPrincipal?.id||'Account';
+  }
+ }catch(error){notice('Unable to check your session. Retry with Refresh.',true);}
+}
 async function request(path, body) {
  const finish=body&&typeof beginLiveMutation==='function'?beginLiveMutation():()=>{};
  try {
-  const token = sessionStorage.getItem('rc-token');
-  const response = await fetch(path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json'}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  const token = browserToken();
+  const response = await fetch(path,{credentials:'same-origin',method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',...(authCSRF?{'X-CSRF-Token':authCSRF}:{})}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  if(response.status===401&&authMode==='oidc'){requireSignIn();throw new Error('Sign in to continue.');}
   const data = await response.json();
   if(!response.ok) throw new Error(data.error?.message || data.error || data.message || `Request failed (${response.status})`);
   return data;
@@ -40,6 +67,7 @@ let statusMetadata={catalog:{},transitions:{}};
 let refreshInFlight=0;
 let refreshAllInFlight=false;
 async function refresh(){
+ if(authExpired){await loadIdentity();if(authExpired)return;}
  if(typeof invalidateLive==='function')invalidateLive();
  const ticket=typeof liveEpoch==='number'?liveEpoch:null;refreshInFlight++;
  try{
@@ -48,7 +76,7 @@ async function refresh(){
   state=next;statusMetadata=metadata;
   if(!list(state.products).some(p=>p.id===productID))productID=state.products?.[0]?.id||'';
   const f=selectedFeature();if(f)productID=f.product_id;render(typeof patchLiveHTML==='function');
- }catch(e){notice(e.message,true);if(!list(state.products).length){$('#main').innerHTML='<div class="empty"><h2>Workspace unavailable</h2><p>Check the server connection or configure your access token using Settings.</p><button id="retry">Try again</button></div>';$('#retry').onclick=refresh;}}
+ }catch(e){if(authExpired)return;notice(e.message,true);if(!list(state.products).length){$('#main').innerHTML='<div class="empty"><h2>Workspace unavailable</h2><p>Check the server connection and your access settings.</p><button id="retry">Try again</button></div>';$('#retry').onclick=refresh;}}
  finally{refreshInFlight--;}
 }
 async function refreshEverything(){
@@ -196,11 +224,23 @@ $('#command-form').onsubmit=async e=>{e.preventDefault();if(!currentForm)return;
 $('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['configuration','delivery','operations'].includes(featureID())?location.hash:'');render();};
 $('#refresh').onclick=refreshEverything;
 $('.skip').onclick=e=>{e.preventDefault();$('#main').focus();};
-$('#identity').onclick=()=>{currentForm=null;$('#dialog-title').textContent='Settings';$('#form-help').textContent='Settings apply only to this browser tab. This is not a sign-in form.';$('#fields').innerHTML='<p class="hint">Web actions are recorded as human/local. API and MCP actions default to agent. These labels are attribution, not authentication.</p>'+inputField(field('token','Control Plane access token (optional)','password'),sessionStorage.getItem('rc-token')||'')+'<p id="token-help" class="hint">Enter the token configured by the Control Plane operator only if this server requires one. This is not a GitHub token. Leave blank for a local server without access protection.</p><button type="button" class="primary" id="save-identity">Save settings</button>';$('#save').hidden=true;$('#form-error').textContent='';$('#dialog').showModal();$('#input-token').setAttribute('aria-describedby','token-help');$('#save-identity').onclick=()=>{sessionStorage.setItem('rc-token',$('#input-token').value);closeDialog();refresh();};};
+async function showAccount(){
+ if(authExpired||!authPrincipal){location.assign('/auth/login');return;}
+ currentForm=null;$('#dialog-title').textContent='Your account';$('#form-help').textContent='Your identity and permissions are verified by the server.';
+ $('#fields').innerHTML=`<dl>${detail('Identity',authPrincipal.id)}${detail('Role',authPrincipal.role)}${detail('Products',authPrincipal.products)}${detail('Permissions',authPrincipal.permissions)}</dl><h3>Independent agents</h3><div id="account-agents">Loading agents…</div><button type="button" id="sign-out">Sign out</button>`;
+ $('#save').hidden=true;$('#form-error').textContent='';$('#dialog').showModal();
+ $('#sign-out').onclick=async()=>{try{await request('/auth/logout',{});closeDialog();requireSignIn();}catch(error){if(!authExpired)$('#form-error').textContent=error.message;}};
+ try{
+  const result=await request('/auth/agents');if(!$('#account-agents'))return;
+  $('#account-agents').innerHTML=list(result.agents).map(agent=>`<div class="row"><strong>${esc(agent.name||agent.id)}</strong><p class="meta">${esc(list(agent.permissions).join(', '))} · ${esc(list(agent.products).join(', '))}</p>${agent.revoked_at?'<span class="muted">Revoked</span>':`<button type="button" data-revoke-agent="${esc(agent.id)}">Revoke access</button>`}</div>`).join('')||'<p class="muted">No agents enrolled. Use release-control login to connect one.</p>';
+  for(const button of document.querySelectorAll('[data-revoke-agent]'))button.onclick=async()=>{button.disabled=true;try{await request('/auth/agents/revoke',{id:button.dataset.revokeAgent});await showAccount();}catch(error){if(!authExpired)$('#form-error').textContent=error.message;button.disabled=false;}};
+ }catch(error){if(!authExpired&&$('#account-agents'))$('#account-agents').textContent=error.message;}
+}
+$('#identity').onclick=()=>{if(authMode==='oidc'){showAccount();return;}currentForm=null;$('#dialog-title').textContent='Settings';$('#form-help').textContent='Settings apply only to this browser tab. This is not a sign-in form.';$('#fields').innerHTML='<p class="hint">Web actions are recorded as human/local. API and MCP actions default to agent. These labels are attribution, not authentication.</p>'+inputField(field('token','Control Plane access token (optional)','password'),sessionStorage.getItem('rc-token')||'')+'<p id="token-help" class="hint">Enter the token configured by the Control Plane operator only if this server requires one. This is not a GitHub token. Leave blank for a local server without access protection.</p><button type="button" class="primary" id="save-identity">Save settings</button>';$('#save').hidden=true;$('#form-error').textContent='';$('#dialog').showModal();$('#input-token').setAttribute('aria-describedby','token-help');$('#save-identity').onclick=()=>{sessionStorage.setItem('rc-token',$('#input-token').value);closeDialog();refresh();};};
 document.addEventListener('click',async e=>{const tab=e.target.closest('[data-config-tab]');if(tab){configurationTab=tab.dataset.configTab||'topology';render();return;}const b=e.target.closest('[data-action]');if(b){openForm(b.dataset.action,b.dataset);return;}if(e.target.closest('[data-resume]')){try{const context=await request(`/api/features/${encodeURIComponent(featureID())}/context`);currentForm=null;$('#dialog-title').textContent='Agent resume context';$('#form-help').textContent='This deterministic context is also available to coding agents through MCP resume.';$('#fields').innerHTML=`<pre>${esc(JSON.stringify(context,null,2))}</pre>`;$('#form-error').textContent='';$('#save').hidden=true;$('#dialog').showModal();}catch(error){notice(error.message,true);}}});
 window.addEventListener('hashchange',restoreProductRoute);
 window.addEventListener('popstate',restoreProductRoute);
-refresh();
+loadIdentity().then(()=>{if(!authExpired)refresh();});
 
 function applicationView(xs) {
  return xs.map(a=>`<article data-live-key="component-${esc(a.id)}" class="row"><h3>${esc(a.name)}</h3><dl>${detail('Kind',a.kind||'APPLICATION')}${detail('Repository',repositoryName(a.repository_id))}${detail('Path',a.path||'/')}</dl>${typeof externalApplicationActions==='function'?externalApplicationActions(a):''}<span class="meta">${esc(a.id)}</span></article>`).join('')||'<p class="muted">No components yet. Define applications for environments or libraries for package publication.</p>';

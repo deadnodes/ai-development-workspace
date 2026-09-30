@@ -41,7 +41,10 @@ func (s *Service) State(ctx context.Context) (domain.State, error) {
 	if err == nil {
 		derive(&st)
 	}
-	return st, err
+	if err != nil {
+		return st, err
+	}
+	return scopedState(ctx, st)
 }
 func id() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
 func invalid(f string, args ...any) error {
@@ -61,8 +64,16 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	c.Actor = attributedActor(ctx, c.Actor)
 	var result any
-	err := s.store.Update(ctx, func(st *domain.State) error { var err error; result, err = apply(st, c); return err })
+	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := authorizeCommand(ctx, *st, c); err != nil {
+			return err
+		}
+		var err error
+		result, err = apply(st, c)
+		return err
+	})
 	return result, err
 }
 func meta(c domain.Command) domain.Meta {

@@ -28,6 +28,14 @@ func priority(body string) string {
 	return ""
 }
 func (s *Service) SyncReview(ctx context.Context, actor, integrationID, repositoryID string, number int, commentKeys []string, preview bool) (any, error) {
+	permission := "write"
+	if preview {
+		permission = "read"
+	}
+	if err := s.authorizeReferences(ctx, permission, integrationID, repositoryID); err != nil {
+		return nil, err
+	}
+	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" || number <= 0 {
 		return nil, invalid("actor and positive pull_request required")
 	}
@@ -35,7 +43,7 @@ func (s *Service) SyncReview(ctx context.Context, actor, integrationID, reposito
 	if !ok {
 		return nil, invalid("review provider not configured")
 	}
-	st, err := s.State(ctx)
+	st, err := s.store.Read(ctx)
 	if err != nil {
 		return nil, err
 	}
