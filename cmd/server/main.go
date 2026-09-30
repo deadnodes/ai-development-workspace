@@ -15,6 +15,7 @@ import (
 
 	"releasecontrol/internal/agentconnect"
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
@@ -30,6 +31,14 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "login":
+			return agentconnect.RunLogin(context.Background(), os.Args[2:], os.Stdout)
+		case "mcp":
+			return agentconnect.RunMCP(context.Background(), os.Args[2:], os.Stdin, os.Stdout)
+		}
+	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {
 		return agentconnect.Run(context.Background(), os.Args[2:], os.Stdout)
 	}
@@ -37,11 +46,19 @@ func run() error {
 	defer stop()
 	boot, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	authConfig, err := auth.ConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	authManager, err := auth.New(boot, authConfig)
+	if err != nil {
+		return err
+	}
+	defer authManager.Close()
 	var store interface {
 		application.Store
 		Close()
 	}
-	var err error
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
 		store, err = persistence.Open(boot, dbURL)
 	} else {
@@ -122,15 +139,22 @@ func run() error {
 		}
 	}()
 	defer func() { stop(); <-gitDone }()
+	workerEnabled := os.Getenv("RCP_WORKER_ENABLED")
+	if workerEnabled != "" && workerEnabled != "true" && workerEnabled != "false" {
+		return fmt.Errorf("RCP_WORKER_ENABLED must be true or false")
+	}
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
+		if workerEnabled == "false" {
+			return
+		}
 		if err := service.RunWorker(ctx, 2*time.Second); err != nil && ctx.Err() == nil {
 			slog.Error("operation worker stopped", "error", err)
 		}
 	}()
 	defer func() { stop(); <-workerDone }()
-	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{Auth: authManager, Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan error, 1)
 	go func() { slog.Info("release-control listening", "address", addr); done <- server.ListenAndServe() }()
 	select {

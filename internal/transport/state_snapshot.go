@@ -25,7 +25,7 @@ func stateSnapshot(service Service) http.HandlerFunc {
 		hash := sha256.Sum256(body)
 		tag := `"` + hex.EncodeToString(hash[:]) + `"`
 		w.Header().Set("ETag", tag)
-		w.Header().Set("Vary", "Authorization")
+		w.Header().Set("Vary", "Cookie, Authorization")
 		for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
 			candidate = strings.TrimSpace(candidate)
 			if candidate == "*" || strings.TrimPrefix(candidate, "W/") == tag {

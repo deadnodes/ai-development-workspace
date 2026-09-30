@@ -31,6 +31,11 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: release-control-config
+            - secretRef:
+                name: release-control-config
           env:
             - name: LISTEN_ADDR
               value: ':8080'
@@ -46,6 +51,7 @@ spec:
                 secretKeyRef:
                   name: release-control-config
                   key: RC_TOKEN
+                  optional: true
             - name: ALLOWED_HOSTS
               valueFrom:
                 configMapKeyRef:
