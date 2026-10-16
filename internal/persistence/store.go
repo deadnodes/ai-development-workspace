@@ -184,9 +184,11 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 	if e != nil {
 		return e
 	}
+	beforeIndex := indexDocuments(before)
+	afterIndex := indexDocuments(after)
 	for kind, records := range before {
 		for _, raw := range records {
-			if productRecordRemoved(before, after, kind, raw) {
+			if afterIndex.productRecordRemoved(beforeIndex, kind, raw) {
 				var meta struct {
 					ID string `json:"id"`
 				}
@@ -209,13 +211,7 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 			if e = json.Unmarshal(r, &obj); e != nil {
 				return e
 			}
-			unchanged := false
-			for _, old := range before[kind] {
-				if string(old) == string(r) {
-					unchanged = true
-					break
-				}
-			}
+			_, unchanged := beforeIndex.documents[kind][string(r)]
 			if unchanged {
 				continue
 			}
@@ -246,7 +242,61 @@ func documents(st domain.State) (map[string][]json.RawMessage, error) {
 	return m, e
 }
 
+// documentIndex is built once per snapshot. Exact document bytes preserve the
+// existing unchanged-record semantics; IDs and owner references preserve the
+// product-deletion guard without rescanning the complete state for every row.
+type documentIndex struct {
+	documents map[string]map[string]struct{}
+	ids       map[string]map[string]struct{}
+	owners    map[string]struct{}
+}
+
+func indexDocuments(groups map[string][]json.RawMessage) documentIndex {
+	index := documentIndex{
+		documents: make(map[string]map[string]struct{}, len(groups)),
+		ids:       make(map[string]map[string]struct{}, len(groups)),
+		owners:    make(map[string]struct{}),
+	}
+	for kind, rows := range groups {
+		index.documents[kind] = make(map[string]struct{}, len(rows))
+		index.ids[kind] = make(map[string]struct{}, len(rows))
+		for _, raw := range rows {
+			index.documents[kind][string(raw)] = struct{}{}
+			var meta struct {
+				ID        string `json:"id"`
+				ProductID string `json:"product_id"`
+			}
+			_ = json.Unmarshal(raw, &meta)
+			index.ids[kind][meta.ID] = struct{}{}
+			index.owners[meta.ProductID] = struct{}{}
+		}
+	}
+	return index
+}
+
 // Only a deleted product permits deletion of its owned records.
+func (after documentIndex) productRecordRemoved(before documentIndex, kind string, raw json.RawMessage) bool {
+	var meta struct {
+		ID        string `json:"id"`
+		ProductID string `json:"product_id"`
+	}
+	if json.Unmarshal(raw, &meta) != nil {
+		return false
+	}
+	owner := meta.ProductID
+	if kind == "products" {
+		owner = meta.ID
+	}
+	if owner == "" {
+		return false
+	}
+	_, referenced := after.owners[owner]
+	_, existed := before.ids["products"][owner]
+	_, remains := after.ids["products"][owner]
+	_, recordRemains := after.ids[kind][meta.ID]
+	return !referenced && existed && !remains && !recordRemains
+}
+
 func productRecordRemoved(before, after map[string][]json.RawMessage, kind string, raw json.RawMessage) bool {
 	var m struct {
 		ID        string `json:"id"`
