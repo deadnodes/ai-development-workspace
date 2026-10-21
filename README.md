@@ -51,12 +51,19 @@ For local development, use `make run` (Go 1.25+), optionally setting `RCP_DATA_P
 
 Implemented: shared Repository Registry, Product/Feature/Integration scopes, unmanaged external dependencies, GitHub App authentication, Git observation, asynchronous Actions/GHCR operations and explicit DEV GitOps changes. The server does not use the local `gh` token. GitHub credentials and workflow/mapping configuration are required.
 
+An opt-in external `cmd/worker` now executes trusted offline source checks and
+local OCI builds with dedicated credentials, immutable recipes and per-attempt
+container supervision. It does not publish registry images or replace existing
+GitHub delivery. See [trusted local worker](docs/LOCAL_WORKER.md) for the exact
+security profile, inactive configuration examples and real runtime tests.
+
 A successful GitOps operation records desired state and remains pending reconciliation. Read-only Kubernetes API observation (kubeconfig or in-cluster ServiceAccount), configured Flux observation, managed integration branches and release workflows have separate policies and evidence. GitOps success alone is not runtime health; local tests are not evidence of a successful live deployment. See the delivery and runtime guides for configuration and limits.
 
 ## References
 
 - [Agent quickstart](docs/AGENT_QUICKSTART.md) — run, connect, configure, deploy, resume.
 - [GitHub build and GitOps contract](docs/GITHUB_DEV.md) — workflow, GHCR and evidence details.
+- [External worker protocol](docs/WORKER_EXECUTION.md) and [local execution](docs/LOCAL_WORKER.md).
 - [Application commands](docs/CONTRACT.md) — shared HTTP/MCP/domain contract.
 - [Architecture](docs/ARCHITECTURE.md) and [roadmap](docs/ROADMAP.md).
 - [Validation](docs/VALIDATION.md) — tested behavior and live acceptance limits.
@@ -77,7 +84,7 @@ Project configuration and history are persisted in PostgreSQL. UI/API/MCP are th
 
 ## Backup and migration
 
-Export/import the complete instance history as gzip through API/MCP or `scripts/backup.mjs`. Restore is atomic and requires an empty destination; active operations are cancelled with original evidence retained. See [agent backup and migration guide](docs/BACKUP.md).
+Export/import the complete instance history as gzip through API/MCP or `scripts/backup.mjs`. Restore is atomic and requires an empty destination; ordinary active operations are cancelled, while external worker jobs require explicit reconciliation. Original evidence is retained and no external work is replayed. See [agent backup and migration guide](docs/BACKUP.md).
 
 Codex P1/P2 review comments can become persistent findings through MCP `sync_pull_request_review`. Shared PRs use preview and explicit comment selection. See [PR review workflow](docs/PR_REVIEWS.md).
 

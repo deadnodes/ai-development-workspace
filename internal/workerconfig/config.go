@@ -12,7 +12,9 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
+	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
 	"time"
@@ -25,15 +27,16 @@ type Parameter struct {
 	Max  int      `json:"max,omitempty"`
 }
 type Recipe struct {
-	ID            string               `json:"id"`
-	Revision      string               `json:"revision"`
-	Hash          string               `json:"hash"`
-	ProductID     string               `json:"product_id"`
-	RepositoryID  string               `json:"repository_id"`
-	RepositoryURL string               `json:"repository_url"`
-	Capability    string               `json:"capability"`
-	Trust         string               `json:"trust"`
-	Parameters    map[string]Parameter `json:"parameters"`
+	ID            string                  `json:"id"`
+	Revision      string                  `json:"revision"`
+	Hash          string                  `json:"hash"`
+	ProductID     string                  `json:"product_id"`
+	RepositoryID  string                  `json:"repository_id"`
+	RepositoryURL string                  `json:"repository_url"`
+	Capability    string                  `json:"capability"`
+	Trust         string                  `json:"trust"`
+	Parameters    map[string]Parameter    `json:"parameters"`
+	Execution     *domain.WorkerExecution `json:"execution"`
 }
 type Credential struct {
 	ID            string    `json:"id"`
@@ -110,10 +113,13 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	seen = map[string]bool{}
 	for _, r := range c.Recipes {
 		u, e := url.Parse(r.RepositoryURL)
-		if !ident.MatchString(r.ID) || !ident.MatchString(r.Revision) || !ident.MatchString(r.ProductID) || !ident.MatchString(r.RepositoryID) || r.Capability != "source_check" || seen[r.ID] || e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || r.Trust != "trusted_source" && r.Trust != "untrusted_source" || !digest.MatchString(r.Hash) || r.Hash != RecipeHash(r) || len(r.Parameters) > 32 {
+		if !ident.MatchString(r.ID) || !ident.MatchString(r.Revision) || !ident.MatchString(r.ProductID) || !ident.MatchString(r.RepositoryID) || r.Capability != "source_check" && r.Capability != "local_oci_build" || seen[r.ID] || e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || r.Trust != "trusted_source" && r.Trust != "untrusted_source" || !digest.MatchString(r.Hash) || r.Hash != RecipeHash(r) || len(r.Parameters) > 32 {
 			return nil, errors.New("invalid immutable nonpublishing worker recipe")
 		}
 		seen[r.ID] = true
+		if err := ValidateExecution(r); err != nil {
+			return nil, err
+		}
 		for name, p := range r.Parameters {
 			if !ident.MatchString(name) || p.Type != "boolean" && p.Type != "integer" && p.Type != "enum" || p.Type == "integer" && p.Min > p.Max || p.Type == "enum" && (len(p.Enum) == 0 || len(p.Enum) > 32) {
 				return nil, errors.New("invalid recipe parameter")
@@ -129,6 +135,44 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	var copy Config
 	_ = json.Unmarshal(b, &copy)
 	return &Authority{config: copy, lookup: lookup, controlFingerprint: sha256.Sum256([]byte(controlToken))}, nil
+}
+
+func ValidateExecution(r Recipe) error {
+	e := r.Execution
+	// Context-only source-check recipes remain claimable by external protocol
+	// clients; cmd/worker requires an explicit execution definition.
+	if e == nil {
+		if r.Capability == "source_check" {
+			return nil
+		}
+		return errors.New("execution definition required")
+	}
+	pinned := regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}$`)
+	if r.Trust != "trusted_source" || e.Kind != r.Capability || !pinned.MatchString(e.ToolchainImage) || e.Network != "none" || e.Platform != "linux/amd64" && e.Platform != "linux/arm64" || e.TimeoutSeconds < 1 || e.TimeoutSeconds > 1800 || e.MemoryMB < 64 || e.MemoryMB > 16384 || e.StorageMB < 16 || e.StorageMB > 4096 || e.CPUs < 1 || e.CPUs > 16 || e.PIDs < 16 || e.PIDs > 1024 || e.SourceBytes < 1 || e.SourceBytes > 256<<20 || e.OutputBytes < 1 || e.OutputBytes > 512<<20 || e.LogBytes < 1 || e.LogBytes > 1<<20 || !validArgv(e.CheckArgv) {
+		return errors.New("invalid trusted isolated execution definition")
+	}
+	if e.Kind == "local_oci_build" {
+		if !pinned.MatchString(e.BuildKitImage) || !validArgv(e.BuildArgv) || !cleanRelative(e.OutputFile) || !cleanRelative(e.ImagePath) || len(e.Entrypoint) == 0 || !validArgv(e.Entrypoint) {
+			return errors.New("invalid local OCI output contract")
+		}
+	} else if e.BuildKitImage != "" || len(e.BuildArgv) != 0 || e.OutputFile != "" || e.ImagePath != "" || len(e.Entrypoint) != 0 {
+		return errors.New("source check cannot declare OCI outputs")
+	}
+	return nil
+}
+func validArgv(argv []string) bool {
+	if len(argv) == 0 || len(argv) > 32 {
+		return false
+	}
+	for _, v := range argv {
+		if v == "" || len(v) > 2048 || strings.ContainsAny(v, "\x00\n\r") {
+			return false
+		}
+	}
+	return true
+}
+func cleanRelative(s string) bool {
+	return s != "" && len(s) < 256 && path.Clean(s) == s && s != "." && !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "../") && !strings.ContainsAny(s, "\x00\n\r\\ ")
 }
 func validGrants(v []string) bool {
 	if len(v) == 0 || len(v) > 100 {

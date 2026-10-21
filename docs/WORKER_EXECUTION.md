@@ -1,7 +1,9 @@
-# External worker protocol — nonpublishing first slice
+# External worker protocol and trusted local execution
 
 This protocol extends durable Operations with WorkerJobs and append-only attempts.
-It does not execute code inside RCP, build images, publish artifacts or deploy.
+It does not execute code inside RCP, publish artifacts or deploy. The separate
+[trusted executor](LOCAL_WORKER.md) performs source checks and bounded offline
+OCI builds; the server stores typed local-output assertions.
 GitHub delivery remains the default existing implementation. External worker
 Operations have exactly one lifecycle authority: worker execution service; the
 GitHub poller never claims them.
@@ -57,7 +59,8 @@ owns recipes, immutable revision/hash, repository URL, trust classification and
 typed parameter definitions. Requests select an approved recipe and captured
 IntegrationRevision; they cannot supply commands, URLs, credential refs or recipe
 contents. This slice grants no external write credentials. A receipt is a worker
-assertion about a check, not proof of an image, provenance attestation or rollout.
+assertion about a check or verified local OCI output, never proof of registry
+availability, independent provenance attestation or rollout.
 
 Recipes accept only bounded booleans, integers and enumerated strings. No raw
 stdout, arbitrary error, URL, prompt, secret or tool payload is persisted. Result
@@ -71,5 +74,6 @@ Worker-only POST /api/worker/{claim,start,heartbeat,report} uses dedicated beare
 credentials and strict typed JSON; claim with no eligible job returns null.
 `internal/workerclient` supplies the typed isolated client. Configuration loading
 is opt-in via RCP_WORKERS_FILE; see configuration structs for the current schema.
-No worker deployment, isolation sandbox, registry credentials, execution runner,
-external publication fencing or build routing is implemented by this slice.
+The executor profile, bounds and real opt-in tests are documented in
+[LOCAL_WORKER.md](LOCAL_WORKER.md). Fleet deployment, registry credentials,
+external publication fencing and existing delivery/build routing remain pending.

@@ -197,7 +197,7 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 			return invalid("configured repository identity mismatch")
 		}
 		m := domain.Meta{ID: id(), ProductID: c.ProductID, FeatureID: integration.FeatureID, Actor: c.Actor, CreatedAt: now, UpdatedAt: now}
-		inputs := domain.WorkerInputs{RecipeID: recipe.ID, RecipeRevision: recipe.Revision, RecipeHash: recipe.Hash, ConfigRevision: in.ConfigRevision, RepositoryID: recipe.RepositoryID, RepositoryURL: recipe.RepositoryURL, RevisionID: rev.ID, SourceSHA: rev.HeadCommit, Trust: recipe.Trust, Parameters: in.Parameters}
+		inputs := domain.WorkerInputs{RecipeID: recipe.ID, RecipeRevision: recipe.Revision, RecipeHash: recipe.Hash, ConfigRevision: in.ConfigRevision, RepositoryID: recipe.RepositoryID, RepositoryURL: recipe.RepositoryURL, RevisionID: rev.ID, SourceSHA: rev.HeadCommit, Trust: recipe.Trust, Parameters: in.Parameters, Execution: recipe.Execution}
 		op := domain.ExternalOperation{Meta: m, Kind: domain.WorkerOperationKind, IntegrationID: integration.ID, RepositoryID: recipe.RepositoryID, RequestedBy: c.Actor, Status: "PENDING", Phase: "EXTERNAL_QUEUED"}
 		m.ID = id()
 		j := domain.WorkerJob{Meta: m, OperationID: op.ID, RequestKey: in.RequestKey, RequestHash: requestHash, IntegrationID: integration.ID, Capability: recipe.Capability, Inputs: inputs, InputHash: workerconfig.Fingerprint(inputs), Status: "QUEUED", Deadline: in.Deadline, MaxAttempts: in.MaxAttempts}
@@ -348,6 +348,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 			if report.Result != "PASSED" && report.Result != "CHECK_FAILED" && report.Result != "EXECUTOR_FAILED" || report.EvidenceHash != "" && !workerconfig.ValidFingerprint(report.EvidenceHash) {
 				return invalid("invalid bounded worker result")
 			}
+			if err := validateWorkerLocalOCI(j, a, report); err != nil {
+				return err
+			}
 			j.Status = "FAILED"
 			if report.Result == "PASSED" {
 				j.Status = "SUCCEEDED"
@@ -367,6 +370,26 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 		err = rejected
 	}
 	return out, err
+}
+
+func validateWorkerLocalOCI(j *domain.WorkerJob, a *domain.WorkerAttempt, r *domain.WorkerReport) error {
+	v := r.LocalOCI
+	if r.Result != "PASSED" || j.Capability != "local_oci_build" {
+		if v != nil {
+			return invalid("unexpected local OCI result")
+		}
+		return nil
+	}
+	e := j.Inputs.Execution
+	if v == nil || e == nil || v.JobID != j.ID || v.AttemptID != a.ID || v.InputHash != j.InputHash || v.SourceSHA != j.Inputs.SourceSHA || v.RecipeHash != j.Inputs.RecipeHash || v.ConfigRevision != j.Inputs.ConfigRevision || v.ToolchainImage != e.ToolchainImage || v.Platform != e.Platform || v.ArchiveBytes < 1 || v.ArchiveBytes > e.OutputBytes {
+		return invalid("local OCI provenance mismatch")
+	}
+	for _, d := range []string{v.ArchiveHash, v.LayoutHash, v.IndexDigest, v.ManifestDigest} {
+		if !workerconfig.ValidFingerprint(d) {
+			return invalid("invalid local OCI identity")
+		}
+	}
+	return nil
 }
 func (s *Service) StartWorker(ctx context.Context, p workerconfig.Principal, in domain.WorkerAttemptRequest) (domain.WorkerLease, error) {
 	return s.mutateWorker(ctx, p, in, "start", nil)

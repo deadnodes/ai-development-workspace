@@ -6,6 +6,7 @@ run:
 	go run ./cmd/server
 build:
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
 test:
 	go test -race ./...
 check:
@@ -30,3 +31,4 @@ check:
 	python3 -m unittest discover -s examples/github-actions -p 'test_*.py'
 	go test -race ./...
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
