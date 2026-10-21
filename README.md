@@ -111,3 +111,7 @@ docker run -d --name ai-development-workspace \
 
 This starts embedded persistence. For a workspace mount or PostgreSQL, follow
 [the Docker guide](docs/DOCKER_LOCAL.md). Use a version tag or digest to pin deployments.
+
+The separate [local OCI publisher](docs/LOCAL_PUBLISHER.md) publishes an explicitly
+approved worker receipt to an exact registry repository and verifies the remote
+bytes; RCP artifact admission and deployment remain separate.

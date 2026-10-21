@@ -139,6 +139,34 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 		if json.Unmarshal(out, &report) != nil || report.Result != "PASSED" || report.LocalOCI == nil {
 			t.Fatalf("worker receipt invalid: %s", out)
 		}
+
+		// Explicit test-only export for the separate publisher integration probe.
+		if export := os.Getenv("RCP_TEST_OCI_EXPORT"); export != "" && n == 0 {
+			if !filepath.IsAbs(export) {
+				t.Fatal("fixture export must be absolute")
+			}
+			if err := os.Mkdir(export, 0700); err != nil {
+				t.Fatal(err)
+			}
+			matches, err := filepath.Glob(filepath.Join(stateDir, "*", "image.oci.tar"))
+			if err != nil || len(matches) != 1 {
+				t.Fatal("expected exact worker archive", matches, err)
+			}
+			data, err := os.ReadFile(matches[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(export, "image.oci.tar"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			data, err = json.Marshal(report.LocalOCI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(export, "receipt.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		manifests = append(manifests, report.LocalOCI.ManifestDigest)
 		if report.LocalOCI.SourceSHA != sha {
 			t.Fatal("compiled source provenance mismatch")

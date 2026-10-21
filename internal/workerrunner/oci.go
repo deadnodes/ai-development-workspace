@@ -55,6 +55,18 @@ func verifyOCI(file string, max int64, platform string, execution *domain.Worker
 	if e != nil || int64(len(b)) > max || len(b) == 0 {
 		return out, errors.New("OCI archive outside bounds")
 	}
+	return verifyOCIBytes(b, max, platform, execution, compiled)
+}
+
+// VerifyOCIBytes validates a bounded immutable archive snapshot.
+func VerifyOCIBytes(b []byte, max int64, platform string) (domain.WorkerLocalOCI, error) {
+	return verifyOCIBytes(b, max, platform, nil, nil)
+}
+func verifyOCIBytes(b []byte, max int64, platform string, execution *domain.WorkerExecution, compiled []byte) (domain.WorkerLocalOCI, error) {
+	var out domain.WorkerLocalOCI
+	if max <= 0 || int64(len(b)) > max || len(b) == 0 {
+		return out, errors.New("OCI archive outside bounds")
+	}
 	files := map[string][]byte{}
 	tr := tar.NewReader(bytes.NewReader(b))
 	total := int64(0)

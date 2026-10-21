@@ -1,0 +1,37 @@
+{
+  "plan": {
+    "id": "replace-unique-publication-id",
+    "approved": false,
+    "product_id": "replace-product",
+    "component_id": "replace-component",
+    "repository_id": "replace-repository",
+    "origin": "https://registry.example.invalid",
+    "repository": "replace/component",
+    "receipt": {
+      "job_id": "replace-job",
+      "attempt_id": "replace-attempt",
+      "input_hash": "replace-with-exact-worker-local-oci-receipt",
+      "source_sha": "replace",
+      "recipe_hash": "replace",
+      "config_revision": "replace",
+      "toolchain_image": "replace",
+      "platform": "linux/arm64",
+      "archive_hash": "replace",
+      "layout_hash": "replace",
+      "index_digest": "replace",
+      "manifest_digest": "replace",
+      "archive_bytes": 0
+    }
+  },
+  "allowed_origin": "https://registry.example.invalid",
+  "allowed_repository": "replace/component",
+  "archive": "/absolute/path/image.oci.tar",
+  "state_dir": "/absolute/canonical/private/publisher-state",
+  "max_archive_bytes": 33554432,
+  "timeout_seconds": 120,
+  "ca_file": "",
+  "username_env": "",
+  "password_env": "",
+  "bearer_env": "RCP_PUBLISHER_REGISTRY_TOKEN",
+  "fixture_loopback_http": false
+}

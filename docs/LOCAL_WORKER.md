@@ -6,6 +6,10 @@ checks and builds a real local OCI archive; it neither pushes an image nor marks
 a registry artifact PRESENT. A receipt is a scoped executor assertion, not an
 independently observed registry or deployment attestation.
 
+A separate operator-approved publisher can publish the exact local receipt and
+archive; see [Local OCI publisher](LOCAL_PUBLISHER.md). Its byte observation does
+not admit an artifact into RCP or authorize deployment.
+
 ## First execution contract
 
 Only `trusted_source` recipes execute. The operator pins the complete execution

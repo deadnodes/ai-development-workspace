@@ -7,6 +7,7 @@ run:
 build:
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-publisher ./cmd/publisher
 test:
 	go test -race ./...
 check:
@@ -32,3 +33,4 @@ check:
 	go test -race ./...
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-publisher ./cmd/publisher
