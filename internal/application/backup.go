@@ -106,6 +106,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 	now := time.Now().UTC()
 	restoreID := id()
 	cancelled := []string{}
+	reconciliationRequired := []string{}
 	err = s.store.Update(ctx, func(current *domain.State) error {
 		b, _ := json.Marshal(current)
 		var groups map[string][]json.RawMessage
@@ -119,6 +120,9 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		originalOperations := []domain.ExternalOperation{}
 		for i := range restored.Operations {
 			op := &restored.Operations[i]
+			if op.Kind == domain.WorkerOperationKind {
+				continue
+			}
 			if op.Status == "PENDING" || op.Status == "RUNNING" {
 				originalOperations = append(originalOperations, *op)
 				cancelled = append(cancelled, op.ID)
@@ -132,6 +136,27 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 				restored.OperationSteps = append(restored.OperationSteps, domain.OperationStep{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: actor, CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, Phase: "RESTORE", Status: "CANCELLED", Detail: op.Error})
 			}
 		}
+		// Restored external work must never compete with the source installation.
+		for i := range restored.WorkerJobs {
+			j := &restored.WorkerJobs[i]
+			if !workerTerminal(j.Status) {
+				if op := operationByID(&restored, j.OperationID); op != nil {
+					originalOperations = append(originalOperations, *op)
+					reconciliationRequired = append(reconciliationRequired, op.ID)
+				}
+				j.Status = "RECONCILIATION_REQUIRED"
+				j.CancellationRequested = true
+				if a := currentWorkerAttempt(&restored, j); a != nil {
+					a.Status = "RECONCILIATION_REQUIRED"
+					a.LeaseUntil = now
+					a.UpdatedAt = now
+				}
+				workerAudit(&restored, j, actor, "worker_restore_requires_reconciliation", now)
+				if op := operationByID(&restored, j.OperationID); op != nil {
+					restored.OperationSteps = append(restored.OperationSteps, domain.OperationStep{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: actor, CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, Phase: "RESTORE_RECONCILIATION_REQUIRED", Status: op.Status, Detail: op.Detail})
+				}
+			}
+		}
 		// Preserve pre-restore operation state as audit evidence; destination workers
 		// must not race the source instance or repeat CI/GitOps mutations.
 		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "interrupted_operations": originalOperations}}})
@@ -141,7 +166,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"restored": true, "sha256": expected, "restore_event_id": restoreID, "cancelled_operation_ids": cancelled}, nil
+	return map[string]any{"restored": true, "sha256": expected, "restore_event_id": restoreID, "cancelled_operation_ids": cancelled, "reconciliation_required_operation_ids": reconciliationRequired}, nil
 }
 func validateBackupState(st domain.State) error {
 	if err := domain.ValidateStateStatuses(st); err != nil {

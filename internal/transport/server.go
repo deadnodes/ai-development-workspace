@@ -16,6 +16,7 @@ import (
 	"releasecontrol/internal/agentguide"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 	"releasecontrol/web"
 )
 
@@ -27,6 +28,7 @@ type Service interface {
 }
 
 type Options struct {
+	Workers      *workerconfig.Authority
 	Token        string
 	AllowedHosts []string
 }
@@ -64,6 +66,7 @@ func New(service Service, options Options) http.Handler {
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
+	registerWorkerRoutes(mux, service, options)
 	registerQueryRoutes(mux, service)
 	registerBackupRoutes(mux, service)
 	registerReviewRoutes(mux, service)
@@ -156,9 +159,13 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 403, map[string]string{"error": "Cross-site requests are not allowed"})
 			return
 		}
+		if o.Workers != nil && o.Workers.IsWorkerToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) && !strings.HasPrefix(r.URL.Path, "/api/worker/") {
+			write(w, 401, map[string]string{"error": "worker credential restricted to worker channel"})
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			w.Header().Set("Cache-Control", "no-store")
-			if o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
+			if !strings.HasPrefix(r.URL.Path, "/api/worker/") && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
 				write(w, 401, map[string]string{"error": "Bearer token required"})
 				return
 			}

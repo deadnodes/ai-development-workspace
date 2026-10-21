@@ -22,6 +22,16 @@ func ValidateStateStatuses(st State) error {
 		}
 		return nil
 	}
+	for _, v := range st.WorkerJobs {
+		if err := check("worker_job", v.ID, v.Status, false); err != nil {
+			return err
+		}
+	}
+	for _, v := range st.WorkerAttempts {
+		if err := check("worker_attempt", v.ID, v.Status, false); err != nil {
+			return err
+		}
+	}
 	for _, v := range st.RuntimeSnapshots {
 		if err := check("runtime_comparison", v.ID, v.ReferenceComparison, true); err != nil {
 			return err

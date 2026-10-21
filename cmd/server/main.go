@@ -21,6 +21,7 @@ import (
 	"releasecontrol/internal/providers/github"
 	"releasecontrol/internal/providers/runtimeobserver"
 	"releasecontrol/internal/transport"
+	"releasecontrol/internal/workerconfig"
 )
 
 func main() {
@@ -69,6 +70,14 @@ func run() error {
 	service := application.NewWithProvider(store, github.New())
 	workspaceRoot := os.Getenv("RCP_WORKSPACE_ROOT")
 	service.SetWorkspaceRoot(workspaceRoot)
+	var workers *workerconfig.Authority
+	if path := os.Getenv("RCP_WORKERS_FILE"); path != "" {
+		workers, err = workerconfig.Load(path, os.Getenv("RC_TOKEN"))
+		if err != nil {
+			return fmt.Errorf("load worker authority: %w", err)
+		}
+		service.ConfigureWorkers(workers)
+	}
 	if os.Getenv("DATABASE_URL") == "" && workspaceRoot != "" {
 		if err := bootstrapWorkspace(boot, service, workspaceRoot); err != nil {
 			slog.Warn("initial workspace scan incomplete; server will remain available", "error", err)
@@ -130,7 +139,7 @@ func run() error {
 		}
 	}()
 	defer func() { stop(); <-workerDone }()
-	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{Workers: workers, Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan error, 1)
 	go func() { slog.Info("release-control listening", "address", addr); done <- server.ListenAndServe() }()
 	select {

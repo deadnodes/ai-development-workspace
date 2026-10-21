@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 	"slices"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
+	externalWorkers  *workerconfig.Authority
 	runtimeObservers []delivery.RuntimeSnapshotObserver
 	workspaceRoot    string
 	store            Store
@@ -61,6 +63,9 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	if c.Action == "queue_worker_job" || c.Action == "cancel_worker_job" || c.Action == "reconcile_worker_job" {
+		return s.executeWorkerCommand(ctx, c)
+	}
 	var result any
 	err := s.store.Update(ctx, func(st *domain.State) error { var err error; result, err = apply(st, c); return err })
 	return result, err

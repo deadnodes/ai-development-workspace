@@ -1,0 +1,228 @@
+// Package workerconfig holds operator-owned execution authority, outside domain state.
+package workerconfig
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+)
+
+type Parameter struct {
+	Type string   `json:"type"`
+	Enum []string `json:"enum,omitempty"`
+	Min  int      `json:"min,omitempty"`
+	Max  int      `json:"max,omitempty"`
+}
+type Recipe struct {
+	ID            string               `json:"id"`
+	Revision      string               `json:"revision"`
+	Hash          string               `json:"hash"`
+	ProductID     string               `json:"product_id"`
+	RepositoryID  string               `json:"repository_id"`
+	RepositoryURL string               `json:"repository_url"`
+	Capability    string               `json:"capability"`
+	Trust         string               `json:"trust"`
+	Parameters    map[string]Parameter `json:"parameters"`
+}
+type Credential struct {
+	ID            string    `json:"id"`
+	Principal     string    `json:"principal"`
+	TokenEnv      string    `json:"token_env"`
+	ProductIDs    []string  `json:"product_ids"`
+	RepositoryIDs []string  `json:"repository_ids"`
+	Capabilities  []string  `json:"capabilities"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	Revoked       bool      `json:"revoked"`
+}
+type Config struct {
+	Revision     string       `json:"revision"`
+	LeaseSeconds int          `json:"lease_seconds"`
+	Recipes      []Recipe     `json:"recipes"`
+	Credentials  []Credential `json:"credentials"`
+}
+
+// Authority keeps a private immutable configuration copy. Secret values are only
+// resolved during authentication, never persisted or exposed by config queries.
+type Authority struct {
+	config             Config
+	lookup             func(string) string
+	controlFingerprint [sha256.Size]byte
+}
+type Principal struct{ credential Credential }
+
+var ident = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$`)
+var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+var digest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func Fingerprint(v any) string {
+	b, _ := json.Marshal(v)
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+func RecipeHash(r Recipe) string { r.Hash = ""; return Fingerprint(r) }
+func Load(path, controlToken string) (*Authority, error) {
+	b, e := os.ReadFile(path)
+	if e != nil {
+		return nil, e
+	}
+	if len(b) > 1<<20 {
+		return nil, errors.New("worker configuration too large")
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	var c Config
+	if e = dec.Decode(&c); e != nil {
+		return nil, errors.New("invalid worker configuration")
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return nil, errors.New("invalid worker configuration")
+	}
+	return New(c, controlToken, os.Getenv)
+}
+func New(c Config, controlToken string, lookup func(string) string) (*Authority, error) {
+	if strings.TrimSpace(controlToken) == "" || lookup == nil {
+		return nil, errors.New("worker protocol requires protected control plane")
+	}
+	if !ident.MatchString(c.Revision) || c.LeaseSeconds < 5 || c.LeaseSeconds > 300 || len(c.Recipes) == 0 || len(c.Recipes) > 100 || len(c.Credentials) == 0 || len(c.Credentials) > 100 {
+		return nil, errors.New("invalid worker configuration bounds")
+	}
+	seen := map[string]bool{}
+	tokens := map[string]bool{Fingerprint(controlToken): true}
+	for _, v := range c.Credentials {
+		token := lookup(v.TokenEnv)
+		if !ident.MatchString(v.ID) || !ident.MatchString(v.Principal) || !envName.MatchString(v.TokenEnv) || seen[v.ID] || v.ExpiresAt.IsZero() || len(token) < 32 || tokens[Fingerprint(token)] || !validGrants(v.ProductIDs) || !validGrants(v.RepositoryIDs) || !validGrants(v.Capabilities) {
+			return nil, errors.New("invalid worker credential configuration")
+		}
+		seen[v.ID] = true
+		tokens[Fingerprint(token)] = true
+	}
+	seen = map[string]bool{}
+	for _, r := range c.Recipes {
+		u, e := url.Parse(r.RepositoryURL)
+		if !ident.MatchString(r.ID) || !ident.MatchString(r.Revision) || !ident.MatchString(r.ProductID) || !ident.MatchString(r.RepositoryID) || r.Capability != "source_check" || seen[r.ID] || e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || r.Trust != "trusted_source" && r.Trust != "untrusted_source" || !digest.MatchString(r.Hash) || r.Hash != RecipeHash(r) || len(r.Parameters) > 32 {
+			return nil, errors.New("invalid immutable nonpublishing worker recipe")
+		}
+		seen[r.ID] = true
+		for name, p := range r.Parameters {
+			if !ident.MatchString(name) || p.Type != "boolean" && p.Type != "integer" && p.Type != "enum" || p.Type == "integer" && p.Min > p.Max || p.Type == "enum" && (len(p.Enum) == 0 || len(p.Enum) > 32) {
+				return nil, errors.New("invalid recipe parameter")
+			}
+			for _, v := range p.Enum {
+				if !ident.MatchString(v) {
+					return nil, errors.New("invalid enum")
+				}
+			}
+		}
+	}
+	b, _ := json.Marshal(c)
+	var copy Config
+	_ = json.Unmarshal(b, &copy)
+	return &Authority{config: copy, lookup: lookup, controlFingerprint: sha256.Sum256([]byte(controlToken))}, nil
+}
+func validGrants(v []string) bool {
+	if len(v) == 0 || len(v) > 100 {
+		return false
+	}
+	for _, s := range v {
+		if !ident.MatchString(s) || s == "*" {
+			return false
+		}
+	}
+	return true
+}
+func (a *Authority) Revision() string     { return a.config.Revision }
+func (a *Authority) Lease() time.Duration { return time.Duration(a.config.LeaseSeconds) * time.Second }
+func (a *Authority) Recipe(id string) (Recipe, bool) {
+	for _, v := range a.config.Recipes {
+		if v.ID == id {
+			b, _ := json.Marshal(v)
+			var out Recipe
+			_ = json.Unmarshal(b, &out)
+			return out, true
+		}
+	}
+	return Recipe{}, false
+}
+func (a *Authority) IsWorkerToken(token string) bool {
+	if a == nil || token == "" {
+		return false
+	}
+	matched := 0
+	provided := sha256.Sum256([]byte(token))
+	for _, c := range a.config.Credentials {
+		v := sha256.Sum256([]byte(a.lookup(c.TokenEnv)))
+		matched |= subtle.ConstantTimeCompare(provided[:], v[:])
+	}
+	return matched == 1
+}
+func (a *Authority) Authenticate(token string, now time.Time) (Principal, error) {
+	if a == nil || token == "" {
+		return Principal{}, errors.New("worker authentication required")
+	}
+	provided := sha256.Sum256([]byte(token))
+	var selected *Credential
+	matches := 0
+	for i := range a.config.Credentials {
+		c := &a.config.Credentials[i]
+		raw := a.lookup(c.TokenEnv)
+		v := sha256.Sum256([]byte(raw))
+		if subtle.ConstantTimeCompare(provided[:], v[:]) == 1 && len(raw) >= 32 {
+			selected = c
+			matches++
+		}
+	}
+	// Environment-backed secrets can rotate after startup. Recheck separation
+	// and uniqueness on every request, including collisions with revoked keys.
+	if subtle.ConstantTimeCompare(provided[:], a.controlFingerprint[:]) == 1 || matches != 1 || selected == nil || selected.Revoked || !now.Before(selected.ExpiresAt) {
+		return Principal{}, errors.New("worker authentication required")
+	}
+	return Principal{credential: *selected}, nil
+}
+func (p Principal) ID() string { return p.credential.Principal }
+func (p Principal) Allows(product, repo, capability string, now time.Time) bool {
+	c := p.credential
+	return c.Principal != "" && !c.Revoked && now.Before(c.ExpiresAt) && slices.Contains(c.ProductIDs, product) && slices.Contains(c.RepositoryIDs, repo) && slices.Contains(c.Capabilities, capability)
+}
+func ValidateParameters(r Recipe, params map[string]any) error {
+	if len(params) != len(r.Parameters) {
+		return errors.New("parameters must exactly match recipe")
+	}
+	for name, def := range r.Parameters {
+		v, ok := params[name]
+		if !ok {
+			return errors.New("missing parameter")
+		}
+		switch def.Type {
+		case "boolean":
+			if _, ok := v.(bool); !ok {
+				return errors.New("expected boolean parameter")
+			}
+		case "enum":
+			s, ok := v.(string)
+			if !ok || !slices.Contains(def.Enum, s) {
+				return errors.New("invalid enum parameter")
+			}
+		case "integer":
+			b, _ := json.Marshal(v)
+			var n int
+			if json.Unmarshal(b, &n) != nil || n < def.Min || n > def.Max {
+				return fmt.Errorf("integer parameter outside bounds")
+			}
+		default:
+			return errors.New("invalid parameter definition")
+		}
+	}
+	return nil
+}
+func ValidFingerprint(s string) bool { return digest.MatchString(s) }
