@@ -113,9 +113,13 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
-	MainCandidate           *MainCandidateProof `json:"main_candidate,omitempty"`
-	SourceRetentionOriginID string              `json:"source_retention_origin_id,omitempty"`
-	SourceRetentionParentID string              `json:"source_retention_parent_id,omitempty"`
+	ReservationMutationIntent string               `json:"reservation_mutation_intent,omitempty"`
+	ReservationEpoch          uint64               `json:"reservation_epoch"`
+	DevReservation            *DevReservationProof `json:"dev_reservation,omitempty"`
+	ReservationQuarantined    bool                 `json:"reservation_quarantined,omitempty"`
+	MainCandidate             *MainCandidateProof  `json:"main_candidate,omitempty"`
+	SourceRetentionOriginID   string               `json:"source_retention_origin_id,omitempty"`
+	SourceRetentionParentID   string               `json:"source_retention_parent_id,omitempty"`
 
 	FeatureUpdate *FeatureUpdateRequest `json:"feature_update,omitempty"`
 

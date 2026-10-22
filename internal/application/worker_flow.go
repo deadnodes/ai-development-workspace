@@ -13,6 +13,9 @@ import (
 )
 
 func flowGuard(st *domain.State, op domain.ExternalOperation) error {
+	if err := reservationOperationAllowed(st, op); err != nil {
+		return err
+	}
 	if op.MainCandidate != nil {
 		return mainCandidateGuard(st, &op)
 	}
@@ -126,7 +129,34 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 					return err
 				}
 			}
-			result, e := provider.ComposeSource(ctx, source.Connection, source.Plan)
+			recovering, e := s.reservationMutationRecovery(ctx, op, token)
+			if e != nil {
+				return e
+			}
+			var result delivery.SourceResult
+			if recovering {
+				observer, ok := s.provider.(delivery.ScopedGitObserver)
+				if !ok {
+					return invalid("source read-only recovery unavailable")
+				}
+				observed, err := observer.ObserveBranch(ctx, source.Connection, source.Plan.Repository, source.Plan.TargetBranch)
+				if err != nil || observed.Name != source.Plan.TargetBranch || !fullSHA.MatchString(observed.SHA) {
+					return invalid("source composition outcome unresolved; no write repeated")
+				}
+				result = delivery.SourceResult{Branch: observed.Name, SHA: observed.SHA}
+				verifier, ok := s.provider.(delivery.ComposedSourceVerifier)
+				if !ok {
+					return invalid("source read-only verifier unavailable")
+				}
+				if err = verifier.VerifyComposedSource(ctx, source.Connection, source.Plan, result); err != nil {
+					return err
+				}
+			} else {
+				if e = s.beginReservationMutation(ctx, op, token, "SOURCE"); e != nil {
+					return e
+				}
+				result, e = provider.ComposeSource(ctx, source.Connection, source.Plan)
+			}
 			if e != nil {
 				return s.finish(ctx, op, token, "FAILED", "source composition failed: "+e.Error(), nil)
 			}
@@ -172,6 +202,9 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 			}
 			if source.Result == nil {
 				return s.finish(ctx, op, token, "FAILED", "missing selected source result", nil)
+			}
+			if e := s.beginReservationMutation(ctx, op, token, "SOURCE"); e != nil {
+				return e
 			}
 			result, e := provider.AdvanceMain(ctx, source.Connection, source.Plan.Repository, source.Plan.BaseRef, source.Plan.BaseSHA, source.Result.SHA)
 			if e != nil {
@@ -393,6 +426,9 @@ func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOpera
 			evidence = map[string]string{"source_snapshot_hash": backupHash(payload), "observed_at": verifiedAt.Format(time.RFC3339Nano)}
 		}
 		st.OperationSteps = append(st.OperationSteps, domain.OperationStep{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, Phase: "QUEUE_COMPONENTS", Status: "SUCCEEDED", Detail: fmt.Sprintf("queued %d component operations", len(children)), Evidence: evidence})
+		for i := range children {
+			children[i].ReservationEpoch = parent.ReservationEpoch
+		}
 		st.Operations = append(st.Operations, children...)
 		return nil
 	})

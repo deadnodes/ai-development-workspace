@@ -19,6 +19,7 @@ func CommandSchema() map[string]any {
 		data[k] = str()
 	}
 	data["digest"] = str()
+	data["reservation_operation_id"] = str()
 	data["expected_selection"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"composition_id", "operation_id", "generation"}, "properties": map[string]any{"composition_id": str(), "operation_id": str(), "generation": map[string]any{"type": "integer", "minimum": 0}}}
 	data["idempotency_key"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids revision_ids") {
@@ -90,6 +91,8 @@ func CommandSchema() map[string]any {
 		{"reconcile_worker_job", "product_id id", "outcome"},
 		{"update_environment_feature", "feature_id", "environment_id revision_ids idempotency_key expected_selection"},
 		{"assemble_environment", "product_id", "environment_id"},
+		{"reserve_candidate_dev", "product_id", "candidate_operation_id environment_id request_key expected_selection"},
+		{"release_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"claim_composition_conflict", "product_id", "conflict_id"},
 		{"record_conflict_resolution", "product_id", "conflict_id commit rationale"},
 		{"verify_conflict_resolution", "product_id", "conflict_id result_ids"},

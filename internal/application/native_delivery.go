@@ -36,6 +36,9 @@ func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOpe
 	if op == nil || op.Kind != "DEPLOY" || op.Snapshot == nil || op.Snapshot.Build.Mode != "NATIVE" || nativeQuarantined(st, op.ProductID) || terminalOperation(op.Status) {
 		return invalid("native delivery unavailable or stopped")
 	}
+	if err := reservationOperationAllowed(st, *op); err != nil {
+		return err
+	}
 	snap := op.Snapshot
 	candidate := snap.MainCandidate != nil
 	if candidate {

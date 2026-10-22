@@ -188,6 +188,12 @@ func (s *Service) executeMainCandidate(ctx context.Context, c domain.Command) (a
 		if err := s.mainCandidateAllowed(current, &op); err != nil {
 			return err
 		}
+		if err := reservationFree(current, op.EnvironmentID); err != nil {
+			return err
+		}
+		if e := environmentByID(current, op.EnvironmentID); e != nil {
+			op.ReservationEpoch = e.ReservationEpoch
+		}
 		current.Compositions = append(current.Compositions, *op.CompositionSnapshot)
 		current.Operations = append(current.Operations, op)
 		current.Events = append(current.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: op.CreatedAt, EntityID: op.ID, ProductID: c.ProductID, Data: c})
@@ -287,7 +293,7 @@ func (s *Service) prepareMainCandidate(st *domain.State, c domain.Command, in do
 		}
 		proof.Sources = append(proof.Sources, rp)
 	}
-	op := domain.ExternalOperation{Meta: m, MainCandidate: proof, Kind: "RELEASE_CANDIDATE", EnvironmentID: in.EnvironmentID, Status: "PENDING", Phase: "QUEUE_BUILDS", RequestedBy: c.Actor, RequestKey: in.IdempotencyKey, RequestHash: hash, CompositionSnapshot: &comp, PreparedDeployments: snaps, IntegrationIDs: selectedIntegrations(comp), ChildIDs: []string{}, NextAttemptAt: m.CreatedAt}
+	op := domain.ExternalOperation{ReservationEpoch: comp.EnvironmentSnapshot.ReservationEpoch, Meta: m, MainCandidate: proof, Kind: "RELEASE_CANDIDATE", EnvironmentID: in.EnvironmentID, Status: "PENDING", Phase: "QUEUE_BUILDS", RequestedBy: c.Actor, RequestKey: in.IdempotencyKey, RequestHash: hash, CompositionSnapshot: &comp, PreparedDeployments: snaps, IntegrationIDs: selectedIntegrations(comp), ChildIDs: []string{}, NextAttemptAt: m.CreatedAt}
 	return op, nil
 }
 
@@ -441,6 +447,11 @@ func mainCandidateGuard(st *domain.State, op *domain.ExternalOperation) error {
 	return nil
 }
 func (s *Service) mainCandidateAllowed(st *domain.State, op *domain.ExternalOperation) error {
+	if op != nil {
+		if err := reservationOperationAllowed(st, *op); err != nil {
+			return err
+		}
+	}
 	if err := mainCandidateGuard(st, op); err != nil {
 		return err
 	}

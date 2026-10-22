@@ -274,6 +274,7 @@ func (s *Service) admitSourceProgress(ctx context.Context, before, after domain.
 		}
 		current := operationByID(st, before.ID)
 		now := time.Now().UTC()
+		current.ReservationMutationIntent = ""
 		current.Sources = after.Sources
 		current.Phase = phase
 		current.CurrentStep = phase
@@ -310,6 +311,7 @@ func (s *Service) admitSourceConflict(ctx context.Context, before domain.Externa
 		now := time.Now().UTC()
 		appendCompositionConflict(st, after, after.Sources[index], now)
 		current := operationByID(st, before.ID)
+		current.ReservationMutationIntent = ""
 		current.Sources = after.Sources
 		current.Status = "FAILED"
 		current.DeploymentState = "BLOCKED"
@@ -375,7 +377,24 @@ func (s *Service) retainFlowSources(ctx context.Context, op domain.ExternalOpera
 			if err := s.checkRetentionLease(ctx, op, token); err != nil {
 				return false, err
 			}
-			sha, err := ref.EnsureRef(ctx, source.Connection, source.Plan.Repository, revision.Branch, revision.HeadCommit)
+			recovering, e := s.reservationMutationRecovery(ctx, op, token)
+			if e != nil {
+				return false, e
+			}
+			var sha string
+			var err error
+			if recovering {
+				observed, readErr := s.provider.(delivery.ScopedGitObserver).ObserveBranch(ctx, source.Connection, source.Plan.Repository, revision.Branch)
+				if readErr != nil || observed.Name != revision.Branch || observed.SHA != revision.HeadCommit {
+					return false, invalid("retained source mutation outcome unresolved; no write repeated")
+				}
+				sha = revision.HeadCommit
+			} else {
+				if e := s.beginReservationMutation(ctx, op, token, "SOURCE"); e != nil {
+					return false, e
+				}
+				sha, err = ref.EnsureRef(ctx, source.Connection, source.Plan.Repository, revision.Branch, revision.HeadCommit)
+			}
 			if err != nil {
 				observer := s.provider.(delivery.ScopedGitObserver)
 				observed, readErr := observer.ObserveBranch(ctx, source.Connection, source.Plan.Repository, revision.Branch)

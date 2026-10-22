@@ -459,6 +459,9 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta, authority 
 		if app == nil || app.ProductID != in.ProductID || env == nil || env.ProductID != in.ProductID || domain.ComponentKind(*app) != "APPLICATION" {
 			return nil, m, invalid("component and environment must belong to integration product")
 		}
+		if e := reservationFree(st, env.ID); e != nil {
+			return nil, m, e
+		}
 		if len(in.Repositories) > 0 && !slices.Contains(in.Repositories, app.RepositoryID) {
 			return nil, m, invalid("component repository not in integration scope")
 		}

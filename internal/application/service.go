@@ -66,6 +66,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return s.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "reserve_candidate_dev" || c.Action == "release_candidate_dev" {
+		return s.executeDevReservation(ctx, c)
+	}
 	if c.Action == "prepare_release_candidate" {
 		if _, present := c.Data["main_sources"]; present {
 			return s.executeMainCandidate(ctx, c)
@@ -383,7 +386,7 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 	if !slices.Contains(domain.Actions, c.Action) {
 		return nil, invalid("unknown action")
 	}
-	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id", "selection_generation"} {
+	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id", "selection_generation", "reservation_epoch", "dev_reservation", "reservation_quarantined", "reservation_mutation_intent"} {
 		if _, exists := c.Data[key]; exists {
 			return nil, invalid("field %s cannot be supplied in data", key)
 		}
@@ -399,6 +402,10 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 	if _, ok := c.Data["result"]; ok && !slices.Contains([]string{"record_check_result", "record_scenario_run"}, c.Action) {
 		return nil, invalid("result is server-managed for %s", c.Action)
 	}
+	if err := reservationCommandAllowed(st, c); err != nil {
+		return nil, err
+	}
+	operationCount := len(st.Operations)
 	m := meta(c)
 	var out any
 	if c.IntegrationID != "" {
@@ -1088,6 +1095,15 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 	}
 	if c.Action == "create_feature" || c.Action == "update_feature" {
 		m.FeatureID = m.ID
+	}
+	for i := operationCount; i < len(st.Operations); i++ {
+		op := &st.Operations[i]
+		if e := environmentByID(st, op.EnvironmentID); e != nil {
+			op.ReservationEpoch = e.ReservationEpoch
+		}
+		if returned, ok := out.(domain.ExternalOperation); ok && returned.ID == op.ID {
+			out = *op
+		}
 	}
 	eventAt := time.Now().UTC()
 	if c.Action == "release_artifact_pin" {

@@ -483,6 +483,7 @@ func (s *Service) ExportWorkspace(ctx context.Context, product string) (Workspac
 			e.Runtime = nil
 			e.DesiredCompositionID = ""
 			e.DesiredOperationID = ""
+			e.ReservationEpoch = 0
 			e.SelectionGeneration = 0
 			out.Environments = append(out.Environments, e)
 		}
@@ -536,6 +537,7 @@ func (s *Service) ImportWorkspace(ctx context.Context, actor string, in Workspac
 			e.Runtime = nil
 			e.DesiredCompositionID = ""
 			e.DesiredOperationID = ""
+			e.ReservationEpoch = 0
 			e.SelectionGeneration = 0
 			st.Environments = append(st.Environments, e)
 		}

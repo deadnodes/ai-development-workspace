@@ -36,6 +36,8 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		tool, path, refName, ref string
 		data                     map[string]any
 	}{
+		{"reserve_candidate_dev", "/api/products/product/candidate-dev/reserve", "product_id", "product", map[string]any{"candidate_operation_id": "candidate", "environment_id": "dev", "request_key": "reservation-request-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
+		{"release_candidate_dev", "/api/products/product/candidate-dev/release", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "reservation-release-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740994")}}},
 		{"update_environment_feature", "/api/features/feature/update-environment", "feature_id", "feature", map[string]any{"environment_id": "dev", "revision_ids": []string{"A2"}, "idempotency_key": "key", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reconcile_composition", "/api/compositions/composition/reconcile", "composition_id", "composition", map[string]any{}},
 		{"prepare_release_candidate", "/api/release-candidates", "product_id", "product", map[string]any{"name": "Release", "environment_id": "prod", "components": []any{component}, "approve_main_update": true}},
@@ -86,6 +88,17 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 					t.Fatalf("exact patch CAS/scope lost: %s", raw)
 				}
 			}
+			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" {
+				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
+				var token domain.EnvironmentSelection
+				want := uint64(9007199254740993)
+				if tc.tool == "release_candidate_dev" {
+					want++
+				}
+				if err := json.Unmarshal(raw, &token); err != nil || token.Generation != want || viaMCP.ProductID != "product" {
+					t.Fatalf("exact reservation CAS/scope lost: %s", raw)
+				}
+			}
 			if tc.tool == "record_runtime_observation" && viaHTTP.Data["healthy"] != false {
 				t.Fatal("unhealthy observation altered")
 			}
@@ -133,5 +146,32 @@ func TestMainCandidateDuplicateJSONRejected(t *testing.T) {
 	}
 	if len(service.commands) != 0 {
 		t.Fatal("ambiguous input reached command layer")
+	}
+}
+
+func TestCandidateDevReservationRejectsAmbiguousTransportInput(t *testing.T) {
+	service := &boundaryService{commands: make(chan domain.Command, 8), queries: make(chan [2]string, 1)}
+	server := httptest.NewServer(transport.New(service, transport.Options{}))
+	defer server.Close()
+	for _, tc := range []struct{ path, body string }{
+		{"reserve", `{"product_id":"other","request_key":"reservation-request-1"}`},
+		{"release", `{"product_id":"other","request_key":"reservation-release-1"}`},
+		{"reserve", `{"request_key":"reservation-request-1","request_key":"reservation-request-2"}`},
+		{"reserve", `{"request_key":"reservation-request-1","expected_selection":{"composition_id":"a","operation_id":"b","generation":1,"generation":2}}`},
+		{"release", `{"reservation_operation_id":"a","reservation_operation_id":"b","request_key":"reservation-release-1"}`},
+		{"reserve", `{"request_key":"reservation-request-1","reservation_epoch":99}`},
+		{"release", `{"request_key":"reservation-release-1","approve":true}`},
+	} {
+		response, err := http.Post(server.URL+"/api/products/product/candidate-dev/"+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 400 {
+			t.Fatalf("ambiguous reservation input accepted: %s HTTP%d", tc.body, response.StatusCode)
+		}
+	}
+	if len(service.commands) != 0 {
+		t.Fatal("ambiguous reservation transport input reached command layer")
 	}
 }

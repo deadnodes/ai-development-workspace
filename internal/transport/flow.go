@@ -17,6 +17,8 @@ import (
 type flowAction struct{ action, pattern, refName, refField, fields, required, description string }
 
 var flowActions = []flowAction{
+	{"reserve_candidate_dev", "POST /api/products/{id}/candidate-dev/reserve", "product_id", "product_id", "candidate_operation_id environment_id request_key expected_selection", "candidate_operation_id environment_id request_key expected_selection", "Reserve the current DEV/TEST selection for preparation of an exact native main candidate. Requires CAS; blocks managed deployments without deploying the candidate or accepting Dev. Attribution is not authentication."},
+	{"release_candidate_dev", "POST /api/products/{id}/candidate-dev/release", "product_id", "product_id", "reservation_operation_id request_key expected_selection", "reservation_operation_id request_key expected_selection", "Explicitly release an unchanged candidate Dev preparation reservation using owner attribution and exact CAS. Preserves baseline intent and observed state; does not restore a deployment or revive old operations. Restored or uncertain reservations remain fenced."},
 	{"update_environment_feature", "POST /api/features/{id}/update-environment", "feature_id", "feature_id", "environment_id revision_ids name idempotency_key expected_selection", "environment_id revision_ids idempotency_key expected_selection", "Atomically patch explicit revisions of one feature into the existing pinned DEV/TEST composition, preserving other features and base. Requires the current desired selection CAS token and a durable idempotency key; queues the existing COMPOSE operation through PR-only targets."},
 	{"assemble_environment", "POST /api/products/{id}/assemble-environment", "product_id", "product_id", "environment_id name integration_ids expected_selection", "environment_id", "Assemble current captured active integration revisions into disposable generated branches, build artifacts and apply the configured environment GitOps targets. Returns immediately with a persistent operation; conflicts require resolution."},
 	{"claim_composition_conflict", "POST /api/products/{id}/conflicts/claim", "product_id", "product_id", "conflict_id", "conflict_id", "Claim responsibility for externally resolving a composition conflict."},
@@ -42,6 +44,9 @@ func flowSchema(spec flowAction) map[string]any {
 	}
 	if spec.action == "record_scenario_run" {
 		properties["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
+	}
+	if spec.action == "reserve_candidate_dev" || spec.action == "release_candidate_dev" {
+		properties["request_key"] = map[string]any{"type": "string", "minLength": 16, "maxLength": 128}
 	}
 	required := append([]string{spec.refName}, strings.Fields(spec.required)...)
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
@@ -127,7 +132,10 @@ func decodeFlowInput(raw []byte) (map[string]any, error) {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil, err
 	}
-	if _, native := input["main_sources"]; native {
+	_, native := input["main_sources"]
+	_, reservation := input["reservation_operation_id"]
+	_, requestKey := input["request_key"]
+	if native || reservation || requestKey {
 		if err := uniqueMainCandidateJSON(raw); err != nil {
 			return nil, err
 		}

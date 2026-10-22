@@ -283,6 +283,11 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			post(domain.Command{Action: "record_scenario_run", ProductID: "p", Data: map[string]any{"scenario_version_id": "candidate-scope", "candidate_operation_id": parent.ID, "components": []domain.ScenarioComponentEvidence{{ApplicationID: "component", OperationID: child.ID, SourceSHA: f.mainA, ArtifactDigest: a.Digest}}, "result": "passed", "observations": []string{"Actual isolated compiler checked A-only source and prod profile; no runtime/Dev acceptance assertion"}}}, nil, true)
 			post(domain.Command{Action: "promote_release_candidate", ID: parent.ID, ProductID: "p", Data: map[string]any{"approve": true}}, nil, false)
 			post(domain.Command{Action: "prepare_release_candidate", ProductID: "p", Data: map[string]any{"name": "legacy", "environment_id": "prod", "approve_main_update": true, "components": []domain.CompositionComponent{{ApplicationID: "component", BaseRef: "main", BaseCommit: f.base, TargetBranch: "generated/legacy", RevisionIDs: []string{"a1"}}}}}, nil, false)
+			beforeReservation, _ := json.Marshal(read().Environments)
+			if !bytes.Equal(environments, beforeReservation) {
+				t.Fatal("build-only candidate changed Dev environment before explicit reservation")
+			}
+			environments = assertRealCandidateDevReservation(t, server.URL, control, parent.ID, f.mainB, read, post)
 			var stale domain.ExternalOperation
 			post(domain.Command{Action: "prepare_release_candidate", ProductID: "p", Data: data("stale-before-publish", sourceResult.ID)}, &stale, true)
 			ticks()

@@ -123,6 +123,13 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	if op.Kind != "DEPLOY" || op.Snapshot == nil {
 		return true, s.finish(ctx, *op, token, "FAILED", "invalid operation snapshot", nil)
 	}
+	state, guardErr := s.store.Read(ctx)
+	if guardErr != nil {
+		return true, guardErr
+	}
+	if guardErr = reservationOperationAllowed(&state, *op); guardErr != nil {
+		return true, s.finish(ctx, *op, token, "BLOCKED", guardErr.Error(), nil)
+	}
 	snapshot := op.Snapshot
 	if snapshot.Build.Mode == "NATIVE" {
 		state, e := s.store.Read(ctx)
@@ -492,6 +499,11 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
 		}
+		if status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if err := reservationOperationAllowed(st, op); err != nil {
+				return err
+			}
+		}
 		if op.Kind == "COMPOSE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -513,6 +525,32 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 			if e := s.flowGuard(st, op); e != nil {
 				status = "BLOCKED"
 				detail = e.Error()
+			}
+		}
+		if current.ReservationMutationIntent != "" {
+			op.ReservationMutationIntent = current.ReservationMutationIntent
+		}
+		if phase == "APPLY_UNCERTAIN" {
+			op.ReservationMutationIntent = "GITOPS"
+		}
+		if phase == "BUILD_LOOKUP" && !release {
+			op.ReservationMutationIntent = "BUILD"
+		}
+		if op.ReservationMutationIntent == "GITOPS" && (op.GitOpsResult != nil && op.GitOpsResult.CommitSHA != "" && op.GitOpsResult.BlobSHA != "" || op.GitOpsPR != nil && op.GitOpsPR.Number > 0 && (phase == "WAIT_GITOPS_PR" || op.GitOpsPR.State == "closed")) {
+			op.ReservationMutationIntent = ""
+		}
+		if op.ReservationMutationIntent == "BUILD" && op.Run != nil && op.Run.Status == "completed" {
+			op.ReservationMutationIntent = ""
+		}
+		if op.ReservationMutationIntent == "SOURCE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" && len(op.Sources) > 0 {
+			all := true
+			for _, source := range op.Sources {
+				if source.Result == nil {
+					all = false
+				}
+			}
+			if all {
+				op.ReservationMutationIntent = ""
 			}
 		}
 		now := time.Now().UTC()

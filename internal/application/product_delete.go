@@ -6,6 +6,13 @@ import (
 )
 
 func deleteProduct(st *domain.State, c domain.Command) error {
+	for _, e := range st.Environments {
+		if e.ProductID == c.ProductID {
+			if err := reservationFree(st, e.ID); err != nil {
+				return err
+			}
+		}
+	}
 	var input struct {
 		Name string `json:"name"`
 	}

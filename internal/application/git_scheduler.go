@@ -201,6 +201,9 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 		return err
 	}
 	for _, env := range st.Environments {
+		if reservationFree(&st, env.ID) != nil {
+			continue
+		}
 		if env.DesiredCompositionID == "" {
 			continue
 		}
