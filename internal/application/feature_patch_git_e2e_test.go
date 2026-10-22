@@ -29,8 +29,9 @@ import (
 // configuration/read fixtures; this test stops before build, registry or GitOps IO.
 type featurePatchGitProvider struct {
 	*fakeFlow
-	github *githubprovider.Provider
-	conn   delivery.Connection
+	github      *githubprovider.Provider
+	conn        delivery.Connection
+	afterEnsure func()
 }
 
 func (p *featurePatchGitProvider) ComposeSource(ctx context.Context, _ delivery.Connection, plan delivery.SourcePlan) (delivery.SourceResult, error) {
@@ -43,11 +44,12 @@ func (p *featurePatchGitProvider) Compare(ctx context.Context, _ delivery.Connec
 }
 
 type featurePatchGitAPI struct {
-	t      *testing.T
-	dir    string
-	mu     sync.Mutex
-	writes []string
-	merges int
+	t                   *testing.T
+	dir                 string
+	mu                  sync.Mutex
+	writes              []string
+	merges              int
+	loseRetentionCreate bool
 }
 
 func (f *featurePatchGitAPI) git(args ...string) (string, error) {
@@ -94,6 +96,14 @@ func (f *featurePatchGitAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p := strings.TrimPrefix(r.URL.Path, "/repos/owner/source/")
 	switch {
+	case r.Method == "GET" && strings.HasPrefix(p, "branches/"):
+		branch := strings.TrimPrefix(p, "branches/")
+		sha, err := f.git("rev-parse", "--verify", "refs/heads/"+branch)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		respond(map[string]any{"name": branch, "commit": map[string]string{"sha": sha}})
 	case r.Method == "GET" && strings.HasPrefix(p, "git/ref/heads/"):
 		branch := strings.TrimPrefix(p, "git/ref/heads/")
 		sha, err := f.git("rev-parse", "--verify", "refs/heads/"+branch)
@@ -108,7 +118,7 @@ func (f *featurePatchGitAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(err)
 			return
 		}
-		if !strings.HasPrefix(in.Ref, "refs/heads/generated/") {
+		if !strings.HasPrefix(in.Ref, "refs/heads/generated/") && !strings.HasPrefix(in.Ref, "refs/heads/rcp/revisions/") {
 			fail(fmt.Errorf("non-generated ref write: %s", in.Ref))
 			return
 		}
@@ -117,6 +127,11 @@ func (f *featurePatchGitAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.writes = append(f.writes, in.Ref)
+		if f.loseRetentionCreate && strings.HasPrefix(in.Ref, "refs/heads/rcp/revisions/") {
+			f.loseRetentionCreate = false
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 	case r.Method == "GET" && strings.HasPrefix(p, "compare/"):
 		pair := strings.Split(strings.TrimPrefix(p, "compare/"), "...")
@@ -291,7 +306,7 @@ func TestFeaturePatchRealGitPreservesOtherFeatureAndPinnedBase(t *testing.T) {
 		t.Fatalf("source retry changed output or merged again: %+v %v", retry, err)
 	}
 	for _, ref := range f.writes {
-		if !strings.HasPrefix(ref, "refs/heads/generated/") {
+		if !strings.HasPrefix(ref, "refs/heads/generated/") && !strings.HasPrefix(ref, "refs/heads/rcp/revisions/") {
 			t.Fatalf("out-of-scope Git write: %s", ref)
 		}
 	}
@@ -299,4 +314,20 @@ func TestFeaturePatchRealGitPreservesOtherFeatureAndPinnedBase(t *testing.T) {
 		t.Fatal("source fixture crossed build/main/GitOps boundary")
 	}
 	t.Logf("real Git source fixture: M=%s A1=%s A2=%s B1=%s excluded B2=%s M2=%s baseline=%s patched=%s merges=%d; no build or live adoption", m, a1, a2, b1, b2, m2, baselineSHA, source.Result.SHA, f.merges)
+}
+
+func (p *featurePatchGitProvider) EnsureRef(ctx context.Context, _ delivery.Connection, repository, branch, sha string) (string, error) {
+	result, err := p.github.EnsureRef(ctx, p.conn, repository, branch, sha)
+	if p.afterEnsure != nil {
+		hook := p.afterEnsure
+		p.afterEnsure = nil
+		hook()
+	}
+	return result, err
+}
+func (p *featurePatchGitProvider) ObserveBranch(ctx context.Context, _ delivery.Connection, repository, branch string) (delivery.BranchInfo, error) {
+	return p.github.ObserveBranch(ctx, p.conn, repository, branch)
+}
+func (p *featurePatchGitProvider) VerifyComposedSource(ctx context.Context, _ delivery.Connection, plan delivery.SourcePlan, result delivery.SourceResult) error {
+	return p.github.VerifyComposedSource(ctx, p.conn, plan, result)
 }

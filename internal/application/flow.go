@@ -114,7 +114,7 @@ func flowSources(st *domain.State, comp domain.Composition, opID string, product
 	}
 	return out, nil
 }
-func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *workerconfig.Authority) (any, domain.Meta, error) {
+func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *workerconfig.Authority, origin *composeRefreshOrigin) (any, domain.Meta, error) {
 	switch c.Action {
 	case "create_hotfix":
 		var in struct {
@@ -317,6 +317,11 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 			op.RequestKey, op.RequestHash = input.IdempotencyKey, hash
 			op.FeatureID = c.FeatureID
 			m.FeatureID = c.FeatureID
+		}
+		if op.Kind == "COMPOSE" {
+			if err := freezeSourceRetention(st, &op, origin); err != nil {
+				return nil, m, err
+			}
 		}
 		st.Operations = append(st.Operations, op)
 		return op, m, nil

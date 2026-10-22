@@ -63,6 +63,9 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	return s.executeCommand(ctx, c, nil)
+}
+func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
 	if c.Action == "cancel_native_delivery" {
 		return s.cancelNativeDelivery(ctx, c)
 	}
@@ -86,7 +89,7 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 			}
 		}
 		var err error
-		result, err = applyAuthorized(st, c, s.externalWorkers)
+		result, err = applyAuthorizedOrigin(st, c, s.externalWorkers, origin)
 		return err
 	})
 	return result, err
@@ -366,6 +369,9 @@ func validateIntegration(st *domain.State, in domain.Integration) error {
 }
 func apply(st *domain.State, c domain.Command) (any, error) { return applyAuthorized(st, c, nil) }
 func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig.Authority) (any, error) {
+	return applyAuthorizedOrigin(st, c, authority, nil)
+}
+func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *workerconfig.Authority, origin *composeRefreshOrigin) (any, error) {
 	if strings.TrimSpace(c.Actor) == "" {
 		return nil, invalid("actor required")
 	}
@@ -533,7 +539,7 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 		}
 	case "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
 		var err error
-		out, m, err = applyFlow(st, c, m, authority)
+		out, m, err = applyFlow(st, c, m, authority, origin)
 		if err != nil {
 			return nil, err
 		}

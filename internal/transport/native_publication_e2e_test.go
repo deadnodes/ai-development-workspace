@@ -424,3 +424,39 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 		})
 	}
 }
+
+func (f *nativePRFixture) EnsureRef(ctx context.Context, _ delivery.Connection, _, branch, sha string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if f.generated == nil {
+		f.generated = map[string]string{}
+	}
+	if prior := f.generated[branch]; prior != "" && prior != sha {
+		return "", fmt.Errorf("retained ref moved")
+	}
+	f.generated[branch] = sha
+	return sha, nil
+}
+func (f *nativePRFixture) ObserveBranch(ctx context.Context, _ delivery.Connection, _, branch string) (delivery.BranchInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return delivery.BranchInfo{}, err
+	}
+	sha := f.generated[branch]
+	if sha == "" {
+		return delivery.BranchInfo{}, fmt.Errorf("retained ref missing")
+	}
+	return delivery.BranchInfo{Name: branch, SHA: sha}, nil
+}
+func (f *nativePRFixture) DiscoverBranchPullRequests(context.Context, delivery.Connection, string, string) ([]delivery.PullRequestObservation, error) {
+	return nil, nil
+}
+func (f *nativePRFixture) VerifyComposedSource(ctx context.Context, _ delivery.Connection, p delivery.SourcePlan, r delivery.SourceResult) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.Branch != p.TargetBranch || r.SHA != f.generated[p.TargetBranch] {
+		return fmt.Errorf("generated source changed")
+	}
+	return nil
+}

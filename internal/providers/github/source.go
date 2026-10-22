@@ -13,6 +13,7 @@ import (
 )
 
 var _ delivery.SourceProvider = (*Provider)(nil)
+var _ delivery.ComposedSourceVerifier = (*Provider)(nil)
 
 func validSourceBranch(s string) bool {
 	if s == "" || s == "@" || strings.HasPrefix(s, "-") || len(s) > 200 || strings.ContainsAny(s, " ~^:?*[\\\t\r\n") || strings.Contains(s, "..") || strings.Contains(s, "@{") || strings.HasSuffix(s, "/") || strings.Contains(s, "//") {
@@ -93,27 +94,99 @@ func (p *Provider) proveSourceStep(ctx context.Context, c delivery.Connection, r
 	return commit.SHA == current && commit.Message == message && len(commit.Parents) == 2 && commit.Parents[0].SHA == previous && commit.Parents[1].SHA == head, nil
 }
 
+func validateSourcePlan(plan delivery.SourcePlan) error {
+	if !validSourceBranch(plan.TargetBranch) || !strings.HasPrefix(plan.TargetBranch, "generated/") || !validSourceBranch(plan.BaseRef) || strings.HasPrefix(plan.BaseRef, "generated/") || !operationID.MatchString(plan.OperationID) || !fullSHA.MatchString(plan.BaseSHA) || len(plan.HeadSHAs) > 20 || len(plan.Repository) == 0 || len(plan.Repository) > 256 {
+		return errors.New("invalid bounded source composition plan")
+	}
+	for i, head := range plan.HeadSHAs {
+		branch, _ := sourceStepIdentity(plan, i)
+		if !fullSHA.MatchString(head) || len(head) != len(plan.BaseSHA) || !validSourceBranch(branch) {
+			return errors.New("composition requires bounded refs and full source SHAs of one format")
+		}
+	}
+	if plan.ResolutionSHA != "" {
+		if !fullSHA.MatchString(plan.ResolutionSHA) || len(plan.ResolutionSHA) != len(plan.BaseSHA) || !operationID.MatchString(plan.ResolutionConflictID) {
+			return errors.New("invalid resolution")
+		}
+	} else if plan.ResolutionConflictID != "" {
+		return errors.New("resolution conflict requires a resolution SHA")
+	}
+	return nil
+}
+
+func sourceStepIdentity(plan delivery.SourcePlan, index int) (string, string) {
+	encoded, _ := json.Marshal(plan)
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256(encoded))
+	return fmt.Sprintf("%s-step-%d", plan.TargetBranch, index+1), fmt.Sprintf("Release Control Plane composition %s step %d", fingerprint, index+1)
+}
+
+// VerifyComposedSource checks current refs using the same identity rules as
+// ComposeSource, without any Git mutations or repair fallback. This is structural
+// provenance under the trusted Git provider/executor boundary: matching parents
+// and message do not cryptographically prove the correctness of a merge's tree.
+func (p *Provider) VerifyComposedSource(ctx context.Context, c delivery.Connection, plan delivery.SourcePlan, expected delivery.SourceResult) error {
+	if err := validateSourcePlan(plan); err != nil {
+		return err
+	}
+	if expected.Branch != plan.TargetBranch || !fullSHA.MatchString(expected.SHA) || len(expected.SHA) != len(plan.BaseSHA) || expected.Conflict || expected.Detail != "" {
+		return errors.New("invalid expected composed source result")
+	}
+	repo, err := p.repository(ctx, c, plan.Repository)
+	if err != nil {
+		return err
+	}
+	previous := plan.BaseSHA
+	if plan.ResolutionSHA != "" {
+		for _, ancestor := range append([]string{plan.BaseSHA}, plan.HeadSHAs...) {
+			ok, err := p.sourceAncestor(ctx, c, repo, ancestor, plan.ResolutionSHA)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("resolution omits selected history")
+			}
+		}
+		previous = plan.ResolutionSHA
+	} else {
+		for i, head := range plan.HeadSHAs {
+			branch, message := sourceStepIdentity(plan, i)
+			current, err := p.sourceRef(ctx, c, repo, branch)
+			if err != nil {
+				return err
+			}
+			proven, err := p.proveSourceStep(ctx, c, repo, current, previous, head, message)
+			if err != nil {
+				return err
+			}
+			if !proven {
+				return errors.New("generated source step no longer matches pinned composition")
+			}
+			previous = current
+		}
+	}
+	current, err := p.sourceRef(ctx, c, repo, plan.TargetBranch)
+	if err != nil {
+		return err
+	}
+	if current != previous || current != expected.SHA {
+		return errors.New("generated target differs from expected composed source")
+	}
+	return nil
+}
+
 // ComposeSource only invokes server-side Git merges. Each step has its own ref,
 // allowing a retry to prove the exact previous/head parents even after a lost response.
 // A tampered branch is rejected instead of reset or force-pushed.
 func (p *Provider) ComposeSource(ctx context.Context, c delivery.Connection, plan delivery.SourcePlan) (delivery.SourceResult, error) {
 	out := delivery.SourceResult{Branch: plan.TargetBranch}
-	if !validSourceBranch(plan.TargetBranch) || !strings.HasPrefix(plan.TargetBranch, "generated/") || !validSourceBranch(plan.BaseRef) || strings.HasPrefix(plan.BaseRef, "generated/") || plan.OperationID == "" || !fullSHA.MatchString(plan.BaseSHA) || len(plan.HeadSHAs) > 20 {
-		return out, errors.New("invalid bounded source composition plan")
-	}
-	for _, head := range plan.HeadSHAs {
-		if !fullSHA.MatchString(head) {
-			return out, errors.New("composition requires full source SHAs")
-		}
+	if err := validateSourcePlan(plan); err != nil {
+		return out, err
 	}
 	repo, err := p.repository(ctx, c, plan.Repository)
 	if err != nil {
 		return out, err
 	}
 	if plan.ResolutionSHA != "" {
-		if !fullSHA.MatchString(plan.ResolutionSHA) || plan.ResolutionConflictID == "" {
-			return out, errors.New("invalid resolution")
-		}
 		for _, ancestor := range append([]string{plan.BaseSHA}, plan.HeadSHAs...) {
 			ok, e := p.sourceAncestor(ctx, c, repo, ancestor, plan.ResolutionSHA)
 			if e != nil {
@@ -133,12 +206,9 @@ func (p *Provider) ComposeSource(ctx context.Context, c delivery.Connection, pla
 		out.SHA = sha
 		return out, nil
 	}
-	encoded, _ := json.Marshal(plan)
-	fingerprint := fmt.Sprintf("%x", sha256.Sum256(encoded))
 	previous := plan.BaseSHA
 	for i, head := range plan.HeadSHAs {
-		branch := fmt.Sprintf("%s-step-%d", plan.TargetBranch, i+1)
-		message := fmt.Sprintf("Release Control Plane composition %s step %d", fingerprint, i+1)
+		branch, message := sourceStepIdentity(plan, i)
 		current, err := p.ensureSourceRef(ctx, c, repo, branch, previous)
 		if err != nil {
 			return out, err

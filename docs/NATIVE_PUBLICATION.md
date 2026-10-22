@@ -63,8 +63,14 @@ publication. Failed or unknown execution never falls back to Actions, registry
 tags or a different artifact. Unknown RUNNING build execution requires explicit
 reconciliation and is never executed again automatically.
 
-Native DEV/TEST COMPOSE children use this same path. A server-derived source
-proof identifies the immutable DEPLOY/COMPOSE snapshots and generated source
+Native DEV/TEST COMPOSE children use this same path. Their parent first freezes
+explicit source-retention intent, admits exact per-revision refs with current
+readback, and verifies retained/generated Git identities before child creation.
+A saved generated result does not bypass the fresh read-only drift checks.
+The child transaction requires the same unexpired parent lease and checked
+source/proof/configuration snapshot; native authority is revalidated after Git I/O.
+Source refs are reachability observations, not eternal repository protection.
+A server-derived source proof identifies the immutable DEPLOY/COMPOSE snapshots and generated source
 revision. Base-only compositions need no fabricated IntegrationID. Public queue
 commands cannot inject source proofs or publish managed builds separately.
 COMPOSE persists each component's resolved authority and absolute deadline at

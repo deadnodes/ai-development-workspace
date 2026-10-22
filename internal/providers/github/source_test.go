@@ -59,6 +59,9 @@ func TestSourceCompositionRetryAndTampering(t *testing.T) {
 		if err != nil || out.SHA != m {
 			t.Fatalf("%+v %v", out, err)
 		}
+		if err := p.VerifyComposedSource(context.Background(), c, plan, out); err != nil {
+			t.Fatalf("production composition failed read-only verification: %v", err)
+		}
 	}
 	if merges != 1 {
 		t.Fatalf("redispatched merge %d", merges)

@@ -26,3 +26,9 @@ type SourceProvider interface {
 	ComposeSource(context.Context, Connection, SourcePlan) (SourceResult, error)
 	AdvanceMain(context.Context, Connection, string, string, string, string) (SourceResult, error)
 }
+
+// ComposedSourceVerifier rereads generated refs and their structural provenance.
+// Implementations must not create or repair refs or recompute a composition.
+type ComposedSourceVerifier interface {
+	VerifyComposedSource(context.Context, Connection, SourcePlan, SourceResult) error
+}

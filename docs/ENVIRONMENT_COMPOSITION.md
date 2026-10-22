@@ -12,7 +12,17 @@ A composition pins a base commit and an ordered selection of revision IDs for ev
 
 Example: DEV revision 12 contains main@M + PAY/INT-03@P + AUTH/INT-02@A. DEV revision 13 can contain main@M2 + PAY/INT-03@P2, excluding AUTH. Revision 12 and the P/A source captures remain unchanged. Recomposition starts from the chosen base; removing AUTH is not a chain of guessed revert commits.
 
-Recording SHAs alone does not retain Git objects. The Git adapter must keep protected immutable refs for captured source versions (for example refs/rcp/integrations/<integration>/<revision>) before branches are deleted or rewritten. Capture alone is client-reported. Execution verifies pinned source/base relationships through the Git provider and rejects moved bases or failed merges; this does not prove semantic independence or preserve every captured object forever. A feature branch that imports unrelated dev work cannot be cleanly separated merely from its name; feature source branches should start from main and dependencies must be declared.
+Recording SHAs alone does not retain Git objects. New explicit DEV/TEST PR-only
+COMPOSE operations freeze exact retained refs `rcp/revisions/<revision-id>` for
+all selected immutable captures, then create only absent refs and read back exact
+SHAs before merging. The operation stores timestamped retention observations;
+manual revision records remain caller-reported. A current reachable ref is not
+repository-side branch protection or eternal object retention. Foreign writers
+can still move/delete refs; later source boundaries detect that drift and block.
+The existing explicit `protect_integration_revision` action still requires
+`approve: true`; its approval is not reused as permission for another operation.
+Feature source branches should start from main and declare their dependencies.
+
 
 ## Planning slice implemented now
 - Create applications and arbitrary environment targets.
@@ -115,6 +125,56 @@ explicit promotion click. A DEV composition never becomes a production release
 merely because its generated branch was built.
 
 The UI/API/MCP expose `reconcile_composition`, which queues a durable COMPOSE parent and per-component deployment children. Release candidate preparation and exact-digest promotion use separate operations and explicit approvals. Commands, evidence requirements and current limitations are documented in [test scenarios and release flow](TEST_AND_RELEASE_FLOW.md#commands-and-evidence).
+
+## Retained source execution and drift boundaries
+
+Explicit `assemble_environment`, `reconcile_composition` and
+`update_environment_feature` requests now establish typed retention intent only
+for configured enabled DEV/TEST PR-only targets. Intent binds Product, parent,
+repository, full source plan/connection/configuration and ordered immutable
+revision IDs to exact `rcp/revisions/<revision-id>` names and head SHAs. Invalid
+or oversized derived names and duplicate-head ownership refuse atomically.
+Same-SHA captures in separate operations retain distinct revision-ID refs.
+Older operations without intent fail closed with new-operation guidance.
+No public field or actor string can supply retention authority or lineage.
+
+The normal COMPOSE worker uses existing create-only `EnsureRef` and scoped ref
+readback. One missing revision is pinned and admitted per durable tick. Existing
+progress is reused after reopen or a lost create response. Admitted missing/moved
+refs block rather than being recreated from old evidence. Full declared source
+history is independently validated, so a valid ref never proves an integration
+contains only its declared work. Every call uses Tick's bounded 25-second context;
+success admission requires its current unexpired 45-second lease, selected parent,
+frozen bindings/connections/grants and native execution authority, even when no
+new worker has replaced the same owner token. Late remote creation can leave an
+exact orphan ref; it cannot admit progress or queue children after supersession.
+Conflict results also require the current unexpired lease and frozen authority:
+conflict context, audit and the parent blocked outcome are admitted atomically.
+
+A read-only source verifier reuses the production adapter's exact step refs,
+commit parents/message, ancestry and final result identity. It never calls
+composition/merge/ref creation as a verification fallback. Saved source results
+are reread before consumption and all retained/generated identities are reread
+again at the actual child-queue boundary, outside the database transaction. The
+same transaction that creates children compares the checked frozen snapshot and
+current lease/authority. Missing pins, final/step drift, malformed proof or provider
+failure preserve prior runtime and immutable history while blocking new builds.
+These checks prove current structural provider provenance under the trusted Git
+provider boundary; parents/messages are not cryptographic proof of merge trees,
+and the checks do not lock remote Git against changes after the observation.
+
+Automatic full refresh may inherit retention authority only through a private
+server call from the currently selected parent's valid explicit intent and exact
+selection CAS, preserving that parent's selected integration scope. Legacy
+`auto_refresh: true` selections without intent create no operation, refs or audit.
+A new explicit request can establish authority before later automatic refresh.
+Creation authority is checked by ordered append-only command/restore provenance
+for the complete ancestor chain through the explicit root, rather than clocks
+from different hosts. Missing, ambiguous or foreign lineage fails closed.
+Cancelled or pre-restore intent cannot restart automatic writes; restored work
+remains historical and existing restore quarantine still applies. Pinned feature
+patches keep `auto_refresh: false`. Production/main advancement rules and source
+worker/mirror ingestion remain separate from this source capability.
 
 ## Independent environment reconciliation
 

@@ -44,6 +44,29 @@ the same assembly once for a selected DEV/TEST composition only when its persist
 `auto_refresh` is explicitly true and no assembly is running. Refresh checks its
 captured selection token atomically; production and pinned compositions are excluded.
 
+New DEV/TEST COMPOSE execution requires enabled PR-only mappings for every
+component. Explicit assemble/reconcile/feature-patch requests freeze server-derived
+`source_retention_origin_id` and each source's typed `retention` intent (exact
+revision-ID refs, ordered SHAs and input hash). `sources[].retained` holds bounded
+timestamped readback observations; callers cannot inject these fields. The worker
+admits one create-only retained ref per bounded tick, validates complete declared
+history independently, and rereads admitted refs plus structural generated
+step/final identity before consuming saved results and before creating children.
+All provider I/O is outside transactions; the child/admission transaction requires
+an unexpired current lease, exact checked snapshots, current selection/configuration,
+connection grants and native authority. Lost responses/reopen can observe an
+existing exact ref; an admitted missing/moved ref blocks without healing. Legacy
+operations without intent require a new explicit request. Scheduler refresh has a
+private origin and may inherit only the selected parent's valid explicit intent,
+CAS and integration scope. Legacy, cancelled and pre-restore lineage cannot mint
+new automatic writes. Complete lineage must have unambiguous scoped creation
+events after the last restore in durable append order; host-clock ordering is not
+authority. Conflict context, audit and parent BLOCKED outcome use the same current
+unexpired lease/frozen-authority admission transaction. Ref observations are reachable-retention evidence, not
+permanent branch protection or cryptographic proof of merge contents. Existing
+`protect_integration_revision` still requires `approve: true`. Release-candidate
+and promotion semantics do not gain retention-write authority from this change.
+
 State adds `applications`, `integration_revisions`, `compositions` arrays. Application fields: id/product_id/meta, name, repository_id, path. IntegrationRevision fields: id/product_id/feature_id/meta, integration_id, repository_id, branch, base_commit, head_commit, commits. Composition fields: id/product_id/meta, environment_id, name, auto_refresh (default false), status=`planned`, components, application_snapshots (Application[]), revision_snapshots (IntegrationRevision[]), environment_snapshot (Environment). Snapshots and revisions have no update action. Recording a newer integration revision never rewrites prior compositions.
 
 Resume includes feature-linked integration_revisions, relevant applications, and compositions containing revision snapshots for that feature. Automatic branch construction, Git verification, Flux reconciliation and Kubernetes changes remain pending provider work.

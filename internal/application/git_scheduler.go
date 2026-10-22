@@ -208,6 +208,10 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 		if composition == nil || !composition.AutoRefresh || composition.ProductID != env.ProductID {
 			continue
 		}
+		parent := operationByID(&st, env.DesiredOperationID)
+		if parent == nil || parent.Kind != "COMPOSE" || !sourceRetentionRefreshAllowed(&st, *parent) {
+			continue
+		}
 		compositionTarget := false
 		for _, target := range st.EnvironmentBindings {
 			if target.EnvironmentID == env.ID && target.AllowDeploy && (target.Purpose == "DEV" || target.Purpose == "TEST") {
@@ -258,12 +262,12 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 		if pending {
 			continue
 		}
-		_, err := s.Execute(ctx, domain.Command{Action: "assemble_environment", Actor: autoComposeActor, ProductID: env.ProductID, Data: map[string]any{
+		_, err := s.executeCommand(ctx, domain.Command{Action: "assemble_environment", Actor: autoComposeActor, ProductID: env.ProductID, Data: map[string]any{
 			"environment_id":     env.ID,
 			"name":               composition.Name + " (refresh)",
 			"integration_ids":    selected,
 			"expected_selection": selectionToken(env),
-		}})
+		}}, &composeRefreshOrigin{Selection: selectionToken(env), ParentID: parent.ID})
 		if errors.Is(err, ErrSelectionChanged) {
 			return nil
 		}

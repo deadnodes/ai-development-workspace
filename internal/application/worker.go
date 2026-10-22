@@ -492,6 +492,14 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
 		}
+		if op.Kind == "COMPOSE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.retentionLease(st, op, token); err != nil {
+				return err
+			}
+		}
 		guardChild := phase == "APPLY_UNCERTAIN"
 		if parent := operationByID(st, op.ParentID); parent != nil && flowHasNative(st, *parent) {
 			guardChild = true

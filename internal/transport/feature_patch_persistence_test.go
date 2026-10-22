@@ -78,6 +78,9 @@ func TestFeaturePatchHTTPMCPPersistence(t *testing.T) {
 				command(domain.Command{Action: "create_feature", ID: "f" + id, ProductID: "p", Data: map[string]any{"title": id, "goal": id}})
 				command(domain.Command{Action: "create_integration", ID: "i" + id, FeatureID: "f" + id, Data: map[string]any{"title": id, "objective": id, "repositories": []string{"source"}}})
 				for n, ch := range []string{"b", "c", "d"} {
+					if id == "b" {
+						ch = []string{"e", "f", "9"}[n]
+					}
 					rid := id + string(rune('1'+n))
 					command(domain.Command{Action: "record_integration_revision", ID: rid, IntegrationID: "i" + id, Data: map[string]any{"repository_id": "source", "branch": "feature/" + id, "base_commit": deliveryBase, "head_commit": strings.Repeat(ch, 40), "commits": []string{strings.Repeat(ch, 40)}}})
 				}
@@ -135,6 +138,9 @@ func TestFeaturePatchHTTPMCPPersistence(t *testing.T) {
 			if e = json.Unmarshal(post("/api/commands", a, 200), &first); e != nil {
 				t.Fatal(e)
 			}
+			if first.SourceRetentionOriginID != first.ID || len(first.Sources) != 1 || first.Sources[0].Retention == nil || first.Sources[0].Retention.OperationID != first.ID || len(first.Sources[0].Retention.Revisions) != 2 || first.Sources[0].Retention.Revisions[0].Branch != "rcp/revisions/a2" || first.Sources[0].Retention.Revisions[1].Branch != "rcp/revisions/b1" {
+				t.Fatal("HTTP operation omitted exact server-derived source retention intent")
+			}
 			if first.FeatureUpdate.ExpectedSelection.Generation != generation {
 				t.Fatal("HTTP rounded CAS token")
 			}
@@ -152,7 +158,21 @@ func TestFeaturePatchHTTPMCPPersistence(t *testing.T) {
 			if comp.AutoRefresh || !reflect.DeepEqual(comp.Components[0].RevisionIDs, []string{"a2", "b2"}) || comp.Components[0].BaseCommit != deliveryBase || st.Environments[0].SelectionGeneration != generation+2 {
 				t.Fatalf("lost state %+v", st.Environments[0])
 			}
+			// The current typed operation is readable over MCP without exposing any
+			// caller-supplied pin/ref fields or replacing historical source snapshots.
+			operationResult, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_operation", Arguments: map[string]any{"operation_id": first.ID}})
+			if err != nil || operationResult.IsError {
+				t.Fatalf("retention operation MCP readback: %v %+v", err, operationResult)
+			}
+			rawOperation, _ := json.Marshal(operationResult.StructuredContent)
+			if !bytes.Contains(rawOperation, []byte("rcp/revisions/a2")) || !bytes.Contains(rawOperation, []byte(first.SourceRetentionOriginID)) {
+				t.Fatalf("MCP operation omitted typed retention intent: %s", rawOperation)
+			}
 			before := fingerprint()
+			post("/api/commands", map[string]any{"action": "reconcile_composition", "actor": "agent/feature-patch", "id": "baseline", "source_retention_origin_id": "forged", "data": map[string]any{}}, 400)
+			if fingerprint() != before {
+				t.Fatal("top-level retention intent injection changed state")
+			}
 			result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: a})
 			if e != nil || result.IsError {
 				t.Fatalf("generic MCP replay %v %+v content=%+v", e, result, result.Content[0])

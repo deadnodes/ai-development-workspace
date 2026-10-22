@@ -13,55 +13,59 @@ func (s *Service) saveCompositionConflict(ctx context.Context, op domain.Externa
 		if current == nil || current.LeaseOwner != token {
 			return invalid("operation lease changed")
 		}
-		for _, c := range st.CompositionConflicts {
-			if c.OperationID == op.ID && c.RepositoryID == source.RepositoryID {
-				return nil
-			}
-		}
-		now := time.Now().UTC()
-		c := domain.CompositionConflict{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: op.RequestedBy, CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, RepositoryID: source.RepositoryID, Source: source, Status: "requires_resolution"}
-		if op.CompositionSnapshot != nil {
-			c.CompositionID = op.CompositionSnapshot.ID
-			affected := []string{}
-			for _, r := range op.CompositionSnapshot.RevisionSnapshots {
-				if r.RepositoryID == source.RepositoryID && !slices.Contains(affected, r.IntegrationID) {
-					affected = append(affected, r.IntegrationID)
-				}
-			}
-			for _, iid := range affected {
-				if in := integration(st, iid); in != nil {
-					c.Integrations = append(c.Integrations, *in)
-					if f := feature(st, in.FeatureID); f != nil {
-						c.Features = append(c.Features, *f)
-					}
-					for _, m := range st.Memories {
-						if m.FeatureID == in.FeatureID && (m.IntegrationID == "" || m.IntegrationID == iid) {
-							c.Memories = append(c.Memories, m)
-						}
-					}
-				}
-			}
-		}
-		for _, gate := range st.Gates {
-			relevant := false
-			for _, in := range c.Integrations {
-				if slices.Contains(gate.IntegrationIDs, in.ID) {
-					relevant = true
-				}
-			}
-			if relevant {
-				c.Gates = append(c.Gates, gate)
-				for _, check := range st.Checks {
-					if check.GateID == gate.ID {
-						c.Checks = append(c.Checks, check)
-					}
-				}
-			}
-		}
-		st.CompositionConflicts = append(st.CompositionConflicts, c)
-		st.Events = append(st.Events, domain.Event{ID: id(), Action: "composition_conflict_detected", Actor: op.RequestedBy, At: now, EntityID: c.ID, ProductID: op.ProductID})
+		appendCompositionConflict(st, op, source, time.Now().UTC())
 		return nil
 	})
+}
+
+// appendCompositionConflict is transaction-local: callers own admission policy.
+func appendCompositionConflict(st *domain.State, op domain.ExternalOperation, source domain.FlowSource, now time.Time) {
+	for _, c := range st.CompositionConflicts {
+		if c.OperationID == op.ID && c.RepositoryID == source.RepositoryID {
+			return
+		}
+	}
+	c := domain.CompositionConflict{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: op.RequestedBy, CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, RepositoryID: source.RepositoryID, Source: source, Status: "requires_resolution"}
+	if op.CompositionSnapshot != nil {
+		c.CompositionID = op.CompositionSnapshot.ID
+		affected := []string{}
+		for _, r := range op.CompositionSnapshot.RevisionSnapshots {
+			if r.RepositoryID == source.RepositoryID && !slices.Contains(affected, r.IntegrationID) {
+				affected = append(affected, r.IntegrationID)
+			}
+		}
+		for _, iid := range affected {
+			if in := integration(st, iid); in != nil {
+				c.Integrations = append(c.Integrations, *in)
+				if f := feature(st, in.FeatureID); f != nil {
+					c.Features = append(c.Features, *f)
+				}
+				for _, m := range st.Memories {
+					if m.FeatureID == in.FeatureID && (m.IntegrationID == "" || m.IntegrationID == iid) {
+						c.Memories = append(c.Memories, m)
+					}
+				}
+			}
+		}
+	}
+	for _, gate := range st.Gates {
+		relevant := false
+		for _, in := range c.Integrations {
+			if slices.Contains(gate.IntegrationIDs, in.ID) {
+				relevant = true
+			}
+		}
+		if relevant {
+			c.Gates = append(c.Gates, gate)
+			for _, check := range st.Checks {
+				if check.GateID == gate.ID {
+					c.Checks = append(c.Checks, check)
+				}
+			}
+		}
+	}
+	st.CompositionConflicts = append(st.CompositionConflicts, c)
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: "composition_conflict_detected", Actor: op.RequestedBy, At: now, EntityID: c.ID, ProductID: op.ProductID})
 }
 
 func applyCompositionConflict(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
