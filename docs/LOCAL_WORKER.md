@@ -180,3 +180,70 @@ staging and historical archives consume quota; no historical GC or automatic
 retention is implemented. Keep capacity under operator control. Spool export is
 optional for standalone local builds, but required for unattended handoff across
 sequential native deliveries with unchanged operator configurations.
+
+## Explicit local cleanup reconciliation
+
+A known-ID `CREATE_UNCERTAIN` remains historical uncertainty after the watchdog
+removes its exact owned container. The local operator can close only its cleanup
+obligation. This command does **not** reconcile server job state, send a report,
+mark a job PASSED, release quarantine, or resume the original execution. Use the
+separate authorized server `reconcile_worker_job` failure/cancellation operation
+when server state also requires reconciliation.
+
+Before existing cleanup removes a resource, the watchdog/supervisor attempts a
+bounded read-only presence check. It opens one `docker system dial-stdio` stream,
+reads daemon identity, and inspects the full container ID, exact intent name and
+owner label over that same stream. The private journal stores only this typed
+proof and observation time. The helper uses raw HTTP requests on that stream,
+never a reconnecting HTTP transport. Docker CLI's audited
+[v28.5.2 implementation](https://github.com/docker/cli/blob/v28.5.2/cli/command/system/dial_stdio.go)
+and the tested
+[v29.3.1 implementation](https://github.com/docker/cli/blob/v29.3.1/cli/command/system/dial_stdio.go)
+dial once and copy bytes without reconnecting. Keep an operator-controlled CLI
+with this behavior. Unsupported transports, disconnects and invalid responses
+produce no proof; existing exact-ID cleanup still runs conservatively.
+Canonical struct field spellings are required in daemon responses and journals;
+case-distinct arbitrary Docker label keys remain valid. Journal writes validate
+their complete bounded content before replacement. If optional presence evidence
+cannot fit the journal's 8192-byte bound, cleanup continues without that proof,
+preserves the readable journal, and explicit closure remains unavailable.
+
+Use the canonical absolute private state directory configured for the original
+supervisor and its exact 32-hex owner. Inspection acquires the existing exclusive
+state and journal locks without waiting. Its bounded JSON includes owner,
+journal SHA256, resource states/full IDs, proven daemon identities, local closure
+eligibility and reasons. `PRESENCE_UNKNOWN` and `RESOURCE_ID_UNKNOWN` remain
+unknown. Inspection performs no Docker query; eligibility describes local
+preconditions, with fresh daemon verification still required at reconciliation.
+
+```sh
+bin/rcp-worker inspect-cleanup /canonical/private/worker-state OWNER
+bin/rcp-worker reconcile-cleanup /canonical/private/worker-state OWNER EXPECTED_JOURNAL_SHA256 operator/host-01
+```
+
+`operator/host-01` is a configured non-sensitive local provenance reference,
+not an authenticated server identity or approval. Use letters, digits, `_`, `/`
+and `-` (1–64 characters, starting with a letter/digit); do not use personal names
+or email addresses. Copy the exact hash from inspection. Reconciliation accepts
+no arbitrary journal path, Docker endpoint or RCP-supplied command. It reads the
+original operator Docker context/configuration from the private journal only.
+
+Closure requires a positively dead original supervisor (ESRCH or a successful,
+bounded unambiguous zombie-state check), expired lease **and** deadline, unchanged
+canonical private directories/locks/journal and expected hash, and a durable
+presence proof for every resource. Zero-ID uncertainty, old absent containers
+without that proof, live/ambiguous PIDs, unsafe paths, corruption, concurrent
+writers and provider failures refuse. PID reuse conservatively refuses closure.
+One fresh daemon stream must match the persisted daemon identity and prove all
+exact IDs and intent names absent; a same-name replacement is left untouched
+and prevents closure. Changing mutable Docker contexts between invocations
+cannot supply a missing original-daemon presence proof.
+
+The command fsyncs a closure bound to original resource IDs/states, daemon
+identity, accepted hash, operator reference and verification time before Done.
+It preserves original CREATE_UNCERTAIN facts, execution times and actual reports.
+Identical replay with the original accepted hash and operator reference succeeds
+without another write or provider query. A changed proof is rejected. Reopening
+validates closure consistency and its original journal hash. Future supervisor
+recovery/watchdogs respect that closure and may claim unrelated work; they never
+restart the original workload. No local historical journal GC is provided.

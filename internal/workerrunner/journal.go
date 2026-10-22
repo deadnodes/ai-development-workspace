@@ -1,6 +1,7 @@
 package workerrunner
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"releasecontrol/internal/domain"
 	"strconv"
@@ -19,12 +21,14 @@ import (
 )
 
 type ownedResource struct {
-	Name        string `json:"name"`
-	ID          string `json:"id,omitempty"`
-	CreateState string `json:"create_state"`
+	Name        string         `json:"name"`
+	ID          string         `json:"id,omitempty"`
+	CreateState string         `json:"create_state"`
+	Presence    *presenceProof `json:"presence,omitempty"`
 }
 type journal struct {
 	Owner         string               `json:"owner"`
+	Closure       *cleanupClosure      `json:"cleanup_closure,omitempty"`
 	ParentPID     int                  `json:"parent_pid"`
 	DockerContext string               `json:"docker_context"`
 	DockerConfig  string               `json:"docker_config"`
@@ -38,6 +42,7 @@ type journal struct {
 
 var ownerPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var containerIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var errJournalCapacity = errors.New("journal exceeds durable size bound")
 var errUncertainCreate = errors.New("container create outcome uncertain; explicit reconciliation required")
 
 func nonce() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
@@ -46,8 +51,15 @@ func saveJournal(file string, j journal) error {
 	if e != nil {
 		return e
 	}
-	temp := file + ".tmp"
-	f, e := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if len(b) > 8192 {
+		return errJournalCapacity
+	}
+	if _, e = decodeJournal(b); e != nil {
+		return e
+	}
+	temp := file + ".tmp-" + nonce()
+	defer os.Remove(temp)
+	f, e := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
 	if e != nil {
 		return e
 	}
@@ -74,7 +86,7 @@ func saveJournal(file string, j journal) error {
 }
 func readJournal(file string) (journal, error) {
 	var j journal
-	f, e := os.Open(file)
+	f, e := os.OpenFile(file, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if e != nil {
 		return j, e
 	}
@@ -83,24 +95,51 @@ func readJournal(file string) (journal, error) {
 	if e != nil || !stat.Mode().IsRegular() || stat.Size() > 8192 {
 		return j, errors.New("invalid journal")
 	}
-	dec := json.NewDecoder(f)
+	b, e := io.ReadAll(io.LimitReader(f, 8193))
+	if e != nil || len(b) > 8192 {
+		return j, errors.New("invalid journal")
+	}
+	return decodeJournal(b)
+}
+func decodeJournal(b []byte) (journal, error) {
+	var j journal
+	if !uniqueJSONFields(b) || !canonicalStructFields(b, reflect.TypeFor[journal]()) {
+		return j, errors.New("ambiguous journal")
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	e = dec.Decode(&j)
+	e := dec.Decode(&j)
 	if e != nil || !ownerPattern.MatchString(j.Owner) || j.ParentPID < 1 || j.Deadline.IsZero() || j.LeaseUntil.IsZero() {
 		return j, errors.New("invalid journal")
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return j, errors.New("invalid journal trailing data")
 	}
 	if len(j.Resources) > 2 {
 		return j, errors.New("too many owned resources")
 	}
 	seen := map[string]bool{}
+	seenIDs := map[string]bool{}
 	for _, resource := range j.Resources {
 		if resource.Name != "rcp-"+j.Owner+"-check" && resource.Name != "rcp-"+j.Owner+"-buildkit" || resource.ID != "" && !containerIDPattern.MatchString(resource.ID) || resource.CreateState != "CREATING" && resource.CreateState != "CREATED" && resource.CreateState != "CREATE_UNCERTAIN" && resource.CreateState != "REMOVED" || (resource.CreateState == "CREATED" || resource.CreateState == "REMOVED") && resource.ID == "" {
 			return j, errors.New("invalid owned resource")
 		}
-		if seen[resource.Name] || j.Done && resource.CreateState != "REMOVED" {
+		if seen[resource.Name] || j.Done && j.Closure == nil && resource.CreateState != "REMOVED" {
 			return j, errors.New("invalid resource journal completion")
 		}
+		if resource.Presence != nil && !validPresence(resource.Presence, resource, j.Owner) {
+			return j, errors.New("invalid presence proof")
+		}
+		if resource.ID != "" {
+			if seenIDs[resource.ID] {
+				return j, errors.New("duplicate resource identity")
+			}
+			seenIDs[resource.ID] = true
+		}
 		seen[resource.Name] = true
+	}
+	if !validClosure(j) {
+		return j, errors.New("invalid cleanup closure")
 	}
 	return j, nil
 }
@@ -111,7 +150,7 @@ func updateJournal(file string, fn func(*journal) error) (journal, error) {
 		return j, e
 	}
 	defer lock.Close()
-	if e = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); e != nil {
+	if e = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
 		return j, e
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
@@ -152,6 +191,9 @@ func cleanupWith(file string, d dockerControl) error {
 			return errors.New("owned resource vanished from journal")
 		})
 		return err
+	}
+	if j.Closure != nil {
+		return nil
 	}
 	for _, resource := range j.Resources {
 		if resource.CreateState == "REMOVED" {
@@ -214,6 +256,21 @@ func cleanupWith(file string, d dockerControl) error {
 			cancel()
 			return errors.New("resource ownership not proven")
 		}
+		// Capture while the exact owned resource still exists. Lack of proof
+		// never prevents safe cleanup, but forbids later operator closure.
+		if real, ok := d.(docker); ok && resource.Presence == nil {
+			proof, proofErr := presence(real, resource, j.Owner)
+			if proofErr == nil {
+				if e = change(resource.Name, func(r *ownedResource) {
+					if r.ID == proof.ID && r.Presence == nil {
+						r.Presence = proof
+					}
+				}); e != nil && !errors.Is(e, errJournalCapacity) {
+					cancel()
+					return e
+				}
+			}
+		}
 		_, e = d.output(ctx, nil, 1024, "rm", "--force", resource.ID)
 		cancel()
 		if e != nil {
@@ -252,21 +309,27 @@ func startWatchdog(file string, j journal) error {
 	return cmd.Process.Release()
 }
 func parentDead(pid int) bool {
-	if syscall.Kill(pid, 0) != nil {
-		return true
+	return proveParentDead(pid, func(pid int) error { return syscall.Kill(pid, 0) }, func(pid int) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "stat=")
+		cmd.Env = cleanEnv()
+		out := &boundedBuffer{remaining: 128}
+		cmd.Stdout = out
+		e := cmd.Run()
+		return out.String(), e
+	})
+}
+func proveParentDead(pid int, kill func(int) error, ps func(int) (string, error)) bool {
+	if e := kill(pid); e != nil {
+		return errors.Is(e, syscall.ESRCH)
 	}
-	// A killed supervisor may remain a zombie until its owner reaps it. Signal
-	// zero alone treats that as alive, so inspect only its bounded process state.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "stat=")
-	cmd.Env = cleanEnv()
-	out := &boundedBuffer{remaining: 128}
-	cmd.Stdout = out
-	if cmd.Run() != nil {
+	out, e := ps(pid)
+	if e != nil {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(out.String()), "Z")
+	state := strings.TrimSpace(out)
+	return regexp.MustCompile(`^Z[A-Za-z+<NLslW-]*$`).MatchString(state)
 }
 
 // Watchdog is an independent process, deliberately without worker credentials.

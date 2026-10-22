@@ -101,12 +101,17 @@ func TestDurableJournalOwnerAndResourceBoundaries(t *testing.T) {
 	if err != nil || read.Owner != j.Owner || read.Resources[0] != j.Resources[0] {
 		t.Fatal("journal not durable", err)
 	}
+	before, _ := os.ReadFile(file)
 	j.Resources = []ownedResource{{Name: "unrelated-production-container", ID: strings.Repeat("b", 64), CreateState: "CREATED"}}
-	if err = saveJournal(file, j); err != nil {
-		t.Fatal(err)
+	if err = saveJournal(file, j); err == nil {
+		t.Fatal("unowned resource write accepted")
 	}
-	if _, err = readJournal(file); err == nil {
-		t.Fatal("unowned resource accepted")
+	after, _ := os.ReadFile(file)
+	if !bytes.Equal(before, after) {
+		t.Fatal("invalid write replaced valid journal")
+	}
+	if _, err = readJournal(file); err != nil {
+		t.Fatal("invalid write poisoned journal", err)
 	}
 }
 func TestBoundedLogsAndTrustedBuildContext(t *testing.T) {

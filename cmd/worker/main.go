@@ -19,6 +19,20 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 4 && os.Args[1] == "inspect-cleanup" {
+		v, e := workerrunner.InspectLocalCleanup(os.Args[2], os.Args[3])
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(v)
+	}
+	if len(os.Args) == 6 && os.Args[1] == "reconcile-cleanup" {
+		v, e := workerrunner.ReconcileLocalCleanup(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(v)
+	}
 	if len(os.Args) == 6 && os.Args[1] == "prepare-rootfs" {
 		max, e := strconv.ParseInt(os.Args[4], 10, 64)
 		if e != nil {
@@ -56,7 +70,7 @@ func run() error {
 		return workerrunner.Watchdog(os.Args[2], os.Args[3])
 	}
 	if len(os.Args) != 3 || os.Args[1] != "run-once" {
-		return fmt.Errorf("usage: worker run-once OPERATOR_CONFIG.json | recipe-hash RECIPE.json | prepare-rootfs SELECTED_TREE NEW_ARCHIVE MAX_EXPANDED_BYTES MAX_ENTRIES")
+		return fmt.Errorf("usage: worker inspect-cleanup STATE_DIR OWNER | reconcile-cleanup STATE_DIR OWNER EXPECTED_HASH OPERATOR_REF | run-once OPERATOR_CONFIG.json | recipe-hash RECIPE.json | prepare-rootfs SELECTED_TREE NEW_ARCHIVE MAX_EXPANDED_BYTES MAX_ENTRIES")
 	}
 	cfg, err := workerrunner.Load(os.Args[2])
 	if err != nil {
