@@ -66,6 +66,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return s.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "deploy_candidate_dev" {
+		return s.executeDevActivation(ctx, c)
+	}
 	if c.Action == "reserve_candidate_dev" || c.Action == "release_candidate_dev" {
 		return s.executeDevReservation(ctx, c)
 	}

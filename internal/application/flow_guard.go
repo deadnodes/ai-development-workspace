@@ -8,6 +8,9 @@ import (
 )
 
 func flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if devActivationParent(st, op) != nil {
+		return devActivationGuard(st, op)
+	}
 	if err := reservationOperationAllowed(st, op); err != nil {
 		return err
 	}
@@ -47,6 +50,9 @@ func flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
 // A native component makes its request-time authority a fence for the whole
 // composition, including GitHub siblings that might be scheduled first.
 func (s *Service) flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if devActivationParent(st, op) != nil {
+		return s.devActivationAllowed(st, op)
+	}
 	if err := flowChildAllowed(st, op); err != nil {
 		return err
 	}

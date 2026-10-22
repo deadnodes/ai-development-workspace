@@ -206,7 +206,7 @@ func (p *Provider) do(ctx context.Context, method, target, auth string, input an
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, e := p.client.Do(req)
+	res, e := p.guardedClient(ctx).Do(req)
 	if e != nil {
 		return nil, nil, 0, errors.New("provider request failed or timed out")
 	}

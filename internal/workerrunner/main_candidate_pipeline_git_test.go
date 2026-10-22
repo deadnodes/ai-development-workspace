@@ -83,7 +83,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			}
 			t.Setenv("RCP_MAIN_FIXTURE_KEY", string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})))
 			client := &http.Client{Transport: sourceRoundTrip(f.roundTrip)}
-			provider := &composedPipelineProvider{Provider: githubprovider.NewWithClient(client), t: t}
+			provider := &mainCandidateActivationProvider{composedPipelineProvider: &composedPipelineProvider{Provider: githubprovider.NewWithClient(client), t: t}}
 			cfg := sourceFetchConfig(t)
 			cfg.ProductID = "p"
 			cfg.RepositoryID = "source"
@@ -298,6 +298,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			assertOwnedResourcesGone(t, cfg)
 			ticks()
 			var failed domain.CheckResult
+			environments = assertRealCandidateDevActivation(t, server.URL, control, parent.ID, provider, ticks, read, post)
 			post(domain.Command{Action: "record_check_result", CheckID: "source-check", Data: map[string]any{"result": "failed", "commit": f.aHead, "observations": "later causal failure"}}, &failed, true)
 			if e := store.Update(ctx, func(s *domain.State) error {
 				for i := range s.Results {
@@ -320,10 +321,10 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			final := read()
 			builds, _ := json.Marshal(final.ComponentBuilds)
 			envs, _ := json.Marshal(final.Environments)
-			if !bytes.Equal(baseline, builds) || !bytes.Equal(environments, envs) || len(final.RuntimeObservations) != 0 || len(final.Releases) != 0 || len(final.DeliveryBuildRuns) != 0 || len(provider.proposals) != 0 || provider.forbidden != 0 || f.writes.Load() != 0 || f.merges != 0 || f.pulls.Load() == 0 || string(f.git("rev-parse", "main")) != f.mainB {
+			if !bytes.Equal(baseline, builds) || !bytes.Equal(environments, envs) || len(final.RuntimeObservations) != 0 || len(final.Releases) != 0 || len(final.DeliveryBuildRuns) != 0 || len(provider.proposals) != 1 || provider.forbidden != 0 || f.writes.Load() != 0 || f.merges != 0 || f.pulls.Load() == 0 || string(f.git("rev-parse", "main")) != f.mainB {
 				t.Fatal("candidate changed Dev config, desired/runtime, main or GitOps")
 			}
-			t.Logf("readonly PR/main(%s ancestor of %s)→SourceGitHub→actual prod recipe→OCI %s→build-only READY; A-only excludes B, deleted source branch, durable replay; later old-clock FAIL blocks second publication; no promotion/main/GitOps/runtime", f.mainA, f.mainB, a.Digest)
+			t.Logf("readonly PR/main(%s ancestor of %s)→SourceGitHub→actual prod recipe→OCI %s→build-only READY→reserved Dev exact-artifact PR; A-only excludes B, deleted source branch, durable replay; later old-clock FAIL blocks second publication; no promotion/main/runtime", f.mainA, f.mainB, a.Digest)
 		})
 	}
 }

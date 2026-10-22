@@ -224,7 +224,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 						contexts[in.FeatureID] = value
 					}
 				}
-				return map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts}, nil
+				return map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)}, nil
 			}
 		}
 		return nil, missing("operation", id)

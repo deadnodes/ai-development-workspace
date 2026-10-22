@@ -10,6 +10,7 @@ import (
 
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 )
 
 func (s *Service) RunWorker(ctx context.Context, interval time.Duration) error {
@@ -116,6 +117,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	}
 	if op.Kind == "REFRESH_REPOSITORY_GIT" {
 		return true, s.observeRepositoryGit(callCtx, *op, token)
+	}
+	if op.Kind == devActivationKind {
+		return true, s.tickDevActivation(callCtx, *op, token)
 	}
 	if op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION" {
 		return true, s.tickFlow(callCtx, *op, token)
@@ -406,8 +410,24 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			return true, s.finish(ctx, *op, token, "BLOCKED", "artifact digest differs; a new approved operation is required", nil)
 		}
 		op.Artifact = &artifact
+		if devActivationParent(&state, *op) != nil {
+			if e := s.verifyNativeSource(callCtx, *op); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
+			base, e := s.provider.ReadGitOps(callCtx, snapshot.GitOpsConnection, snapshot.GitOpsRequest)
+			if e != nil {
+				return true, s.retry(ctx, *op, token, "candidate Dev GitOps read: "+e.Error())
+			}
+			if base.HeadSHA == "" || base.BlobSHA == "" {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "candidate Dev GitOps base evidence missing", nil)
+			}
+			op.GitOpsBase = &base
+		}
 		return true, s.advance(ctx, *op, token, "APPLY", "ARTIFACT_READY", "artifact digest observed; GitOps update pending", map[string]string{"digest": artifact.Digest})
 	case "APPLY", "APPLY_UNCERTAIN":
+		if devActivationParent(&state, *op) != nil {
+			return true, s.applyDevActivation(callCtx, ctx, *op, token)
+		}
 		if snapshot.Build.Mode == "NATIVE" {
 			if e := s.verifyNativeSource(callCtx, *op); e != nil {
 				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
@@ -500,6 +520,11 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 			return fmt.Errorf("operation lease lost")
 		}
 		if status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if devActivationParent(st, op) != nil {
+				if err := s.devActivationAllowed(st, op); err != nil {
+					return err
+				}
+			}
 			if err := reservationOperationAllowed(st, op); err != nil {
 				return err
 			}
@@ -532,9 +557,18 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		}
 		if phase == "APPLY_UNCERTAIN" {
 			op.ReservationMutationIntent = "GITOPS"
+			if devActivationParent(st, op) != nil && current.DevActivationIntentHash == "" && current.Phase == "APPLY" && status == "GITOPS_PENDING" && op.Snapshot != nil && op.GitOpsBase != nil && op.Artifact != nil {
+				op.DevActivationIntentHash = workerconfig.Fingerprint(gitOpsPRApply(op))
+			}
 		}
 		if phase == "BUILD_LOOKUP" && !release {
 			op.ReservationMutationIntent = "BUILD"
+		}
+		if devActivationParent(st, op) != nil && op.GitOpsPR != nil && current.DevActivationPRHash == "" && phase == "WAIT_GITOPS_PR" && status == "GITOPS_PENDING" {
+			op.DevActivationPRHash = activationPRHash(*op.GitOpsPR)
+		}
+		if devActivationParent(st, op) != nil && op.GitOpsResult != nil && current.DevActivationResultHash == "" && status == "GITOPS_APPLIED" {
+			op.DevActivationResultHash = workerconfig.Fingerprint(op.GitOpsResult)
 		}
 		if op.ReservationMutationIntent == "GITOPS" && (op.GitOpsResult != nil && op.GitOpsResult.CommitSHA != "" && op.GitOpsResult.BlobSHA != "" || op.GitOpsPR != nil && op.GitOpsPR.Number > 0 && (phase == "WAIT_GITOPS_PR" || op.GitOpsPR.State == "closed")) {
 			op.ReservationMutationIntent = ""

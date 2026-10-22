@@ -55,6 +55,9 @@ func reservationFree(st *domain.State, environmentID string) error {
 	return nil
 }
 func reservationOperationAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if devActivationParent(st, op) != nil {
+		return devActivationGuard(st, op)
+	}
 	switch op.Kind {
 	case "DEPLOY", "COMPOSE", "RELEASE_CANDIDATE", "RELEASE_PROMOTION":
 	default:
@@ -144,7 +147,7 @@ func devReservationInput(c domain.Command) (domain.DevReservationRequest, string
 func devReservationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
-		if op.ProductID == c.ProductID && op.RequestKey == in.RequestKey && (op.Kind == "DEV_RESERVATION" || op.Kind == "DEV_RESERVATION_RELEASE") {
+		if op.ProductID == c.ProductID && op.RequestKey == in.RequestKey && (op.Kind == "DEV_RESERVATION" || op.Kind == "DEV_RESERVATION_RELEASE" || op.Kind == devActivationKind) {
 			if op.RequestHash != hash || op.RequestedBy != c.Actor {
 				return nil, invalid("request_key already binds another reservation payload or actor")
 			}
@@ -293,6 +296,11 @@ func (s *Service) executeDevReservation(ctx context.Context, c domain.Command) (
 			if hold == nil || hold.ProductID != c.ProductID || hold.Kind != "DEV_RESERVATION" || hold.DevReservation == nil || hold.RequestedBy != c.Actor {
 				return invalid("same attributed reservation owner required")
 			}
+			for _, activation := range st.Operations {
+				if activation.DevActivation != nil && activation.DevActivation.ReservationOperationID == hold.ID || activation.Kind == devActivationKind && activation.EnvironmentID == hold.EnvironmentID && activation.ReservationEpoch == hold.ReservationEpoch {
+					return invalid("candidate activation admitted; verified restoration required before release")
+				}
+			}
 			environment := environmentByID(st, hold.EnvironmentID)
 			if environment == nil || environment.ProductID != c.ProductID {
 				return invalid("reservation environment unavailable")
@@ -335,7 +343,16 @@ func ReservationState(st *domain.State, environmentID string) map[string]any {
 	if hold.DevReservation == nil {
 		return map[string]any{"active": true, "operation_id": hold.ID, "reconciliation_required": true, "candidate_deployed": false}
 	}
-	return map[string]any{"active": true, "operation_id": hold.ID, "candidate_operation_id": hold.DevReservation.CandidateOperationID, "owner": hold.RequestedBy, "epoch": hold.DevReservation.Epoch, "selection": hold.DevReservation.ReservedSelection, "reconciliation_required": hold.ReservationQuarantined || hold.Status != "SUCCEEDED", "candidate_deployed": false, "release_action": "release_candidate_dev"}
+	out := map[string]any{"active": true, "operation_id": hold.ID, "candidate_operation_id": hold.DevReservation.CandidateOperationID, "owner": hold.RequestedBy, "epoch": hold.DevReservation.Epoch, "selection": hold.DevReservation.ReservedSelection, "reconciliation_required": hold.ReservationQuarantined || hold.Status != "SUCCEEDED", "candidate_deployed": false, "release_action": "release_candidate_dev"}
+	for _, activation := range st.Operations {
+		if activation.Kind == devActivationKind && activation.DevActivation != nil && activation.DevActivation.ReservationOperationID == hold.ID {
+			out["candidate_deployment_id"] = activation.ID
+			out["candidate_deployment_status"] = activation.Status
+			out["candidate_deployment_state"] = activation.DeploymentState
+			out["release_action"] = "verified_restoration_required"
+		}
+	}
+	return out
 }
 
 // beginReservationMutation serializes external mutation intent with reserve.

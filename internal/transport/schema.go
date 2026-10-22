@@ -92,6 +92,7 @@ func CommandSchema() map[string]any {
 		{"update_environment_feature", "feature_id", "environment_id revision_ids idempotency_key expected_selection"},
 		{"assemble_environment", "product_id", "environment_id"},
 		{"reserve_candidate_dev", "product_id", "candidate_operation_id environment_id request_key expected_selection"},
+		{"deploy_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"release_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"claim_composition_conflict", "product_id", "conflict_id"},
 		{"record_conflict_resolution", "product_id", "conflict_id commit rationale"},

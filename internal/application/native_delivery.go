@@ -33,6 +33,9 @@ func (s *Service) freezeNative(product string, app domain.Application, build dom
 // nativeDeliveryAllowed is the live fence shared by all managed-job mutations.
 // Historical artifacts use their immutable provenance rather than this live fence.
 func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOperation) error {
+	if op != nil && devActivationParent(st, *op) != nil {
+		return s.devActivationAllowed(st, *op)
+	}
 	if op == nil || op.Kind != "DEPLOY" || op.Snapshot == nil || op.Snapshot.Build.Mode != "NATIVE" || nativeQuarantined(st, op.ProductID) || terminalOperation(op.Status) {
 		return invalid("native delivery unavailable or stopped")
 	}
@@ -349,6 +352,16 @@ func nativeWorkerOrigin(st *domain.State, j *domain.WorkerJob) error {
 	return invalid("immutable native job link mismatch")
 }
 func (s *Service) verifyNativeSource(ctx context.Context, op domain.ExternalOperation) error {
+	st, err := s.store.Read(ctx)
+	if err != nil {
+		return err
+	}
+	if parent := devActivationParent(&st, op); parent != nil {
+		if err := s.devActivationAllowed(&st, op); err != nil {
+			return err
+		}
+		return s.observeMainCandidate(ctx, operationByID(&st, parent.DevActivation.CandidateOperationID), false)
+	}
 	if op.Snapshot != nil && op.Snapshot.MainCandidate != nil {
 		st, err := s.store.Read(ctx)
 		if err != nil {

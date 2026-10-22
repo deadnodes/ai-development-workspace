@@ -36,6 +36,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		tool, path, refName, ref string
 		data                     map[string]any
 	}{
+		{"deploy_candidate_dev", "/api/products/product/candidate-dev/deploy", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "candidate-dev-deploy-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reserve_candidate_dev", "/api/products/product/candidate-dev/reserve", "product_id", "product", map[string]any{"candidate_operation_id": "candidate", "environment_id": "dev", "request_key": "reservation-request-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"release_candidate_dev", "/api/products/product/candidate-dev/release", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "reservation-release-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740994")}}},
 		{"update_environment_feature", "/api/features/feature/update-environment", "feature_id", "feature", map[string]any{"environment_id": "dev", "revision_ids": []string{"A2"}, "idempotency_key": "key", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
@@ -78,6 +79,16 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 			if !reflect.DeepEqual(viaHTTP, viaMCP) {
 				t.Fatalf("different shared domain commands HTTP=%+v MCP=%+v", viaHTTP, viaMCP)
 			}
+			if tc.tool == "deploy_candidate_dev" {
+				generic, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: viaHTTP})
+				if err != nil || generic.IsError {
+					t.Fatalf("generic execute rejected candidate Dev request: %v %+v", err, generic)
+				}
+				viaExecute := <-service.commands
+				if !reflect.DeepEqual(viaHTTP, viaExecute) {
+					t.Fatalf("generic execute differs from named delivery: %+v != %+v", viaExecute, viaHTTP)
+				}
+			}
 			if viaHTTP.Action != tc.tool || viaHTTP.Actor != "human/flow" {
 				t.Fatal("command attribution/action lost")
 			}
@@ -88,7 +99,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 					t.Fatalf("exact patch CAS/scope lost: %s", raw)
 				}
 			}
-			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" {
+			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" || tc.tool == "deploy_candidate_dev" {
 				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
 				var token domain.EnvironmentSelection
 				want := uint64(9007199254740993)
@@ -154,6 +165,12 @@ func TestCandidateDevReservationRejectsAmbiguousTransportInput(t *testing.T) {
 	server := httptest.NewServer(transport.New(service, transport.Options{}))
 	defer server.Close()
 	for _, tc := range []struct{ path, body string }{
+		{"deploy", `{"product_id":"other","request_key":"candidate-dev-deploy-1"}`},
+		{"deploy", `{"reservation_operation_id":"a","reservation_operation_id":"b","request_key":"candidate-dev-deploy-1"}`},
+		{"deploy", `{"request_key":"candidate-dev-deploy-1","expected_selection":{"composition_id":"a","operation_id":"b","generation":1,"generation":2}}`},
+		{"deploy", `{"reservation_operation_id":"a","request_key":"candidate-dev-deploy-1","artifact_id":"injected"}`},
+		{"deploy", `{"reservation_operation_id":"a","request_key":"candidate-dev-deploy-1","approve":true}`},
+		{"deploy", `{"Reservation_operation_id":"a","request_key":"candidate-dev-deploy-1"}`},
 		{"reserve", `{"product_id":"other","request_key":"reservation-request-1"}`},
 		{"release", `{"product_id":"other","request_key":"reservation-release-1"}`},
 		{"reserve", `{"request_key":"reservation-request-1","request_key":"reservation-request-2"}`},

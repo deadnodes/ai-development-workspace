@@ -113,6 +113,10 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
+	DevActivation             *DevActivationProof  `json:"dev_activation,omitempty"`
+	DevActivationIntentHash   string               `json:"dev_activation_intent_hash,omitempty"`
+	DevActivationPRHash       string               `json:"dev_activation_pr_hash,omitempty"`
+	DevActivationResultHash   string               `json:"dev_activation_result_hash,omitempty"`
 	ReservationMutationIntent string               `json:"reservation_mutation_intent,omitempty"`
 	ReservationEpoch          uint64               `json:"reservation_epoch"`
 	DevReservation            *DevReservationProof `json:"dev_reservation,omitempty"`
