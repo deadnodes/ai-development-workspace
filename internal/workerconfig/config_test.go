@@ -163,3 +163,82 @@ func TestRotationRejectsCollisionsWithInactiveCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentRejectsChangedGrantSnapshot(t *testing.T) {
+	token := strings.Repeat("w", 32)
+	a, e := New(testConfig(), "control", func(string) string { return token })
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := a.Authenticate(token, time.Now())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, mutate := range []func(*Credential){func(c *Credential) { c.ProductIDs = []string{"other"} }, func(c *Credential) { c.RepositoryIDs = []string{"other"} }, func(c *Credential) { c.Capabilities = []string{"other"} }, func(c *Credential) { c.Principal = "other" }, func(c *Credential) { c.ExpiresAt = c.ExpiresAt.Add(-time.Minute) }, func(c *Credential) { c.Revoked = true }} {
+		copy := *a
+		copy.config = testConfig()
+		copy.config.Credentials[0] = p.credential
+		mutate(&copy.config.Credentials[0])
+		if copy.Current(p, time.Now()) {
+			t.Fatal("stale grant remained current")
+		}
+	}
+	if (*Authority)(nil).Current(p, time.Now()) {
+		t.Fatal("nil authority current")
+	}
+}
+func TestPublicationAndSourcePrincipalSeparation(t *testing.T) {
+	token := strings.Repeat("w", 32)
+	for _, samePrincipal := range []bool{false, true} {
+		c := testConfig()
+		if samePrincipal {
+			v := c.Credentials[0]
+			v.ID = "publish"
+			v.TokenEnv = "PUBLISH_TOKEN"
+			v.Capabilities = []string{"registry_publish"}
+			c.Credentials = append(c.Credentials, v)
+		} else {
+			c.Credentials[0].Capabilities = append(c.Credentials[0].Capabilities, "registry_publish")
+		}
+		if _, e := New(c, "control", func(ref string) string {
+			if ref == "PUBLISH_TOKEN" {
+				return strings.Repeat("p", 32)
+			}
+			return token
+		}); e == nil {
+			t.Fatal("source and publication authority combined")
+		}
+	}
+}
+
+func TestRegistryRotationCannotLeakAnyControlOrWorkerCredential(t *testing.T) {
+	c := testConfig()
+	r := PublicationRecipe{ID: "publication", Revision: "v1", ProductID: "p", RepositoryID: "r", ComponentID: "app", Profile: "test", BuildRecipeHash: c.Recipes[0].Hash, Origin: "https://registry.example.invalid", Repository: "fixture/image", MaxBytes: 1 << 20, TimeoutSeconds: 10, Pull: RegistryRead{BearerEnv: "PULL_TOKEN"}}
+	r.Hash = PublicationHash(r)
+	c.Publications = []PublicationRecipe{r}
+	pub := c.Credentials[0]
+	pub.ID = "publish"
+	pub.Principal = "worker/publish"
+	pub.TokenEnv = "PUBLISH_TOKEN"
+	pub.Capabilities = []string{"registry_publish"}
+	c.Credentials = append(c.Credentials, pub)
+	sourceToken, pubToken, registryToken := strings.Repeat("s", 32), strings.Repeat("p", 32), "pull-only-fixture"
+	values := map[string]string{"WORKER_FIXTURE_TOKEN": sourceToken, "PUBLISH_TOKEN": pubToken, "PULL_TOKEN": registryToken}
+	a, e := New(c, "control-fixture", func(ref string) string { return values[ref] })
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := a.Authenticate(pubToken, time.Now())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, collision := range []string{sourceToken, pubToken, "control-fixture"} {
+		values["PULL_TOKEN"] = collision
+		if a.Current(p, time.Now()) {
+			t.Fatal("registry collision did not invalidate current authority")
+		}
+		if _, e = a.Authenticate(pubToken, time.Now()); e == nil {
+			t.Fatal("registry collision allowed a credential-leaking request")
+		}
+	}
+}

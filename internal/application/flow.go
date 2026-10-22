@@ -331,6 +331,9 @@ func prepareFlowDeployments(st *domain.State, comp domain.Composition, m domain.
 		}
 		source := repositoryBinding(st, app.RepositoryID)
 		build := componentBuild(st, app.ID)
+		if build != nil && build.Mode == "NATIVE_EXISTING_ARTIFACT" {
+			return nil, invalid("automatic native build graph is not implemented; select an existing native artifact explicitly")
+		}
 		target := environmentBinding(st, comp.EnvironmentID, app.ID)
 		env := environmentByID(st, comp.EnvironmentID)
 		if source == nil || build == nil || target == nil || env == nil {

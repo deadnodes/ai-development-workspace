@@ -24,6 +24,11 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 	if !found {
 		return missing("product", c.ProductID)
 	}
+	// Deletion would erase quarantine and let the same ID reuse old native
+	// worker authority without an ownership transfer.
+	if nativeQuarantined(st, c.ProductID) {
+		return invalid("native-quarantined product cannot be deleted; ownership transfer is not implemented")
+	}
 	for _, op := range st.Operations {
 		if op.ProductID == c.ProductID && !terminalOperation(op.Status) {
 			return invalid("product has unfinished operations; finish or cancel them before deletion")

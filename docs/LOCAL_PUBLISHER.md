@@ -66,9 +66,10 @@ includes plan hash, complete approved provenance, manifest digest and observatio
 time. It means these registry bytes were read and verified during this local
 invocation. It is **not** authenticated RCP acceptance, active-attempt fencing,
 DeliveryArtifact PRESENT, a numeric GitHub Actions identity, or deployment
-eligibility. Native RCP provider admission/routing, live registry provisioning,
-real credentials, retention policy, runtime consumers and deployment acceptance
-remain separate work.
+eligibility. The separate [`run-once` native path](NATIVE_PUBLICATION.md) uses
+RCP leases and server-side admission; this standalone `publish` mode does not.
+Live registry provisioning, real credentials, retention policy, runtime consumers
+and deployment acceptance remain separate work.
 
 ## Verification
 

@@ -144,6 +144,10 @@ func TestPostgresFlowHistoryRestartAndBackupMigration(t *testing.T) {
 	normalized.Operations = before.Operations
 	normalized.Events = before.Events
 	normalized.OperationSteps = before.OperationSteps
+	if len(after.NativeQuarantines) != len(before.Products) {
+		t.Fatal("native restore quarantine missing")
+	}
+	normalized.NativeQuarantines = before.NativeQuarantines
 	if !reflect.DeepEqual(before, normalized) {
 		a, _ := json.Marshal(before)
 		b, _ := json.Marshal(normalized)

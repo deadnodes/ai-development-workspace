@@ -178,6 +178,7 @@ func TestWorkerDurabilityAndConcurrentClaims(t *testing.T) {
 			store = reopen()
 			s = New(store)
 			s.ConfigureWorkers(workerAuthority(t))
+			p = workerIdentity(t, s)
 			state, e := store.Read(context.Background())
 			if e != nil || state.WorkerJobs[0].ID != job.ID || state.WorkerAttempts[0].Fence != 1 {
 				t.Fatal("restart lost claim", e)
@@ -483,6 +484,7 @@ func TestWorkerBackupRestoreReconciliationAgreement(t *testing.T) {
 			defer destination.Close()
 			restored := New(destination)
 			restored.ConfigureWorkers(workerAuthority(t))
+			p = workerIdentity(t, restored)
 			response, err := restored.RestoreBackup(ctx, "human/operator", backup.ArchiveBase64, backup.SHA256)
 			if err != nil {
 				t.Fatal(err)

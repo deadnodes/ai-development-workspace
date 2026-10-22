@@ -25,7 +25,9 @@ type RepositoryBinding struct {
 	DefaultBranch string `json:"default_branch"`
 }
 type ComponentBuild struct {
-	RebuildMissing bool `json:"rebuild_missing"`
+	Mode           string `json:"mode,omitempty"`
+	Profile        string `json:"profile,omitempty"`
+	RebuildMissing bool   `json:"rebuild_missing"`
 	Meta
 	ApplicationID   string            `json:"application_id"`
 	ConnectionID    string            `json:"connection_id"`
@@ -141,6 +143,8 @@ type ConnectionGrant struct {
 }
 
 type DeliveryArtifact struct {
+	Provenance string          `json:"provenance,omitempty"`
+	Native     *NativeArtifact `json:"native,omitempty"`
 	Meta
 	OperationID     string                `json:"operation_id"`
 	ApplicationID   string                `json:"application_id"`

@@ -63,11 +63,26 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	if c.Action == "queue_worker_publication" || c.Action == "reconcile_worker_publication" {
+		return s.executeNativePublication(ctx, c)
+	}
 	if c.Action == "queue_worker_job" || c.Action == "cancel_worker_job" || c.Action == "reconcile_worker_job" {
 		return s.executeWorkerCommand(ctx, c)
 	}
 	var result any
-	err := s.store.Update(ctx, func(st *domain.State) error { var err error; result, err = apply(st, c); return err })
+	err := s.store.Update(ctx, func(st *domain.State) error {
+		if c.Action == "configure_component" && c.Data["mode"] == "NATIVE_EXISTING_ARTIFACT" {
+			component, _ := c.Data["application_id"].(string)
+			profile, _ := c.Data["profile"].(string)
+			image, _ := c.Data["image_repository"].(string)
+			if !s.externalWorkers.AllowsNativeComponent(c.ProductID, component, profile, image) {
+				return invalid("native component requires exact operator publication configuration")
+			}
+		}
+		var err error
+		result, err = apply(st, c)
+		return err
+	})
 	return result, err
 }
 func meta(c domain.Command) domain.Meta {

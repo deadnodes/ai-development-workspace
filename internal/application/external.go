@@ -11,6 +11,7 @@ import (
 
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 )
 
 var repositoryName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -270,6 +271,8 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		return repo, m, nil
 	case "configure_component":
 		var input struct {
+			Mode            string            `json:"mode"`
+			Profile         string            `json:"profile"`
 			RebuildMissing  bool              `json:"rebuild_missing"`
 			ApplicationID   string            `json:"application_id"`
 			ConnectionID    string            `json:"connection_id"`
@@ -292,7 +295,13 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if _, e := scopedConnection(st, input.ConnectionID, c.ProductID); e != nil {
 			return nil, m, e
 		}
-		if input.Workflow == "" || strings.ContainsAny(input.Workflow, "\n\r") || !imageName.MatchString(input.ImageRepository) {
+		if input.Mode == "NATIVE_EXISTING_ARTIFACT" {
+			if nativeQuarantined(st, c.ProductID) || !workerconfig.ValidIdentifier(input.Profile) || input.Workflow != "" || input.WorkflowRef != "" || len(input.Inputs) > 0 || input.RebuildMissing || input.ImageRepository == "" || strings.ContainsAny(input.ImageRepository, " @\n\r") {
+				return nil, m, invalid("invalid native existing-artifact configuration or quarantine")
+			}
+		} else if input.Mode != "" && input.Mode != "GITHUB_ACTIONS" {
+			return nil, m, invalid("unknown component build mode")
+		} else if input.Workflow == "" || strings.ContainsAny(input.Workflow, "\n\r") || !imageName.MatchString(input.ImageRepository) {
 			return nil, m, invalid("workflow and ghcr.io image_repository required")
 		}
 		if input.WorkflowRef != "" && !safeBranch(input.WorkflowRef) {
@@ -303,7 +312,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 				return nil, m, invalid("reserved workflow input %s", key)
 			}
 		}
-		v := domain.ComponentBuild{RebuildMissing: input.RebuildMissing, Meta: m, ApplicationID: app.ID, ConnectionID: input.ConnectionID, Workflow: input.Workflow, ImageRepository: input.ImageRepository, WorkflowRef: input.WorkflowRef, Inputs: input.Inputs}
+		v := domain.ComponentBuild{Mode: input.Mode, Profile: input.Profile, RebuildMissing: input.RebuildMissing, Meta: m, ApplicationID: app.ID, ConnectionID: input.ConnectionID, Workflow: input.Workflow, ImageRepository: input.ImageRepository, WorkflowRef: input.WorkflowRef, Inputs: input.Inputs}
 		st.ComponentBuilds = append(st.ComponentBuilds, v)
 		return v, m, nil
 	case "configure_environment":
@@ -464,6 +473,9 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if build == nil || target == nil || source == nil || target.Purpose != "DEV" || !target.AllowDeploy {
 			return nil, m, invalid("component build and explicit enabled DEV mapping required")
 		}
+		if build.Mode == "NATIVE_EXISTING_ARTIFACT" && (nativeQuarantined(st, in.ProductID) || c.Action != "deploy_existing_artifact" || target.GitOpsMode != "PR") {
+			return nil, m, invalid("native requires existing artifact and GitOps pull request; automatic builds disabled")
+		}
 		gitops := repositoryBinding(st, target.RepositoryID)
 		sc, e := scopedConnection(st, build.ConnectionID, in.ProductID)
 		if e != nil {
@@ -505,6 +517,13 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 			known, err := validatedExistingArtifact(st, input.ArtifactID, in.ProductID, app.ID, app.RepositoryID, revision.HeadCommit, build.ImageRepository)
 			if err != nil {
 				return nil, m, err
+			}
+			if build.Mode == "NATIVE_EXISTING_ARTIFACT" {
+				if known.Native == nil || known.Native.Profile != build.Profile {
+					return nil, m, invalid("native artifact profile mismatch")
+				}
+			} else if known.Native != nil {
+				return nil, m, invalid("native artifact requires native component mode")
 			}
 			if input.ExpectedDigest != "" && input.ExpectedDigest != known.Digest {
 				return nil, m, invalid("expected digest differs from selected artifact")

@@ -8,7 +8,9 @@ independently observed registry or deployment attestation.
 
 A separate operator-approved publisher can publish the exact local receipt and
 archive; see [Local OCI publisher](LOCAL_PUBLISHER.md). Its byte observation does
-not admit an artifact into RCP or authorize deployment.
+not admit an artifact into RCP or authorize deployment. The separate
+[native publication path](NATIVE_PUBLICATION.md) binds the accepted build receipt
+to a publication job and independent server registry observation.
 
 ## First execution contract
 

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"reflect"
 	"regexp"
 	"releasecontrol/internal/domain"
 	"slices"
@@ -49,10 +50,11 @@ type Credential struct {
 	Revoked       bool      `json:"revoked"`
 }
 type Config struct {
-	Revision     string       `json:"revision"`
-	LeaseSeconds int          `json:"lease_seconds"`
-	Recipes      []Recipe     `json:"recipes"`
-	Credentials  []Credential `json:"credentials"`
+	Revision     string              `json:"revision"`
+	LeaseSeconds int                 `json:"lease_seconds"`
+	Publications []PublicationRecipe `json:"publications,omitempty"`
+	Recipes      []Recipe            `json:"recipes"`
+	Credentials  []Credential        `json:"credentials"`
 }
 
 // Authority keeps a private immutable configuration copy. Secret values are only
@@ -62,7 +64,10 @@ type Authority struct {
 	lookup             func(string) string
 	controlFingerprint [sha256.Size]byte
 }
-type Principal struct{ credential Credential }
+type Principal struct {
+	credential  Credential
+	fingerprint [sha256.Size]byte
+}
 
 var ident = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$`)
 var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
@@ -97,7 +102,7 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	if strings.TrimSpace(controlToken) == "" || lookup == nil {
 		return nil, errors.New("worker protocol requires protected control plane")
 	}
-	if !ident.MatchString(c.Revision) || c.LeaseSeconds < 5 || c.LeaseSeconds > 300 || len(c.Recipes) == 0 || len(c.Recipes) > 100 || len(c.Credentials) == 0 || len(c.Credentials) > 100 {
+	if !ident.MatchString(c.Revision) || c.LeaseSeconds < 5 || c.LeaseSeconds > 300 || len(c.Recipes) == 0 || len(c.Recipes) > 100 || len(c.Publications) > 100 || len(c.Credentials) == 0 || len(c.Credentials) > 100 {
 		return nil, errors.New("invalid worker configuration bounds")
 	}
 	seen := map[string]bool{}
@@ -106,6 +111,14 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 		token := lookup(v.TokenEnv)
 		if !ident.MatchString(v.ID) || !ident.MatchString(v.Principal) || !envName.MatchString(v.TokenEnv) || seen[v.ID] || v.ExpiresAt.IsZero() || len(token) < 32 || tokens[Fingerprint(token)] || !validGrants(v.ProductIDs) || !validGrants(v.RepositoryIDs) || !validGrants(v.Capabilities) {
 			return nil, errors.New("invalid worker credential configuration")
+		}
+		if slices.Contains(v.Capabilities, "registry_publish") && (slices.Contains(v.Capabilities, "source_check") || slices.Contains(v.Capabilities, "local_oci_build")) {
+			return nil, errors.New("publication and source credentials must be separate")
+		}
+		for _, prior := range c.Credentials {
+			if prior.ID != v.ID && prior.Principal == v.Principal && (slices.Contains(v.Capabilities, "registry_publish") != slices.Contains(prior.Capabilities, "registry_publish")) {
+				return nil, errors.New("publication and source principals must be separate")
+			}
 		}
 		seen[v.ID] = true
 		tokens[Fingerprint(token)] = true
@@ -127,6 +140,23 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 			for _, v := range p.Enum {
 				if !ident.MatchString(v) {
 					return nil, errors.New("invalid enum")
+				}
+			}
+		}
+	}
+	for _, r := range c.Publications {
+		if err := ValidatePublication(r); err != nil {
+			return nil, err
+		}
+		if seen[r.ID] {
+			return nil, errors.New("duplicate recipe")
+		}
+		seen[r.ID] = true
+		for _, ref := range []string{r.Pull.UsernameEnv, r.Pull.PasswordEnv, r.Pull.BearerEnv} {
+			if ref != "" {
+				raw := lookup(ref)
+				if len(raw) == 0 || tokens[Fingerprint(raw)] {
+					return nil, errors.New("registry and control credentials must be separate")
 				}
 			}
 		}
@@ -211,7 +241,7 @@ func (a *Authority) IsWorkerToken(token string) bool {
 	return matched == 1
 }
 func (a *Authority) Authenticate(token string, now time.Time) (Principal, error) {
-	if a == nil || token == "" {
+	if a == nil || token == "" || !a.registryCredentialsSeparated() {
 		return Principal{}, errors.New("worker authentication required")
 	}
 	provided := sha256.Sum256([]byte(token))
@@ -231,7 +261,17 @@ func (a *Authority) Authenticate(token string, now time.Time) (Principal, error)
 	if subtle.ConstantTimeCompare(provided[:], a.controlFingerprint[:]) == 1 || matches != 1 || selected == nil || selected.Revoked || !now.Before(selected.ExpiresAt) {
 		return Principal{}, errors.New("worker authentication required")
 	}
-	return Principal{credential: *selected}, nil
+	for _, r := range a.config.Publications {
+		for _, ref := range []string{r.Pull.UsernameEnv, r.Pull.PasswordEnv, r.Pull.BearerEnv} {
+			if ref != "" {
+				v := sha256.Sum256([]byte(a.lookup(ref)))
+				if subtle.ConstantTimeCompare(provided[:], v[:]) == 1 {
+					return Principal{}, errors.New("worker authentication required")
+				}
+			}
+		}
+	}
+	return Principal{credential: *selected, fingerprint: provided}, nil
 }
 func (p Principal) ID() string { return p.credential.Principal }
 func (p Principal) Allows(product, repo, capability string, now time.Time) bool {
@@ -270,3 +310,55 @@ func ValidateParameters(r Recipe, params map[string]any) error {
 	return nil
 }
 func ValidFingerprint(s string) bool { return digest.MatchString(s) }
+
+// Current revalidates a request principal after network I/O, including secret rotation.
+func (a *Authority) Current(p Principal, now time.Time) bool {
+	if a == nil {
+		return false
+	}
+	for _, c := range a.config.Credentials {
+		if c.ID == p.credential.ID {
+			raw := a.lookup(c.TokenEnv)
+			sum := sha256.Sum256([]byte(raw))
+			if sum != p.fingerprint {
+				return false
+			}
+			fresh, err := a.Authenticate(raw, now)
+			return err == nil && reflect.DeepEqual(fresh.credential, p.credential)
+		}
+	}
+	return false
+}
+
+func ValidIdentifier(s string) bool { return ident.MatchString(s) }
+func (a *Authority) AllowsNativeComponent(product, component, profile, image string) bool {
+	if a != nil {
+		for _, r := range a.config.Publications {
+			if r.ProductID == product && r.ComponentID == component && r.Profile == profile && strings.TrimPrefix(strings.TrimPrefix(r.Origin, "https://"), "http://")+"/"+r.Repository == image {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *Authority) registryCredentialsSeparated() bool {
+	if a == nil {
+		return false
+	}
+	tokens := map[[sha256.Size]byte]bool{a.controlFingerprint: true}
+	for _, c := range a.config.Credentials {
+		tokens[sha256.Sum256([]byte(a.lookup(c.TokenEnv)))] = true
+	}
+	for _, r := range a.config.Publications {
+		for _, ref := range []string{r.Pull.UsernameEnv, r.Pull.PasswordEnv, r.Pull.BearerEnv} {
+			if ref != "" {
+				raw := a.lookup(ref)
+				if raw == "" || tokens[sha256.Sum256([]byte(raw))] {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}

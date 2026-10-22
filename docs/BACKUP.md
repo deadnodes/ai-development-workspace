@@ -60,3 +60,11 @@ MVP: максимум 8 MiB сжатого архива и 64 MiB распако
 Gzip — сжатие, не шифрование. Архив содержит приватную историю, конфигурацию и любые данные, ранее записанные пользователями в текстовые поля. Храни его в закрытом, при необходимости зашифрованном backup storage. Secret refs не раскрываются самим приложением, но произвольно записанный в memory секрет также попадёт в полный backup.
 
 Автоматическое расписание, retention, object storage и слияние двух историй не реализованы. MCP/API и скрипт позволяют агенту выполнить backup и перенос сейчас. Полный PostgreSQL/PITR backup остаётся отдельным инструментом эксплуатации.
+
+
+Native worker recovery: restore marks every imported Product with persistent
+native quarantine, including Products with only historical successful artifacts.
+Local OCI build/publication execution, native configuration and native GitOps PR
+preparation remain blocked after reopen and subsequent backups. No quarantine
+clear/ownership transfer route exists in this slice. Source installation execution
+is unaffected. See [native publication recovery](NATIVE_PUBLICATION.md).

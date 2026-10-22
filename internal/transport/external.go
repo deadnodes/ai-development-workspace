@@ -21,6 +21,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 		"GET /api/integrations/{id}/git":              "get_integration_git",
 		"GET /api/products/{id}/unlinked-git-commits": "get_unlinked_git_commits",
 		"GET /api/environments/{id}/state":            "get_environment_state",
+		"GET /api/worker-jobs/{id}":                   "get_worker_job",
 		"GET /api/operations/{id}":                    "get_operation",
 		"GET /api/connections/{id}/repositories":      "discover_repositories",
 		"POST /api/connections/{id}/test":             "test_connection",
@@ -141,6 +142,12 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		EnvironmentID string `json:"environment_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_environment_state", in.EnvironmentID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_worker_job", Description: "Read one bounded worker job and its attempts; no global state required."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		JobID string `json:"job_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_worker_job", in.JobID)
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_operation", Description: "Read persisted operation status, step evidence and attention needs. Queued or pending does not mean deployed."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

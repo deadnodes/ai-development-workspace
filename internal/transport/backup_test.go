@@ -96,6 +96,15 @@ func TestPostgresBackupMigrationHTTPMCPAndOrdering(t *testing.T) {
 		t.Fatal("restore audit missing")
 	}
 	after.Events = after.Events[:len(before.Events)]
+	if len(after.NativeQuarantines) != len(before.Products) {
+		t.Fatal("restore native quarantine missing")
+	}
+	for _, q := range after.NativeQuarantines {
+		if q.ProductID == "" || q.RestoreID == "" {
+			t.Fatal("invalid native quarantine")
+		}
+	}
+	after.NativeQuarantines = before.NativeQuarantines
 	if !reflect.DeepEqual(before, after) {
 		a, _ := json.Marshal(before)
 		b, _ := json.Marshal(after)

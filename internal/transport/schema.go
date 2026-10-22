@@ -72,6 +72,8 @@ func CommandSchema() map[string]any {
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"queue_worker_publication", "product_id", "build_job_id component_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
+		{"reconcile_worker_publication", "product_id id", ""},
 		{"queue_worker_job", "product_id integration_id", "request_key recipe_id recipe_revision recipe_hash config_revision revision_id source_sha deadline max_attempts parameters"},
 		{"cancel_worker_job", "product_id id", ""},
 		{"reconcile_worker_job", "product_id id", "outcome"},
@@ -98,7 +100,7 @@ func CommandSchema() map[string]any {
 		{"configure_publication", "product_id", "application_id format registry_url package_name"},
 		{"record_package_artifact", "product_id", "application_id publication_target_id source_commit version checksum uri"},
 		{"configure_artifact_retention", "product_id", "application_id keep_last keep_current keep_previous"},
-		{"configure_component", "product_id", "application_id connection_id workflow image_repository"},
+		{"configure_component", "product_id", "application_id connection_id mode profile workflow image_repository"},
 		{"configure_environment", "product_id", "environment_id purpose connection_id repository_id ref path image_field application_id allow_deploy"},
 		{"refresh_environment_runtime", "product_id", "environment_id"},
 		{"refresh_integration_git", "integration_id", ""}, {"refresh_repository_git", "product_id", "repository_id"},

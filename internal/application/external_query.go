@@ -183,6 +183,18 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 		}
 		return map[string]any{"runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."}, nil
+	case "get_worker_job":
+		j := workerJob(&st, id)
+		if j == nil {
+			return nil, missing("worker job", id)
+		}
+		attempts := []domain.WorkerAttempt{}
+		for _, a := range st.WorkerAttempts {
+			if a.JobID == j.ID {
+				attempts = append(attempts, a)
+			}
+		}
+		return map[string]any{"job": j, "attempts": attempts}, nil
 	case "get_operation":
 		for _, op := range st.Operations {
 			if op.ID == id {

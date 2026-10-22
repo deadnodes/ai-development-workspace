@@ -76,6 +76,13 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 	var out any
 	err := s.store.Update(ctx, func(st *domain.State) error {
 		now := time.Now().UTC()
+		if c.Action == "queue_worker_job" && nativeQuarantined(st, c.ProductID) {
+			recipeID, _ := c.Data["recipe_id"].(string)
+			r, ok := s.externalWorkers.Recipe(recipeID)
+			if ok && r.Capability == "local_oci_build" {
+				return invalid("native product quarantined after restore")
+			}
+		}
 		if c.Action != "queue_worker_job" {
 			if c.FeatureID != "" || c.IntegrationID != "" || c.GateID != "" || c.CheckID != "" || c.ResultID != "" {
 				return invalid("unexpected worker command scope")
@@ -219,6 +226,9 @@ func currentWorkerAttempt(st *domain.State, j *domain.WorkerJob) *domain.WorkerA
 	return nil
 }
 func (s *Service) workerConfigMatches(j *domain.WorkerJob) bool {
+	if j.Capability == "registry_publish" {
+		return s.nativeConfigMatches(j)
+	}
 	r, ok := s.externalWorkers.Recipe(j.Inputs.RecipeID)
 	return ok && r.Hash == j.Inputs.RecipeHash && r.Revision == j.Inputs.RecipeRevision && r.ProductID == j.ProductID && r.RepositoryID == j.Inputs.RepositoryID && r.RepositoryURL == j.Inputs.RepositoryURL && r.Trust == j.Inputs.Trust && r.Capability == j.Capability && s.externalWorkers.Revision() == j.Inputs.ConfigRevision && workerconfig.Fingerprint(j.Inputs) == j.InputHash
 }
@@ -253,18 +263,37 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 		return nil, invalid("external workers disabled")
 	}
 	now := time.Now().UTC()
-	if !p.Allows(in.ProductID, in.RepositoryID, in.Capability, now) {
+	if (in.RecipeID == "") != (in.RecipeHash == "") {
+		return nil, invalid("exact recipe claim filter required")
+	}
+	if in.RecipeID != "" {
+		if in.Capability == "registry_publish" {
+			r, ok := s.externalWorkers.Publication(in.RecipeID)
+			if !ok || r.Hash != in.RecipeHash || r.ProductID != in.ProductID || r.RepositoryID != in.RepositoryID {
+				return nil, invalid("invalid publication claim filter")
+			}
+		} else {
+			r, ok := s.externalWorkers.Recipe(in.RecipeID)
+			if !ok || r.Hash != in.RecipeHash || r.Capability != in.Capability || r.ProductID != in.ProductID || r.RepositoryID != in.RepositoryID {
+				return nil, invalid("invalid recipe claim filter")
+			}
+		}
+	}
+	if !s.externalWorkers.Current(p, now) || !p.Allows(in.ProductID, in.RepositoryID, in.Capability, now) {
 		return nil, invalid("worker scope denied")
 	}
 	var out *domain.WorkerLease
 	err := s.store.Update(ctx, func(st *domain.State) error {
 		now = time.Now().UTC()
-		if !p.Allows(in.ProductID, in.RepositoryID, in.Capability, now) {
+		if !s.externalWorkers.Current(p, now) || !p.Allows(in.ProductID, in.RepositoryID, in.Capability, now) {
 			return invalid("worker scope expired")
 		}
 		for i := range st.WorkerJobs {
 			j := &st.WorkerJobs[i]
-			if j.ProductID != in.ProductID || j.Inputs.RepositoryID != in.RepositoryID || j.Capability != in.Capability {
+			if j.ProductID != in.ProductID || j.Inputs.RepositoryID != in.RepositoryID || j.Capability != in.Capability || in.RecipeID != "" && (j.Inputs.RecipeID != in.RecipeID || j.Inputs.RecipeHash != in.RecipeHash) {
+				continue
+			}
+			if (j.Capability == "registry_publish" || j.Capability == "local_oci_build") && nativeQuarantined(st, j.ProductID) {
 				continue
 			}
 			recoverWorker(st, j, now)
@@ -306,8 +335,11 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 		now := time.Now().UTC()
 		j := workerJob(st, in.JobID)
 		a := workerAttempt(st, in.AttemptID)
-		if j == nil || a == nil || a.JobID != j.ID || a.Fence != in.Fence || j.Fence != in.Fence || a.InputHash != in.InputHash || j.InputHash != in.InputHash || a.Principal != p.ID() || !p.Allows(j.ProductID, j.Inputs.RepositoryID, j.Capability, now) {
+		if j == nil || a == nil || a.JobID != j.ID || a.Fence != in.Fence || j.Fence != in.Fence || a.InputHash != in.InputHash || j.InputHash != in.InputHash || a.Principal != p.ID() || !s.externalWorkers.Current(p, now) || !p.Allows(j.ProductID, j.Inputs.RepositoryID, j.Capability, now) {
 			return invalid("worker ownership or scope denied")
+		}
+		if (j.Capability == "local_oci_build" || j.Capability == "registry_publish") && nativeQuarantined(st, j.ProductID) {
+			return invalid("native product quarantined after restore")
 		}
 		if report != nil && a.Report != nil {
 			if reflect.DeepEqual(a.Report, report) {
@@ -317,7 +349,7 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 			return invalid("conflicting report replay")
 		}
 		recoverWorker(st, j, now)
-		if !s.workerConfigMatches(j) || !now.Before(a.LeaseUntil) || !now.Before(j.Deadline) || j.CancellationRequested || workerTerminal(j.Status) || j.Status == "RECONCILIATION_REQUIRED" {
+		if j.Capability == "registry_publish" && nativeQuarantined(st, j.ProductID) || !s.workerConfigMatches(j) || !now.Before(a.LeaseUntil) || !now.Before(j.Deadline) || j.CancellationRequested || workerTerminal(j.Status) || j.Status == "RECONCILIATION_REQUIRED" {
 			rejected = invalid("worker lease or immutable inputs invalid")
 			return nil
 		}
@@ -373,6 +405,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 }
 
 func validateWorkerLocalOCI(j *domain.WorkerJob, a *domain.WorkerAttempt, r *domain.WorkerReport) error {
+	if r.Publication != nil {
+		return invalid("unexpected publication result")
+	}
 	v := r.LocalOCI
 	if r.Result != "PASSED" || j.Capability != "local_oci_build" {
 		if v != nil {
@@ -398,5 +433,13 @@ func (s *Service) HeartbeatWorker(ctx context.Context, p workerconfig.Principal,
 	return s.mutateWorker(ctx, p, in, "heartbeat", nil)
 }
 func (s *Service) ReportWorker(ctx context.Context, p workerconfig.Principal, in domain.WorkerReport) (domain.WorkerLease, error) {
+	st, e := s.store.Read(ctx)
+	if e != nil {
+		return domain.WorkerLease{}, e
+	}
+	j := workerJob(&st, in.JobID)
+	if j != nil && j.Capability == "registry_publish" && in.Result == "PASSED" {
+		return s.reportPublication(ctx, p, in)
+	}
 	return s.mutateWorker(ctx, p, in.WorkerAttemptRequest, "report", &in)
 }

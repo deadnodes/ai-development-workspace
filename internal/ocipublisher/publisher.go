@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"releasecontrol/internal/domain"
-	"releasecontrol/internal/workerrunner"
+	"releasecontrol/internal/ociverify"
 )
 
 const manifestType = "application/vnd.oci.image.manifest.v1+json"
@@ -130,25 +130,31 @@ func (c Config) validate() (*url.URL, error) {
 	if r.Platform != "linux/amd64" && r.Platform != "linux/arm64" {
 		return nil, invalid
 	}
-	u, e := url.Parse(p.Origin)
+	return validateRegistry(c.Plan.Origin, c.Plan.Repository, c.MaxArchiveBytes, c.TimeoutSeconds, c.UsernameEnv, c.PasswordEnv, c.BearerEnv, c.FixtureLoopbackHTTP)
+}
+func validateRegistry(origin, repo string, maxBytes int64, timeout int, username, password, bearer string, fixture bool) (*url.URL, error) {
+	if len(repo) > 255 || !repository.MatchString(repo) || maxBytes < 1 || maxBytes > 256<<20 || timeout < 1 || timeout > 600 {
+		return nil, invalid
+	}
+	u, e := url.Parse(origin)
 	if e != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
 		return nil, invalid
 	}
 	if u.Scheme != "https" {
 		ip := net.ParseIP(u.Hostname())
-		if u.Scheme != "http" || !c.FixtureLoopbackHTTP || ip == nil || !ip.IsLoopback() {
+		if u.Scheme != "http" || !fixture || ip == nil || !ip.IsLoopback() {
 			return nil, invalid
 		}
 	}
-	if u.String() != p.Origin {
+	if u.String() != origin {
 		return nil, invalid
 	}
-	for _, s := range []string{c.UsernameEnv, c.PasswordEnv, c.BearerEnv} {
+	for _, s := range []string{username, password, bearer} {
 		if s != "" && !envName.MatchString(s) {
 			return nil, invalid
 		}
 	}
-	if (c.UsernameEnv == "") != (c.PasswordEnv == "") || c.BearerEnv != "" && c.UsernameEnv != "" {
+	if (username == "") != (password == "") || bearer != "" && username != "" {
 		return nil, invalid
 	}
 	return u, nil
@@ -169,7 +175,7 @@ func publishWithSync(ctx context.Context, c Config, sync func(*os.File) error) (
 	if e != nil {
 		return nil, e
 	}
-	actual, e := workerrunner.VerifyOCIBytes(archive, c.MaxArchiveBytes, c.Plan.Receipt.Platform)
+	actual, e := ociverify.VerifyOCIBytes(archive, c.MaxArchiveBytes, c.Plan.Receipt.Platform)
 	if e != nil {
 		return nil, invalid
 	}

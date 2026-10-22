@@ -46,17 +46,18 @@ type WorkerLocalOCI struct {
 }
 
 type WorkerInputs struct {
-	RecipeID       string           `json:"recipe_id"`
-	RecipeRevision string           `json:"recipe_revision"`
-	RecipeHash     string           `json:"recipe_hash"`
-	ConfigRevision string           `json:"config_revision"`
-	RepositoryID   string           `json:"repository_id"`
-	RepositoryURL  string           `json:"repository_url"`
-	RevisionID     string           `json:"revision_id"`
-	SourceSHA      string           `json:"source_sha"`
-	Trust          string           `json:"trust"`
-	Parameters     map[string]any   `json:"parameters"`
-	Execution      *WorkerExecution `json:"execution"`
+	RecipeID       string             `json:"recipe_id"`
+	RecipeRevision string             `json:"recipe_revision"`
+	RecipeHash     string             `json:"recipe_hash"`
+	ConfigRevision string             `json:"config_revision"`
+	RepositoryID   string             `json:"repository_id"`
+	RepositoryURL  string             `json:"repository_url"`
+	RevisionID     string             `json:"revision_id"`
+	SourceSHA      string             `json:"source_sha"`
+	Trust          string             `json:"trust"`
+	Parameters     map[string]any     `json:"parameters"`
+	Execution      *WorkerExecution   `json:"execution"`
+	Publication    *WorkerPublication `json:"publication,omitempty"`
 }
 type WorkerJob struct {
 	Meta
@@ -88,6 +89,8 @@ type WorkerLease struct {
 	Attempt WorkerAttempt `json:"attempt"`
 }
 type WorkerClaim struct {
+	RecipeID     string `json:"recipe_id,omitempty"`
+	RecipeHash   string `json:"recipe_hash,omitempty"`
 	ProductID    string `json:"product_id"`
 	RepositoryID string `json:"repository_id"`
 	Capability   string `json:"capability"`
@@ -100,7 +103,46 @@ type WorkerAttemptRequest struct {
 }
 type WorkerReport struct {
 	WorkerAttemptRequest
-	Result       string          `json:"result"`
-	EvidenceHash string          `json:"evidence_hash,omitempty"`
-	LocalOCI     *WorkerLocalOCI `json:"local_oci,omitempty"`
+	Result       string                   `json:"result"`
+	EvidenceHash string                   `json:"evidence_hash,omitempty"`
+	LocalOCI     *WorkerLocalOCI          `json:"local_oci,omitempty"`
+	Publication  *WorkerPublicationReport `json:"publication,omitempty"`
+}
+
+// WorkerPublication freezes authenticated build evidence; never a local path or credential.
+type WorkerPublication struct {
+	ComponentID string         `json:"component_id"`
+	Profile     string         `json:"profile"`
+	Origin      string         `json:"origin"`
+	Repository  string         `json:"repository"`
+	Receipt     WorkerLocalOCI `json:"receipt"`
+}
+type WorkerPublicationReport struct {
+	ManifestDigest string `json:"manifest_digest"`
+}
+type NativeArtifact struct {
+	PublicationJobID     string                `json:"publication_job_id"`
+	PublicationAttemptID string                `json:"publication_attempt_id"`
+	PublicationInputHash string                `json:"publication_input_hash"`
+	Profile              string                `json:"profile"`
+	Receipt              WorkerLocalOCI        `json:"receipt"`
+	Observation          NativeObservation     `json:"observation"`
+	Reconciliation       *NativeReconciliation `json:"reconciliation,omitempty"`
+}
+type NativeObservation struct {
+	ManifestDigest string    `json:"manifest_digest"`
+	ConfigDigest   string    `json:"config_digest"`
+	LayerDigest    string    `json:"layer_digest"`
+	Platform       string    `json:"platform"`
+	Bytes          int64     `json:"bytes"`
+	ObservedAt     time.Time `json:"observed_at"`
+}
+type NativeReconciliation struct {
+	Actor         string    `json:"actor"`
+	At            time.Time `json:"at"`
+	AttemptStatus string    `json:"attempt_status"`
+}
+type NativeQuarantine struct {
+	Meta
+	RestoreID string `json:"restore_id"`
 }

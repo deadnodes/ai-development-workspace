@@ -117,6 +117,11 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 			}
 		}
 		restored := envelope.State
+		for _, p := range restored.Products {
+			if !nativeQuarantined(&restored, p.ID) {
+				restored.NativeQuarantines = append(restored.NativeQuarantines, domain.NativeQuarantine{Meta: domain.Meta{ID: id(), ProductID: p.ID, Actor: actor, CreatedAt: now, UpdatedAt: now}, RestoreID: restoreID})
+			}
+		}
 		originalOperations := []domain.ExternalOperation{}
 		for i := range restored.Operations {
 			op := &restored.Operations[i]

@@ -4,9 +4,11 @@ package workerclient
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"releasecontrol/internal/domain"
@@ -25,7 +27,7 @@ func New(endpoint, token string) (*Client, error) {
 	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" || u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) || len(token) < 32 {
 		return nil, errors.New("invalid worker endpoint or credential")
 	}
-	return &Client{endpoint: strings.TrimRight(endpoint, "/"), token: token, http: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("worker redirects forbidden") }}}, nil
+	return &Client{endpoint: strings.TrimRight(endpoint, "/"), token: token, http: &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, DisableCompression: true, MaxResponseHeaderBytes: 16384, DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext}, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("worker redirects forbidden") }}}, nil
 }
 func (c *Client) call(ctx context.Context, path string, in, out any) error {
 	b, e := json.Marshal(in)

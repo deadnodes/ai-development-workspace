@@ -168,7 +168,7 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 			_, _ = client.Report(parent, *j.Report)
 		}
 	}
-	lease, e := client.Claim(parent, domain.WorkerClaim{ProductID: c.ProductID, RepositoryID: c.RepositoryID, Capability: c.Recipe.Capability})
+	lease, e := client.Claim(parent, domain.WorkerClaim{ProductID: c.ProductID, RepositoryID: c.RepositoryID, Capability: c.Recipe.Capability, RecipeID: c.Recipe.ID, RecipeHash: c.Recipe.Hash})
 	if e != nil || lease == nil {
 		return nil, e
 	}

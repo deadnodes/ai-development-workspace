@@ -115,3 +115,8 @@ This starts embedded persistence. For a workspace mount or PostgreSQL, follow
 The separate [local OCI publisher](docs/LOCAL_PUBLISHER.md) publishes an explicitly
 approved worker receipt to an exact registry repository and verifies the remote
 bytes; RCP artifact admission and deployment remain separate.
+
+The [native publication path](docs/NATIVE_PUBLICATION.md) connects authenticated
+worker builds to a separate publisher, independently verifies registry bytes and
+admits typed native artifacts for the existing GitOps PR path. It remains opt-in;
+automatic native builds and live installation are separate work.
