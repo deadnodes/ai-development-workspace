@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -225,7 +226,21 @@ func TestRealCreateStartSupervisionWindows(t *testing.T) {
 				if after.Done || after.Resources[0].CreateState != "CREATE_UNCERTAIN" {
 					t.Fatal("late CREATE silently resolved uncertainty")
 				}
-				if err = Recover(dir); !errors.Is(err, errUncertainCreate) {
+				// Container absence does not mean the still-running watchdog has
+				// released journal.lock. Retry only that nonblocking lock conflict;
+				// the eventual unknown-create proof remains mandatory below.
+				until := time.Now().Add(5 * time.Second)
+				for {
+					err = Recover(dir)
+					if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
+						break
+					}
+					if !time.Now().Before(until) {
+						t.Fatal("watchdog journal contention did not clear", err)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if !errors.Is(err, errUncertainCreate) {
 					t.Fatal("restart did not stop at unknown create", err)
 				}
 			}
