@@ -45,6 +45,9 @@ func VerifyOCI(file string, max int64, platform string) (domain.WorkerLocalOCI, 
 	return VerifyWithExecution(file, max, platform, nil, nil)
 }
 func VerifyWithExecution(file string, max int64, platform string, execution *domain.WorkerExecution, compiled []byte) (domain.WorkerLocalOCI, error) {
+	return VerifyWithRuntime(file, max, platform, execution, compiled, nil)
+}
+func VerifyWithRuntime(file string, max int64, platform string, execution *domain.WorkerExecution, compiled []byte, runtime []RuntimeEntry) (domain.WorkerLocalOCI, error) {
 	var out domain.WorkerLocalOCI
 	f, e := os.Open(file)
 	if e != nil {
@@ -55,7 +58,7 @@ func VerifyWithExecution(file string, max int64, platform string, execution *dom
 	if e != nil || int64(len(b)) > max || len(b) == 0 {
 		return out, errors.New("OCI archive outside bounds")
 	}
-	return verifyOCIBytes(b, max, platform, execution, compiled)
+	return verifyOCIBytesRuntime(b, max, platform, execution, compiled, runtime)
 }
 
 // VerifyOCIBytes validates a bounded immutable archive snapshot.
@@ -63,6 +66,9 @@ func VerifyOCIBytes(b []byte, max int64, platform string) (domain.WorkerLocalOCI
 	return verifyOCIBytes(b, max, platform, nil, nil)
 }
 func verifyOCIBytes(b []byte, max int64, platform string, execution *domain.WorkerExecution, compiled []byte) (domain.WorkerLocalOCI, error) {
+	return verifyOCIBytesRuntime(b, max, platform, execution, compiled, nil)
+}
+func verifyOCIBytesRuntime(b []byte, max int64, platform string, execution *domain.WorkerExecution, compiled []byte, runtime []RuntimeEntry) (domain.WorkerLocalOCI, error) {
 	var out domain.WorkerLocalOCI
 	if max <= 0 || int64(len(b)) > max || len(b) == 0 {
 		return out, errors.New("OCI archive outside bounds")
@@ -148,6 +154,8 @@ func verifyOCIBytes(b []byte, max int64, platform string, execution *domain.Work
 		Config       struct {
 			User       string   `json:"User"`
 			Entrypoint []string `json:"Entrypoint"`
+			Env        []string `json:"Env"`
+			WorkingDir string   `json:"WorkingDir"`
 		} `json:"config"`
 		RootFS struct {
 			Type    string   `json:"type"`
@@ -188,30 +196,59 @@ func verifyOCIBytes(b []byte, max int64, platform string, execution *domain.Work
 		if c.Config.User != "65532:65532" || !reflect.DeepEqual(c.Config.Entrypoint, execution.Entrypoint) {
 			return out, errors.New("OCI runtime contract mismatch")
 		}
-		layerTar := tar.NewReader(bytes.NewReader(decompressed))
-		found := false
-		for {
-			h, err := layerTar.Next()
-			if err == io.EOF {
-				break
+		if execution.RuntimeRootFS != nil {
+			var raw struct {
+				Config map[string]json.RawMessage `json:"config"`
 			}
+			if json.Unmarshal(config, &raw) != nil || !reflect.DeepEqual(c.Config.Env, []string{"PATH=/usr/local/bin:/usr/bin:/bin"}) || c.Config.WorkingDir != "/" {
+				return out, errors.New("runtime config differs from fixed generated profile")
+			}
+			for key := range raw.Config {
+				if key != "User" && key != "Entrypoint" && key != "Env" && key != "WorkingDir" {
+					return out, errors.New("unexpected runtime config field")
+				}
+			}
+			if runtimeIdentity(runtime) != execution.RuntimeRootFS.InputsHash {
+				return out, errors.New("runtime input identity mismatch")
+			}
+			_, expected, err := MergeRuntime(runtime, execution.ImagePath, compiled, max)
 			if err != nil {
 				return out, err
 			}
-			if h.Typeflag == tar.TypeDir {
-				continue
+			if err = verifyRuntimeLayer(decompressed, expected, max); err != nil {
+				return out, err
 			}
-			if found || h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Name != execution.ImagePath || h.Mode&0777 != 0555 || h.Size != int64(len(compiled)) {
-				return out, errors.New("OCI layer differs from compiled output contract")
+			copy := *execution.RuntimeRootFS
+			out.RuntimeRootFS = &copy
+		} else {
+			if len(runtime) != 0 {
+				return out, errors.New("unexpected runtime bundle")
 			}
-			data, err := io.ReadAll(io.LimitReader(layerTar, max+1))
-			if err != nil || !bytes.Equal(data, compiled) {
-				return out, errors.New("OCI compiled output identity mismatch")
+			layerTar := tar.NewReader(bytes.NewReader(decompressed))
+			found := false
+			for {
+				h, err := layerTar.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return out, err
+				}
+				if h.Typeflag == tar.TypeDir {
+					continue
+				}
+				if found || h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Name != execution.ImagePath || h.Mode&0777 != 0555 || h.Size != int64(len(compiled)) {
+					return out, errors.New("OCI layer differs from compiled output contract")
+				}
+				data, err := io.ReadAll(io.LimitReader(layerTar, max+1))
+				if err != nil || !bytes.Equal(data, compiled) {
+					return out, errors.New("OCI compiled output identity mismatch")
+				}
+				found = true
 			}
-			found = true
-		}
-		if !found {
-			return out, errors.New("compiled output missing from OCI layer")
+			if !found {
+				return out, errors.New("compiled output missing from OCI layer")
+			}
 		}
 	}
 	for name := range files {

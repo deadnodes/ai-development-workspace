@@ -530,66 +530,90 @@ func TestWorkerBackupRestoreReconciliationAgreement(t *testing.T) {
 
 func TestWorkerLocalOCIAssertionBindingReplayAndReopen(t *testing.T) {
 	for _, kind := range []string{"local", "postgres"} {
-		t.Run(kind, func(t *testing.T) {
-			ctx := context.Background()
-			store, reopen := openWorkerTestStore(t, kind)
-			defer func() { store.Close() }()
-			s := New(store)
-			base := workerAuthority(t)
-			recipe, _ := base.Recipe("check")
-			recipe.Capability = "local_oci_build"
-			recipe.Execution = &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:" + strings.Repeat("a", 64), BuildKitImage: "moby/buildkit@sha256:" + strings.Repeat("b", 64), Platform: "linux/arm64", CheckArgv: []string{"make", "check"}, BuildArgv: []string{"make", "build"}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 60, MemoryMB: 256, StorageMB: 64, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 4 << 20, LogBytes: 4096}
-			recipe.Hash = workerconfig.RecipeHash(recipe)
-			config := workerconfig.Config{Revision: "cfg1", LeaseSeconds: 20, Recipes: []workerconfig.Recipe{recipe}, Credentials: []workerconfig.Credential{{ID: "runner", Principal: "worker/one", TokenEnv: "TEST_WORKER_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"r"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}}}
-			authority, err := workerconfig.New(config, "control", func(string) string { return workerTestToken })
-			if err != nil {
-				t.Fatal(err)
-			}
-			s.ConfigureWorkers(authority)
-			workerSeed(t, s)
-			j := queueWorker(t, s)
-			p := workerIdentity(t, s)
-			lease, err := s.ClaimWorker(ctx, p, domain.WorkerClaim{ProductID: "p", RepositoryID: "r", Capability: "local_oci_build"})
-			if err != nil || lease == nil {
-				t.Fatal(err)
-			}
-			req := workerRequest(lease)
-			if _, err = s.StartWorker(ctx, p, req); err != nil {
-				t.Fatal(err)
-			}
-			good := domain.WorkerLocalOCI{JobID: j.ID, AttemptID: lease.Attempt.ID, InputHash: j.InputHash, SourceSHA: j.Inputs.SourceSHA, RecipeHash: j.Inputs.RecipeHash, ConfigRevision: j.Inputs.ConfigRevision, ToolchainImage: recipe.Execution.ToolchainImage, Platform: recipe.Execution.Platform, ArchiveHash: "sha256:" + strings.Repeat("c", 64), LayoutHash: "sha256:" + strings.Repeat("d", 64), IndexDigest: "sha256:" + strings.Repeat("e", 64), ManifestDigest: "sha256:" + strings.Repeat("f", 64), ArchiveBytes: 1234}
-			for _, mutate := range []func(*domain.WorkerLocalOCI){func(v *domain.WorkerLocalOCI) { v.JobID = "foreign" }, func(v *domain.WorkerLocalOCI) { v.AttemptID = "foreign" }, func(v *domain.WorkerLocalOCI) { v.InputHash = "wrong" }, func(v *domain.WorkerLocalOCI) { v.SourceSHA = strings.Repeat("c", 40) }, func(v *domain.WorkerLocalOCI) { v.RecipeHash = "wrong" }, func(v *domain.WorkerLocalOCI) { v.ConfigRevision = "other" }, func(v *domain.WorkerLocalOCI) { v.ToolchainImage = "other" }, func(v *domain.WorkerLocalOCI) { v.Platform = "linux/amd64" }, func(v *domain.WorkerLocalOCI) { v.ArchiveBytes = 9 << 20 }, func(v *domain.WorkerLocalOCI) { v.ManifestDigest = "tag:latest" }} {
-				bad := good
-				mutate(&bad)
-				if _, err = s.ReportWorker(ctx, p, domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", LocalOCI: &bad}); err == nil {
-					t.Fatal("mismatched local assertion accepted")
+		for _, runtimeProfile := range []string{"scratch", "runtime"} {
+			t.Run(kind+"/"+runtimeProfile, func(t *testing.T) {
+				ctx := context.Background()
+				store, reopen := openWorkerTestStore(t, kind)
+				defer func() { store.Close() }()
+				s := New(store)
+				base := workerAuthority(t)
+				recipe, _ := base.Recipe("check")
+				recipe.Capability = "local_oci_build"
+				recipe.Execution = &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:" + strings.Repeat("a", 64), BuildKitImage: "moby/buildkit@sha256:" + strings.Repeat("b", 64), Platform: "linux/arm64", CheckArgv: []string{"make", "check"}, BuildArgv: []string{"make", "build"}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 60, MemoryMB: 256, StorageMB: 64, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 4 << 20, LogBytes: 4096}
+				if runtimeProfile == "runtime" {
+					recipe.Execution.RuntimeRootFS = &domain.WorkerRuntimeRootFS{Hash: "sha256:" + strings.Repeat("1", 64), ArchiveBytes: 10240, MaxExpandedBytes: 1 << 20, MaxEntries: 32, InputsHash: "sha256:" + strings.Repeat("2", 64)}
 				}
-			}
-			if _, err = s.ReportWorker(ctx, p, domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED"}); err == nil {
-				t.Fatal("build succeeded without local OCI output")
-			}
-			report := domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", LocalOCI: &good}
-			if _, err = s.ReportWorker(ctx, p, report); err != nil {
-				t.Fatal(err)
-			}
-			store.Close()
-			store = reopen()
-			s = New(store)
-			s.ConfigureWorkers(authority)
-			before, _ := store.Read(ctx)
-			if _, err = s.ReportWorker(ctx, p, report); err != nil {
-				t.Fatal("identical typed result replay after reopen", err)
-			}
-			after, _ := store.Read(ctx)
-			if len(before.Events) != len(after.Events) || after.WorkerAttempts[0].Report.LocalOCI.ManifestDigest != good.ManifestDigest || len(after.DeliveryArtifacts) != 0 || len(after.DeliveryBuildRuns) != 0 {
-				t.Fatal("local assertion lost or misrepresented as publication")
-			}
-			changed := good
-			changed.ManifestDigest = "sha256:" + strings.Repeat("0", 64)
-			report.LocalOCI = &changed
-			if _, err = s.ReportWorker(ctx, p, report); err == nil {
-				t.Fatal("conflicting typed receipt replay accepted")
-			}
-		})
+				recipe.Hash = workerconfig.RecipeHash(recipe)
+				config := workerconfig.Config{Revision: "cfg1", LeaseSeconds: 20, Recipes: []workerconfig.Recipe{recipe}, Credentials: []workerconfig.Credential{{ID: "runner", Principal: "worker/one", TokenEnv: "TEST_WORKER_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"r"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}}}
+				authority, err := workerconfig.New(config, "control", func(string) string { return workerTestToken })
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.ConfigureWorkers(authority)
+				workerSeed(t, s)
+				j := queueWorker(t, s)
+				p := workerIdentity(t, s)
+				lease, err := s.ClaimWorker(ctx, p, domain.WorkerClaim{ProductID: "p", RepositoryID: "r", Capability: "local_oci_build"})
+				if err != nil || lease == nil {
+					t.Fatal(err)
+				}
+				req := workerRequest(lease)
+				if _, err = s.StartWorker(ctx, p, req); err != nil {
+					t.Fatal(err)
+				}
+				good := domain.WorkerLocalOCI{JobID: j.ID, AttemptID: lease.Attempt.ID, InputHash: j.InputHash, SourceSHA: j.Inputs.SourceSHA, RecipeHash: j.Inputs.RecipeHash, ConfigRevision: j.Inputs.ConfigRevision, ToolchainImage: recipe.Execution.ToolchainImage, Platform: recipe.Execution.Platform, ArchiveHash: "sha256:" + strings.Repeat("c", 64), LayoutHash: "sha256:" + strings.Repeat("d", 64), IndexDigest: "sha256:" + strings.Repeat("e", 64), ManifestDigest: "sha256:" + strings.Repeat("f", 64), ArchiveBytes: 1234}
+				good.RuntimeRootFS = recipe.Execution.RuntimeRootFS
+				badRuntime := good
+				if good.RuntimeRootFS == nil {
+					badRuntime.RuntimeRootFS = &domain.WorkerRuntimeRootFS{Hash: "unexpected"}
+				} else {
+					copy := *good.RuntimeRootFS
+					copy.Hash = "sha256:" + strings.Repeat("3", 64)
+					badRuntime.RuntimeRootFS = &copy
+				}
+				if _, err = s.ReportWorker(ctx, p, domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", LocalOCI: &badRuntime}); err == nil {
+					t.Fatal("runtime receipt/recipe mismatch accepted")
+				}
+				if good.RuntimeRootFS != nil {
+					missing := good
+					missing.RuntimeRootFS = nil
+					if _, err = s.ReportWorker(ctx, p, domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", LocalOCI: &missing}); err == nil {
+						t.Fatal("missing runtime receipt accepted")
+					}
+				}
+				for _, mutate := range []func(*domain.WorkerLocalOCI){func(v *domain.WorkerLocalOCI) { v.JobID = "foreign" }, func(v *domain.WorkerLocalOCI) { v.AttemptID = "foreign" }, func(v *domain.WorkerLocalOCI) { v.InputHash = "wrong" }, func(v *domain.WorkerLocalOCI) { v.SourceSHA = strings.Repeat("c", 40) }, func(v *domain.WorkerLocalOCI) { v.RecipeHash = "wrong" }, func(v *domain.WorkerLocalOCI) { v.ConfigRevision = "other" }, func(v *domain.WorkerLocalOCI) { v.ToolchainImage = "other" }, func(v *domain.WorkerLocalOCI) { v.Platform = "linux/amd64" }, func(v *domain.WorkerLocalOCI) { v.ArchiveBytes = 9 << 20 }, func(v *domain.WorkerLocalOCI) { v.ManifestDigest = "tag:latest" }} {
+					bad := good
+					mutate(&bad)
+					if _, err = s.ReportWorker(ctx, p, domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", LocalOCI: &bad}); err == nil {
+						t.Fatal("mismatched local assertion accepted")
+					}
+				}
+				if _, err = s.ReportWorker(ctx, p, domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED"}); err == nil {
+					t.Fatal("build succeeded without local OCI output")
+				}
+				report := domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", LocalOCI: &good}
+				if _, err = s.ReportWorker(ctx, p, report); err != nil {
+					t.Fatal(err)
+				}
+				store.Close()
+				store = reopen()
+				s = New(store)
+				s.ConfigureWorkers(authority)
+				before, _ := store.Read(ctx)
+				if _, err = s.ReportWorker(ctx, p, report); err != nil {
+					t.Fatal("identical typed result replay after reopen", err)
+				}
+				after, _ := store.Read(ctx)
+				if len(before.Events) != len(after.Events) || after.WorkerAttempts[0].Report.LocalOCI.ManifestDigest != good.ManifestDigest || len(after.DeliveryArtifacts) != 0 || len(after.DeliveryBuildRuns) != 0 {
+					t.Fatal("local assertion lost or misrepresented as publication")
+				}
+				changed := good
+				changed.ManifestDigest = "sha256:" + strings.Repeat("0", 64)
+				report.LocalOCI = &changed
+				if _, err = s.ReportWorker(ctx, p, report); err == nil {
+					t.Fatal("conflicting typed receipt replay accepted")
+				}
+			})
+		}
 	}
 }

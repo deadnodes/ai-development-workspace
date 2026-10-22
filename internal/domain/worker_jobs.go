@@ -7,42 +7,54 @@ const WorkerOperationKind = "WORKER_EXECUTION"
 // WorkerExecution is operator-owned, immutable recipe content. Commands are
 // literal argv, never request parameters or shell templates.
 type WorkerExecution struct {
-	Kind           string   `json:"kind"`
-	ToolchainImage string   `json:"toolchain_image"`
-	BuildKitImage  string   `json:"buildkit_image,omitempty"`
-	Platform       string   `json:"platform"`
-	CheckArgv      []string `json:"check_argv"`
-	BuildArgv      []string `json:"build_argv,omitempty"`
-	OutputFile     string   `json:"output_file,omitempty"`
-	ImagePath      string   `json:"image_path,omitempty"`
-	Entrypoint     []string `json:"entrypoint,omitempty"`
-	Network        string   `json:"network"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
-	MemoryMB       int      `json:"memory_mb"`
-	StorageMB      int      `json:"storage_mb"`
-	CPUs           int      `json:"cpus"`
-	PIDs           int      `json:"pids"`
-	SourceBytes    int64    `json:"source_bytes"`
-	OutputBytes    int64    `json:"output_bytes"`
-	LogBytes       int64    `json:"log_bytes"`
+	RuntimeRootFS  *WorkerRuntimeRootFS `json:"runtime_rootfs,omitempty"`
+	Kind           string               `json:"kind"`
+	ToolchainImage string               `json:"toolchain_image"`
+	BuildKitImage  string               `json:"buildkit_image,omitempty"`
+	Platform       string               `json:"platform"`
+	CheckArgv      []string             `json:"check_argv"`
+	BuildArgv      []string             `json:"build_argv,omitempty"`
+	OutputFile     string               `json:"output_file,omitempty"`
+	ImagePath      string               `json:"image_path,omitempty"`
+	Entrypoint     []string             `json:"entrypoint,omitempty"`
+	Network        string               `json:"network"`
+	TimeoutSeconds int                  `json:"timeout_seconds"`
+	MemoryMB       int                  `json:"memory_mb"`
+	StorageMB      int                  `json:"storage_mb"`
+	CPUs           int                  `json:"cpus"`
+	PIDs           int                  `json:"pids"`
+	SourceBytes    int64                `json:"source_bytes"`
+	OutputBytes    int64                `json:"output_bytes"`
+	LogBytes       int64                `json:"log_bytes"`
+}
+
+// WorkerRuntimeRootFS pins an operator-prepared bundle baked into the immutable
+// toolchain. Local paths and bundle bytes are never control-plane inputs.
+type WorkerRuntimeRootFS struct {
+	Hash             string `json:"hash"`
+	ArchiveBytes     int64  `json:"archive_bytes"`
+	MaxExpandedBytes int64  `json:"max_expanded_bytes"`
+	MaxEntries       int    `json:"max_entries"`
+	InputsHash       string `json:"inputs_hash"`
 }
 
 // WorkerLocalOCI is an executor assertion about a verified local archive. It
 // does not assert registry presence, publication or deployment.
 type WorkerLocalOCI struct {
-	JobID          string `json:"job_id"`
-	AttemptID      string `json:"attempt_id"`
-	InputHash      string `json:"input_hash"`
-	SourceSHA      string `json:"source_sha"`
-	RecipeHash     string `json:"recipe_hash"`
-	ConfigRevision string `json:"config_revision"`
-	ToolchainImage string `json:"toolchain_image"`
-	Platform       string `json:"platform"`
-	ArchiveHash    string `json:"archive_hash"`
-	LayoutHash     string `json:"layout_hash"`
-	IndexDigest    string `json:"index_digest"`
-	ManifestDigest string `json:"manifest_digest"`
-	ArchiveBytes   int64  `json:"archive_bytes"`
+	RuntimeRootFS  *WorkerRuntimeRootFS `json:"runtime_rootfs,omitempty"`
+	JobID          string               `json:"job_id"`
+	AttemptID      string               `json:"attempt_id"`
+	InputHash      string               `json:"input_hash"`
+	SourceSHA      string               `json:"source_sha"`
+	RecipeHash     string               `json:"recipe_hash"`
+	ConfigRevision string               `json:"config_revision"`
+	ToolchainImage string               `json:"toolchain_image"`
+	Platform       string               `json:"platform"`
+	ArchiveHash    string               `json:"archive_hash"`
+	LayoutHash     string               `json:"layout_hash"`
+	IndexDigest    string               `json:"index_digest"`
+	ManifestDigest string               `json:"manifest_digest"`
+	ArchiveBytes   int64                `json:"archive_bytes"`
 }
 
 type WorkerSourceProof struct {

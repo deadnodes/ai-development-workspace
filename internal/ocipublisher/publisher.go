@@ -130,6 +130,9 @@ func (c Config) validate() (*url.URL, error) {
 	if r.Platform != "linux/amd64" && r.Platform != "linux/arm64" {
 		return nil, invalid
 	}
+	if s := r.RuntimeRootFS; s != nil && (!digest.MatchString(s.Hash) || !digest.MatchString(s.InputsHash) || s.ArchiveBytes < 1 || s.ArchiveBytes > 128<<20 || s.MaxExpandedBytes < 1 || s.MaxExpandedBytes > 128<<20 || s.MaxEntries < 1 || s.MaxEntries > 20000) {
+		return nil, invalid
+	}
 	return validateRegistry(c.Plan.Origin, c.Plan.Repository, c.MaxArchiveBytes, c.TimeoutSeconds, c.UsernameEnv, c.PasswordEnv, c.BearerEnv, c.FixtureLoopbackHTTP)
 }
 func validateRegistry(origin, repo string, maxBytes int64, timeout int, username, password, bearer string, fixture bool) (*url.URL, error) {
@@ -187,6 +190,9 @@ func publishWithSync(ctx context.Context, c Config, sync func(*os.File) error) (
 	actual.RecipeHash = expected.RecipeHash
 	actual.ConfigRevision = expected.ConfigRevision
 	actual.ToolchainImage = expected.ToolchainImage
+	// Runtime pins are authenticated build assertions, like recipe/toolchain;
+	// exact archive/layout/manifest identities above bind all observed bytes.
+	actual.RuntimeRootFS = expected.RuntimeRootFS
 	if !reflect.DeepEqual(actual, expected) {
 		return nil, invalid
 	}

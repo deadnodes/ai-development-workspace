@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"releasecontrol/internal/workerconfig"
 	"releasecontrol/internal/workerrunner"
+	"strconv"
 	"syscall"
 )
 
@@ -18,6 +19,21 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 6 && os.Args[1] == "prepare-rootfs" {
+		max, e := strconv.ParseInt(os.Args[4], 10, 64)
+		if e != nil {
+			return e
+		}
+		count, e := strconv.Atoi(os.Args[5])
+		if e != nil {
+			return e
+		}
+		spec, e := workerrunner.NormalizeRuntimeRootFS(os.Args[2], os.Args[3], max, count)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(spec)
+	}
 	if len(os.Args) == 3 && os.Args[1] == "recipe-hash" {
 		file, err := os.Open(os.Args[2])
 		if err != nil {
@@ -40,7 +56,7 @@ func run() error {
 		return workerrunner.Watchdog(os.Args[2], os.Args[3])
 	}
 	if len(os.Args) != 3 || os.Args[1] != "run-once" {
-		return fmt.Errorf("usage: worker run-once OPERATOR_CONFIG.json | recipe-hash RECIPE.json")
+		return fmt.Errorf("usage: worker run-once OPERATOR_CONFIG.json | recipe-hash RECIPE.json | prepare-rootfs SELECTED_TREE NEW_ARCHIVE MAX_EXPANDED_BYTES MAX_ENTRIES")
 	}
 	cfg, err := workerrunner.Load(os.Args[2])
 	if err != nil {

@@ -431,6 +431,9 @@ func validateWorkerLocalOCI(j *domain.WorkerJob, a *domain.WorkerAttempt, r *dom
 	if v == nil || e == nil || v.JobID != j.ID || v.AttemptID != a.ID || v.InputHash != j.InputHash || v.SourceSHA != j.Inputs.SourceSHA || v.RecipeHash != j.Inputs.RecipeHash || v.ConfigRevision != j.Inputs.ConfigRevision || v.ToolchainImage != e.ToolchainImage || v.Platform != e.Platform || v.ArchiveBytes < 1 || v.ArchiveBytes > e.OutputBytes {
 		return invalid("local OCI provenance mismatch")
 	}
+	if !reflect.DeepEqual(v.RuntimeRootFS, e.RuntimeRootFS) {
+		return invalid("runtime rootfs provenance mismatch")
+	}
 	for _, d := range []string{v.ArchiveHash, v.LayoutHash, v.IndexDigest, v.ManifestDigest} {
 		if !workerconfig.ValidFingerprint(d) {
 			return invalid("invalid local OCI identity")

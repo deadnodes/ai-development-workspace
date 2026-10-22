@@ -39,3 +39,7 @@ func VerifyOCIBytes(b []byte, max int64, platform string) (domain.WorkerLocalOCI
 func verifyOCI(file string, max int64, platform string, e *domain.WorkerExecution, b []byte) (domain.WorkerLocalOCI, error) {
 	return ociverify.VerifyWithExecution(file, max, platform, e, b)
 }
+
+func NormalizeRuntimeRootFS(sourceDir, outputFile string, maxExpandedBytes int64, maxEntries int) (domain.WorkerRuntimeRootFS, error) {
+	return ociverify.NormalizeRuntimeRootFS(sourceDir, outputFile, maxExpandedBytes, maxEntries)
+}

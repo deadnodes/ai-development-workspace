@@ -17,6 +17,7 @@ import (
 
 	"releasecontrol/internal/artifactspool"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/ociverify"
 	"releasecontrol/internal/workerclient"
 	"releasecontrol/internal/workerconfig"
 )
@@ -350,7 +351,22 @@ func execute(ctx context.Context, c Config, root string, js *journalState) (*dom
 	if err != nil || len(binary) == 0 {
 		return nil, errors.New("compiled output unavailable or exceeds bound")
 	}
-	contextTar, err := buildContext(e, binary)
+	var runtime []ociverify.RuntimeEntry
+	if e.RuntimeRootFS != nil {
+		kind, statErr := d.output(ctx, nil, 128, "exec", checkID, "stat", "-c", "%F", "/opt", "/opt/rcp", ociverify.RuntimeBundlePath)
+		if statErr != nil || stringTrim(kind) != "directory\ndirectory\nregular file" {
+			return nil, errors.New("runtime bundle must be immutable regular image content")
+		}
+		bundle, readErr := d.output(ctx, nil, e.RuntimeRootFS.ArchiveBytes, "exec", checkID, "cat", ociverify.RuntimeBundlePath)
+		if readErr != nil {
+			return nil, errors.New("pinned runtime bundle unavailable")
+		}
+		runtime, err = ociverify.RuntimeBundle(bundle, e.RuntimeRootFS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	contextTar, err := buildContextRuntime(e, binary, runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +404,7 @@ func execute(ctx context.Context, c Config, root string, js *journalState) (*dom
 	if err = os.WriteFile(archivePath, archive, 0600); err != nil {
 		return nil, err
 	}
-	result, err := verifyOCI(archivePath, e.OutputBytes, e.Platform, e, binary)
+	result, err := ociverify.VerifyWithRuntime(archivePath, e.OutputBytes, e.Platform, e, binary, runtime)
 	return &result, err
 }
 func jsSource(j *journalState) string { return j.snapshot().SourceSHA }

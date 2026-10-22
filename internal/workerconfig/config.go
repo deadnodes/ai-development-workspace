@@ -182,10 +182,13 @@ func ValidateExecution(r Recipe) error {
 		return errors.New("invalid trusted isolated execution definition")
 	}
 	if e.Kind == "local_oci_build" {
+		if r := e.RuntimeRootFS; r != nil && (!digest.MatchString(r.Hash) || !digest.MatchString(r.InputsHash) || r.ArchiveBytes < 1 || r.ArchiveBytes > 128<<20 || r.MaxExpandedBytes < 1 || r.MaxExpandedBytes > 128<<20 || r.MaxEntries < 1 || r.MaxEntries > 20000) {
+			return errors.New("invalid runtime rootfs pins or bounds")
+		}
 		if !pinned.MatchString(e.BuildKitImage) || !validArgv(e.BuildArgv) || !cleanRelative(e.OutputFile) || !cleanRelative(e.ImagePath) || len(e.Entrypoint) == 0 || !validArgv(e.Entrypoint) {
 			return errors.New("invalid local OCI output contract")
 		}
-	} else if e.BuildKitImage != "" || len(e.BuildArgv) != 0 || e.OutputFile != "" || e.ImagePath != "" || len(e.Entrypoint) != 0 {
+	} else if e.RuntimeRootFS != nil || e.BuildKitImage != "" || len(e.BuildArgv) != 0 || e.OutputFile != "" || e.ImagePath != "" || len(e.Entrypoint) != 0 {
 		return errors.New("source check cannot declare OCI outputs")
 	}
 	return nil

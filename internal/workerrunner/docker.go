@@ -10,6 +10,7 @@ import (
 	"io"
 	"os/exec"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/ociverify"
 	"strings"
 	"time"
 )
@@ -157,16 +158,30 @@ func (d docker) waitBuildKit(ctx context.Context, id string) error {
 	}
 }
 func buildContext(e *domain.WorkerExecution, binary []byte) ([]byte, error) {
+	return buildContextRuntime(e, binary, nil)
+}
+func buildContextRuntime(e *domain.WorkerExecution, binary []byte, runtime []ociverify.RuntimeEntry) ([]byte, error) {
 	entrypoint, _ := json.Marshal(e.Entrypoint)
 	copyPair, _ := json.Marshal([]string{"payload", "/" + e.ImagePath})
 	dockerfile := "FROM scratch\nCOPY --chmod=0555 " + string(copyPair) + "\nUSER 65532:65532\nENTRYPOINT " + string(entrypoint) + "\n"
+	payloadName := "payload"
+	payload := binary
+	if e.RuntimeRootFS != nil {
+		var err error
+		payload, _, err = ociverify.MergeRuntime(runtime, e.ImagePath, binary, e.OutputBytes)
+		if err != nil {
+			return nil, err
+		}
+		payloadName = "rootfs.tar"
+		dockerfile = "FROM scratch\nADD [\"rootfs.tar\",\"/\"]\nENV PATH=/usr/local/bin:/usr/bin:/bin\nWORKDIR /\nUSER 65532:65532\nENTRYPOINT " + string(entrypoint) + "\n"
+	}
 	var b bytes.Buffer
 	tw := tar.NewWriter(&b)
 	for _, f := range []struct {
 		name string
 		data []byte
 		mode int64
-	}{{"Dockerfile", []byte(dockerfile), 0644}, {"payload", binary, 0755}} {
+	}{{"Dockerfile", []byte(dockerfile), 0644}, {payloadName, payload, 0755}} {
 		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.data)), ModTime: time.Unix(0, 0)}); err != nil {
 			return nil, err
 		}

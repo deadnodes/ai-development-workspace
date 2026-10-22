@@ -123,3 +123,7 @@ bindings let DEPLOY and DEV/TEST COMPOSE queue the same build/publication jobs
 automatically, with durable shared-volume archive transport and source fencing.
 Native production candidates and main advancement remain blocked; live installation
 and the remaining RCP-011 acceptance are separate work.
+
+The [real application fixture](docs/REAL_APPLICATION_BUILDS.md) prepares a pinned
+offline RCP toolchain and a verified Git/CA runtime bundle, then exercises the
+same native path with actual application source and by-digest runtime checks.
