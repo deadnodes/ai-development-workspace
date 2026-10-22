@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"releasecontrol/internal/artifactspool"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/ocipublisher"
 	"releasecontrol/internal/workerclient"
@@ -21,6 +22,7 @@ import (
 )
 
 type Config struct {
+	ArtifactSpool  *artifactspool.Config          `json:"artifact_spool,omitempty"`
 	Endpoint       string                         `json:"endpoint"`
 	TokenEnv       string                         `json:"token_env"`
 	ConfigRevision string                         `json:"config_revision"`
@@ -28,10 +30,21 @@ type Config struct {
 	Publisher      ocipublisher.Config            `json:"publisher"`
 }
 type journal struct {
+	Phase      string               `json:"phase"`
 	ConfigHash string               `json:"config_hash"`
 	Lease      domain.WorkerLease   `json:"lease"`
 	Report     *domain.WorkerReport `json:"report,omitempty"`
 	Done       bool                 `json:"done"`
+}
+
+func validJournalPhase(j journal) bool {
+	if j.Done {
+		return j.Phase == "DONE" && j.Report != nil
+	}
+	if j.Report != nil {
+		return j.Phase == "REPORT_PENDING"
+	}
+	return j.Phase == "CLAIMED" || j.Phase == "STARTED" || j.Phase == "PUBLISH_INTENT"
 }
 
 var invalid = errors.New("invalid pinned native publisher configuration or journal")
@@ -59,7 +72,12 @@ func decode(b []byte, v any) error {
 // Using bytes.Reader keeps decoding independent of filesystem paths supplied by RCP.
 func newReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
 func validate(c Config) error {
-	if workerconfig.ValidatePublication(c.Recipe) != nil || c.ConfigRevision == "" || !regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`).MatchString(c.TokenEnv) || c.Publisher.AllowedOrigin != c.Recipe.Origin || c.Publisher.AllowedRepository != c.Recipe.Repository || c.Publisher.MaxArchiveBytes != c.Recipe.MaxBytes || c.Publisher.TimeoutSeconds != c.Recipe.TimeoutSeconds || !filepath.IsAbs(c.Publisher.Archive) || !filepath.IsAbs(c.Publisher.StateDir) {
+	if c.ArtifactSpool != nil {
+		if artifactspool.Validate(*c.ArtifactSpool) != nil || c.ArtifactSpool.MaxArchiveBytes != c.Publisher.MaxArchiveBytes || c.Publisher.Archive != "" || c.Publisher.StateDir == c.ArtifactSpool.Root || strings.HasPrefix(filepath.Clean(c.Publisher.StateDir), c.ArtifactSpool.Root+string(os.PathSeparator)) {
+			return invalid
+		}
+	}
+	if workerconfig.ValidatePublication(c.Recipe) != nil || c.ConfigRevision == "" || !regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`).MatchString(c.TokenEnv) || c.Publisher.AllowedOrigin != c.Recipe.Origin || c.Publisher.AllowedRepository != c.Recipe.Repository || c.Publisher.MaxArchiveBytes != c.Recipe.MaxBytes || c.Publisher.TimeoutSeconds != c.Recipe.TimeoutSeconds || (c.ArtifactSpool == nil && !filepath.IsAbs(c.Publisher.Archive)) || !filepath.IsAbs(c.Publisher.StateDir) {
 		return invalid
 	}
 	for _, ref := range []string{c.Publisher.UsernameEnv, c.Publisher.PasswordEnv, c.Publisher.BearerEnv} {
@@ -114,8 +132,8 @@ func leaseMatches(c Config, l domain.WorkerLease) bool {
 	return j.Capability == "registry_publish" && j.ProductID == r.ProductID && j.Inputs.RepositoryID == r.RepositoryID && j.Inputs.RecipeID == r.ID && j.Inputs.RecipeHash == r.Hash && j.Inputs.RecipeRevision == r.Revision && j.Inputs.ConfigRevision == c.ConfigRevision && workerconfig.Fingerprint(j.Inputs) == j.InputHash && p != nil && p.ComponentID == r.ComponentID && p.Profile == r.Profile && p.Origin == r.Origin && p.Repository == r.Repository && p.Receipt.RecipeHash == r.BuildRecipeHash && j.Inputs.SourceSHA == p.Receipt.SourceSHA && a.JobID == j.ID && a.InputHash == j.InputHash && a.Fence == j.Fence && !j.CancellationRequested
 }
 
-// RunOnce durably retains one lease and pending report. Restart always retries
-// the same START, immutable digest publication or REPORT; it never rebuilds.
+// RunOnce durably retains one lease and pending report. An uncertain publication
+// intent is reconciled using GET/hash only; it never repeats registry writes.
 func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 	if e := validate(c); e != nil {
 		return nil, e
@@ -156,7 +174,7 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 			err = f.Sync()
 		}
 		f.Close()
-		if err != nil || decode(b, &j) != nil || j.ConfigHash != workerconfig.Fingerprint(c) || !leaseMatches(c, j.Lease) {
+		if err != nil || decode(b, &j) != nil || !validJournalPhase(j) || j.ConfigHash != workerconfig.Fingerprint(c) || !leaseMatches(c, j.Lease) {
 			return nil, invalid
 		}
 		d, err := os.Open(dir)
@@ -192,7 +210,7 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 		if !leaseMatches(c, *lease) {
 			return nil, invalid
 		}
-		j = journal{ConfigHash: workerconfig.Fingerprint(c), Lease: *lease}
+		j = journal{Phase: "CLAIMED", ConfigHash: workerconfig.Fingerprint(c), Lease: *lease}
 		if e = durable(file, j); e != nil {
 			return nil, e
 		}
@@ -209,6 +227,7 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 			return nil, e
 		}
 		j.Done = true
+		j.Phase = "DONE"
 		j.Lease = out
 		return &out, durable(file, j)
 	}
@@ -220,6 +239,10 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 		return nil, invalid
 	}
 	j.Lease = lease
+	uncertainPublication := j.Phase == "PUBLISH_INTENT"
+	if !uncertainPublication {
+		j.Phase = "STARTED"
+	}
 	if e = durable(file, j); e != nil {
 		return nil, e
 	}
@@ -227,8 +250,29 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 	defer stop()
 	p := *lease.Job.Inputs.Publication
 	publisher := c.Publisher
+	if c.ArtifactSpool != nil && !uncertainPublication {
+		publisher.Archive, e = artifactspool.Resolve(*c.ArtifactSpool, p.Receipt)
+		if e != nil {
+			return nil, e
+		}
+	}
 	publisher.Plan = ocipublisher.Plan{ID: lease.Job.ID, Approved: true, ProductID: lease.Job.ProductID, ComponentID: p.ComponentID, RepositoryID: lease.Job.Inputs.RepositoryID, Origin: p.Origin, Repository: p.Repository, Receipt: p.Receipt}
-	observation, e := ocipublisher.Publish(ctx, publisher)
+	var observation *ocipublisher.Observation
+	if uncertainPublication {
+		read, err := ocipublisher.Read(ctx, ocipublisher.ReadConfig{Origin: p.Origin, Repository: p.Repository, CAFile: publisher.CAFile, UsernameEnv: publisher.UsernameEnv, PasswordEnv: publisher.PasswordEnv, BearerEnv: publisher.BearerEnv, MaxBytes: publisher.MaxArchiveBytes, TimeoutSeconds: publisher.TimeoutSeconds, FixtureLoopbackHTTP: publisher.FixtureLoopbackHTTP}, p.Receipt.ManifestDigest, p.Receipt.Platform)
+		if err != nil {
+			return nil, errors.New("publication outcome uncertain; read-only reconciliation required")
+		}
+		observation = &ocipublisher.Observation{Plan: publisher.Plan, ManifestDigest: read.ManifestDigest}
+	} else {
+		// A crash after this durability boundary may have published bytes. Never
+		// infer that absence means it is safe to repeat an external write.
+		j.Phase = "PUBLISH_INTENT"
+		if e = durable(file, j); e != nil {
+			return nil, e
+		}
+		observation, e = ocipublisher.Publish(ctx, publisher)
+	}
 	select {
 	case err := <-hbErr:
 		return nil, err
@@ -242,6 +286,7 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 	}
 	report := domain.WorkerReport{WorkerAttemptRequest: req, Result: "PASSED", Publication: &domain.WorkerPublicationReport{ManifestDigest: observation.ManifestDigest}}
 	j.Report = &report
+	j.Phase = "REPORT_PENDING"
 	if e = durable(file, j); e != nil {
 		return nil, e
 	}
@@ -250,6 +295,7 @@ func RunOnce(parent context.Context, c Config) (*domain.WorkerLease, error) {
 		return nil, e
 	}
 	j.Done = true
+	j.Phase = "DONE"
 	j.Lease = out
 	return &out, durable(file, j)
 }

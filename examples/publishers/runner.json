@@ -1,0 +1,35 @@
+{
+  "endpoint": "http://127.0.0.1:8090",
+  "token_env": "RCP_PUBLICATION_WORKER_TOKEN",
+  "config_revision": "replace-authority-config-revision",
+  "recipe": {
+    "id": "replace-publication-recipe",
+    "revision": "v1",
+    "hash": "replace-computed-publication-hash",
+    "product_id": "replace-product",
+    "repository_id": "replace-repository",
+    "component_id": "replace-component",
+    "profile": "native-offline",
+    "build_recipe_hash": "replace-exact-build-recipe-hash",
+    "origin": "https://registry.example.invalid",
+    "repository": "replace/component",
+    "max_bytes": 16777216,
+    "timeout_seconds": 120,
+    "pull": {"bearer_env": "RCP_REGISTRY_READ_TOKEN"}
+  },
+  "artifact_spool": {
+    "root": "/absolute/canonical/private/artifact-spool",
+    "max_archive_bytes": 16777216,
+    "max_total_bytes": 268435456,
+    "max_entries": 32
+  },
+  "publisher": {
+    "archive": "",
+    "state_dir": "/absolute/canonical/private/publisher-state",
+    "allowed_origin": "https://registry.example.invalid",
+    "allowed_repository": "replace/component",
+    "max_archive_bytes": 16777216,
+    "timeout_seconds": 120,
+    "bearer_env": "RCP_REGISTRY_WRITE_TOKEN"
+  }
+}

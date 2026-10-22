@@ -59,6 +59,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 }
 
 type deployInput struct {
+	RequestKey     string `json:"request_key,omitempty"`
 	Actor          string `json:"actor,omitempty" jsonschema:"Human or agent attribution"`
 	IntegrationID  string `json:"integration_id" jsonschema:"Integration to deploy"`
 	EnvironmentID  string `json:"environment_id" jsonschema:"Explicitly configured DEV environment"`
@@ -69,6 +70,9 @@ type deployInput struct {
 
 func (in deployInput) command() domain.Command {
 	data := map[string]any{"environment_id": in.EnvironmentID}
+	if in.RequestKey != "" {
+		data["request_key"] = in.RequestKey
+	}
 	if in.ApplicationID != "" {
 		data["application_id"] = in.ApplicationID
 	}

@@ -118,5 +118,8 @@ bytes; RCP artifact admission and deployment remain separate.
 
 The [native publication path](docs/NATIVE_PUBLICATION.md) connects authenticated
 worker builds to a separate publisher, independently verifies registry bytes and
-admits typed native artifacts for the existing GitOps PR path. It remains opt-in;
-automatic native builds and live installation are separate work.
+admits typed native artifacts for the existing GitOps PR path. Optional operator
+bindings let DEPLOY and DEV/TEST COMPOSE queue the same build/publication jobs
+automatically, with durable shared-volume archive transport and source fencing.
+Native production candidates and main advancement remain blocked; live installation
+and the remaining RCP-011 acceptance are separate work.

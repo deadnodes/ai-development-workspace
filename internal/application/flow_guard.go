@@ -41,12 +41,24 @@ func flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
 	return nil
 }
 
+// A native component makes its request-time authority a fence for the whole
+// composition, including GitHub siblings that might be scheduled first.
+func (s *Service) flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if err := flowChildAllowed(st, op); err != nil {
+		return err
+	}
+	if parent := operationByID(st, op.ParentID); parent != nil {
+		return s.flowGuard(st, *parent)
+	}
+	return nil
+}
+
 func (s *Service) verifyPromotionSource(ctx context.Context, op domain.ExternalOperation) error {
 	st, err := s.State(ctx)
 	if err != nil {
 		return err
 	}
-	if err = flowChildAllowed(&st, op); err != nil {
+	if err = s.flowChildAllowed(&st, op); err != nil {
 		return err
 	}
 	parent := operationByID(&st, op.ParentID)

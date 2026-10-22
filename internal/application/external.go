@@ -137,7 +137,8 @@ func pendingRefresh(st *domain.State, kind, productID, integrationID, repository
 	}
 	return nil
 }
-func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
+func applyExternal(st *domain.State, c domain.Command, m domain.Meta, authority *workerconfig.Authority) (any, domain.Meta, error) {
+	s := &Service{externalWorkers: authority}
 	switch c.Action {
 	case "refresh_environment_runtime":
 		var input struct {
@@ -271,15 +272,16 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		return repo, m, nil
 	case "configure_component":
 		var input struct {
-			Mode            string            `json:"mode"`
-			Profile         string            `json:"profile"`
-			RebuildMissing  bool              `json:"rebuild_missing"`
-			ApplicationID   string            `json:"application_id"`
-			ConnectionID    string            `json:"connection_id"`
-			Workflow        string            `json:"workflow"`
-			ImageRepository string            `json:"image_repository"`
-			WorkflowRef     string            `json:"workflow_ref"`
-			Inputs          map[string]string `json:"inputs"`
+			Native          *domain.NativeBinding `json:"native"`
+			Mode            string                `json:"mode"`
+			Profile         string                `json:"profile"`
+			RebuildMissing  bool                  `json:"rebuild_missing"`
+			ApplicationID   string                `json:"application_id"`
+			ConnectionID    string                `json:"connection_id"`
+			Workflow        string                `json:"workflow"`
+			ImageRepository string                `json:"image_repository"`
+			WorkflowRef     string                `json:"workflow_ref"`
+			Inputs          map[string]string     `json:"inputs"`
 		}
 		if e := decode(c.Data, &input); e != nil {
 			return nil, m, e
@@ -295,14 +297,22 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if _, e := scopedConnection(st, input.ConnectionID, c.ProductID); e != nil {
 			return nil, m, e
 		}
-		if input.Mode == "NATIVE_EXISTING_ARTIFACT" {
+		if input.Mode == "NATIVE" {
 			if nativeQuarantined(st, c.ProductID) || !workerconfig.ValidIdentifier(input.Profile) || input.Workflow != "" || input.WorkflowRef != "" || len(input.Inputs) > 0 || input.RebuildMissing || input.ImageRepository == "" || strings.ContainsAny(input.ImageRepository, " @\n\r") {
 				return nil, m, invalid("invalid native existing-artifact configuration or quarantine")
+			}
+			if input.Native != nil {
+				if _, _, err := s.nativeRecipes(c.ProductID, *app, input.Profile, input.ImageRepository, input.Native); err != nil {
+					return nil, m, err
+				}
 			}
 		} else if input.Mode != "" && input.Mode != "GITHUB_ACTIONS" {
 			return nil, m, invalid("unknown component build mode")
 		} else if input.Workflow == "" || strings.ContainsAny(input.Workflow, "\n\r") || !imageName.MatchString(input.ImageRepository) {
 			return nil, m, invalid("workflow and ghcr.io image_repository required")
+		}
+		if input.Mode != "NATIVE" && input.Native != nil {
+			return nil, m, invalid("native binding requires native mode")
 		}
 		if input.WorkflowRef != "" && !safeBranch(input.WorkflowRef) {
 			return nil, m, invalid("invalid workflow_ref")
@@ -312,7 +322,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 				return nil, m, invalid("reserved workflow input %s", key)
 			}
 		}
-		v := domain.ComponentBuild{Mode: input.Mode, Profile: input.Profile, RebuildMissing: input.RebuildMissing, Meta: m, ApplicationID: app.ID, ConnectionID: input.ConnectionID, Workflow: input.Workflow, ImageRepository: input.ImageRepository, WorkflowRef: input.WorkflowRef, Inputs: input.Inputs}
+		v := domain.ComponentBuild{Native: input.Native, Mode: input.Mode, Profile: input.Profile, RebuildMissing: input.RebuildMissing, Meta: m, ApplicationID: app.ID, ConnectionID: input.ConnectionID, Workflow: input.Workflow, ImageRepository: input.ImageRepository, WorkflowRef: input.WorkflowRef, Inputs: input.Inputs}
 		st.ComponentBuilds = append(st.ComponentBuilds, v)
 		return v, m, nil
 	case "configure_environment":
@@ -399,6 +409,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		return v, m, nil
 	case "deploy_integration", "deploy_existing_artifact":
 		var input struct {
+			RequestKey     string `json:"request_key"`
 			ArtifactID     string `json:"artifact_id"`
 			EnvironmentID  string `json:"environment_id"`
 			ApplicationID  string `json:"application_id"`
@@ -407,6 +418,23 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		}
 		if e := decode(c.Data, &input); e != nil {
 			return nil, m, e
+		}
+		requestHash := workerconfig.Fingerprint(struct {
+			Action, Integration, Actor string
+			Data                       any
+		}{c.Action, c.IntegrationID, c.Actor, input})
+		if input.RequestKey != "" {
+			if !workerRequestKey.MatchString(input.RequestKey) {
+				return nil, m, invalid("invalid delivery request_key")
+			}
+			for _, previous := range st.Operations {
+				if previous.Kind == "DEPLOY" && previous.IntegrationID == c.IntegrationID && previous.RequestKey == input.RequestKey {
+					if previous.RequestHash != requestHash {
+						return nil, m, invalid("conflicting delivery request replay")
+					}
+					return previous, previous.Meta, nil
+				}
+			}
 		}
 		in := integration(st, c.IntegrationID)
 		if in == nil {
@@ -473,7 +501,7 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		if build == nil || target == nil || source == nil || target.Purpose != "DEV" || !target.AllowDeploy {
 			return nil, m, invalid("component build and explicit enabled DEV mapping required")
 		}
-		if build.Mode == "NATIVE_EXISTING_ARTIFACT" && (nativeQuarantined(st, in.ProductID) || c.Action != "deploy_existing_artifact" || target.GitOpsMode != "PR") {
+		if build.Mode == "NATIVE" && (nativeQuarantined(st, in.ProductID) || c.Action != "deploy_existing_artifact" && build.Native == nil || target.GitOpsMode != "PR") {
 			return nil, m, invalid("native requires existing artifact and GitOps pull request; automatic builds disabled")
 		}
 		gitops := repositoryBinding(st, target.RepositoryID)
@@ -512,13 +540,13 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 		request.Inputs["operation_id"] = m.ID
 		request.Inputs["image_repository"] = build.ImageRepository
 		snapshot := &domain.DeliverySnapshot{Revision: *revision, Application: *app, Build: *build, Target: *target, Environment: *env, Source: *source, GitOps: *gitops, SourceConnection: sc.Config, GitOpsConnection: gc.Config, BuildRequest: request, GitOpsRequest: delivery.GitOpsRequest{Repository: repositoryLocator(st, *gitops), Ref: target.Ref, Path: target.Path, ImageRepository: build.ImageRepository, ImageField: target.ImageField, DigestField: target.DigestField}}
-		v := domain.ExternalOperation{Meta: m, Kind: "DEPLOY", IntegrationID: in.ID, EnvironmentID: env.ID, ApplicationID: app.ID, Status: "PENDING", RequestedBy: c.Actor, Phase: "PREFLIGHT", Snapshot: snapshot, ExpectedDigest: input.ExpectedDigest, NextAttemptAt: time.Now().UTC()}
+		v := domain.ExternalOperation{RequestKey: input.RequestKey, RequestHash: requestHash, Meta: m, Kind: "DEPLOY", IntegrationID: in.ID, EnvironmentID: env.ID, ApplicationID: app.ID, Status: "PENDING", RequestedBy: c.Actor, Phase: "PREFLIGHT", Snapshot: snapshot, ExpectedDigest: input.ExpectedDigest, NextAttemptAt: time.Now().UTC()}
 		if c.Action == "deploy_existing_artifact" {
 			known, err := validatedExistingArtifact(st, input.ArtifactID, in.ProductID, app.ID, app.RepositoryID, revision.HeadCommit, build.ImageRepository)
 			if err != nil {
 				return nil, m, err
 			}
-			if build.Mode == "NATIVE_EXISTING_ARTIFACT" {
+			if build.Mode == "NATIVE" {
 				if known.Native == nil || known.Native.Profile != build.Profile {
 					return nil, m, invalid("native artifact profile mismatch")
 				}
@@ -532,6 +560,13 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta) (any, doma
 			v.ExpectedDigest = known.Digest
 		} else if input.ArtifactID != "" {
 			return nil, m, invalid("artifact_id requires deploy_existing_artifact")
+		}
+		if build.Mode == "NATIVE" && c.Action == "deploy_integration" {
+			native, err := s.freezeNative(in.ProductID, *app, *build, m.CreatedAt)
+			if err != nil {
+				return nil, m, err
+			}
+			v.Native = native
 		}
 		st.Operations = append(st.Operations, v)
 		return v, m, nil

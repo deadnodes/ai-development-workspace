@@ -39,5 +39,11 @@
   "state_dir": "/absolute/operator/private-worker-state",
   "docker_context": "orbstack",
   "docker_config": "/absolute/operator/.docker",
-  "allow_rootless_unconfined": true
+  "allow_rootless_unconfined": true,
+  "artifact_spool": {
+    "root": "/absolute/canonical/private/artifact-spool",
+    "max_archive_bytes": 16777216,
+    "max_total_bytes": 268435456,
+    "max_entries": 32
+  }
 }

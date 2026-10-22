@@ -1,132 +1,170 @@
-# Native publication and existing-artifact GitOps PRs
+# Native build, publication and GitOps PR delivery
 
-This source slice joins the authenticated offline build protocol to the separate
-publisher and server-side artifact admission. It does not install a registry or
-replace the automatic GitHub build graph. The server never executes application
-commands. Native binaries remain external executors.
+Native binaries are external executors. The control plane stores immutable intent,
+source/recipe identities, jobs, receipts and artifact provenance; it never runs
+application commands or stores image bytes. The existing DEPLOY and COMPOSE
+operations own delivery. GitHub Actions components retain their existing path.
 
-## Operator configuration
+## Operator authority and component binding
 
-`RCP_WORKER_CONFIG` adds immutable `publications` entries to the existing worker
-configuration. Each `workerconfig.PublicationRecipe` pins ID/revision/hash,
-Product, source repository, component, build profile, accepted build recipe hash,
-exact registry origin/repository, byte/time bounds and read-only registry settings.
-`workerconfig.PublicationHash` computes the hash with the hash field cleared.
-The configuration is startup-only; editing a file is not a hot reload.
+`RCP_WORKER_CONFIG` is immutable startup authority. Its build recipes pin source
+repository/URL, ID/revision/hash, toolchain/BuildKit images, literal argv, isolation,
+resource bounds and typed nonsecret parameters. Publication recipes pin Product,
+component, repository, profile, accepted build recipe hash, exact registry
+origin/repository, byte/time bounds and separate read credential references.
+`workerconfig.RecipeHash` and `PublicationHash` hash the recipe with `hash` cleared.
+The configuration has one revision; editing a file is not a hot reload.
 
-`pull` contains `ca_file`, separate `username_env`/`password_env` or `bearer_env`,
-and an explicitly named `fixture_loopback_http` exception. Production origins
-require HTTPS; plain HTTP is permitted only for numeric loopback fixtures.
-The server performs authenticated GETs only, with no ambient proxy or redirects,
-TLS >= 1.2, bounded bodies and an exact origin/repository. Pull credentials stay
-outside persisted jobs, leases and audit. Worker tokens cannot equal the control
-credential or a configured registry credential. Source/build and publication
-capabilities cannot share a credential or principal.
+Configure a component with `mode: NATIVE`, profile, source connection and exact
+`image_repository` (`host[:port]/repository`, no scheme). The operator publication
+recipe must authorize that component/profile/image. Workflow fields, workflow
+inputs and `rebuild_missing` are forbidden. There is one native mode and no
+prototype alias. Without a `native` binding, the component supports only
+`deploy_existing_artifact`.
 
-Configure the existing component using `configure_component` with
-`mode: NATIVE_EXISTING_ARTIFACT`, `profile`, `application_id`, `connection_id` and
-exact `image_repository` (`host[:port]/repository`, no scheme). The operator
-publication recipe must authorize this component/profile/image. Source GitHub
-and GitOps bindings remain required. Workflow fields, extra inputs and
-`rebuild_missing` are forbidden in native mode. The target must use
-`gitops_mode: PR`; DIRECT is rejected for native delivery.
+An explicit automatic binding selects operator recipes and typed values only:
 
-## Queue, execute, admit
+```json
+{
+  "application_id": "component",
+  "connection_id": "source-connection",
+  "mode": "NATIVE",
+  "profile": "native-dev",
+  "image_repository": "registry.example/team/component",
+  "native": {
+    "build_recipe_id": "component-build",
+    "publication_recipe_id": "component-publish",
+    "parameters": {}
+  }
+}
+```
 
-1. Finish `queue_worker_job` / `local_oci_build` through the existing authenticated
-   worker protocol. Its successful report retains a verified local OCI receipt;
-   this is not yet a registry artifact.
-2. Call `queue_worker_publication` with Product ID and data `build_job_id`,
-   `component_id`, `recipe_id`, `recipe_revision`, `recipe_hash`, `config_revision`,
-   `request_key` (16–128 identifier characters) and `deadline` (within one hour).
-   Product/Integration/repository/source/receipt are derived from the successful
-   build. Callers cannot supply a replacement source, digest or registry target.
-   An identical request replay returns the same job; a conflicting key is rejected.
-3. Run `rcp-publisher run-once /absolute/operator-config.json`. Its configuration
-   is `publishrunner.Config`: endpoint, worker `token_env`, config revision,
-   the exact nonsecret publication recipe and `publisher` settings containing
-   operator-owned `archive`, private existing `state_dir`, exact allowed target,
-   byte/time bounds, CA and separate push credential environment references.
-   The registry plan is derived from the authenticated lease. No server-supplied
-   local path is accepted. The original `publisher publish` operator CLI remains
-   available and continues to make only a local registry-byte observation.
-4. The publisher claims only its pinned recipe, durably journals its lease before
-   START, heartbeats during publishing and report verification, and persists a
-   pending result before REPORT. A lost START/REPORT response is retried using the
-   same job/attempt/input. Restart can reobserve/reconcile the same digest intent;
-   it never rebuilds. Completed journals are retained before the same profile
-   claims another job. A single operator archive path is supported: its bytes must
-   match each claimed receipt before network writes; fleet artifact transfer is
-   separate future work.
-5. The server independently GETs and hashes the manifest, config and layer, then
-   verifies the one-image/one-layer closure, platform and rootfs diffID. Network
-   I/O happens outside the store transaction. Current credential identity/grants,
-   expiry/rotation, fence, config, cancellation, lease and deadline are checked
-   again atomically before admission. Only then does the job become SUCCEEDED
-   and one `NATIVE_WORKER` DeliveryArtifact appear. Its BuildRunID is zero; there
-   is no synthetic Actions run or GitHub report. Replays do not duplicate it.
+Recipe IDs/revisions/hashes, config revision, profile, source identity and image
+pins are derived and revalidated by the server. Callers cannot supply recipe
+bodies, shell, credential values or executor paths. All native delivery requires
+an explicitly enabled DEV/TEST mapping using `gitops_mode: PR`; DIRECT is rejected.
+Native release candidates, main advancement and promotion fail closed, including
+resumed operations and mixed Actions/native selections before protected writes.
 
-The original archive hash remains the authenticated build receipt assertion.
-Registry pull verifies the manifest-addressed closure; it cannot reconstruct or
-prove byte equality of the original tar serialization. Server observation records
-manifest/config/layer digests, platform, byte count and time separately.
+## Automatic delivery
 
-Read one job through MCP `get_worker_job {job_id}` or
-`GET /api/worker-jobs/{id}`. These expose bounded job/attempt history and do not
-require a global state download.
+Call `deploy_integration` with the normal integration, DEV environment, optional
+component/revision and optional `request_key` (16–128 identifier characters).
+Identical keyed retries return the same DEPLOY and persisted absolute deadline;
+a conflicting payload is rejected. The server verifies source HEAD/base and
+GitOps CAS before queueing the exact frozen-source build. One bounded deadline
+is frozen once, with no automatic extension or replacement execution.
 
-## Reconciliation, fencing and restore
+Tick creates a managed WorkerJob, waits for its accepted local OCI receipt,
+creates a separate publication job, then selects the server-admitted artifact on
+that same DEPLOY. Deterministic parent/job links and transitions persist atomically.
+Repeated ticks, concurrent workers and reopen do not create another build or
+publication. Failed or unknown execution never falls back to Actions, registry
+tags or a different artifact. Unknown RUNNING build execution requires explicit
+reconciliation and is never executed again automatically.
 
-Ordinary RUNNING lease expiry becomes RECONCILIATION_REQUIRED. Explicit
-`reconcile_worker_publication` with Product/job ID and empty data reads only the
-same frozen digest. It can admit a server-observed artifact while retaining the
-original EXPIRED attempt and absent worker report, with a separate typed
-reconciliation record. Identical successful reconciliation replay is idempotent.
-Expired worker reports remain invalid. Cancellation, deadline/config drift,
-UNKNOWN registry state or restore quarantine prevents successful reconciliation.
-Existing failure/cancel closure remains available.
+Native DEV/TEST COMPOSE children use this same path. A server-derived source
+proof identifies the immutable DEPLOY/COMPOSE snapshots and generated source
+revision. Base-only compositions need no fabricated IntegrationID. Public queue
+commands cannot inject source proofs or publish managed builds separately.
+COMPOSE persists each component's resolved authority and absolute deadline at
+request time, before assembling source. Restart validates every frozen component
+before source or child execution; children reuse that authority without refreezing.
+Completed artifact reuse validates immutable origin separately from the former
+parent's live execution status.
 
-A lease cannot retract bytes already sent in an immutable registry HTTP write.
-Fencing prevents admission and downstream desired state changes. It does not
-claim physical reversal of an in-flight remote byte write.
+## Durable archive transport and publisher
 
-Every restored Product receives a persistent native quarantine. Every imported
-nonterminal worker job retains cancellation and requires reconciliation. A restored
-copy cannot queue/claim/start/heartbeat/report native builds or publications,
-configure native delivery or prepare GitOps from old successful native artifacts.
-History and legacy GitHub paths remain available. Quarantine survives reopen and
-further backups. There is **no clearing or ownership-transfer action in this
-slice**. Deleting a quarantined Product is rejected, so deletion and reuse of its
-ID cannot bypass quarantine. Deletion requires a future owner-approved
-transfer/recovery design; no such transfer is implemented here.
-An owner-approved transfer protocol is required before recovery/live
-adoption; ordinary reconciliation cannot impersonate such a transfer.
+Both supervisors use operator-configured `artifact_spool` settings. The trusted
+build supervisor validates OCI output, durably exports an immutable
+content-addressed archive, and only then journals/reports PASSED. Source containers
+cannot access the spool or control/registry credentials. RCP stores archive hash,
+byte count and receipt, never spool paths or bytes.
 
-## Prepare a GitOps PR
+The POSIX spool is a private, existing canonical directory with per-archive,
+total-byte and entry quotas, locking, bounded copy, no symlink/path escape,
+no-overwrite publication and file/directory fsync, including existing-entry
+replay. Cleanup affects only the invocation's own staging file; historical
+archives are retained. Publisher configuration uses the same archive byte bound
+and a read-only spool view. It derives each filename solely from the validated
+receipt archive hash and verifies a bounded immutable snapshot before publication.
+Two changed-source jobs can use unchanged persistent worker/publisher configs
+without archive copying. This supports cohost/shared-volume transport; it is not
+remote object storage or fleet transport. See [worker](LOCAL_WORKER.md) and
+[publisher](LOCAL_PUBLISHER.md) configuration and examples.
 
-Use the existing `deploy_existing_artifact` command with exact Integration,
-component, revision, DEV target and artifact ID. It validates typed native
-provenance/profile, preserves source HEAD/base and GitOps permission/CAS checks,
-performs a fresh independent registry inspection and prepares the existing GitOps
-PR. It waits at WAIT_GITOPS_PR for external review/merge. A PR is not a deployment
-or runtime-health observation. Native `deploy_integration`, composition/candidate
-build graphs, missing-artifact rebuilds, promotion dispatch and DIRECT mapping
-fail closed; none can fall back to GitHub Actions. GitHub components retain their
-existing workflow evidence checks.
+The publisher journals its lease before START and a durable PUBLISH_INTENT before
+any registry publication. A lost START response before that intent may retry the
+same idempotent START, then publish for the first time. Restart with an unresolved
+PUBLISH_INTENT performs only exact registry GET/hash observation; it never repeats
+POST/PUT. Complete matching bytes and a current lease allow persistence/reporting
+of that same result. Missing, corrupt, UNKNOWN, 401 or expired authority remains
+uncertain and requires explicit reconciliation. Known durable reports replay the
+same job/attempt/result. Completed journals remain in history. The standalone
+operator `publisher publish` CLI still accepts a local archive and retains its
+explicit operator purpose.
+
+## Admission, cancellation and reconciliation
+
+The server independently GETs/hashes manifest, config and layer, verifying the
+one-image/one-layer closure, platform and rootfs diffID. HTTPS is required except
+explicit numeric-loopback fixtures. HTTP clients use bounded bodies, exact
+origin/repository, no ambient proxy/redirects and TLS >=1.2. Pull credentials and
+worker/control/publisher credentials remain separate and outside durable state.
+Registry and source provider I/O run outside the store transaction. Current
+credentials/grants, recipe/config, cancellation, parent/supersession, target,
+fence, lease and deadline are checked before execution and atomically after I/O.
+Only then does one `NATIVE_WORKER` DeliveryArtifact appear. BuildRunID is zero;
+there is no synthetic Actions run or workflow report. The archive hash describes
+the build tar; registry verification proves the manifest-addressed closure, not
+byte equality of that tar's serialization.
+
+`cancel_native_delivery` takes Product ID, DEPLOY ID and empty data. Before
+external PR intent it atomically stops the delivery and its managed jobs.
+Cancelling a managed worker job also stops its delivery. Running work remains
+RECONCILIATION_REQUIRED; cancellation makes no claim of physical registry reversal
+or cleanup. Cancellation is rejected after APPLY_UNCERTAIN/PR/result; it never
+closes or merges a PR. Reads expose state through `get_worker_job {job_id}` or
+`GET /api/worker-jobs/{id}` without a global state download.
+
+Ordinary RUNNING publication lease expiry becomes RECONCILIATION_REQUIRED.
+Explicit `reconcile_worker_publication` with Product/job ID and empty data reads
+only the frozen digest and can admit its exact verified bytes. The original
+attempt remains EXPIRED with nil report and a separate server reconciliation
+proof. This does not rebuild, replace the job or invent worker success. Native
+source/target/authority drift, cancellation, deadline or quarantine blocks it.
+
+`deploy_existing_artifact` remains exact artifact-only delivery and never builds,
+even for an automatically bound component. Fresh registry inspection and source/
+GitOps CAS lead to the existing WAIT_GITOPS_PR phase. Review/merge is external;
+a PR or GitOps merge is not runtime-health evidence.
+
+Restore quarantines every imported Product permanently in this slice. Imported
+active jobs require reconciliation, but the restored instance cannot queue,
+claim, start, heartbeat, report, reconcile/admit or prepare native delivery from
+old artifacts. Deletion/reuse cannot bypass quarantine. Ordinary reopen of the
+original instance remains supported. There is no clearing, ownership transfer,
+historical GC or recovery cutover command.
 
 ## Verification boundary
 
-`RCP_TEST_DOCKER=1 TEST_DATABASE_URL=<isolated fixture DSN> go test -race -count=1
--v ./...` includes the protected ephemeral API → actual worker subprocess →
-separate publisher subprocess → pinned Distribution → server verification →
-GitOps PR provider fixture chain on local and actual PostgreSQL stores. The test
-owns a labelled exact-ID loopback tmpfs Distribution container and cleans it up;
-Docker context `orbstack` and the already cached arm64 compiler/BuildKit pins are
-fixture-specific. It tests lost START/REPORT, restart and sequential jobs without
-Actions/direct writes. Fast tests cover post-I/O rotation/fence/cancel/config/
-lease/deadline changes, corrupt/missing/401 bytes, reopen, backup quarantine and
-ordinary reconciliation. `make check` runs repository checks and all three builds.
+`RCP_TEST_DOCKER=1 TEST_DATABASE_URL=<isolated fixture DSN> make check` exercises
+repository checks plus the protected ephemeral API → Tick → real worker process
+→ durable spool → separate publisher process → pinned Distribution → server
+admission → GitOps PR provider fixture on local and actual PostgreSQL stores.
+It performs two changed-source deliveries with the same configs and a real
+two-component generated-source COMPOSE path, without manual queue/archive copy,
+Actions, direct writes or fallback. Exact-ID fixture containers are cleaned up.
+Lost START before publication and durable REPORT retry are distinguished from
+unknown execution. Deterministic tests cover request replay/conflicts, concurrent
+ticks, reopen, cancellation, config/grant/parent/deadline races, explicit expired
+publication reconciliation, restore quarantine and all-native/mixed production
+rejection before main mutation. Runner/spool tests cover uncertainty, fsync,
+quotas, corruption and isolation.
 
-This is native arm64 fixture evidence, not Linux x86, live registry storage/TLS/
-backup/Dev-failure acceptance, production ownership transfer, fleet archive
-transport, automatic native build graph, retention/GC or complete RCP-011 delivery.
+This is native arm64/source acceptance. Linux x86, real application dependencies,
+cache policy, live registry TLS/storage/backup/node pulls, ownership transfer,
+fleet transport/recovery, retention/GC, full A+B update/conflict semantics,
+agent-owned merge/verification, Dev/Prod policy cutover and the complete RCP-011
+roadmap remain separate acceptance work. No live infrastructure, credentials,
+protected merge or production permission is implied.

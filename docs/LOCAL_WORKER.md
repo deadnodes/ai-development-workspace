@@ -147,3 +147,36 @@ exact-ID deletion across a name-replacement race and real late
 CREATE/START supervision windows after SIGKILL or lease timeout. Unknown CREATE
 outcomes must remain unresolved even after their late exact resource is removed.
 Fixture results are distinct from full stage02/03 and application A+B/selected-Prod acceptance.
+
+## Persistent handoff to the native publisher
+
+For automatic native delivery, configure `artifact_spool` in the supervisor:
+
+```json
+{"root":"/absolute/canonical/private/artifact-spool","max_archive_bytes":16777216,"max_total_bytes":268435456,"max_entries":32}
+```
+
+The operator precreates a dedicated canonical private directory (0700). Keep it
+on a durable POSIX filesystem supporting file/directory fsync, hard links and
+advisory locks. Only trusted supervisors receive write access. The source and
+BuildKit containers never receive this mount. The separate publisher mounts the
+same volume read-only and uses a separate writable private state directory.
+The configured root may differ between hosts/mounts; receipt hashes identify
+entries, while paths never enter RCP. This supports a shared volume or cohosted
+processes; it is not remote object storage or fleet orchestration.
+
+After verifying the OCI archive, the supervisor copies bounded bytes into its
+own staging file, verifies the archive hash, fsyncs the file, publishes the hash
+entry without overwrite and fsyncs the directory. Only then may it persist or
+send a PASSED report. Existing-entry replay rechecks bytes and both durability
+acknowledgements. Global byte and entry quotas serialize all cooperating
+writers. Quota exhaustion, corruption, symlinks, unsafe permissions and sync
+failures fail closed. Restart never rebuilds an unknown running attempt. A crash
+before its report is durable can leave an immutable spool entry requiring
+operator reconciliation; that entry alone does not authorize RCP acceptance.
+
+Staging cleanup removes only the current invocation's own staging file. Stale
+staging and historical archives consume quota; no historical GC or automatic
+retention is implemented. Keep capacity under operator control. Spool export is
+optional for standalone local builds, but required for unattended handoff across
+sequential native deliveries with unchanged operator configurations.

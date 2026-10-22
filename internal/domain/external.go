@@ -24,10 +24,27 @@ type RepositoryBinding struct {
 	Role          string `json:"role"`
 	DefaultBranch string `json:"default_branch"`
 }
+type NativeBinding struct {
+	BuildRecipeID       string         `json:"build_recipe_id"`
+	PublicationRecipeID string         `json:"publication_recipe_id"`
+	Parameters          map[string]any `json:"parameters"`
+}
+type NativeDelivery struct {
+	ParentHash                string    `json:"parent_hash,omitempty"`
+	ConfigRevision            string    `json:"config_revision"`
+	BuildRecipeHash           string    `json:"build_recipe_hash"`
+	BuildRecipeRevision       string    `json:"build_recipe_revision"`
+	PublicationRecipeHash     string    `json:"publication_recipe_hash"`
+	PublicationRecipeRevision string    `json:"publication_recipe_revision"`
+	Deadline                  time.Time `json:"deadline"`
+	BuildJobID                string    `json:"build_job_id,omitempty"`
+	PublicationJobID          string    `json:"publication_job_id,omitempty"`
+}
 type ComponentBuild struct {
-	Mode           string `json:"mode,omitempty"`
-	Profile        string `json:"profile,omitempty"`
-	RebuildMissing bool   `json:"rebuild_missing"`
+	Native         *NativeBinding `json:"native,omitempty"`
+	Mode           string         `json:"mode,omitempty"`
+	Profile        string         `json:"profile,omitempty"`
+	RebuildMissing bool           `json:"rebuild_missing"`
 	Meta
 	ApplicationID   string            `json:"application_id"`
 	ConnectionID    string            `json:"connection_id"`
@@ -64,6 +81,7 @@ type GitObservation struct {
 	ObservedAt    time.Time `json:"observed_at"`
 }
 type DeliverySnapshot struct {
+	Native           *NativeDelivery        `json:"native,omitempty"`
 	Revision         IntegrationRevision    `json:"revision"`
 	Application      Application            `json:"application"`
 	Build            ComponentBuild         `json:"build"`
@@ -77,6 +95,9 @@ type DeliverySnapshot struct {
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
 type ExternalOperation struct {
+	RequestKey          string                      `json:"request_key,omitempty"`
+	RequestHash         string                      `json:"request_hash,omitempty"`
+	Native              *NativeDelivery             `json:"native,omitempty"`
 	GitOpsPR            *delivery.GitOpsPullRequest `json:"gitops_pr,omitempty"`
 	ExistingArtifact    *DeliveryArtifact           `json:"existing_artifact,omitempty"`
 	PreparedDeployments []DeliverySnapshot          `json:"prepared_deployments,omitempty"`

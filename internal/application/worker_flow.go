@@ -56,6 +56,10 @@ func flowGuard(st *domain.State, op domain.ExternalOperation) error {
 			return invalid("provider connection changed; create a new operation")
 		}
 	}
+	if e := nativeReleaseDenied(st, op); e != nil {
+		return e
+	}
+
 	if op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION" {
 		if err := releaseWorkReady(st, *op.CompositionSnapshot); err != nil {
 			return err
@@ -72,7 +76,7 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 	if err != nil {
 		return err
 	}
-	if err = flowGuard(&st, op); err != nil {
+	if err = s.flowGuard(&st, op); err != nil {
 		return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
 	}
 	switch op.Phase {
@@ -197,7 +201,7 @@ func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOpera
 		if parent == nil || parent.LeaseOwner != token {
 			return invalid("operation lease lost")
 		}
-		if err := flowGuard(st, *parent); err != nil {
+		if err := s.flowGuard(st, *parent); err != nil {
 			return err
 		}
 		if len(parent.ChildIDs) > 0 {
@@ -260,7 +264,16 @@ func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOpera
 				snap.BuildRequest.Inputs["image_tag"] = snap.BuildRequest.ImageTag
 				snap.BuildRequest.Inputs["operation_id"] = cm.ID
 				snap.BuildRequest.Inputs["image_repository"] = snap.Build.ImageRepository
-				children = append(children, domain.ExternalOperation{Meta: cm, ParentID: op.ID, Kind: "DEPLOY", Status: "PENDING", Phase: "PREFLIGHT", CurrentStep: "PREFLIGHT", EnvironmentID: op.EnvironmentID, ApplicationID: snap.Application.ID, Snapshot: &snap, BuildOnly: op.Kind == "RELEASE_CANDIDATE", RequestedBy: op.RequestedBy, NextAttemptAt: now})
+				var native *domain.NativeDelivery
+				if snap.Build.Mode == "NATIVE" {
+					if err := s.validateFrozenNative(op.ProductID, snap, op.CreatedAt); err != nil {
+						return err
+					}
+					frozen := *snap.Native
+					frozen.ParentHash = nativeParentHash(parent)
+					native = &frozen
+				}
+				children = append(children, domain.ExternalOperation{Native: native, Meta: cm, ParentID: op.ID, Kind: "DEPLOY", Status: "PENDING", Phase: "PREFLIGHT", CurrentStep: "PREFLIGHT", EnvironmentID: op.EnvironmentID, ApplicationID: snap.Application.ID, Snapshot: &snap, BuildOnly: op.Kind == "RELEASE_CANDIDATE", RequestedBy: op.RequestedBy, NextAttemptAt: now})
 			}
 		}
 		if len(children) == 0 {
@@ -290,7 +303,7 @@ func (s *Service) finishFlowRelease(ctx context.Context, op domain.ExternalOpera
 		if parent == nil || parent.LeaseOwner != token {
 			return invalid("operation lease lost")
 		}
-		if err := flowGuard(st, *parent); err != nil {
+		if err := s.flowGuard(st, *parent); err != nil {
 			return err
 		}
 		now := time.Now().UTC()

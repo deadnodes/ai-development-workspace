@@ -140,7 +140,7 @@ func newNativeFixture(t *testing.T, kind string) *nativeFixture {
 	}
 	s := New(store)
 	s.ConfigureWorkers(a)
-	exec(t, s, domain.Command{Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component", "connection_id": "conn", "mode": "NATIVE_EXISTING_ARTIFACT", "profile": r.Profile, "image_repository": nativeImage(r)}})
+	exec(t, s, domain.Command{Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component", "connection_id": "conn", "mode": "NATIVE", "profile": r.Profile, "image_repository": nativeImage(r)}})
 	v, err := s.Execute(ctx, domain.Command{Action: "queue_worker_job", Actor: "operator", ProductID: "p", IntegrationID: "i", Data: map[string]any{"request_key": "native-build-fixture-key", "recipe_id": buildRecipe.ID, "recipe_revision": buildRecipe.Revision, "recipe_hash": buildRecipe.Hash, "config_revision": "cfg1", "revision_id": "rev", "source_sha": shaHead, "parameters": map[string]any{}, "deadline": time.Now().Add(time.Minute), "max_attempts": 1}})
 	if err != nil {
 		t.Fatal(err)
@@ -421,7 +421,7 @@ func TestNativeRestoreActiveSourceContinuesAndQuarantinePersists(t *testing.T) {
 			if _, e = f.s.ReportWorker(ctx, f.p, report); e != nil {
 				t.Fatal("source stopped after independent restore", e)
 			}
-			for _, command := range []domain.Command{{Action: "reconcile_worker_publication", ID: report.JobID, ProductID: "p", Actor: "operator", Data: map[string]any{}}, {Action: "configure_component", ProductID: "p", Actor: "operator", Data: map[string]any{"application_id": "component", "connection_id": "conn", "mode": "NATIVE_EXISTING_ARTIFACT", "profile": f.recipe.Profile, "image_repository": nativeImage(f.recipe)}}} {
+			for _, command := range []domain.Command{{Action: "reconcile_worker_publication", ID: report.JobID, ProductID: "p", Actor: "operator", Data: map[string]any{}}, {Action: "configure_component", ProductID: "p", Actor: "operator", Data: map[string]any{"application_id": "component", "connection_id": "conn", "mode": "NATIVE", "profile": f.recipe.Profile, "image_repository": nativeImage(f.recipe)}}} {
 				if _, e = copy.Execute(ctx, command); e == nil {
 					t.Fatal("restored native mutation accepted", command.Action)
 				}

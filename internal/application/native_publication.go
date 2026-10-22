@@ -45,7 +45,7 @@ func (s *Service) executeNativePublication(ctx context.Context, c domain.Command
 	if err := decode(c.Data, &in); err != nil {
 		return nil, err
 	}
-	if c.ID != "" || c.IntegrationID != "" || c.FeatureID != "" || c.GateID != "" || c.CheckID != "" || c.ResultID != "" || !workerRequestKey.MatchString(in.RequestKey) {
+	if c.ID != "" || c.IntegrationID != "" || c.FeatureID != "" || c.GateID != "" || c.CheckID != "" || c.ResultID != "" || (!workerRequestKey.MatchString(in.RequestKey) || strings.HasPrefix(in.RequestKey, "native-build:") || strings.HasPrefix(in.RequestKey, "native-publish:")) {
 		return nil, invalid("invalid publication scope or request key")
 	}
 	var out domain.WorkerJob
@@ -72,6 +72,9 @@ func (s *Service) executeNativePublication(ctx context.Context, c domain.Command
 			return invalid("publication recipe identity mismatch")
 		}
 		b := workerJob(st, in.BuildJobID)
+		if b != nil && b.Inputs.SourceProof != nil {
+			return invalid("managed build publication is server-owned")
+		}
 		if b == nil || b.ProductID != c.ProductID || b.Status != "SUCCEEDED" || b.Capability != "local_oci_build" || b.Inputs.RepositoryID != r.RepositoryID || b.Inputs.RecipeHash != r.BuildRecipeHash {
 			return invalid("successful exact build required")
 		}
@@ -82,7 +85,7 @@ func (s *Service) executeNativePublication(ctx context.Context, c domain.Command
 		app := applicationByID(st, r.ComponentID)
 		build := componentBuild(st, r.ComponentID)
 		integration := integration(st, b.IntegrationID)
-		if app == nil || app.ProductID != c.ProductID || app.RepositoryID != r.RepositoryID || domain.ComponentKind(*app) != "APPLICATION" || integration == nil || integration.ProductID != c.ProductID || build == nil || build.Mode != "NATIVE_EXISTING_ARTIFACT" || build.Profile != r.Profile || build.ImageRepository != nativeImage(r) {
+		if app == nil || app.ProductID != c.ProductID || app.RepositoryID != r.RepositoryID || domain.ComponentKind(*app) != "APPLICATION" || integration == nil || integration.ProductID != c.ProductID || build == nil || build.Mode != "NATIVE" || build.Profile != r.Profile || build.ImageRepository != nativeImage(r) {
 			return invalid("native component/profile configuration required")
 		}
 		if !in.Deadline.After(now) || in.Deadline.After(now.Add(time.Hour)) {
@@ -109,8 +112,19 @@ func (s *Service) nativeConfigMatches(j *domain.WorkerJob) bool {
 	return ok && p != nil && j.Capability == "registry_publish" && r.ProductID == j.ProductID && r.RepositoryID == j.Inputs.RepositoryID && r.ComponentID == p.ComponentID && r.Profile == p.Profile && r.Origin == p.Origin && r.Repository == p.Repository && r.BuildRecipeHash == p.Receipt.RecipeHash && r.Hash == j.Inputs.RecipeHash && r.Revision == j.Inputs.RecipeRevision && s.externalWorkers.Revision() == j.Inputs.ConfigRevision && workerconfig.Fingerprint(j.Inputs) == j.InputHash
 }
 func (s *Service) publicationEligible(st *domain.State, j *domain.WorkerJob) error {
+	return s.publicationEligibleWithParent(st, j, true)
+}
+func (s *Service) publicationEligibleWithParent(st *domain.State, j *domain.WorkerJob, live bool) error {
+	if live && j != nil {
+		if err := s.managedWorkerAllowed(st, j); err != nil {
+			return err
+		}
+	}
 	if j == nil || j.Capability != "registry_publish" || nativeQuarantined(st, j.ProductID) || !s.nativeConfigMatches(j) || j.CancellationRequested {
 		return invalid("native publication quarantined, cancelled or configuration changed")
+	}
+	if err := nativeWorkerOrigin(st, j); err != nil {
+		return err
 	}
 	p := j.Inputs.Publication
 	b := workerJob(st, p.Receipt.JobID)
@@ -118,8 +132,11 @@ func (s *Service) publicationEligible(st *domain.State, j *domain.WorkerJob) err
 	if b == nil || a == nil || b.ProductID != j.ProductID || b.IntegrationID != j.IntegrationID || b.Inputs.SourceSHA != j.Inputs.SourceSHA || b.Inputs.RepositoryID != j.Inputs.RepositoryID || b.Status != "SUCCEEDED" || a.JobID != b.ID || a.Status != "SUCCEEDED" || a.Report == nil || a.Report.LocalOCI == nil || !reflect.DeepEqual(*a.Report.LocalOCI, p.Receipt) {
 		return invalid("publication build provenance changed")
 	}
+	if err := nativeWorkerOrigin(st, b); err != nil {
+		return err
+	}
 	build := componentBuild(st, p.ComponentID)
-	if build == nil || build.Mode != "NATIVE_EXISTING_ARTIFACT" || build.Profile != p.Profile {
+	if build == nil || build.Mode != "NATIVE" || build.Profile != p.Profile {
 		return invalid("native component profile changed")
 	}
 	r, _ := s.externalWorkers.Publication(j.Inputs.RecipeID)
@@ -135,17 +152,20 @@ func (s *Service) publicationReportEligible(st *domain.State, p workerconfig.Pri
 	if j == nil || a == nil || a.JobID != j.ID || a.Fence != in.Fence || j.Fence != in.Fence || j.InputHash != in.InputHash || a.InputHash != in.InputHash || a.Principal != p.ID() || !s.externalWorkers.Current(p, now) || !p.Allows(j.ProductID, j.Inputs.RepositoryID, j.Capability, now) {
 		return nil, nil, invalid("publication worker ownership or current authority denied")
 	}
-	if err := s.publicationEligible(st, j); err != nil {
-		return nil, nil, err
-	}
 	if in.Result != "PASSED" || in.LocalOCI != nil || in.Publication == nil || in.Publication.ManifestDigest != j.Inputs.Publication.Receipt.ManifestDigest || in.EvidenceHash != "" {
 		return nil, nil, invalid("publication result mismatch")
 	}
 	if a.Report != nil {
 		if reflect.DeepEqual(*a.Report, in) && j.Status == "SUCCEEDED" {
+			if err := s.historicalPublicationEligible(st, j); err != nil {
+				return nil, nil, err
+			}
 			return j, a, nil
 		}
 		return nil, nil, invalid("conflicting publication report")
+	}
+	if err := s.publicationEligible(st, j); err != nil {
+		return nil, nil, err
 	}
 	if j.Status != "RUNNING" || a.Status != "RUNNING" || !now.Before(a.LeaseUntil) || !now.Before(j.Deadline) {
 		return nil, nil, invalid("publication lease expired or invalid")
@@ -166,9 +186,24 @@ func (s *Service) reportPublication(ctx context.Context, p workerconfig.Principa
 		return domain.WorkerLease{Job: *j, Attempt: *a}, nil
 	}
 	recipe, _ := s.externalWorkers.Publication(j.Inputs.RecipeID)
+	if j.Inputs.SourceProof != nil {
+		parent := operationByID(&st, j.Inputs.SourceProof.DeliveryID)
+		if parent == nil {
+			return out, invalid("native parent missing")
+		}
+		if err := s.verifyNativeSource(ctx, *parent); err != nil {
+			return out, err
+		}
+	}
 	observation, err := readPublication(ctx, recipe, *j.Inputs.Publication)
 	if err != nil {
 		return out, invalid("registry bytes unavailable or invalid")
+	}
+	if j.Inputs.SourceProof != nil {
+		parent := operationByID(&st, j.Inputs.SourceProof.DeliveryID)
+		if err := s.verifyNativeSource(ctx, *parent); err != nil {
+			return out, err
+		}
 	}
 	err = s.store.Update(ctx, func(st *domain.State) error {
 		j, a, e := s.publicationReportEligible(st, p, in)
@@ -210,16 +245,20 @@ func (s *Service) reconcilePublication(ctx context.Context, c domain.Command) (a
 		if j == nil || j.ProductID != c.ProductID {
 			return nil, nil, invalid("publication outside product")
 		}
-		if e := s.publicationEligible(st, j); e != nil {
-			return nil, nil, e
-		}
+
 		a := currentWorkerAttempt(st, j)
 		if j.Status == "SUCCEEDED" && a != nil && a.Status == "EXPIRED" && a.Report == nil {
 			for _, artifact := range st.DeliveryArtifacts {
 				if artifact.Native != nil && artifact.Native.PublicationJobID == j.ID && artifact.Native.PublicationAttemptID == a.ID && artifact.Native.Reconciliation != nil {
+					if e := s.historicalPublicationEligible(st, j); e != nil {
+						return nil, nil, e
+					}
 					return j, a, nil
 				}
 			}
+		}
+		if e := s.publicationEligible(st, j); e != nil {
+			return nil, nil, e
 		}
 		now := time.Now().UTC()
 		if a == nil || j.Status != "RECONCILIATION_REQUIRED" || a.Status != "EXPIRED" || a.Report != nil || !now.Before(j.Deadline) {
@@ -245,10 +284,30 @@ func (s *Service) reconcilePublication(ctx context.Context, c domain.Command) (a
 	if frozen.Status == "SUCCEEDED" {
 		return frozen, nil
 	}
+	checkManagedSource := func() error {
+		if frozen.Inputs.SourceProof == nil {
+			return nil
+		}
+		state, e := s.store.Read(ctx)
+		if e != nil {
+			return e
+		}
+		parent := operationByID(&state, frozen.Inputs.SourceProof.DeliveryID)
+		if parent == nil {
+			return invalid("native parent missing")
+		}
+		return s.verifyNativeSource(ctx, *parent)
+	}
+	if e := checkManagedSource(); e != nil {
+		return nil, e
+	}
 	r, _ := s.externalWorkers.Publication(frozen.Inputs.RecipeID)
 	o, err := readPublication(ctx, r, *frozen.Inputs.Publication)
 	if err != nil {
 		return nil, invalid("registry bytes unavailable or invalid")
+	}
+	if e := checkManagedSource(); e != nil {
+		return nil, e
 	}
 	var out domain.WorkerJob
 	err = s.store.Update(ctx, func(st *domain.State) error {
@@ -288,7 +347,7 @@ func (s *Service) inspectNativeArtifact(ctx context.Context, op domain.ExternalO
 		return out, e
 	}
 	j := workerJob(&st, known.Native.PublicationJobID)
-	if e = s.publicationEligible(&st, j); e != nil {
+	if e = s.historicalPublicationEligible(&st, j); e != nil {
 		return out, e
 	}
 	r, _ := s.externalWorkers.Publication(j.Inputs.RecipeID)
@@ -300,8 +359,12 @@ func (s *Service) inspectNativeArtifact(ctx context.Context, op domain.ExternalO
 	if e != nil {
 		return out, e
 	}
-	if e = s.publicationEligible(&after, workerJob(&after, j.ID)); e != nil {
+	if e = s.historicalPublicationEligible(&after, workerJob(&after, j.ID)); e != nil {
 		return out, e
 	}
 	return delivery.ArtifactResult{Available: true, Digest: o.ManifestDigest, ObservedAt: o.ObservedAt}, nil
+}
+
+func (s *Service) historicalPublicationEligible(st *domain.State, j *domain.WorkerJob) error {
+	return s.publicationEligibleWithParent(st, j, false)
 }

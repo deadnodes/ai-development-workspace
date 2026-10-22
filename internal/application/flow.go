@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 	"slices"
 	"strings"
 	"time"
@@ -77,6 +78,9 @@ func flowSources(st *domain.State, comp domain.Composition, opID string, product
 		if source == nil || !domain.IsSourceRole(source.Role) || build == nil || target == nil || !target.AllowDeploy {
 			return nil, invalid("source/build and enabled target required for %s", app.ID)
 		}
+		if production && build.Mode == "NATIVE" {
+			return nil, invalid("native release/main advancement is unsupported")
+		}
 		if production && target.Purpose != "PROD" {
 			return nil, invalid("release requires explicit PROD mapping")
 		}
@@ -110,7 +114,7 @@ func flowSources(st *domain.State, comp domain.Composition, opID string, product
 	}
 	return out, nil
 }
-func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
+func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *workerconfig.Authority) (any, domain.Meta, error) {
 	switch c.Action {
 	case "create_hotfix":
 		var in struct {
@@ -257,6 +261,23 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.M
 		if err != nil {
 			return nil, m, err
 		}
+		for i := range prepared {
+			snap := &prepared[i]
+			if snap.Build.Mode == "NATIVE" {
+				if production {
+					return nil, m, invalid("native production candidate is unsupported")
+				}
+				if nativeQuarantined(st, comp.ProductID) || snap.Target.GitOpsMode != "PR" {
+					return nil, m, invalid("native composition requires enabled PR target")
+				}
+				service := Service{externalWorkers: authority}
+				frozen, e := service.freezeNative(comp.ProductID, snap.Application, snap.Build, m.CreatedAt)
+				if e != nil {
+					return nil, m, e
+				}
+				snap.Native = frozen
+			}
+		}
 		for _, op := range st.Operations {
 			if production && op.Kind == "RELEASE_CANDIDATE" && !terminalOperation(op.Status) && op.ProductID == m.ProductID {
 				return nil, m, invalid("another candidate is advancing main")
@@ -289,6 +310,9 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta) (any, domain.M
 		}
 		if c.ProductID != "" && candidate.ProductID != c.ProductID {
 			return nil, m, invalid("candidate outside product")
+		}
+		if err := nativeReleaseDenied(st, *candidate); err != nil {
+			return nil, m, err
 		}
 		if err := releaseWorkReady(st, *candidate.CompositionSnapshot); err != nil {
 			return nil, m, err
@@ -331,8 +355,8 @@ func prepareFlowDeployments(st *domain.State, comp domain.Composition, m domain.
 		}
 		source := repositoryBinding(st, app.RepositoryID)
 		build := componentBuild(st, app.ID)
-		if build != nil && build.Mode == "NATIVE_EXISTING_ARTIFACT" {
-			return nil, invalid("automatic native build graph is not implemented; select an existing native artifact explicitly")
+		if build != nil && build.Mode == "NATIVE" && build.Native == nil {
+			return nil, invalid("automatic native binding required for composition")
 		}
 		target := environmentBinding(st, comp.EnvironmentID, app.ID)
 		env := environmentByID(st, comp.EnvironmentID)

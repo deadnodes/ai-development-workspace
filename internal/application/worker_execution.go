@@ -103,6 +103,15 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 				if workerTerminal(j.Status) {
 					return invalid("job already terminal")
 				}
+				if j.Inputs.SourceProof != nil {
+					parent := operationByID(st, j.Inputs.SourceProof.DeliveryID)
+					if parent == nil || parent.Phase == "APPLY_UNCERTAIN" || parent.GitOpsPR != nil || parent.GitOpsResult != nil {
+						return invalid("managed delivery has external PR intent")
+					}
+					stopNativeDelivery(st, parent, "CANCELLED", "managed worker job cancelled", now)
+					out = *j
+					return nil
+				}
 				j.CancellationRequested = true
 				if j.Status == "RUNNING" || j.Status == "RECONCILIATION_REQUIRED" {
 					j.Status = "RECONCILIATION_REQUIRED"
@@ -153,7 +162,7 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 		if err := decode(c.Data, &in); err != nil {
 			return err
 		}
-		if !workerRequestKey.MatchString(in.RequestKey) {
+		if !workerRequestKey.MatchString(in.RequestKey) || strings.HasPrefix(in.RequestKey, "native-build:") || strings.HasPrefix(in.RequestKey, "native-publish:") {
 			return invalid("request_key must contain 16..128 identifier characters")
 		}
 		requestHash := workerconfig.Fingerprint(struct {
@@ -300,7 +309,7 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 			if j.Status != "QUEUED" || out != nil {
 				continue
 			}
-			if !s.workerConfigMatches(j) {
+			if !s.workerConfigMatches(j) || s.managedWorkerAllowed(st, j) != nil {
 				j.Status = "RECONCILIATION_REQUIRED"
 				workerAudit(st, j, "system/worker-recovery", "worker_configuration_changed", now)
 				continue
@@ -347,6 +356,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 				return nil
 			}
 			return invalid("conflicting report replay")
+		}
+		if err := s.managedWorkerAllowed(st, j); err != nil {
+			return err
 		}
 		recoverWorker(st, j, now)
 		if j.Capability == "registry_publish" && nativeQuarantined(st, j.ProductID) || !s.workerConfigMatches(j) || !now.Before(a.LeaseUntil) || !now.Before(j.Deadline) || j.CancellationRequested || workerTerminal(j.Status) || j.Status == "RECONCILIATION_REQUIRED" {

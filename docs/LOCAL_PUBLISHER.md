@@ -121,3 +121,37 @@ RCP_TEST_OCI_EXPORT=/tmp/unique-worker-export \
 It checks real TLS/custom trust, authenticated publish/re-observation, and wrong
 credentials failing UNKNOWN. These tests do not prove x86 builds, live registry
 availability, RCP artifact admission or deployment acceptance.
+
+## Native run-once spool transport
+
+`run-once` can use the supervisor's persistent content-addressed spool. Configure
+an `artifact_spool` object at the runner's top level, with the same byte/entry
+limits as the writer, and set `publisher.archive` to the empty string. The
+spool's `max_archive_bytes` must equal the publication recipe and publisher
+archive bound. Use [the inactive native runner example](../examples/publishers/runner.json)
+as a starting point; replace all placeholders and recompute the recipe hash.
+
+Mount the operator-precreated canonical private spool root read-only. Configure
+`publisher.state_dir` as a separate writable private directory outside that
+root. No journal, lock, temporary file or intent is written to the spool by the
+publisher. Each claimed lease selects only the exact archive hash from its
+server-accepted build receipt. Neither RCP nor a caller supplies a local path.
+The resolver verifies the bounded hash entry, then the existing publisher takes
+and verifies its own immutable bounded OCI snapshot before registry access.
+The base configuration and its durable journal identity remain unchanged across
+different jobs. Two sequential deliveries need no manual archive copy or runner
+configuration edit.
+
+The native runner durably records `PUBLISH_INTENT` before its first registry
+write. Restart after that boundary with no durable report uses only GET/hash
+through the publisher's private registry authority. Complete exact closure and
+a current lease permit persisting/replaying PASSED. Missing, corrupt, unknown,
+unauthorized or expired results remain uncertain and require reconciliation;
+they never trigger registry writes or a new build/job. A lost START response
+before publication intent permits only idempotent START retry followed by the
+first publication. A known durable report is retried unchanged. Missing journal
+phase is rejected; it cannot prove execution was never started.
+
+The standalone `publish` command continues to use a fixed operator-approved
+archive and plan. Shared-volume transport does not prove remote fleet recovery,
+registry retention, real deployment or host/storage availability.

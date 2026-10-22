@@ -15,23 +15,25 @@ import (
 	"syscall"
 	"time"
 
+	"releasecontrol/internal/artifactspool"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerclient"
 	"releasecontrol/internal/workerconfig"
 )
 
 type Config struct {
-	Endpoint                string              `json:"endpoint"`
-	TokenEnv                string              `json:"token_env"`
-	ProductID               string              `json:"product_id"`
-	RepositoryID            string              `json:"repository_id"`
-	ConfigRevision          string              `json:"config_revision"`
-	Recipe                  workerconfig.Recipe `json:"recipe"`
-	SourceMirror            string              `json:"source_mirror,omitempty"`
-	StateDir                string              `json:"state_dir"`
-	DockerContext           string              `json:"docker_context,omitempty"`
-	DockerConfig            string              `json:"docker_config,omitempty"`
-	AllowRootlessUnconfined bool                `json:"allow_rootless_unconfined"`
+	ArtifactSpool           *artifactspool.Config `json:"artifact_spool,omitempty"`
+	Endpoint                string                `json:"endpoint"`
+	TokenEnv                string                `json:"token_env"`
+	ProductID               string                `json:"product_id"`
+	RepositoryID            string                `json:"repository_id"`
+	ConfigRevision          string                `json:"config_revision"`
+	Recipe                  workerconfig.Recipe   `json:"recipe"`
+	SourceMirror            string                `json:"source_mirror,omitempty"`
+	StateDir                string                `json:"state_dir"`
+	DockerContext           string                `json:"docker_context,omitempty"`
+	DockerConfig            string                `json:"docker_config,omitempty"`
+	AllowRootlessUnconfined bool                  `json:"allow_rootless_unconfined"`
 }
 
 func Load(file string) (Config, error) {
@@ -52,6 +54,9 @@ func Load(file string) (Config, error) {
 	return c, validateConfig(c)
 }
 func validateConfig(c Config) error {
+	if c.ArtifactSpool != nil && artifactspool.Validate(*c.ArtifactSpool) != nil {
+		return errors.New("invalid artifact spool configuration")
+	}
 	if c.Recipe.Hash != workerconfig.RecipeHash(c.Recipe) || c.Recipe.Execution == nil || workerconfig.ValidateExecution(c.Recipe) != nil || c.Recipe.Trust != "trusted_source" || c.Recipe.ProductID != c.ProductID || c.Recipe.RepositoryID != c.RepositoryID || c.ConfigRevision == "" || !filepath.IsAbs(c.StateDir) || c.SourceMirror != "" && !filepath.IsAbs(c.SourceMirror) || !regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`).MatchString(c.TokenEnv) || c.DockerContext != "" && !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(c.DockerContext) {
 		return errors.New("invalid pinned worker configuration")
 	}
@@ -240,26 +245,16 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 		}
 	}()
 	defer func() { close(stopHeartbeat); cancel(); <-heartbeatDone }()
-	report := &domain.WorkerReport{WorkerAttemptRequest: request, Result: "EXECUTOR_FAILED"}
 	result, runErr := execute(ctx, c, root, js)
-	if errors.Is(runErr, errCheckFailed) {
-		report.Result = "CHECK_FAILED"
-	}
-	if ctx.Err() != nil {
-		report.Result = "EXECUTOR_FAILED"
-	}
-	if runErr == nil {
-		report.Result = "PASSED"
-		if result != nil {
-			result.JobID = lease.Job.ID
-			result.AttemptID = lease.Attempt.ID
-			result.InputHash = lease.Job.InputHash
-			result.SourceSHA = lease.Job.Inputs.SourceSHA
-			result.RecipeHash = c.Recipe.Hash
-			result.ConfigRevision = c.ConfigRevision
-			result.ToolchainImage = spec.ToolchainImage
-			report.LocalOCI = result
-		}
+	report, runErr := prepareReport(ctx, c, root, request, result, runErr)
+	if report.LocalOCI != nil {
+		result.JobID = lease.Job.ID
+		result.AttemptID = lease.Attempt.ID
+		result.InputHash = lease.Job.InputHash
+		result.SourceSHA = lease.Job.Inputs.SourceSHA
+		result.RecipeHash = c.Recipe.Hash
+		result.ConfigRevision = c.ConfigRevision
+		result.ToolchainImage = spec.ToolchainImage
 	}
 	if e = js.update(func(j *journal) { j.Report = report }); e != nil {
 		return nil, e
@@ -273,6 +268,27 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 	}
 	if e != nil {
 		return report, e
+	}
+	return report, runErr
+}
+
+// prepareReport is the durability boundary between a verified local output and
+// an admissible report. A known lease stop always overrides executor success.
+func prepareReport(ctx context.Context, c Config, root string, request domain.WorkerAttemptRequest, result *domain.WorkerLocalOCI, runErr error) (*domain.WorkerReport, error) {
+	report := &domain.WorkerReport{WorkerAttemptRequest: request, Result: "EXECUTOR_FAILED"}
+	if runErr == nil && result != nil && c.ArtifactSpool != nil {
+		runErr = artifactspool.Export(ctx, *c.ArtifactSpool, filepath.Join(root, "image.oci.tar"), *result)
+	}
+	if errors.Is(runErr, errCheckFailed) {
+		report.Result = "CHECK_FAILED"
+	}
+	if ctx.Err() != nil {
+		runErr = ctx.Err()
+		report.Result = "EXECUTOR_FAILED"
+	}
+	if runErr == nil {
+		report.Result = "PASSED"
+		report.LocalOCI = result
 	}
 	return report, runErr
 }

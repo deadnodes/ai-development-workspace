@@ -26,6 +26,9 @@ func validatedExistingArtifact(st *domain.State, id, product, app, repo, sha, im
 			if j == nil || a == nil || j.Status != "SUCCEEDED" || j.Capability != "registry_publish" || artifact.OperationID != j.OperationID || a.Fence != j.Fence || a.InputHash != j.InputHash || j.ProductID != product || j.InputHash != n.PublicationInputHash || a.JobID != j.ID || j.Inputs.Publication == nil || j.Inputs.Publication.ComponentID != app || j.Inputs.SourceSHA != sha || j.Inputs.RepositoryID != repo || j.Inputs.Publication.Profile != n.Profile || !reflect.DeepEqual(j.Inputs.Publication.Receipt, n.Receipt) || n.Receipt.ManifestDigest != artifact.Digest || n.Observation.ManifestDigest != artifact.Digest || n.Observation.Platform != n.Receipt.Platform || n.Observation.ObservedAt.IsZero() {
 				return nil, invalid("invalid native publication evidence")
 			}
+			if err := nativeWorkerOrigin(st, j); err != nil {
+				return nil, err
+			}
 			if n.Reconciliation != nil {
 				if a.Status != "EXPIRED" || a.Report != nil || n.Reconciliation.Actor == "" || n.Reconciliation.At.IsZero() {
 					return nil, invalid("invalid native reconciliation evidence")

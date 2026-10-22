@@ -45,7 +45,14 @@ type WorkerLocalOCI struct {
 	ArchiveBytes   int64  `json:"archive_bytes"`
 }
 
+type WorkerSourceProof struct {
+	ParentHash   string `json:"parent_hash,omitempty"`
+	DeliveryID   string `json:"delivery_id"`
+	ParentID     string `json:"parent_id,omitempty"`
+	SnapshotHash string `json:"snapshot_hash"`
+}
 type WorkerInputs struct {
+	SourceProof    *WorkerSourceProof `json:"source_proof,omitempty"`
 	RecipeID       string             `json:"recipe_id"`
 	RecipeRevision string             `json:"recipe_revision"`
 	RecipeHash     string             `json:"recipe_hash"`

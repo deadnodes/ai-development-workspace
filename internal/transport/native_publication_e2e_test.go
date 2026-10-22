@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/artifactspool"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/ocipublisher"
@@ -30,11 +31,28 @@ import (
 type nativePRFixture struct {
 	*persistedDeliveryFixture
 	sha                    string
+	merged                 bool
+	last                   delivery.GitOpsApply
+	generated              map[string]string
 	proposals, inspections atomic.Int32
 }
 
 func (f *nativePRFixture) Branches(context.Context, delivery.Connection, string) ([]delivery.BranchInfo, error) {
-	return []delivery.BranchInfo{{Name: "main", SHA: f.sha}, {Name: "feature/work", SHA: f.sha}}, nil
+	result := []delivery.BranchInfo{{Name: "main", SHA: f.sha}, {Name: "feature/work", SHA: f.sha}}
+	for branch, sha := range f.generated {
+		result = append(result, delivery.BranchInfo{Name: branch, SHA: sha})
+	}
+	return result, nil
+}
+func (f *nativePRFixture) ComposeSource(_ context.Context, _ delivery.Connection, plan delivery.SourcePlan) (delivery.SourceResult, error) {
+	if f.generated == nil {
+		f.generated = map[string]string{}
+	}
+	f.generated[plan.TargetBranch] = f.sha
+	return delivery.SourceResult{Branch: plan.TargetBranch, SHA: f.sha}, nil
+}
+func (f *nativePRFixture) AdvanceMain(context.Context, delivery.Connection, string, string, string, string) (delivery.SourceResult, error) {
+	return delivery.SourceResult{}, fmt.Errorf("native main advancement forbidden")
 }
 func (f *nativePRFixture) Compare(context.Context, delivery.Connection, string, string, string) (delivery.CompareResult, error) {
 	return delivery.CompareResult{Status: "identical"}, nil
@@ -48,10 +66,21 @@ func (f *nativePRFixture) ProposeGitOps(_ context.Context, _ delivery.Connection
 		return delivery.GitOpsPullRequest{}, fmt.Errorf("unpinned GitOps")
 	}
 	f.proposals.Add(1)
+	f.last = a
 	return delivery.GitOpsPullRequest{Number: 9, URL: "https://github.test/fixture/pull/9", HeadSHA: f.sha, State: "open"}, nil
 }
 func (f *nativePRFixture) ObserveGitOpsPR(_ context.Context, _ delivery.Connection, _ delivery.GitOpsApply, p delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
+	p.Merged = f.merged
 	return p, nil
+}
+
+func (f *nativePRFixture) ReadGitOps(context.Context, delivery.Connection, delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
+	result := delivery.GitOpsSnapshot{HeadSHA: strings.Repeat("c", 40), BlobSHA: strings.Repeat("e", 40)}
+	if f.merged {
+		result.Digest = f.last.Digest
+		result.ImageRepository = f.last.Request.ImageRepository
+	}
+	return result, nil
 }
 
 // Explicit opt-in owns one exact-ID tmpfs registry and per-attempt build
@@ -144,12 +173,17 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 			recipe.Hash = workerconfig.RecipeHash(recipe)
 			publication := workerconfig.PublicationRecipe{ID: "publish", Revision: "v1", ProductID: "p", RepositoryID: "source", ComponentID: "component", Profile: "native-test", BuildRecipeHash: recipe.Hash, Origin: origin, Repository: "fixture/image", MaxBytes: 16 << 20, TimeoutSeconds: 30, Pull: workerconfig.RegistryRead{FixtureLoopbackHTTP: true}}
 			publication.Hash = workerconfig.PublicationHash(publication)
+			publication2 := publication
+			publication2.ID = "publish2"
+			publication2.ComponentID = "component2"
+			publication2.Repository = "fixture/image2"
+			publication2.Hash = workerconfig.PublicationHash(publication2)
 			buildToken := "native-e2e-build-token-000000000000000001"
 			publishToken := "native-e2e-publish-token-000000000000001"
 			control := "native-e2e-control-token-000000000000001"
 			t.Setenv("NATIVE_E2E_BUILD", buildToken)
 			t.Setenv("NATIVE_E2E_PUBLISH", publishToken)
-			authority, err := workerconfig.New(workerconfig.Config{Revision: "cfg1", LeaseSeconds: 20, Recipes: []workerconfig.Recipe{recipe}, Publications: []workerconfig.PublicationRecipe{publication}, Credentials: []workerconfig.Credential{{ID: "build", Principal: "worker/build", TokenEnv: "NATIVE_E2E_BUILD", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "NATIVE_E2E_PUBLISH", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}, control, os.Getenv)
+			authority, err := workerconfig.New(workerconfig.Config{Revision: "cfg1", LeaseSeconds: 20, Recipes: []workerconfig.Recipe{recipe}, Publications: []workerconfig.PublicationRecipe{publication, publication2}, Credentials: []workerconfig.Credential{{ID: "build", Principal: "worker/build", TokenEnv: "NATIVE_E2E_BUILD", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "NATIVE_E2E_PUBLISH", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}, control, os.Getenv)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,90 +243,184 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 			for _, r := range []struct{ id, role string }{{"source", "APPLICATION"}, {"gitops", "GITOPS"}} {
 				post(domain.Command{Action: "import_repository", ID: r.id, ProductID: "p", Data: map[string]any{"connection_id": "conn", "full_name": "team/" + r.id, "role": r.role, "default_branch": "main"}}, nil)
 			}
-			for _, c := range []domain.Command{{Action: "create_application", ID: "component", ProductID: "p", Data: map[string]any{"name": "fixture", "repository_id": "source"}}, {Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component", "connection_id": "conn", "mode": "NATIVE_EXISTING_ARTIFACT", "profile": publication.Profile, "image_repository": strings.TrimPrefix(origin, "http://") + "/fixture/image"}}, {Action: "create_environment", ID: "dev", ProductID: "p", Data: map[string]any{"name": "fixture Dev"}}, {Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": "dev", "application_id": "component", "purpose": "DEV", "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": "app.yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}}, {Action: "record_integration_revision", ID: "rev", IntegrationID: "i", Data: map[string]any{"repository_id": "source", "branch": "feature/work", "base_commit": sha, "head_commit": sha, "commits": []string{sha}}}} {
+			for _, c := range []domain.Command{{Action: "create_application", ID: "component", ProductID: "p", Data: map[string]any{"name": "fixture", "repository_id": "source"}}, {Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component", "connection_id": "conn", "mode": "NATIVE", "native": map[string]any{"build_recipe_id": recipe.ID, "publication_recipe_id": publication.ID, "parameters": map[string]any{}}, "profile": publication.Profile, "image_repository": strings.TrimPrefix(origin, "http://") + "/fixture/image"}}, {Action: "create_environment", ID: "dev", ProductID: "p", Data: map[string]any{"name": "fixture Dev"}}, {Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": "dev", "application_id": "component", "purpose": "DEV", "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": "app.yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}}, {Action: "record_integration_revision", ID: "rev", IntegrationID: "i", Data: map[string]any{"repository_id": "source", "branch": "feature/work", "base_commit": sha, "head_commit": sha, "commits": []string{sha}}}} {
 				post(c, nil)
 			}
-			var buildJob domain.WorkerJob
-			post(domain.Command{Action: "queue_worker_job", ProductID: "p", IntegrationID: "i", Data: map[string]any{"request_key": "native-e2e-build-request", "recipe_id": recipe.ID, "recipe_revision": recipe.Revision, "recipe_hash": recipe.Hash, "config_revision": "cfg1", "revision_id": "rev", "source_sha": sha, "parameters": map[string]any{}, "deadline": time.Now().Add(10 * time.Minute), "max_attempts": 1}}, &buildJob)
+
 			home, _ := os.UserHomeDir()
-			workerCfg := workerrunner.Config{Endpoint: server.URL, TokenEnv: "NATIVE_E2E_BUILD", ProductID: "p", RepositoryID: "source", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "worker-state"), DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true}
+			spoolRoot := filepath.Join(dir, "spool")
+			if err := os.Mkdir(spoolRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			spool := &artifactspool.Config{Root: spoolRoot, MaxArchiveBytes: publication.MaxBytes, MaxTotalBytes: 64 << 20, MaxEntries: 8}
+			workerCfg := workerrunner.Config{ArtifactSpool: spool, Endpoint: server.URL, TokenEnv: "NATIVE_E2E_BUILD", ProductID: "p", RepositoryID: "source", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "worker-state"), DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true}
 			workerFile := filepath.Join(dir, "worker.json")
 			b, _ := json.Marshal(workerCfg)
 			os.WriteFile(workerFile, b, 0600)
+			pubDir := filepath.Join(dir, "publisher-state")
+			os.Mkdir(pubDir, 0700)
+			publisherCfg := publishrunner.Config{ArtifactSpool: spool, Endpoint: server.URL, TokenEnv: "NATIVE_E2E_PUBLISH", ConfigRevision: "cfg1", Recipe: publication, Publisher: ocipublisher.Config{AllowedOrigin: origin, AllowedRepository: publication.Repository, StateDir: pubDir, MaxArchiveBytes: publication.MaxBytes, TimeoutSeconds: publication.TimeoutSeconds, FixtureLoopbackHTTP: true}}
+			pubFile := filepath.Join(dir, "publisher.json")
+			b, _ = json.Marshal(publisherCfg)
+			os.WriteFile(pubFile, b, 0600)
 			run := func(binary, file string) error {
 				cmd := exec.Command(binary, "run-once", file)
 				b, e := cmd.CombinedOutput()
 				if e != nil {
-					t.Logf("native subprocess result: %v %s", e, b)
+					t.Logf("subprocess %v: %s", e, b)
 				}
 				return e
 			}
-			if err = run(binaries["worker"], workerFile); err != nil {
-				t.Fatal("real worker failed", err)
-			}
-			st, _ := store.Read(ctx)
-			if len(st.WorkerAttempts) != 1 || st.WorkerAttempts[0].Report == nil || st.WorkerAttempts[0].Report.LocalOCI == nil || st.WorkerJobs[0].Status != "SUCCEEDED" {
-				t.Fatal("real accepted build missing")
-			}
-			receipt := *st.WorkerAttempts[0].Report.LocalOCI
-			archives, _ := filepath.Glob(filepath.Join(workerCfg.StateDir, "*", "image.oci.tar"))
-			if len(archives) != 1 {
-				t.Fatal("exact owned archive missing")
-			}
-			pubDir := filepath.Join(dir, "publisher-state")
-			os.Mkdir(pubDir, 0700)
-			publisherCfg := publishrunner.Config{Endpoint: server.URL, TokenEnv: "NATIVE_E2E_PUBLISH", ConfigRevision: "cfg1", Recipe: publication, Publisher: ocipublisher.Config{AllowedOrigin: origin, AllowedRepository: publication.Repository, Archive: archives[0], StateDir: pubDir, MaxArchiveBytes: publication.MaxBytes, TimeoutSeconds: publication.TimeoutSeconds, FixtureLoopbackHTTP: true}}
-			pubFile := filepath.Join(dir, "publisher.json")
-			b, _ = json.Marshal(publisherCfg)
-			os.WriteFile(pubFile, b, 0600)
-			queue := func(key string) {
-				post(domain.Command{Action: "queue_worker_publication", ProductID: "p", Data: map[string]any{"build_job_id": buildJob.ID, "component_id": "component", "recipe_id": publication.ID, "recipe_hash": publication.Hash, "recipe_revision": publication.Revision, "config_revision": "cfg1", "request_key": key, "deadline": time.Now().Add(time.Minute)}}, nil)
-			}
-			queue("native-e2e-publication-one")
-			if run(binaries["publisher"], pubFile) == nil {
-				t.Fatal("lost START incorrectly reported success")
-			}
-			if run(binaries["publisher"], pubFile) == nil {
-				t.Fatal("lost REPORT incorrectly reported success")
-			}
-			if err = run(binaries["publisher"], pubFile); err != nil {
-				t.Fatal("pending report replay failed", err)
-			}
-			queue("native-e2e-publication-two")
-			if err = run(binaries["publisher"], pubFile); err != nil {
-				t.Fatal("second profile job failed", err)
-			}
-			st, _ = store.Read(ctx)
-			if len(st.WorkerJobs) != 3 || len(st.WorkerAttempts) != 3 || len(st.DeliveryArtifacts) != 2 || len(st.DeliveryBuildRuns) != 0 {
-				t.Fatalf("duplicate/missing chain evidence jobs=%d attempts=%d artifacts=%d gha=%d", len(st.WorkerJobs), len(st.WorkerAttempts), len(st.DeliveryArtifacts), len(st.DeliveryBuildRuns))
-			}
-			artifact := st.DeliveryArtifacts[1]
-			if artifact.Native == nil || artifact.BuildRunID != 0 || artifact.Native.Receipt != receipt || artifact.Native.Observation.ManifestDigest != receipt.ManifestDigest {
-				t.Fatal("dishonest native provenance")
-			}
-			post(domain.Command{Action: "deploy_existing_artifact", ID: "deploy", IntegrationID: "i", Data: map[string]any{"environment_id": "dev", "application_id": "component", "revision_id": "rev", "artifact_id": artifact.ID}}, nil)
-			for range 6 {
+			tick := func() {
+				t.Helper()
 				store.Update(ctx, func(st *domain.State) error {
 					for i := range st.Operations {
-						st.Operations[i].NextAttemptAt = time.Time{}
+						st.Operations[i].NextAttemptAt = st.Operations[i].UpdatedAt
 					}
 					return nil
 				})
-				if _, err = service.Tick(ctx); err != nil {
-					t.Fatal(err)
+				if _, e := service.Tick(ctx); e != nil {
+					t.Fatal(e)
 				}
+			}
+			var previousDigest string
+			for deliveryIndex := 0; deliveryIndex < 2; deliveryIndex++ {
+				if deliveryIndex > 0 {
+					os.WriteFile(filepath.Join(repo, "main.go"), []byte("package main\nfunc main(){println(42)}\n"), 0600)
+					git("add", "main.go")
+					git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Changed fixture")
+					sha = git("rev-parse", "HEAD")
+					provider.sha = sha
+					provider.merged = false
+					post(domain.Command{Action: "record_integration_revision", ID: "rev2", IntegrationID: "i", Data: map[string]any{"repository_id": "source", "branch": "feature/work", "base_commit": sha, "head_commit": sha, "commits": []string{sha}}}, nil)
+				}
+				revision := "rev"
+				if deliveryIndex > 0 {
+					revision = "rev2"
+				}
+				request := domain.Command{Action: "deploy_integration", IntegrationID: "i", Data: map[string]any{"environment_id": "dev", "application_id": "component", "revision_id": revision, "request_key": fmt.Sprintf("automatic-native-%d", deliveryIndex)}}
+				var deploy, replay domain.ExternalOperation
+				post(request, &deploy)
+				post(request, &replay)
+				if deploy.ID != replay.ID || deploy.Native == nil || !deploy.Native.Deadline.Equal(replay.Native.Deadline) {
+					t.Fatal("delivery request replay changed identity or deadline")
+				}
+				for range 3 {
+					tick()
+				}
+				st, _ := store.Read(ctx)
+				if len(st.WorkerJobs) != (deliveryIndex*2 + 1) {
+					t.Fatalf("automatic build not queued: %+v", st.Operations)
+				}
+				if e := run(binaries["worker"], workerFile); e != nil {
+					t.Fatal("real automatic worker", e)
+				}
+				tick()
+				if deliveryIndex == 0 {
+					if run(binaries["publisher"], pubFile) == nil {
+						t.Fatal("lost START accepted")
+					}
+					if run(binaries["publisher"], pubFile) == nil {
+						t.Fatal("lost REPORT accepted")
+					}
+				}
+				if e := run(binaries["publisher"], pubFile); e != nil {
+					t.Fatal("real automatic publication/report", e)
+				}
+				for range 5 {
+					tick()
+				}
+				st, _ = store.Read(ctx)
+				var current domain.ExternalOperation
+				for _, op := range st.Operations {
+					if op.ID == deploy.ID {
+						current = op
+					}
+				}
+				if current.Phase != "WAIT_GITOPS_PR" || current.GitOpsResult != nil || provider.proposals.Load() != int32(deliveryIndex+1) {
+					t.Fatalf("automatic graph did not reach one PR %+v", current)
+				}
+				artifact := st.DeliveryArtifacts[len(st.DeliveryArtifacts)-1]
+				if artifact.Native == nil || artifact.SourceCommit != sha || artifact.Native.Receipt.ArchiveHash == "" || deliveryIndex > 0 && artifact.Digest == previousDigest {
+					t.Fatal("exact changed-source native artifact missing")
+				}
+				previousDigest = artifact.Digest
+				provider.merged = true
+				tick()
+				st, _ = store.Read(ctx)
+				for _, op := range st.Operations {
+					if op.ID == deploy.ID && op.Status != "SUCCEEDED" {
+						t.Fatalf("external fixture PR merge not observed: %+v", op)
+					}
+				}
+			}
+			st, _ := store.Read(ctx)
+			if len(st.WorkerJobs) != 4 || len(st.WorkerAttempts) != 4 || len(st.DeliveryArtifacts) != 2 || len(st.DeliveryBuildRuns) != 0 || provider.dispatches.Load() != 0 || provider.applies.Load() != 0 || provider.inspections.Load() != 0 {
+				t.Fatal("automatic graph duplicates or GitHub fallback")
+			}
+			t.Logf("two changed-source protected API→Tick→worker subprocess→durable shared CAS spool→separate publisher subprocess→pinned Distribution→admission→GitOps PR, unchanged configs; lost START before execution and known REPORT replay; zero manual queue/archive copy/GHA/direct")
+
+			post(domain.Command{Action: "create_application", ID: "component2", ProductID: "p", Data: map[string]any{"name": "second native component", "repository_id": "source"}}, nil)
+			post(domain.Command{Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component2", "connection_id": "conn", "mode": "NATIVE", "profile": publication2.Profile, "image_repository": strings.TrimPrefix(origin, "http://") + "/" + publication2.Repository, "native": map[string]any{"build_recipe_id": recipe.ID, "publication_recipe_id": publication2.ID, "parameters": map[string]any{}}}}, nil)
+			post(domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": "dev", "application_id": "component2", "purpose": "DEV", "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": "second.yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}}, nil)
+			// Base-only two-component composition has no IntegrationID. Both jobs
+			// prove their immutable generated-source origin through the parent.
+			post(domain.Command{Action: "plan_composition", ID: "native-pair", ProductID: "p", Data: map[string]any{"environment_id": "dev", "name": "native pair", "components": []any{map[string]any{"application_id": "component", "base_ref": "main", "base_commit": sha, "target_branch": "generated/native-pair", "revision_ids": []string{}}, map[string]any{"application_id": "component2", "base_ref": "main", "base_commit": sha, "target_branch": "generated/native-pair", "revision_ids": []string{}}}}}, nil)
+			var composition domain.ExternalOperation
+			post(domain.Command{Action: "reconcile_composition", ID: "native-pair", ProductID: "p"}, &composition)
+			provider.merged = false
+			for range 10 {
+				tick()
 			}
 			st, _ = store.Read(ctx)
-			found := false
-			for _, op := range st.Operations {
-				if op.ID == "deploy" {
-					found = op.Phase == "WAIT_GITOPS_PR" && op.Status == "RUNNING" && op.GitOpsResult == nil
+			if len(st.WorkerJobs) != 6 {
+				t.Fatalf("two native compose builds missing %+v", st.Operations)
+			}
+			for range 2 {
+				if e := run(binaries["worker"], workerFile); e != nil {
+					t.Fatal("real compose worker", e)
 				}
 			}
-			if !found || provider.dispatches.Load() != 0 || provider.applies.Load() != 0 || provider.inspections.Load() != 0 || provider.proposals.Load() != 1 {
-				t.Fatal("native path did not stop at one GitOps PR without Actions")
+			for range 5 {
+				tick()
 			}
-			t.Logf("actual protected API→worker→publisher subprocess(restart/lost START+REPORT, 2 jobs)→pinned Distribution→server GET/hash→one GitOps PR: source=%s digest=%s; zero GHA/direct writes", sha, receipt.ManifestDigest)
+			pubDir2 := filepath.Join(dir, "publisher2-state")
+			os.Mkdir(pubDir2, 0700)
+			publisherCfg2 := publisherCfg
+			publisherCfg2.Recipe = publication2
+			publisherCfg2.Publisher.AllowedRepository = publication2.Repository
+			publisherCfg2.Publisher.StateDir = pubDir2
+			pubFile2 := filepath.Join(dir, "publisher2.json")
+			b, _ = json.Marshal(publisherCfg2)
+			os.WriteFile(pubFile2, b, 0600)
+			for _, file := range []string{pubFile, pubFile2} {
+				if e := run(binaries["publisher"], file); e != nil {
+					t.Fatal("real compose publisher", e)
+				}
+			}
+			for range 10 {
+				tick()
+			}
+			st, _ = store.Read(ctx)
+			componentChildren := 0
+			for _, op := range st.Operations {
+				if op.ParentID == composition.ID && op.Kind == "DEPLOY" {
+					componentChildren++
+					if op.IntegrationID != "" || op.Phase != "WAIT_GITOPS_PR" || op.ExistingArtifact == nil || op.ExistingArtifact.SourceCommit != sha {
+						t.Fatalf("invalid composed native child %+v", op)
+					}
+				}
+			}
+			if componentChildren != 2 || len(st.WorkerJobs) != 8 || len(st.DeliveryArtifacts) != 4 || provider.proposals.Load() != 4 {
+				t.Fatal("two-component compose did not use same native path")
+			}
+			for _, job := range st.WorkerJobs[4:] {
+				if job.Inputs.SourceProof == nil || job.Inputs.SourceProof.ParentID != composition.ID || job.IntegrationID != "" {
+					t.Fatal("composed jobs use forged integration or lack origin proof")
+				}
+			}
+			t.Log("actual two-component COMPOSE→generated-source proof→2 real builds→2 spool publications→2 exact admitted artifacts→2 GitOps PRs; no fabricated IntegrationID")
+
 		})
 	}
 }

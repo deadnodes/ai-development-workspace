@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"releasecontrol/internal/artifactspool"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -103,7 +104,12 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 	defer server.Close()
 	stateDir := filepath.Join(root, "worker-state")
 	home, _ := os.UserHomeDir()
-	cfg := Config{Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_WORKER_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: stateDir, DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true}
+	spoolRoot := filepath.Join(root, "spool")
+	if err := os.Mkdir(spoolRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	spoolRoot, _ = filepath.EvalSymlinks(spoolRoot)
+	cfg := Config{ArtifactSpool: &artifactspool.Config{Root: spoolRoot, MaxArchiveBytes: 16777216, MaxTotalBytes: 67108864, MaxEntries: 4}, Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_WORKER_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: stateDir, DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true}
 	configFile := filepath.Join(root, "worker.json")
 	b, _ := json.Marshal(cfg)
 	if err = os.WriteFile(configFile, b, 0600); err != nil {
@@ -166,6 +172,9 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 			if err = os.WriteFile(filepath.Join(export, "receipt.json"), data, 0600); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if _, err := artifactspool.Resolve(*cfg.ArtifactSpool, *report.LocalOCI); err != nil {
+			t.Fatalf("report preceded durable spool: %v", err)
 		}
 		manifests = append(manifests, report.LocalOCI.ManifestDigest)
 		if report.LocalOCI.SourceSHA != sha {

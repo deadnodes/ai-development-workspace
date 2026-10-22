@@ -121,25 +121,31 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		return true, s.finish(ctx, *op, token, "FAILED", "invalid operation snapshot", nil)
 	}
 	snapshot := op.Snapshot
-	if snapshot.Build.Mode == "NATIVE_EXISTING_ARTIFACT" {
+	if snapshot.Build.Mode == "NATIVE" {
 		state, e := s.store.Read(ctx)
 		if e != nil {
 			return true, e
 		}
-		known := op.ExistingArtifact
-		if nativeQuarantined(&state, op.ProductID) || op.ParentID != "" || known == nil || known.Native == nil || snapshot.Target.GitOpsMode != "PR" || snapshot.Build.RebuildMissing || op.Run != nil {
-			return true, s.finish(ctx, *op, token, "BLOCKED", "native automatic builds and direct delivery are disabled", nil)
-		}
-		if _, e = validatedExistingArtifact(&state, known.ID, op.ProductID, op.ApplicationID, snapshot.Revision.RepositoryID, snapshot.Revision.HeadCommit, snapshot.Build.ImageRepository); e != nil {
+		if e = s.nativeDeliveryAllowed(&state, op); e != nil {
 			return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
 		}
-		if e = s.publicationEligible(&state, workerJob(&state, known.Native.PublicationJobID)); e != nil {
-			return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+		if op.Native != nil && op.Phase == "NATIVE_BUILD" {
+			return true, s.tickNativeDelivery(ctx, *op, token)
 		}
-		if known.Native.Profile != snapshot.Build.Profile || op.Phase == "DISPATCH" || op.Phase == "BUILD_LOOKUP" || op.Phase == "PROMOTION_PREFLIGHT" {
-			return true, s.finish(ctx, *op, token, "BLOCKED", "invalid native profile or automatic phase", nil)
+		if op.Native == nil && op.ExistingArtifact == nil || op.Phase == "DISPATCH" || op.Phase == "BUILD_LOOKUP" || op.Phase == "PROMOTION_PREFLIGHT" {
+			return true, s.finish(ctx, *op, token, "BLOCKED", "native automatic binding or exact existing artifact required", nil)
+		}
+		if op.ExistingArtifact != nil {
+			known := op.ExistingArtifact
+			if known.Native == nil || known.Native.Profile != snapshot.Build.Profile {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "native profile mismatch", nil)
+			}
+			if _, e = validatedExistingArtifact(&state, known.ID, op.ProductID, op.ApplicationID, snapshot.Revision.RepositoryID, snapshot.Revision.HeadCommit, snapshot.Build.ImageRepository); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
 		}
 	}
+
 	if domain.ComponentKind(snapshot.Application) != "APPLICATION" {
 		return true, s.finish(ctx, *op, token, "BLOCKED", "library components use publication, not environment deployment", nil)
 	}
@@ -148,7 +154,7 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		if e != nil {
 			return true, e
 		}
-		if e = flowChildAllowed(&state, *op); e != nil {
+		if e = s.flowChildAllowed(&state, *op); e != nil {
 			return true, s.finish(ctx, *op, token, "CANCELLED", e.Error(), nil)
 		}
 	}
@@ -257,6 +263,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			}
 			return true, s.advance(ctx, *op, token, "INSPECT", "WAITING_FOR_ARTIFACT", "recheck selected immutable artifact; CI build is disabled for this operation", map[string]string{"artifact_id": op.ExistingArtifact.ID})
 		}
+		if snapshot.Build.Mode == "NATIVE" {
+			return true, s.advance(ctx, *op, token, "NATIVE_BUILD", "BUILDING", "native frozen-source build and publication requested", nil)
+		}
 		if op.ExpectedDigest == "" {
 			state, readErr := s.State(ctx)
 			if readErr != nil {
@@ -363,7 +372,7 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		}
 		var artifact delivery.ArtifactResult
 		var e error
-		if snapshot.Build.Mode == "NATIVE_EXISTING_ARTIFACT" {
+		if snapshot.Build.Mode == "NATIVE" {
 			artifact, e = s.inspectNativeArtifact(callCtx, *op)
 		} else {
 			artifact, e = s.provider.InspectArtifact(callCtx, snapshot.SourceConnection, request)
@@ -389,6 +398,11 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		op.Artifact = &artifact
 		return true, s.advance(ctx, *op, token, "APPLY", "ARTIFACT_READY", "artifact digest observed; GitOps update pending", map[string]string{"digest": artifact.Digest})
 	case "APPLY", "APPLY_UNCERTAIN":
+		if snapshot.Build.Mode == "NATIVE" {
+			if e := s.verifyNativeSource(callCtx, *op); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
+		}
 		if op.ParentID != "" {
 			if e := s.verifyPromotionSource(callCtx, *op); e != nil {
 				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
@@ -475,13 +489,17 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
 		}
-		if phase == "APPLY_UNCERTAIN" && op.ParentID != "" && status != "CANCELLED" && status != "BLOCKED" {
-			if err := flowChildAllowed(st, op); err != nil {
+		guardChild := phase == "APPLY_UNCERTAIN"
+		if parent := operationByID(st, op.ParentID); parent != nil && flowHasNative(st, *parent) {
+			guardChild = true
+		}
+		if guardChild && op.ParentID != "" && status != "FAILED" && status != "CANCELLED" && status != "BLOCKED" {
+			if err := s.flowChildAllowed(st, op); err != nil {
 				return err
 			}
 		}
 		if (op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION") && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
-			if e := flowGuard(st, op); e != nil {
+			if e := s.flowGuard(st, op); e != nil {
 				status = "BLOCKED"
 				detail = e.Error()
 			}
@@ -522,26 +540,23 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if terminalOperation(op.Status) {
 			op.FinishedAt = &now
 		}
-		if op.Snapshot != nil && op.Snapshot.Build.Mode == "NATIVE_EXISTING_ARTIFACT" && !terminalOperation(op.Status) {
-			if nativeQuarantined(st, op.ProductID) {
-				return invalid("native product quarantined")
-			}
-			if op.ExistingArtifact == nil || op.ExistingArtifact.Native == nil {
-				return invalid("native artifact required")
-			}
-			if err := s.publicationEligible(st, workerJob(st, op.ExistingArtifact.Native.PublicationJobID)); err != nil {
+		if op.Snapshot != nil && op.Snapshot.Build.Mode == "NATIVE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if err := s.nativeDeliveryAllowed(st, current); err != nil {
 				return err
 			}
-			if _, err := validatedExistingArtifact(st, op.ExistingArtifact.ID, op.ProductID, op.ApplicationID, op.Snapshot.Revision.RepositoryID, op.Snapshot.Revision.HeadCommit, op.Snapshot.Build.ImageRepository); err != nil {
-				return err
+			if op.ExistingArtifact != nil {
+				if _, err := validatedExistingArtifact(st, op.ExistingArtifact.ID, op.ProductID, op.ApplicationID, op.Snapshot.Revision.RepositoryID, op.Snapshot.Revision.HeadCommit, op.Snapshot.Build.ImageRepository); err != nil {
+					return err
+				}
 			}
 		}
+
 		*current = op
 		if op.Run != nil {
 			bm := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}
 			st.DeliveryBuildRuns = append(st.DeliveryBuildRuns, domain.DeliveryBuildRun{Meta: bm, OperationID: op.ID, ApplicationID: op.ApplicationID, Request: op.Snapshot.BuildRequest, Result: *op.Run})
 		}
-		if op.Artifact != nil && op.Snapshot != nil && op.Snapshot.Build.Mode != "NATIVE_EXISTING_ARTIFACT" {
+		if op.Artifact != nil && op.Snapshot != nil && op.Snapshot.Build.Mode != "NATIVE" {
 			am := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}
 			runID := int64(0)
 			if op.Run != nil {
