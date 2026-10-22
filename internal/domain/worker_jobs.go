@@ -64,20 +64,21 @@ type WorkerSourceProof struct {
 	SnapshotHash string `json:"snapshot_hash"`
 }
 type WorkerInputs struct {
-	Check          *WorkerCheckBinding `json:"check,omitempty"`
-	SourceProof    *WorkerSourceProof  `json:"source_proof,omitempty"`
-	RecipeID       string              `json:"recipe_id"`
-	RecipeRevision string              `json:"recipe_revision"`
-	RecipeHash     string              `json:"recipe_hash"`
-	ConfigRevision string              `json:"config_revision"`
-	RepositoryID   string              `json:"repository_id"`
-	RepositoryURL  string              `json:"repository_url"`
-	RevisionID     string              `json:"revision_id"`
-	SourceSHA      string              `json:"source_sha"`
-	Trust          string              `json:"trust"`
-	Parameters     map[string]any      `json:"parameters"`
-	Execution      *WorkerExecution    `json:"execution"`
-	Publication    *WorkerPublication  `json:"publication,omitempty"`
+	Registry       *WorkerRegistryInputs `json:"registry,omitempty"`
+	Check          *WorkerCheckBinding   `json:"check,omitempty"`
+	SourceProof    *WorkerSourceProof    `json:"source_proof,omitempty"`
+	RecipeID       string                `json:"recipe_id"`
+	RecipeRevision string                `json:"recipe_revision"`
+	RecipeHash     string                `json:"recipe_hash"`
+	ConfigRevision string                `json:"config_revision"`
+	RepositoryID   string                `json:"repository_id"`
+	RepositoryURL  string                `json:"repository_url"`
+	RevisionID     string                `json:"revision_id"`
+	SourceSHA      string                `json:"source_sha"`
+	Trust          string                `json:"trust"`
+	Parameters     map[string]any        `json:"parameters"`
+	Execution      *WorkerExecution      `json:"execution"`
+	Publication    *WorkerPublication    `json:"publication,omitempty"`
 }
 type WorkerJob struct {
 	CheckOperationID string `json:"check_operation_id,omitempty"`
@@ -129,6 +130,7 @@ type WorkerAttemptRequest struct {
 	InputHash string `json:"input_hash"`
 }
 type WorkerReport struct {
+	Registry *WorkerRegistryReport `json:"registry,omitempty"`
 	WorkerAttemptRequest
 	Result       string                   `json:"result"`
 	EvidenceHash string                   `json:"evidence_hash,omitempty"`

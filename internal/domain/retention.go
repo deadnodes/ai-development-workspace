@@ -36,13 +36,17 @@ type RetentionImage struct {
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
 }
 type RetentionReport struct {
-	ProductID       string                     `json:"product_id"`
-	EvaluatedAt     time.Time                  `json:"evaluated_at"`
-	InputHash       string                     `json:"input_hash"`
-	DeletionAllowed bool                       `json:"deletion_allowed"`
-	Policies        []EffectiveRetentionPolicy `json:"policies"`
-	Images          []RetentionImage           `json:"images"`
-	Blockers        []string                   `json:"blockers"`
+	Registry                []RegistryCoverageSummary  `json:"registry"`
+	ProtectedObjects        []RegistryProtectedObject  `json:"protected_objects"`
+	ProtectedEdges          []RegistryProtectedEdge    `json:"protected_edges"`
+	GlobalInventoryComplete bool                       `json:"global_inventory_complete"`
+	ProductID               string                     `json:"product_id"`
+	EvaluatedAt             time.Time                  `json:"evaluated_at"`
+	InputHash               string                     `json:"input_hash"`
+	DeletionAllowed         bool                       `json:"deletion_allowed"`
+	Policies                []EffectiveRetentionPolicy `json:"policies"`
+	Images                  []RetentionImage           `json:"images"`
+	Blockers                []string                   `json:"blockers"`
 }
 
 const retentionFreshness = 5 * time.Minute
@@ -812,7 +816,7 @@ func newRetentionCollector(st State, product string, now time.Time) *retentionCo
 
 // EvaluateRetention is a pure protected-root inventory. Its fingerprint is an
 // advisory input identity, never a deletion capability, lease or completeness proof.
-func EvaluateRetention(st State, product string, now time.Time) RetentionReport {
+func EvaluateRetention(st State, product string, now time.Time, authorities []RegistryObservationAuthority) RetentionReport {
 	c := newRetentionCollector(st, product, now)
 	c.evaluate()
 	products := map[string]bool{}
@@ -872,6 +876,7 @@ func EvaluateRetention(st State, product string, now time.Time) RetentionReport 
 	}
 	sort.Slice(report.Images, func(i, j int) bool { return report.Images[i].Identity < report.Images[j].Identity })
 	report.Blockers = sortedUnique(report.Blockers)
+	c.evidence = append(c.evidence, registryRetention(st, &report, now, authorities)...)
 	hashed := report
 	hashed.Policies = append([]EffectiveRetentionPolicy{}, report.Policies...)
 	for i := range hashed.Policies {
@@ -953,7 +958,7 @@ func (c *retentionCollector) relevantEvidence() {
 				ID, Job, Status, InputHash, Report string
 				Fence                              uint64
 				Completed                          time.Time
-			}{a.ID, a.JobID, a.Status, a.InputHash, checkHash(a.Report), a.Fence, a.UpdatedAt}))
+			}{a.ID, a.JobID, a.Status, a.InputHash, retentionWorkerReportHash(a.Report), a.Fence, a.UpdatedAt}))
 		}
 	}
 	for _, r := range c.st.Releases {

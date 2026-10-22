@@ -93,6 +93,19 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 		if lose {
 			recorded := httptest.NewRecorder()
 			baseHandler.ServeHTTP(recorded, r)
+			if recorded.Code != http.StatusOK {
+				t.Errorf("lost response was not accepted: %s status %d", r.URL.Path, recorded.Code)
+			}
+			if r.URL.Path == "/api/worker/report" {
+				// Span the ordinary heartbeat period AFTER real server admission.
+				// A still-running supervisor would receive the correct terminal
+				// HTTP422 and cancel this request before its retry can run.
+				select {
+				case <-time.After(1200 * time.Millisecond):
+				case <-r.Context().Done():
+					t.Error("accepted REPORT response canceled by terminal heartbeat")
+				}
+			}
 			conn, _, err := w.(http.Hijacker).Hijack()
 			if err == nil {
 				_ = conn.Close()

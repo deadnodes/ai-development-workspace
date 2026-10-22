@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -38,6 +39,27 @@ func registerWorkerRoutes(mux *http.ServeMux, service Service, o Options) {
 			write(w, 415, map[string]string{"error": "application/json required"})
 			return
 		}
+		if r.URL.Path == "/api/worker/report" {
+			raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, domain.RegistryReportMaxBytes))
+			if e != nil {
+				write(w, 400, map[string]string{"error": "invalid worker report bounds"})
+				return
+			}
+			var in domain.WorkerReport
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&in) != nil || decoder.Decode(new(any)) != io.EOF {
+				write(w, 400, map[string]string{"error": "invalid worker report"})
+				return
+			}
+			if len(raw) > 16<<10 && (in.Registry == nil || !p.Allows(in.Registry.Scope.ProductID, in.Registry.Scope.RepositoryID, "registry_observe", time.Now().UTC())) {
+				write(w, 400, map[string]string{"error": "worker report exceeds capability bound"})
+				return
+			}
+			v, e := s.ReportWorker(r.Context(), p, in)
+			respond(w, v, e)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
@@ -68,13 +90,6 @@ func registerWorkerRoutes(mux *http.ServeMux, service Service, o Options) {
 			} else {
 				v, e = s.HeartbeatWorker(r.Context(), p, in)
 			}
-			respond(w, v, e)
-		case "/api/worker/report":
-			var in domain.WorkerReport
-			if !decode(&in) {
-				return
-			}
-			v, e := s.ReportWorker(r.Context(), p, in)
 			respond(w, v, e)
 		default:
 			write(w, 404, map[string]string{"error": "worker route not found"})

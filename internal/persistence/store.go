@@ -157,6 +157,9 @@ func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
 	if e = rows.Err(); e != nil {
 		return st, e
 	}
+	if e = domain.ValidateRegistryInventories(st); e != nil {
+		return st, e
+	}
 	if e = domain.ValidateArtifactPins(st); e != nil {
 		return st, e
 	}

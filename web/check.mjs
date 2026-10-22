@@ -266,6 +266,15 @@ const retentionHTML=evaluate("retentionReportHTML({evaluated_at:'2026-10-22T00:0
 assert.ok(retentionHTML.includes('Deletion disabled'));
 assert.ok(retentionHTML.includes('OCI_CLOSURE_UNPROVEN'));
 assert.ok(retentionHTML.includes('&lt;unsafe&gt;'));
+const observedRetentionHTML=evaluate("retentionReportHTML({global_inventory_complete:false,registry:[{image_repository:'registry.example/team/image',status:'CURRENT',freshness:'FRESH',attestation:'WORKER_ATTESTED_REGISTRY_READ',required_roots:2,covered_roots:2,nodes:7,edges:9,blockers:['GLOBAL_INVENTORY_INCOMPLETE']}],protected_objects:[{image_repository:'registry.example/team/image',digest:'sha256:proof',kind:'blob',media_type:'<unsafe-media>',size:42,protected:true,availability:'VERIFIED',root_digests:['sha256:root'],reasons:['runtime'],blockers:[]}],images:[],policies:[],blockers:[]})");
+assert.ok(observedRetentionHTML.includes('Observer-attested read'));
+assert.ok(observedRetentionHTML.includes('Covered roots: 2 / 2'));
+assert.ok(observedRetentionHTML.includes('Protected OCI objects (1)'));
+assert.ok(observedRetentionHTML.includes('&lt;unsafe-media&gt;'));
+assert.ok(!observedRetentionHTML.includes('<unsafe-media>'));
+assert.ok(observedRetentionHTML.includes('Deletion disabled'));
+assert.ok(observedRetentionHTML.includes('not fully enumerated'));
+assert.ok(retentionHTML.includes('No recorded registry observations'));
 assert.ok(evaluate('deliveryView()').includes('Artifact retention'));
 assert.ok(evaluate('deliveryView()').includes('&lt;unsafe&gt;'));
 vm.runInContext(fs.readFileSync(new URL('./static/branches.js',import.meta.url),'utf8'),sandbox);

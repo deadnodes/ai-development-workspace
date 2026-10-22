@@ -24,7 +24,7 @@ func TestRetentionPolicyValidationAndWarnings(t *testing.T) {
 	st.DeliveryArtifacts = []domain.DeliveryArtifact{{Meta: domain.Meta{ID: "missing", ProductID: "p"}, ApplicationID: "a", ImageRepository: "registry.example/image", Digest: "sha256:" + strings.Repeat("a", 64), Availability: "MISSING", ObservedAt: now}}
 	items := retentionAttentionAt(st, "p", now)
 	found := false
-	report := domain.EvaluateRetention(st, "p", now)
+	report := domain.EvaluateRetention(st, "p", now, nil)
 	for _, item := range items {
 		if item["input_hash"] != report.InputHash {
 			t.Fatal("attention used different report")
@@ -49,7 +49,7 @@ func TestRetentionAttentionHasNoPhantomWarningsWithoutImageEvidence(t *testing.T
 		if withComponent {
 			st.Applications = []domain.Application{{Meta: domain.Meta{ID: "a", ProductID: "p"}, Retention: &domain.ArtifactRetention{KeepLast: 3}}}
 		}
-		report := domain.EvaluateRetention(st, "p", now)
+		report := domain.EvaluateRetention(st, "p", now, nil)
 		if report.DeletionAllowed || len(report.Blockers) == 0 || report.InputHash == "" {
 			t.Fatal("report lost mandatory deletion blockers or evidence hash")
 		}

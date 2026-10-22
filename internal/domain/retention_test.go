@@ -58,7 +58,7 @@ func TestRetentionFloorChronologyDedupProfiles(t *testing.T) {
 	dup.CreatedAt = retentionNow.Add(time.Hour)
 	dup.ObservedAt = retentionNow
 	st.DeliveryArtifacts = append(st.DeliveryArtifacts, dup)
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	if len(r.Images) != 14 || r.Policies[0].EffectiveKeepLast != 10 || !r.Policies[0].KeepCurrent || r.Policies[0].KeepPrevious != 1 {
 		t.Fatal(r)
 	}
@@ -72,7 +72,7 @@ func TestRetentionFloorChronologyDedupProfiles(t *testing.T) {
 	for n := 14; n < 26; n++ {
 		retentionGHA(&st, n, "release", retentionNow.Add(-time.Duration(n)*time.Minute))
 	}
-	r = EvaluateRetention(st, "p", retentionNow)
+	r = EvaluateRetention(st, "p", retentionNow, nil)
 	for n := 14; n < 26; n++ {
 		if retentionFind(t, r, retentionSHA(n)).Protected != (n < 24) {
 			t.Fatal("profile quota mixed", n)
@@ -107,7 +107,7 @@ func TestRetentionUnknownChronologyOutsideQuota(t *testing.T) {
 			case "bad-profile":
 				st.Operations[len(st.Operations)-1].Snapshot.Build.Profile = "bad profile"
 			}
-			r := EvaluateRetention(st, "p", retentionNow)
+			r := EvaluateRetention(st, "p", retentionNow, nil)
 			v := retentionFind(t, r, a.Digest)
 			if !v.Protected || !retentionHas(v.Reasons, "unknown_publication_chronology") {
 				t.Fatal(v)
@@ -128,7 +128,7 @@ func TestRetentionEarliestTrustedPublicationBoundary(t *testing.T) {
 	a := retentionGHA(&st, 0, "default", retentionNow.Add(-time.Hour))
 	a.ID = "same-digest-old-publication"
 	st.DeliveryArtifacts[len(st.DeliveryArtifacts)-1] = a
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	if retentionFind(t, r, retentionSHA(0)).Protected || !retentionFind(t, r, retentionSHA(10)).Protected {
 		t.Fatal("latest replay publication inflated quota", r)
 	}
@@ -160,7 +160,7 @@ func TestRetentionNativeAcceptedPublicationNotBuildTime(t *testing.T) {
 	for n := 0; n < 12; n++ {
 		retentionNative(&st, n, retentionNow.Add(-time.Duration(n+1)*time.Minute))
 	}
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	for n := 0; n < 12; n++ {
 		v := retentionFind(t, r, retentionSHA(n))
 		if v.Protected != (n < 10) || v.PublishedAt == nil || !v.PublishedAt.Equal(st.WorkerAttempts[n*2+1].UpdatedAt) {
@@ -185,7 +185,7 @@ func TestRetentionNativeAcceptedPublicationNotBuildTime(t *testing.T) {
 			case "future":
 				bad.WorkerAttempts[23].UpdatedAt = retentionNow.Add(time.Second)
 			}
-			v := retentionFind(t, EvaluateRetention(bad, "p", retentionNow), retentionSHA(11))
+			v := retentionFind(t, EvaluateRetention(bad, "p", retentionNow, nil), retentionSHA(11))
 			if !v.Protected || !retentionHas(v.Blockers, "unknown_publication_chronology") {
 				t.Fatal(v)
 			}
@@ -195,7 +195,7 @@ func TestRetentionNativeAcceptedPublicationNotBuildTime(t *testing.T) {
 func TestRetentionRuntimeRootsWithoutArtifactsAndFreshness(t *testing.T) {
 	st := retentionBase()
 	st.RuntimeSnapshots = []RuntimeSnapshot{{Meta: Meta{ID: "runtime", ProductID: "p"}, ApplicationID: "app", EnvironmentID: "env", Expected: RuntimeExpected{ImageRepository: "ghcr.io/owner/app", Value: retentionSHA(50)}, Runtime: delivery.RuntimeSnapshot{ObservedAt: retentionNow, WorkloadImage: "ghcr.io/owner/app@" + retentionSHA(51), Health: "UNHEALTHY", Pods: []delivery.RuntimePod{{Image: "ghcr.io/owner/app@" + retentionSHA(52), ImageID: "docker-pullable://ghcr.io/owner/app@" + retentionSHA(53), Ready: false}}, Flux: &delivery.RuntimeFluxSnapshot{Revision: "old", Status: "NotReady"}}}}
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	if len(r.Images) != 4 {
 		t.Fatal(r)
 	}
@@ -205,15 +205,15 @@ func TestRetentionRuntimeRootsWithoutArtifactsAndFreshness(t *testing.T) {
 		}
 	}
 	st.RuntimeSnapshots[0].Runtime.Pods[0].Image = "ghcr.io/owner/app:main"
-	r = EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute))
+	r = EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute), nil)
 	if retentionHas(r.Blockers, "runtime_evidence_stale") {
 		t.Fatal("5min inclusive boundary")
 	}
-	r = EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute+time.Nanosecond))
+	r = EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute+time.Nanosecond), nil)
 	if !retentionHas(r.Blockers, "runtime_evidence_stale") || !retentionHas(r.Blockers, "mutable_or_unresolved_image_reference") {
 		t.Fatal(r)
 	}
-	r = EvaluateRetention(st, "p", retentionNow.Add(-time.Nanosecond))
+	r = EvaluateRetention(st, "p", retentionNow.Add(-time.Nanosecond), nil)
 	if !retentionHas(r.Blockers, "runtime_evidence_unknown") {
 		t.Fatal("future treated fresh", r)
 	}
@@ -225,7 +225,7 @@ func TestRetentionSharedPhysicalPrivacyPinsAndUncertainCancellation(t *testing.T
 	}
 	st.Products = append(st.Products, Product{Meta: Meta{ID: "foreign-secret-product"}})
 	st.ArtifactPins = append(st.ArtifactPins, ArtifactPin{Meta: Meta{ID: "secret-job", ProductID: "foreign-secret-product"}, ImageRepository: "GHCR.IO:443/owner/app", Digest: retentionSHA(11), Purpose: "rollback"})
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	v := retentionFind(t, r, retentionSHA(11))
 	if !v.Protected || !retentionHas(v.Reasons, "shared_product_root") {
 		t.Fatal(v)
@@ -237,7 +237,7 @@ func TestRetentionSharedPhysicalPrivacyPinsAndUncertainCancellation(t *testing.T
 	snap := DeliverySnapshot{Application: st.Applications[0], Build: ComponentBuild{ImageRepository: "ghcr.io/owner/app"}}
 	st.Operations = append(st.Operations, ExternalOperation{Meta: Meta{ID: "cancelled", ProductID: "p"}, Kind: "DEPLOY", Status: "CANCELLED", Attempts: 1, Snapshot: &snap, Artifact: &delivery.ArtifactResult{Digest: retentionSHA(10)}})
 	st.NativeQuarantines = []NativeQuarantine{{Meta: Meta{ProductID: "p"}}}
-	r = EvaluateRetention(st, "p", retentionNow)
+	r = EvaluateRetention(st, "p", retentionNow, nil)
 	if !retentionFind(t, r, retentionSHA(10)).Protected || !retentionHas(r.Blockers, "uncertain_external_intent") || !retentionHas(r.Blockers, "restore_quarantine") {
 		t.Fatal(r)
 	}
@@ -262,12 +262,12 @@ func TestRetentionFrozenWholeProductionTargetAndIncompleteRelease(t *testing.T) 
 	st.ComponentBuilds = []ComponentBuild{{ApplicationID: "app", ImageRepository: "different.io/new/image"}}
 	st.EnvironmentBindings = []EnvironmentBinding{{ApplicationID: "app", Purpose: "DEV", Path: "new/path"}}
 	// Historical runtime roots are independently protected, so check production reasons.
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	if !retentionHas(retentionFind(t, r, retentionSHA(100)).Reasons, "production_current") || !retentionHas(retentionFind(t, r, retentionSHA(101)).Reasons, "production_previous") || retentionHas(retentionFind(t, r, retentionSHA(102)).Reasons, "production_previous") || !retentionHas(retentionFind(t, r, retentionSHA(104)).Reasons, "production_current") {
 		t.Fatal(r)
 	}
 	st.Releases[2].RecordedExternally = true
-	r = EvaluateRetention(st, "p", retentionNow)
+	r = EvaluateRetention(st, "p", retentionNow, nil)
 	if !retentionHas(retentionFind(t, r, retentionSHA(102)).Reasons, "release_unproven") || !retentionHas(r.Blockers, "release_lineage_incomplete_or_external") {
 		t.Fatal(r)
 	}
@@ -277,8 +277,8 @@ func TestRetentionHashClockPermutationAndEvidence(t *testing.T) {
 	for n := 0; n < 12; n++ {
 		retentionGHA(&st, n, "default", retentionNow.Add(-time.Duration(n+1)*time.Minute))
 	}
-	r := EvaluateRetention(st, "p", retentionNow)
-	later := EvaluateRetention(st, "p", retentionNow.Add(time.Minute))
+	r := EvaluateRetention(st, "p", retentionNow, nil)
+	later := EvaluateRetention(st, "p", retentionNow.Add(time.Minute), nil)
 	if r.InputHash != later.InputHash || r.EvaluatedAt == later.EvaluatedAt {
 		t.Fatal("raw clock in input fingerprint")
 	}
@@ -295,14 +295,14 @@ func TestRetentionHashClockPermutationAndEvidence(t *testing.T) {
 	reverse(st.DeliveryArtifacts)
 	reverse(st.Operations)
 	reverse(st.DeliveryBuildRuns)
-	if EvaluateRetention(st, "p", retentionNow).InputHash != r.InputHash {
+	if EvaluateRetention(st, "p", retentionNow, nil).InputHash != r.InputHash {
 		t.Fatal("array ordering changed canonical hash")
 	}
-	if EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute)).InputHash != r.InputHash || EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute+time.Nanosecond)).InputHash == r.InputHash {
+	if EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute), nil).InputHash != r.InputHash || EvaluateRetention(st, "p", retentionNow.Add(5*time.Minute+time.Nanosecond), nil).InputHash == r.InputHash {
 		t.Fatal("freshness hash boundary incorrect")
 	}
 	st.DeliveryBuildRuns[0].Result.Artifacts["available"] = "false"
-	if EvaluateRetention(st, "p", retentionNow).InputHash == r.InputHash {
+	if EvaluateRetention(st, "p", retentionNow, nil).InputHash == r.InputHash {
 		t.Fatal("relevant evidence not hashed")
 	}
 }
@@ -313,13 +313,13 @@ func TestRetentionDefaultRegistryRequiresFrozenGHAProof(t *testing.T) {
 	a.ImageRepository = "owner/app"
 	st.Operations[0].Snapshot.Build.ImageRepository = a.ImageRepository
 	st.DeliveryBuildRuns[0].Result.Artifacts["image_repository"] = a.ImageRepository
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	v := retentionFind(t, r, a.Digest)
 	if v.ImageRepository != "ghcr.io/owner/app" || !retentionHas(v.Profiles, "default") {
 		t.Fatal(v)
 	}
 	st.Operations[0].Snapshot = nil
-	r = EvaluateRetention(st, "p", retentionNow)
+	r = EvaluateRetention(st, "p", retentionNow, nil)
 	if len(r.Images) != 0 || !retentionHas(r.Blockers, "unresolved_image_reference") {
 		t.Fatal("ambiguous registry guessed", r)
 	}
@@ -339,13 +339,13 @@ func TestRetentionDesiredPreparedChildrenAndFluxRoots(t *testing.T) {
 	st.Environments = []Environment{{Meta: Meta{ID: "env", ProductID: "p"}, DesiredCompositionID: "desired", DesiredOperationID: "parent"}}
 	// Flux proves only a known recorded image at this revision, not healthy pods.
 	st.RuntimeSnapshots = []RuntimeSnapshot{{Meta: Meta{ID: "runtime", ProductID: "p"}, ApplicationID: "app", EnvironmentID: "env", Runtime: delivery.RuntimeSnapshot{ObservedAt: retentionNow, Health: "UNKNOWN", Flux: &delivery.RuntimeFluxSnapshot{Revision: "main@sha1:old-flux", Status: "NotReady"}}}}
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	if !retentionHas(retentionFind(t, r, retentionSHA(11)).Reasons, "desired_composition") || !retentionHas(retentionFind(t, r, retentionSHA(12)).Reasons, "desired_operation") || !retentionHas(retentionFind(t, r, retentionSHA(13)).Reasons, "flux_reconciled") {
 		t.Fatal(r)
 	}
 	// A new in-flight exact digest remains a root without an artifact registry row.
 	st.Operations = append(st.Operations, ExternalOperation{Meta: Meta{ID: "inflight", ProductID: "p"}, Status: "RUNNING", ApplicationID: "app", Snapshot: &snap, ExpectedDigest: retentionSHA(70)})
-	if !retentionFind(t, EvaluateRetention(st, "p", retentionNow), retentionSHA(70)).Protected {
+	if !retentionFind(t, EvaluateRetention(st, "p", retentionNow, nil), retentionSHA(70)).Protected {
 		t.Fatal("inflight missing artifact root dropped")
 	}
 }
@@ -370,7 +370,7 @@ func TestRetentionWholeReleaseRejectsPartialGreen(t *testing.T) {
 	st.Releases[0].GitOpsCommits["app-b"] = child.GitOpsResult.CommitSHA
 	st.Releases[0].SourceCommits["app-b"] = "source"
 	st.RuntimeObservations = append(st.RuntimeObservations, RuntimeObservation{Meta: Meta{ProductID: "p", CreatedAt: st.Releases[0].CreatedAt.Add(-time.Second)}, OperationID: child.ID, EnvironmentID: "env", ArtifactDigest: child.Artifact.Digest, GitOpsCommit: child.GitOpsResult.CommitSHA, Healthy: true})
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	for _, d := range []string{retentionSHA(100), retentionSHA(201)} {
 		v := retentionFind(t, r, d)
 		if !v.Protected || !retentionHas(v.Reasons, "release_unproven") || retentionHas(v.Reasons, "production_current") {
@@ -382,24 +382,24 @@ func TestRetentionHashCanonicalEffectivePolicyAndRuntimePodPermutation(t *testin
 	st := retentionBase()
 	retentionGHA(&st, 0, "default", retentionNow.Add(-time.Minute))
 	st.Applications[0].Retention = &ArtifactRetention{KeepLast: 3}
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	st.Applications[0].Retention.KeepLast = 4
-	if r.InputHash != EvaluateRetention(st, "p", retentionNow).InputHash {
+	if r.InputHash != EvaluateRetention(st, "p", retentionNow, nil).InputHash {
 		t.Fatal("ineffective below-floor count changed effective-policy hash")
 	}
 	st.Applications[0].Retention.KeepLast = 11
-	if r.InputHash == EvaluateRetention(st, "p", retentionNow).InputHash {
+	if r.InputHash == EvaluateRetention(st, "p", retentionNow, nil).InputHash {
 		t.Fatal("effective policy absent from hash")
 	}
 	st.RuntimeSnapshots = []RuntimeSnapshot{{Meta: Meta{ID: "runtime", ProductID: "p"}, ApplicationID: "app", Runtime: delivery.RuntimeSnapshot{ObservedAt: retentionNow, WorkloadImage: "ghcr.io/owner/app@" + retentionSHA(40), Pods: []delivery.RuntimePod{{UID: "one", Image: "ghcr.io/owner/app@" + retentionSHA(41)}, {UID: "two", Image: "ghcr.io/owner/app@" + retentionSHA(42)}}}}}
-	r = EvaluateRetention(st, "p", retentionNow)
+	r = EvaluateRetention(st, "p", retentionNow, nil)
 	pods := st.RuntimeSnapshots[0].Runtime.Pods
 	pods[0], pods[1] = pods[1], pods[0]
-	if r.InputHash != EvaluateRetention(st, "p", retentionNow).InputHash {
+	if r.InputHash != EvaluateRetention(st, "p", retentionNow, nil).InputHash {
 		t.Fatal("pod order changed canonical hash")
 	}
 	pods[0].Ready = true
-	if r.InputHash == EvaluateRetention(st, "p", retentionNow).InputHash {
+	if r.InputHash == EvaluateRetention(st, "p", retentionNow, nil).InputHash {
 		t.Fatal("runtime evidence mutation not hashed")
 	}
 }
@@ -410,7 +410,7 @@ func TestRetentionForeignOnlyDigestUnionWithoutPayloadLeak(t *testing.T) {
 	st.Products = append(st.Products, Product{Meta: Meta{ID: "foreign-product"}})
 	st.ArtifactPins = []ArtifactPin{{Meta: Meta{ID: "foreign-pin", ProductID: "foreign-product"}, ApplicationID: "private-app", ImageRepository: "ghcr.io/owner/app", Digest: retentionSHA(999), Purpose: "manual"}}
 	st.RuntimeSnapshots = []RuntimeSnapshot{{Meta: Meta{ID: "foreign-runtime", ProductID: "foreign-product"}, ApplicationID: "private-app", Runtime: delivery.RuntimeSnapshot{ObservedAt: retentionNow, WorkloadImage: "ghcr.io/owner/app@" + retentionSHA(998), Pods: []delivery.RuntimePod{{ImageID: "docker-pullable://different.example/private/app@" + retentionSHA(997)}}}}}
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	if len(r.Images) != 3 {
 		t.Fatal("foreign-only root union incomplete", r)
 	}
@@ -446,7 +446,7 @@ func TestRetentionIncompleteReleaseKnownFrozenRepositoryNoArtifacts(t *testing.T
 			case "conflicting-digest":
 				child.Artifact.Digest = retentionSHA(102)
 			}
-			r := EvaluateRetention(st, "p", retentionNow)
+			r := EvaluateRetention(st, "p", retentionNow, nil)
 			v := retentionFind(t, r, retentionSHA(100))
 			if !v.Protected || !retentionHas(v.Reasons, "release_unproven") || retentionHas(v.Reasons, "production_current") || !retentionHas(r.Blockers, "release_lineage_incomplete_or_external") {
 				t.Fatal("incomplete release lost frozen image", v, r.Blockers)
@@ -470,7 +470,7 @@ func TestRetentionSuccessfulPublicationWithoutValidAdmission(t *testing.T) {
 			case "corrupt":
 				st.DeliveryArtifacts[11].Native.PublicationInputHash = "wrong"
 			}
-			r := EvaluateRetention(st, "p", retentionNow)
+			r := EvaluateRetention(st, "p", retentionNow, nil)
 			v := retentionFind(t, r, retentionSHA(11))
 			if mode == "normal-history" {
 				if v.Protected || retentionHas(r.Blockers, "publication_admission_missing_or_invalid") {
@@ -496,7 +496,7 @@ func TestRetentionManagedAcceptedBuildReceiptBeforePublication(t *testing.T) {
 	attempt.Report.InputHash = j.InputHash
 	attempt.Report.LocalOCI.InputHash = j.InputHash
 	st.Operations = []ExternalOperation{{Meta: Meta{ID: "delivery", ProductID: "p"}, Status: "RUNNING", Snapshot: &DeliverySnapshot{Application: st.Applications[0], Build: ComponentBuild{Mode: "NATIVE", ImageRepository: "ghcr.io/owner/app"}}}}
-	v := retentionFind(t, EvaluateRetention(st, "p", retentionNow), a.Digest)
+	v := retentionFind(t, EvaluateRetention(st, "p", retentionNow, nil), a.Digest)
 	if !retentionHas(v.Reasons, "accepted_build_receipt") || v.Availability != "UNKNOWN" {
 		t.Fatal(v)
 	}
@@ -537,7 +537,7 @@ func TestRetentionUnqualifiedRegistryRejectsCopiedOrCorruptScope(t *testing.T) {
 			case "foreign-original":
 				o.ProductID = "other"
 			}
-			r := EvaluateRetention(st, "p", retentionNow)
+			r := EvaluateRetention(st, "p", retentionNow, nil)
 			if len(r.Images) != 0 {
 				t.Fatal("ambiguous default-registry alias resolved", mode, r)
 			}
@@ -550,9 +550,9 @@ func TestRetentionUnqualifiedRegistryRejectsCopiedOrCorruptScope(t *testing.T) {
 func TestRetentionSemanticMergeOrderBoundInHash(t *testing.T) {
 	st := retentionBase()
 	st.Compositions = []Composition{{Meta: Meta{ID: "comp", ProductID: "p"}, Components: []CompositionComponent{{ApplicationID: "app", RevisionIDs: []string{"a", "b"}}}}}
-	r := EvaluateRetention(st, "p", retentionNow)
+	r := EvaluateRetention(st, "p", retentionNow, nil)
 	st.Compositions[0].Components[0].RevisionIDs = []string{"b", "a"}
-	if r.InputHash == EvaluateRetention(st, "p", retentionNow).InputHash {
+	if r.InputHash == EvaluateRetention(st, "p", retentionNow, nil).InputHash {
 		t.Fatal("semantic merge order normalized away")
 	}
 }
@@ -563,7 +563,7 @@ func TestRetentionFluxAndDesiredFrozenChildExpectedDigestWithoutArtifact(t *test
 	st.Operations = []ExternalOperation{{Meta: Meta{ID: "parent", ProductID: "p"}, Status: "SUCCEEDED", ChildIDs: []string{"child"}}, {Meta: Meta{ID: "child", ProductID: "p"}, ParentID: "parent", Status: "SUCCEEDED", EnvironmentID: "env", ApplicationID: "app", Snapshot: &snap, ExpectedDigest: retentionSHA(77), GitOpsResult: &delivery.GitOpsResult{CommitSHA: "flux-commit"}}}
 	st.Environments = []Environment{{Meta: Meta{ProductID: "p"}, DesiredOperationID: "parent"}}
 	st.RuntimeSnapshots = []RuntimeSnapshot{{Meta: Meta{ProductID: "p"}, EnvironmentID: "env", ApplicationID: "app", Runtime: delivery.RuntimeSnapshot{ObservedAt: retentionNow, Flux: &delivery.RuntimeFluxSnapshot{Revision: "main@sha1:flux-commit"}}}}
-	v := retentionFind(t, EvaluateRetention(st, "p", retentionNow), retentionSHA(77))
+	v := retentionFind(t, EvaluateRetention(st, "p", retentionNow, nil), retentionSHA(77))
 	if !retentionHas(v.Reasons, "desired_operation") || !retentionHas(v.Reasons, "flux_reconciled") {
 		t.Fatal(v)
 	}
@@ -582,12 +582,12 @@ func TestRetentionSharedPinLifecycleOpaqueHashAndScope(t *testing.T) {
 	if e := ValidateArtifactPins(st); e != nil {
 		t.Fatal(e)
 	}
-	before := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second))
+	before := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second), nil)
 	artifactPinReleaseProof(&st)
 	if e := ValidateArtifactPins(st); e != nil {
 		t.Fatal(e)
 	}
-	after := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second))
+	after := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second), nil)
 	a, b := before, after
 	a.InputHash = ""
 	b.InputHash = ""
@@ -610,7 +610,7 @@ func TestRetentionSharedPinLifecycleOpaqueHashAndScope(t *testing.T) {
 	// Pin/event collection order and clock movement within the same freshness
 	// classes have no semantic effect on the scoped evidence fingerprint.
 	st.ArtifactPins[0], st.ArtifactPins[1] = st.ArtifactPins[1], st.ArtifactPins[0]
-	if got := EvaluateRetention(st, "p", retentionNow.Add(3*time.Second)); got.InputHash != after.InputHash {
+	if got := EvaluateRetention(st, "p", retentionNow.Add(3*time.Second), nil); got.InputHash != after.InputHash {
 		t.Fatal("collection order or raw clock changed opaque hash")
 	}
 	// Even the same foreign application can own another private registry image.
@@ -628,11 +628,11 @@ func TestRetentionSharedPinLifecycleOpaqueHashAndScope(t *testing.T) {
 	if e := ValidateArtifactPins(st); e != nil {
 		t.Fatal(e)
 	}
-	if got := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second)); got.InputHash != after.InputHash {
+	if got := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second), nil); got.InputHash != after.InputHash {
 		t.Fatal("unshared foreign repository churned local fingerprint")
 	}
 	st.RuntimeSnapshots[0].Runtime.Pods[0].Ready = true
-	if got := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second)); got.InputHash != after.InputHash {
+	if got := EvaluateRetention(st, "p", retentionNow.Add(2*time.Second), nil); got.InputHash != after.InputHash {
 		t.Fatal("unshared foreign runtime mutation churned local fingerprint")
 	}
 }
@@ -666,13 +666,13 @@ func TestRetentionLocalRunEvidenceBeyondEarliestPublication(t *testing.T) {
 			} else {
 				st.DeliveryBuildRuns[0].Result.Conclusion = "failure"
 			}
-			before := EvaluateRetention(st, "p", retentionNow)
+			before := EvaluateRetention(st, "p", retentionNow, nil)
 			if mode == "later-qualified-observation" {
 				st.DeliveryBuildRuns[1].Result.Artifacts["observed_at"] = retentionNow.Add(-45 * time.Second).Format(time.RFC3339Nano)
 			} else {
 				st.DeliveryBuildRuns[0].Result.Conclusion = "cancelled"
 			}
-			after := EvaluateRetention(st, "p", retentionNow)
+			after := EvaluateRetention(st, "p", retentionNow, nil)
 			retentionAssertEvidenceChange(t, before, after)
 			if mode == "later-qualified-observation" {
 				v := retentionFind(t, after, retentionSHA(0))
@@ -680,12 +680,12 @@ func TestRetentionLocalRunEvidenceBeyondEarliestPublication(t *testing.T) {
 					t.Fatal("earliest publication boundary changed")
 				}
 				st.DeliveryBuildRuns[0], st.DeliveryBuildRuns[1] = st.DeliveryBuildRuns[1], st.DeliveryBuildRuns[0]
-				if EvaluateRetention(st, "p", retentionNow).InputHash != after.InputHash {
+				if EvaluateRetention(st, "p", retentionNow, nil).InputHash != after.InputHash {
 					t.Fatal("run record permutation changed normalized hash")
 				}
 			}
 			st.DeliveryBuildRuns[0].Result.URL = "https://example.invalid/unconsumed-run-log"
-			if EvaluateRetention(st, "p", retentionNow).InputHash != after.InputHash {
+			if EvaluateRetention(st, "p", retentionNow, nil).InputHash != after.InputHash {
 				t.Fatal("unconsumed provider URL included in hash")
 			}
 		})
@@ -698,16 +698,16 @@ func TestRetentionRuntimeErrorPresenceAndReleaseSourceEvidenceHash(t *testing.T)
 			st.RuntimeSnapshots = append(st.RuntimeSnapshots, RuntimeSnapshot{Meta: Meta{ID: id, ProductID: "p"}, ApplicationID: "app", Runtime: delivery.RuntimeSnapshot{ObservedAt: retentionNow, WorkloadImage: "ghcr.io/owner/app@" + retentionSHA(80)}})
 		}
 		st.RuntimeSnapshots[0].Runtime.Errors = []string{"existing fixture error"}
-		before := EvaluateRetention(st, "p", retentionNow)
+		before := EvaluateRetention(st, "p", retentionNow, nil)
 		st.RuntimeSnapshots[1].Runtime.Errors = []string{"new fixture error"}
-		after := EvaluateRetention(st, "p", retentionNow)
+		after := EvaluateRetention(st, "p", retentionNow, nil)
 		retentionAssertEvidenceChange(t, before, after)
 		st.RuntimeSnapshots[1].Runtime.Errors = []string{"different raw error details"}
-		if EvaluateRetention(st, "p", retentionNow).InputHash != after.InputHash {
+		if EvaluateRetention(st, "p", retentionNow, nil).InputHash != after.InputHash {
 			t.Fatal("raw error payload hashed instead of normalized presence")
 		}
 		st.RuntimeSnapshots[0], st.RuntimeSnapshots[1] = st.RuntimeSnapshots[1], st.RuntimeSnapshots[0]
-		if EvaluateRetention(st, "p", retentionNow).InputHash != after.InputHash {
+		if EvaluateRetention(st, "p", retentionNow, nil).InputHash != after.InputHash {
 			t.Fatal("snapshot order changed hash")
 		}
 	})
@@ -716,9 +716,9 @@ func TestRetentionRuntimeErrorPresenceAndReleaseSourceEvidenceHash(t *testing.T)
 		retentionRelease(&st, 0, "prod/path")
 		st.Operations[1].Snapshot.Revision.HeadCommit = strings.Repeat("a", 40)
 		st.Releases[0].SourceCommits["app"] = strings.Repeat("b", 40)
-		before := EvaluateRetention(st, "p", retentionNow)
+		before := EvaluateRetention(st, "p", retentionNow, nil)
 		st.Releases[0].SourceCommits["app"] = strings.Repeat("c", 40)
-		after := EvaluateRetention(st, "p", retentionNow)
+		after := EvaluateRetention(st, "p", retentionNow, nil)
 		retentionAssertEvidenceChange(t, before, after)
 		if !retentionHas(retentionFind(t, after, retentionSHA(100)).Reasons, "release_unproven") {
 			t.Fatal("fixture not incomplete")

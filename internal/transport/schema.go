@@ -73,6 +73,7 @@ func CommandSchema() map[string]any {
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"refresh_registry_inventory", "product_id", "application_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
 		{"pin_artifact", "product_id", "application_id image_repository digest purpose request_key"},
 		{"release_artifact_pin", "product_id id", "application_id"},
 		{"queue_worker_publication", "product_id", "build_job_id component_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},

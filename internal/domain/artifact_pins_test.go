@@ -68,12 +68,12 @@ func TestArtifactPinValidationAndIdentity(t *testing.T) {
 	if e := ValidateArtifactPins(st); e != nil {
 		t.Fatal(e)
 	}
-	r := EvaluateRetention(st, "p", at)
+	r := EvaluateRetention(st, "p", at, nil)
 	if len(r.Images) != 0 {
 		t.Fatal("released pin still roots image", r)
 	}
 	active := artifactPinFixture()
-	r = EvaluateRetention(active, "p", at)
+	r = EvaluateRetention(active, "p", at, nil)
 	if len(r.Images) != 1 || !r.Images[0].Protected {
 		t.Fatal("active pin absent", r)
 	}

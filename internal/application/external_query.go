@@ -20,7 +20,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		return domain.EvaluateRetention(st, id, time.Now().UTC()), nil
+		return s.evaluateRetention(st, id, time.Now().UTC()), nil
 	case "get_product_configuration":
 		return productConfiguration(st, id)
 	case "test_connection", "discover_repositories":
@@ -232,7 +232,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		items := retentionAttention(st, id)
+		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC()))
 		items = append(items, unlinkedGitCommits(st, id)...)
 		for _, finding := range st.Findings {
 			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {

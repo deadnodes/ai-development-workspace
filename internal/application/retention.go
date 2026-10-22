@@ -31,8 +31,10 @@ func retentionAttention(st domain.State, product string) []map[string]any {
 	return retentionAttentionAt(st, product, time.Now().UTC())
 }
 func retentionAttentionAt(st domain.State, product string, now time.Time) []map[string]any {
+	return retentionAttentionReport(domain.EvaluateRetention(st, product, now, nil))
+}
+func retentionAttentionReport(report domain.RetentionReport) []map[string]any {
 	out := []map[string]any{}
-	report := domain.EvaluateRetention(st, product, now)
 	for _, e := range report.Images {
 		if !e.Protected || (e.Availability == "PRESENT" && e.Freshness == "FRESH" && len(e.Blockers) == 0) {
 			continue

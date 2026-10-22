@@ -39,8 +39,47 @@ records the evaluation clock separately.
 
 **`deletion_allowed` is always false.** The hash is neither a deletion capability
 nor a compare-and-swap authorization. An “Unprotected recorded” row is advisory,
-never permission to delete. OCI closure, complete registry inventory and complete
-workload coverage are not established by this report.
+never permission to delete. An admitted observer report can describe the verified
+reachable OCI objects for its exact roots and observation window. Complete registry
+inventory, complete workload coverage and a deletion fence remain separate proofs.
+
+## Explicit registry observations
+
+`refresh_registry_inventory` queues a read-only observation for a configured
+component. It uses the existing worker lease, attempt and report protocol. The
+operator recipe fixes the registry origin, repository, limits and local credential
+references; a caller cannot supply a URL, root list, shell command or credential.
+The command supplies `application_id`, `recipe_id`, `recipe_revision`,
+`recipe_hash`, `config_revision`, `request_key` and `deadline` in `data`, with
+`product_id` as its scope. Feature and Integration references are optional and
+must belong to that Product.
+
+The external observer reads the frozen known digests and the configured
+repository's tags. It verifies manifest and blob hashes and follows all supported
+platform manifests, configs, layers, subjects and referrers. Unsupported content,
+missing bytes, failed discovery or exhausted limits degrade the report. No
+registry writes occur. Observations persist minimal typed graph facts, never raw
+manifests, configs, tag names, annotations, credentials or provider error bodies.
+
+`WORKER_ATTESTED_REGISTRY_READ` identifies a report from the configured observer;
+it is not an independent server-side verification of remote bytes. A completed
+job may contain a partial or unknown observation. Tag enumeration cannot discover
+all untagged manifests or orphaned blobs, so `global_inventory_complete` remains
+false even after a successful scan.
+
+The retention report includes `registry` coverage summaries and
+`protected_objects`. Coverage compares the currently required digest set and
+operator recipe with the frozen observation. The original retention `input_hash`
+is request provenance, not a currentness test: admitting new evidence changes it.
+Freshness requires the observation's start, finish and server receipt to be no
+more than five minutes old and not in the future. A delayed report, retry,
+restart or restore does not renew the observation window.
+
+A newer partial observation cannot erase previously known reachable-object
+protection for roots that remain protected. Historical edges remain conservative
+protection with degraded coverage; a historical graph does not itself pin a root
+that is no longer protected. Queries use stored observations only. Opening the
+report never starts a scan.
 
 ## Explicit protection pins
 
@@ -105,8 +144,9 @@ browser fixture verifies default 10, saved 3/effective 10, and the rendered repo
 These are source acceptance fixtures, not adoption of this version by the live
 RCP service or proof of native x86 execution.
 
-Registry inventory refresh, OCI index/child/blob/referrer closure, deletion fences
-and pin races, recovery, destructive approval, measured freed disk space and
-successful re-pull remain separate stage-04 work. Full shared A+B Dev and selective
-Production acceptance also remain. This change performs no registry deletion,
-live provider writes, infrastructure change, main/Flux merge, or runtime cutover.
+Complete backend inventory, including untagged manifests and orphaned blobs,
+requires its own scoped consistency barrier. Deletion fences, pin races,
+destructive approval, measured freed disk space and successful protected re-pull
+remain stage-04 work. Full shared A+B Dev and selective Production acceptance also
+remain. Source fixtures do not authorize registry deletion, live provider writes,
+infrastructure change, main/Flux merge, or runtime cutover.

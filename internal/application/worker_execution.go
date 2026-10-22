@@ -238,6 +238,9 @@ func currentWorkerAttempt(st *domain.State, j *domain.WorkerJob) *domain.WorkerA
 	return nil
 }
 func (s *Service) workerConfigMatches(j *domain.WorkerJob) bool {
+	if j.Capability == "registry_observe" {
+		return s.registryConfigMatches(j)
+	}
 	if j.Capability == "registry_publish" {
 		return s.nativeConfigMatches(j)
 	}
@@ -279,7 +282,12 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 		return nil, invalid("exact recipe claim filter required")
 	}
 	if in.RecipeID != "" {
-		if in.Capability == "registry_publish" {
+		if in.Capability == "registry_observe" {
+			r, ok := s.externalWorkers.Observation(in.RecipeID)
+			if !ok || r.Hash != in.RecipeHash || r.ProductID != in.ProductID || r.RepositoryID != in.RepositoryID {
+				return nil, invalid("invalid registry observation claim filter")
+			}
+		} else if in.Capability == "registry_publish" {
 			r, ok := s.externalWorkers.Publication(in.RecipeID)
 			if !ok || r.Hash != in.RecipeHash || r.ProductID != in.ProductID || r.RepositoryID != in.RepositoryID {
 				return nil, invalid("invalid publication claim filter")
@@ -305,14 +313,14 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 			if j.ProductID != in.ProductID || j.Inputs.RepositoryID != in.RepositoryID || j.Capability != in.Capability || in.RecipeID != "" && (j.Inputs.RecipeID != in.RecipeID || j.Inputs.RecipeHash != in.RecipeHash) {
 				continue
 			}
-			if (j.Capability == "registry_publish" || j.Capability == "local_oci_build") && nativeQuarantined(st, j.ProductID) {
+			if (j.Capability == "registry_observe" || j.Capability == "registry_publish" || j.Capability == "local_oci_build") && nativeQuarantined(st, j.ProductID) {
 				continue
 			}
 			recoverWorker(st, j, now)
 			if j.Status != "QUEUED" || out != nil {
 				continue
 			}
-			if !s.workerConfigMatches(j) || s.managedWorkerAllowed(st, j) != nil || j.Inputs.Check != nil && s.checkAuthority(st, operationByID(st, j.CheckOperationID), false) != nil {
+			if !s.workerConfigMatches(j) || j.Capability == "registry_observe" && s.registryWorkerAllowed(st, j) != nil || s.managedWorkerAllowed(st, j) != nil || j.Inputs.Check != nil && s.checkAuthority(st, operationByID(st, j.CheckOperationID), false) != nil {
 				j.Status = "RECONCILIATION_REQUIRED"
 				workerAudit(st, j, "system/worker-recovery", "worker_configuration_changed", now)
 				continue
@@ -353,8 +361,13 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 		if j == nil || a == nil || a.JobID != j.ID || a.Fence != in.Fence || j.Fence != in.Fence || a.InputHash != in.InputHash || j.InputHash != in.InputHash || a.Principal != p.ID() || !s.externalWorkers.Current(p, now) || !p.Allows(j.ProductID, j.Inputs.RepositoryID, j.Capability, now) {
 			return invalid("worker ownership or scope denied")
 		}
-		if (j.Capability == "local_oci_build" || j.Capability == "registry_publish") && nativeQuarantined(st, j.ProductID) {
+		if (j.Capability == "registry_observe" || j.Capability == "local_oci_build" || j.Capability == "registry_publish") && nativeQuarantined(st, j.ProductID) {
 			return invalid("native product quarantined after restore")
+		}
+		if j.Capability == "registry_observe" {
+			if e := s.registryWorkerAllowed(st, j); e != nil {
+				return e
+			}
 		}
 		if report != nil && a.Report != nil {
 			if reflect.DeepEqual(a.Report, report) {
@@ -403,7 +416,11 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 			if report.Result != "PASSED" && report.Result != "CHECK_FAILED" && report.Result != "EXECUTOR_FAILED" || report.EvidenceHash != "" && !workerconfig.ValidFingerprint(report.EvidenceHash) {
 				return invalid("invalid bounded worker result")
 			}
-			if err := validateWorkerLocalOCI(j, a, report); err != nil {
+			if j.Capability == "registry_observe" {
+				if e := domain.ValidateRegistryWorkerReport(*j, *a, *report, now); e != nil {
+					return invalid("invalid registry observation report")
+				}
+			} else if err := validateWorkerLocalOCI(j, a, report); err != nil {
 				return err
 			}
 			j.Status = "FAILED"
@@ -413,6 +430,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 			a.Status = j.Status
 			copy := *report
 			a.Report = &copy
+			if j.Capability == "registry_observe" && report.Result == "PASSED" {
+				admitRegistryInventory(st, j, a, report, now)
+			}
 		default:
 			return invalid("unknown worker action")
 		}
@@ -428,6 +448,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 }
 
 func validateWorkerLocalOCI(j *domain.WorkerJob, a *domain.WorkerAttempt, r *domain.WorkerReport) error {
+	if r.Registry != nil {
+		return invalid("unexpected registry report kind")
+	}
 	if r.Publication != nil {
 		return invalid("unexpected publication result")
 	}

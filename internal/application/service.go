@@ -69,6 +69,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	if c.Action == "queue_worker_publication" || c.Action == "reconcile_worker_publication" {
 		return s.executeNativePublication(ctx, c)
 	}
+	if c.Action == "refresh_registry_inventory" {
+		return s.refreshRegistryInventory(ctx, c)
+	}
 	if c.Action == "queue_worker_job" || c.Action == "cancel_worker_job" || c.Action == "reconcile_worker_job" {
 		return s.executeWorkerCommand(ctx, c)
 	}

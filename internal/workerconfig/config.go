@@ -51,11 +51,12 @@ type Credential struct {
 	Revoked       bool      `json:"revoked"`
 }
 type Config struct {
-	Revision     string              `json:"revision"`
-	LeaseSeconds int                 `json:"lease_seconds"`
-	Publications []PublicationRecipe `json:"publications,omitempty"`
-	Recipes      []Recipe            `json:"recipes"`
-	Credentials  []Credential        `json:"credentials"`
+	Observations []RegistryObserveRecipe `json:"observations,omitempty"`
+	Revision     string                  `json:"revision"`
+	LeaseSeconds int                     `json:"lease_seconds"`
+	Publications []PublicationRecipe     `json:"publications,omitempty"`
+	Recipes      []Recipe                `json:"recipes"`
+	Credentials  []Credential            `json:"credentials"`
 }
 
 // Authority keeps a private immutable configuration copy. Secret values are only
@@ -103,7 +104,7 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	if strings.TrimSpace(controlToken) == "" || lookup == nil {
 		return nil, errors.New("worker protocol requires protected control plane")
 	}
-	if !ident.MatchString(c.Revision) || c.LeaseSeconds < 5 || c.LeaseSeconds > 300 || len(c.Recipes) == 0 || len(c.Recipes) > 100 || len(c.Publications) > 100 || len(c.Credentials) == 0 || len(c.Credentials) > 100 {
+	if !ident.MatchString(c.Revision) || c.LeaseSeconds < 5 || c.LeaseSeconds > 300 || len(c.Recipes)+len(c.Observations) == 0 || len(c.Recipes) > 100 || len(c.Observations) > 100 || len(c.Publications) > 100 || len(c.Credentials) == 0 || len(c.Credentials) > 100 {
 		return nil, errors.New("invalid worker configuration bounds")
 	}
 	seen := map[string]bool{}
@@ -113,10 +114,16 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 		if !ident.MatchString(v.ID) || !ident.MatchString(v.Principal) || !envName.MatchString(v.TokenEnv) || seen[v.ID] || v.ExpiresAt.IsZero() || len(token) < 32 || tokens[Fingerprint(token)] || !validGrants(v.ProductIDs) || !validGrants(v.RepositoryIDs) || !validGrants(v.Capabilities) {
 			return nil, errors.New("invalid worker credential configuration")
 		}
+		if slices.Contains(v.Capabilities, "registry_observe") && len(v.Capabilities) != 1 {
+			return nil, errors.New("registry observation credentials must be separate")
+		}
 		if slices.Contains(v.Capabilities, "registry_publish") && (slices.Contains(v.Capabilities, "source_check") || slices.Contains(v.Capabilities, "local_oci_build")) {
 			return nil, errors.New("publication and source credentials must be separate")
 		}
 		for _, prior := range c.Credentials {
+			if prior.ID != v.ID && prior.Principal == v.Principal && (slices.Contains(v.Capabilities, "registry_observe") != slices.Contains(prior.Capabilities, "registry_observe")) {
+				return nil, errors.New("registry observation principals must be separate")
+			}
 			if prior.ID != v.ID && prior.Principal == v.Principal && (slices.Contains(v.Capabilities, "registry_publish") != slices.Contains(prior.Capabilities, "registry_publish")) {
 				return nil, errors.New("publication and source principals must be separate")
 			}
@@ -168,6 +175,27 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 				raw := lookup(ref)
 				if len(raw) == 0 || tokens[Fingerprint(raw)] {
 					return nil, errors.New("registry and control credentials must be separate")
+				}
+			}
+		}
+	}
+	for _, r := range c.Observations {
+		if ValidateObservation(r) != nil || seen[r.ID] {
+			return nil, errors.New("invalid or duplicate registry observation recipe")
+		}
+		seen[r.ID] = true
+		for _, ref := range []string{r.Pull.UsernameEnv, r.Pull.PasswordEnv, r.Pull.BearerEnv} {
+			if ref != "" {
+				raw := lookup(ref)
+				if raw == "" || tokens[Fingerprint(raw)] {
+					return nil, errors.New("registry observation and control credentials must be separate")
+				}
+				for _, p := range c.Publications {
+					for _, other := range []string{p.Pull.UsernameEnv, p.Pull.PasswordEnv, p.Pull.BearerEnv} {
+						if other != "" && (other == ref || lookup(other) == raw) {
+							return nil, errors.New("registry observation and publication credentials must be separate")
+						}
+					}
 				}
 			}
 		}
@@ -395,6 +423,23 @@ func (a *Authority) registryCredentialsSeparated() bool {
 				raw := a.lookup(ref)
 				if raw == "" || tokens[sha256.Sum256([]byte(raw))] {
 					return false
+				}
+			}
+		}
+	}
+	for _, r := range a.config.Observations {
+		for _, ref := range []string{r.Pull.UsernameEnv, r.Pull.PasswordEnv, r.Pull.BearerEnv} {
+			if ref != "" {
+				raw := a.lookup(ref)
+				if raw == "" || tokens[sha256.Sum256([]byte(raw))] {
+					return false
+				}
+				for _, p := range a.config.Publications {
+					for _, other := range []string{p.Pull.UsernameEnv, p.Pull.PasswordEnv, p.Pull.BearerEnv} {
+						if other != "" && (other == ref || a.lookup(other) == raw) {
+							return false
+						}
+					}
 				}
 			}
 		}

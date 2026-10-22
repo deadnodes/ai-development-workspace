@@ -125,7 +125,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		originalOperations := []domain.ExternalOperation{}
 		for i := range restored.Operations {
 			op := &restored.Operations[i]
-			if op.Kind == domain.WorkerOperationKind {
+			if op.Kind == domain.WorkerOperationKind || op.Kind == domain.RegistryObserveOperationKind {
 				continue
 			}
 			if op.Status == "PENDING" || op.Status == "RUNNING" {

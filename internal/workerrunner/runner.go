@@ -218,36 +218,17 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 	if e = js.update(func(j *journal) { j.LeaseUntil = started.Attempt.LeaseUntil }); e != nil {
 		return nil, e
 	}
-	stopHeartbeat := make(chan struct{})
-	heartbeatDone := make(chan struct{})
-	go func() {
-		defer close(heartbeatDone)
-		for {
-			remaining := time.Until(js.snapshot().LeaseUntil)
-			interval := remaining / 3
-			if interval > time.Second {
-				interval = time.Second
-			}
-			if interval < 20*time.Millisecond {
-				interval = 20 * time.Millisecond
-			}
-			select {
-			case <-stopHeartbeat:
-				return
-			case <-ctx.Done():
-				return
-			case <-time.After(interval):
-			}
-			renewed, err := client.Heartbeat(ctx, request)
-			if err != nil || js.update(func(j *journal) { j.LeaseUntil = renewed.Attempt.LeaseUntil }) != nil {
-				cancel()
-				return
-			}
-		}
-	}()
-	defer func() { close(stopHeartbeat); cancel(); <-heartbeatDone }()
+	stopHeartbeat := superviseWorkerHeartbeat(ctx, cancel, client, request, js)
+	defer stopHeartbeat()
 	result, runErr := execute(ctx, c, root, js)
 	report, runErr := prepareReport(ctx, c, root, request, result, runErr)
+	// The terminal report must not race a heartbeat rejected after its own
+	// acceptance. Join supervision first, then honor any lease failure observed
+	// during execution/export before persisting the final report.
+	stopHeartbeat()
+	if ctx.Err() != nil {
+		report, runErr = prepareReport(ctx, c, root, request, nil, ctx.Err())
+	}
 	if report.LocalOCI != nil {
 		result.JobID = lease.Job.ID
 		result.AttemptID = lease.Attempt.ID
@@ -271,6 +252,46 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 		return report, e
 	}
 	return report, runErr
+}
+
+// superviseWorkerHeartbeat keeps lease failures authoritative until execution
+// has a durable terminal result. Stopping joins an in-flight bounded HTTP call;
+// it never cancels the parent/report context or ignores a known lease failure.
+func superviseWorkerHeartbeat(ctx context.Context, cancel context.CancelFunc, client *workerclient.Client, request domain.WorkerAttemptRequest, js *journalState) func() {
+	stopHeartbeat := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		for {
+			remaining := time.Until(js.snapshot().LeaseUntil)
+			interval := remaining / 3
+			if interval > time.Second {
+				interval = time.Second
+			}
+			if interval < 20*time.Millisecond {
+				interval = 20 * time.Millisecond
+			}
+			select {
+			case <-stopHeartbeat:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+			// A blocked renewal cannot remain authoritative beyond the lease
+			// it is trying to renew. This also bounds finalization's join by
+			// the current lease and preserves the execution/parent deadline.
+			heartbeatCtx, finishHeartbeat := context.WithDeadline(ctx, js.snapshot().LeaseUntil)
+			renewed, err := client.Heartbeat(heartbeatCtx, request)
+			finishHeartbeat()
+			if err != nil || js.update(func(j *journal) { j.LeaseUntil = renewed.Attempt.LeaseUntil }) != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(stopHeartbeat) }); <-heartbeatDone }
 }
 
 // prepareReport is the durability boundary between a verified local output and

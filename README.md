@@ -133,5 +133,8 @@ App checks-and-build context to the exact native worker source and accepted
 receipt, with durable write reconciliation and managed delivery gates.
 
 The [artifact protection inventory](docs/ARTIFACT_RETENTION.md) reports effective
-retention floors, deployment roots and durable manual/rollback pins from stored
-evidence. Deletion remains disabled.
+retention floors, deployment roots, durable manual/rollback pins and admitted
+registry-observer coverage from stored evidence. Explicit observer jobs read OCI
+objects without registry writes; tag discovery does not prove complete inventory.
+Deletion remains disabled. See [registry observer setup](docs/REGISTRY_OBSERVER.md)
+for the separate operator recipe, credential and runner configuration.

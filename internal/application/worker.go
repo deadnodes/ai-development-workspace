@@ -60,7 +60,7 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		var candidate *domain.ExternalOperation
 		for i := range st.Operations {
 			v := &st.Operations[i]
-			if v.Kind == domain.WorkerOperationKind {
+			if v.Kind == domain.WorkerOperationKind || v.Kind == domain.RegistryObserveOperationKind {
 				continue
 			}
 			if s.provider == nil && v.Kind != "REFRESH_RUNTIME" {

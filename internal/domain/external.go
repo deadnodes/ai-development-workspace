@@ -95,6 +95,7 @@ type DeliverySnapshot struct {
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
 type ExternalOperation struct {
+	RegistryObservation *WorkerInputs               `json:"registry_observation,omitempty"`
 	CheckPublication    *CheckPublication           `json:"check_publication,omitempty"`
 	RequestKey          string                      `json:"request_key,omitempty"`
 	RequestHash         string                      `json:"request_hash,omitempty"`

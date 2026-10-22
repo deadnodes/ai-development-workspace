@@ -146,7 +146,7 @@ func TestRetentionInventoryProtectedAPIReopenBackupRestore(t *testing.T) {
 			if report.DeletionAllowed || len(report.Images) != 1 || !report.Images[0].Protected || len(report.Policies) != 1 || report.Policies[0].ConfiguredKeepLast != 3 || report.Policies[0].EffectiveKeepLast != 10 {
 				t.Fatalf("typed floor/pin report:%+v", report)
 			}
-			direct := domain.EvaluateRetention(after, "p", report.EvaluatedAt)
+			direct := domain.EvaluateRetention(after, "p", report.EvaluatedAt, nil)
 			if !reflect.DeepEqual(report, direct) {
 				t.Fatal("HTTP diverged from domain report")
 			}

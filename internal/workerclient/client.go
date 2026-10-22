@@ -17,9 +17,10 @@ import (
 )
 
 type Client struct {
-	endpoint string
-	token    string
-	http     *http.Client
+	registryObservation bool
+	endpoint            string
+	token               string
+	http                *http.Client
 }
 
 func New(endpoint, token string) (*Client, error) {
@@ -48,7 +49,22 @@ func (c *Client) call(ctx context.Context, path string, in, out any) error {
 	if res.StatusCode != 200 {
 		return errors.New("worker request rejected")
 	}
-	dec := json.NewDecoder(io.LimitReader(res.Body, 64<<10))
+	limit := int64(64 << 10)
+	if c.registryObservation {
+		limit = 512 << 10
+	}
+	var reader io.Reader = io.LimitReader(res.Body, limit)
+	if c.registryObservation {
+		b, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
+		if e != nil || int64(len(b)) > limit {
+			return errors.New("invalid worker response")
+		}
+		reader = bytes.NewReader(b)
+	}
+	dec := json.NewDecoder(reader)
+	if c.registryObservation {
+		dec.DisallowUnknownFields()
+	}
 	if e = dec.Decode(out); e != nil {
 		return errors.New("invalid worker response")
 	}
@@ -76,4 +92,15 @@ func (c *Client) Report(ctx context.Context, in domain.WorkerReport) (domain.Wor
 	var out domain.WorkerLease
 	e := c.call(ctx, "report", in, &out)
 	return out, e
+}
+
+// NewRegistryObserver enables bounded registry graph responses for this dedicated
+// observer client. Source/build/publication clients keep their original bounds.
+func NewRegistryObserver(endpoint, token string) (*Client, error) {
+	c, e := New(endpoint, token)
+	if e != nil {
+		return nil, e
+	}
+	c.registryObservation = true
+	return c, nil
 }
