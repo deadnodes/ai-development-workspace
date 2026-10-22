@@ -47,7 +47,7 @@ for private product artifacts. Never place registry credentials in project knowl
 
 Before applying:
 
-1. Read `/api/state` (or MCP `get_state`); defer while Operations are PENDING or
+1. Inspect the full operator `/api/state` snapshot; MCP `get_state` is only a bounded navigation index and cannot establish idle operations. Defer while Operations are PENDING or
    RUNNING. Coordinate a short maintenance window so users/agents do not start
    writes between this check and shutdown.
 2. Record maintenance intent and the current image/commit outside the container.

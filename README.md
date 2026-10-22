@@ -41,7 +41,7 @@ curl --fail http://127.0.0.1:8090/healthz
 - Command schemas: `GET /api/schema`
 - Commands: `POST /api/commands`
 
-First agent calls: `get_state {}`, `get_project_context {"product_id":"…"}`, then `resume {"feature_id":"…"}`. Fresh databases contain no demo data. Record a structured `handoff` before stopping work.
+First agent calls: `get_state {}` lists Products; `get_state {"product_id":"…"}` lists that Product's Features; `get_state {"feature_id":"…"}` lists that Feature's Integrations. Then use `get_project_context {"product_id":"…"}` and `resume {"feature_id":"…"}` for the chosen work. Navigation defaults to 25 cards (maximum 100); pass the returned `pagination.next_cursor` with the same scope to continue. It is a compact index, not a backup or readiness report. Fresh databases contain no demo data. Record a structured `handoff` before stopping work.
 
 The default Compose setup is loopback-only, without an API token. PostgreSQL data survives restarts in a named volume. `docker compose --profile app down` stops the services; do not add `-v` unless intentionally deleting data.
 

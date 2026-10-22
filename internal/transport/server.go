@@ -72,10 +72,7 @@ func New(service Service, options Options) http.Handler {
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_state", Description: "Read products, features, integration/work claims, verification, findings, applications, environments, immutable source revisions, composition plans, releases, GitHub connections, delivery operations, provider observations and audit history."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-		v, e := service.State(ctx)
-		return nil, v, e
-	})
+	registerStateNavigationTool(server, service)
 	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Deterministic feature context for a fresh coding agent: intent, ordered plan, progress, decisions, discoveries, blockers, handoffs, verification evidence and other active work."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		FeatureID string `json:"feature_id" jsonschema:"Feature ID to resume"`
 	}) (*mcp.CallToolResult, any, error) {
