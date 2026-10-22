@@ -1,0 +1,7 @@
+{
+  "check": {
+    "name": "RCP / checks and build",
+    "expected_app_id": 123456,
+    "finalize_seconds": 300
+  }
+}

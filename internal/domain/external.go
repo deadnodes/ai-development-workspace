@@ -95,6 +95,7 @@ type DeliverySnapshot struct {
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
 type ExternalOperation struct {
+	CheckPublication    *CheckPublication           `json:"check_publication,omitempty"`
 	RequestKey          string                      `json:"request_key,omitempty"`
 	RequestHash         string                      `json:"request_hash,omitempty"`
 	Native              *NativeDelivery             `json:"native,omitempty"`
@@ -134,6 +135,24 @@ type ExternalOperation struct {
 	LeaseOwner     string                   `json:"lease_owner,omitempty"`
 	LeaseUntil     time.Time                `json:"lease_until"`
 	FinishedAt     *time.Time               `json:"finished_at,omitempty"`
+}
+
+// CheckPublication is a server-frozen destination and bounded provider intent.
+// The passive worker operation remains solely an execution projection.
+type CheckPublication struct {
+	JobID                string                        `json:"job_id"`
+	WorkerOperationID    string                        `json:"worker_operation_id"`
+	Inputs               WorkerInputs                  `json:"inputs"`
+	InputHash            string                        `json:"input_hash"`
+	Source               RepositoryBinding             `json:"source"`
+	Connection           delivery.Connection           `json:"connection"`
+	ProviderRepositoryID int64                         `json:"provider_repository_id,omitempty"`
+	Identity             delivery.CheckRunIdentity     `json:"identity"`
+	FinalizeDeadline     time.Time                     `json:"finalize_deadline"`
+	Observations         int                           `json:"observations"`
+	Intent               *delivery.CheckRunWrite       `json:"intent,omitempty"`
+	IntentHash           string                        `json:"intent_hash,omitempty"`
+	Observed             *delivery.CheckRunObservation `json:"observed,omitempty"`
 }
 type OperationStep struct {
 	Meta

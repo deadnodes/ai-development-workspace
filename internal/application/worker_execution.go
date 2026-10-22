@@ -213,14 +213,17 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 			return invalid("configured repository identity mismatch")
 		}
 		m := domain.Meta{ID: id(), ProductID: c.ProductID, FeatureID: integration.FeatureID, Actor: c.Actor, CreatedAt: now, UpdatedAt: now}
-		inputs := domain.WorkerInputs{RecipeID: recipe.ID, RecipeRevision: recipe.Revision, RecipeHash: recipe.Hash, ConfigRevision: in.ConfigRevision, RepositoryID: recipe.RepositoryID, RepositoryURL: recipe.RepositoryURL, RevisionID: rev.ID, SourceSHA: rev.HeadCommit, Trust: recipe.Trust, Parameters: in.Parameters, Execution: recipe.Execution}
+		inputs := domain.WorkerInputs{Check: recipe.Check, RecipeID: recipe.ID, RecipeRevision: recipe.Revision, RecipeHash: recipe.Hash, ConfigRevision: in.ConfigRevision, RepositoryID: recipe.RepositoryID, RepositoryURL: recipe.RepositoryURL, RevisionID: rev.ID, SourceSHA: rev.HeadCommit, Trust: recipe.Trust, Parameters: in.Parameters, Execution: recipe.Execution}
 		op := domain.ExternalOperation{Meta: m, Kind: domain.WorkerOperationKind, IntegrationID: integration.ID, RepositoryID: recipe.RepositoryID, RequestedBy: c.Actor, Status: "PENDING", Phase: "EXTERNAL_QUEUED"}
 		m.ID = id()
 		j := domain.WorkerJob{Meta: m, OperationID: op.ID, RequestKey: in.RequestKey, RequestHash: requestHash, IntegrationID: integration.ID, Capability: recipe.Capability, Inputs: inputs, InputHash: workerconfig.Fingerprint(inputs), Status: "QUEUED", Deadline: in.Deadline, MaxAttempts: in.MaxAttempts}
 		st.Operations = append(st.Operations, op)
 		st.WorkerJobs = append(st.WorkerJobs, j)
+		if err := s.queueWorkerCheck(st, j.ID); err != nil {
+			return err
+		}
 		workerAudit(st, &st.WorkerJobs[len(st.WorkerJobs)-1], c.Actor, c.Action, now)
-		out = j
+		out = *workerJob(st, j.ID)
 		return nil
 	})
 	return out, err
@@ -239,7 +242,7 @@ func (s *Service) workerConfigMatches(j *domain.WorkerJob) bool {
 		return s.nativeConfigMatches(j)
 	}
 	r, ok := s.externalWorkers.Recipe(j.Inputs.RecipeID)
-	return ok && r.Hash == j.Inputs.RecipeHash && r.Revision == j.Inputs.RecipeRevision && r.ProductID == j.ProductID && r.RepositoryID == j.Inputs.RepositoryID && r.RepositoryURL == j.Inputs.RepositoryURL && r.Trust == j.Inputs.Trust && r.Capability == j.Capability && s.externalWorkers.Revision() == j.Inputs.ConfigRevision && workerconfig.Fingerprint(j.Inputs) == j.InputHash
+	return ok && r.Hash == j.Inputs.RecipeHash && r.Revision == j.Inputs.RecipeRevision && r.ProductID == j.ProductID && r.RepositoryID == j.Inputs.RepositoryID && r.RepositoryURL == j.Inputs.RepositoryURL && r.Trust == j.Inputs.Trust && r.Capability == j.Capability && reflect.DeepEqual(r.Check, j.Inputs.Check) && s.externalWorkers.Revision() == j.Inputs.ConfigRevision && workerconfig.Fingerprint(j.Inputs) == j.InputHash
 }
 func recoverWorker(st *domain.State, j *domain.WorkerJob, now time.Time) {
 	if workerTerminal(j.Status) || j.Status == "RECONCILIATION_REQUIRED" {
@@ -309,9 +312,12 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 			if j.Status != "QUEUED" || out != nil {
 				continue
 			}
-			if !s.workerConfigMatches(j) || s.managedWorkerAllowed(st, j) != nil {
+			if !s.workerConfigMatches(j) || s.managedWorkerAllowed(st, j) != nil || j.Inputs.Check != nil && s.checkAuthority(st, operationByID(st, j.CheckOperationID), false) != nil {
 				j.Status = "RECONCILIATION_REQUIRED"
 				workerAudit(st, j, "system/worker-recovery", "worker_configuration_changed", now)
+				continue
+			}
+			if !checkInitialReady(st, j) {
 				continue
 			}
 			if j.Fence >= uint64(j.MaxAttempts) {
@@ -356,6 +362,11 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 				return nil
 			}
 			return invalid("conflicting report replay")
+		}
+		if j.Inputs.Check != nil {
+			if err := s.checkAuthority(st, operationByID(st, j.CheckOperationID), false); err != nil {
+				return err
+			}
 		}
 		if err := s.managedWorkerAllowed(st, j); err != nil {
 			return err

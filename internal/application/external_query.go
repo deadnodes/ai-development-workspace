@@ -264,6 +264,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 					}
 				}
 				reason := "DEPLOY_FAILED"
+				if op.Kind == "CHECK_PUBLICATION" {
+					reason = "CHECK_PUBLICATION_RECONCILIATION_REQUIRED"
+				}
 				if op.Kind == "REFRESH_GIT" {
 					reason = "GIT_SYNC_FAILED"
 				}

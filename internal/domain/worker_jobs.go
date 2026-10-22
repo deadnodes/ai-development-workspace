@@ -64,21 +64,23 @@ type WorkerSourceProof struct {
 	SnapshotHash string `json:"snapshot_hash"`
 }
 type WorkerInputs struct {
-	SourceProof    *WorkerSourceProof `json:"source_proof,omitempty"`
-	RecipeID       string             `json:"recipe_id"`
-	RecipeRevision string             `json:"recipe_revision"`
-	RecipeHash     string             `json:"recipe_hash"`
-	ConfigRevision string             `json:"config_revision"`
-	RepositoryID   string             `json:"repository_id"`
-	RepositoryURL  string             `json:"repository_url"`
-	RevisionID     string             `json:"revision_id"`
-	SourceSHA      string             `json:"source_sha"`
-	Trust          string             `json:"trust"`
-	Parameters     map[string]any     `json:"parameters"`
-	Execution      *WorkerExecution   `json:"execution"`
-	Publication    *WorkerPublication `json:"publication,omitempty"`
+	Check          *WorkerCheckBinding `json:"check,omitempty"`
+	SourceProof    *WorkerSourceProof  `json:"source_proof,omitempty"`
+	RecipeID       string              `json:"recipe_id"`
+	RecipeRevision string              `json:"recipe_revision"`
+	RecipeHash     string              `json:"recipe_hash"`
+	ConfigRevision string              `json:"config_revision"`
+	RepositoryID   string              `json:"repository_id"`
+	RepositoryURL  string              `json:"repository_url"`
+	RevisionID     string              `json:"revision_id"`
+	SourceSHA      string              `json:"source_sha"`
+	Trust          string              `json:"trust"`
+	Parameters     map[string]any      `json:"parameters"`
+	Execution      *WorkerExecution    `json:"execution"`
+	Publication    *WorkerPublication  `json:"publication,omitempty"`
 }
 type WorkerJob struct {
+	CheckOperationID string `json:"check_operation_id,omitempty"`
 	Meta
 	OperationID           string       `json:"operation_id"`
 	RequestKey            string       `json:"request_key"`
@@ -92,6 +94,12 @@ type WorkerJob struct {
 	MaxAttempts           int          `json:"max_attempts"`
 	Fence                 uint64       `json:"fence"`
 	CancellationRequested bool         `json:"cancellation_requested"`
+}
+
+type WorkerCheckBinding struct {
+	Name            string `json:"name"`
+	ExpectedAppID   int64  `json:"expected_app_id"`
+	FinalizeSeconds int    `json:"finalize_seconds"`
 }
 type WorkerAttempt struct {
 	Meta

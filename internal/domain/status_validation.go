@@ -9,6 +9,9 @@ import (
 // snapshots. Opaque provider responses and append-only event payloads retain
 // their original vocabulary and are deliberately not interpreted as our state.
 func ValidateStateStatuses(st State) error {
+	if err := ValidateWorkerChecks(st); err != nil {
+		return err
+	}
 	if err := ValidateRepositoryKinds(st); err != nil {
 		return err
 	}

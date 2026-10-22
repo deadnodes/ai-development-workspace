@@ -127,3 +127,7 @@ and the remaining RCP-011 acceptance are separate work.
 The [real application fixture](docs/REAL_APPLICATION_BUILDS.md) prepares a pinned
 offline RCP toolchain and a verified Git/CA runtime bundle, then exercises the
 same native path with actual application source and by-digest runtime checks.
+
+Optional [provider check publication](docs/PROVIDER_CHECKS.md) binds one GitHub
+App checks-and-build context to the exact native worker source and accepted
+receipt, with durable write reconciliation and managed delivery gates.

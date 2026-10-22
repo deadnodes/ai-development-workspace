@@ -28,16 +28,17 @@ type Parameter struct {
 	Max  int      `json:"max,omitempty"`
 }
 type Recipe struct {
-	ID            string                  `json:"id"`
-	Revision      string                  `json:"revision"`
-	Hash          string                  `json:"hash"`
-	ProductID     string                  `json:"product_id"`
-	RepositoryID  string                  `json:"repository_id"`
-	RepositoryURL string                  `json:"repository_url"`
-	Capability    string                  `json:"capability"`
-	Trust         string                  `json:"trust"`
-	Parameters    map[string]Parameter    `json:"parameters"`
-	Execution     *domain.WorkerExecution `json:"execution"`
+	Check         *domain.WorkerCheckBinding `json:"check,omitempty"`
+	ID            string                     `json:"id"`
+	Revision      string                     `json:"revision"`
+	Hash          string                     `json:"hash"`
+	ProductID     string                     `json:"product_id"`
+	RepositoryID  string                     `json:"repository_id"`
+	RepositoryURL string                     `json:"repository_url"`
+	Capability    string                     `json:"capability"`
+	Trust         string                     `json:"trust"`
+	Parameters    map[string]Parameter       `json:"parameters"`
+	Execution     *domain.WorkerExecution    `json:"execution"`
 }
 type Credential struct {
 	ID            string    `json:"id"`
@@ -125,6 +126,16 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	}
 	seen = map[string]bool{}
 	for _, r := range c.Recipes {
+		if r.Check != nil {
+			if r.Capability != "local_oci_build" || r.Trust != "trusted_source" || len(r.Parameters) != 0 || !regexp.MustCompile(`^RCP /[A-Za-z0-9 ._/-]{1,96}$`).MatchString(r.Check.Name) || r.Check.ExpectedAppID < 1 || r.Check.FinalizeSeconds < 60 || r.Check.FinalizeSeconds > 600 {
+				return nil, errors.New("invalid operator check binding")
+			}
+			for _, other := range c.Recipes {
+				if other.Check != nil && (other.ID != r.ID || other.ProductID != r.ProductID) && other.Check.Name == r.Check.Name && other.Check.ExpectedAppID == r.Check.ExpectedAppID && CanonicalRepositoryURL(other.RepositoryURL) == CanonicalRepositoryURL(r.RepositoryURL) {
+					return nil, errors.New("conflicting physical repository check owner")
+				}
+			}
+		}
 		u, e := url.Parse(r.RepositoryURL)
 		if !ident.MatchString(r.ID) || !ident.MatchString(r.Revision) || !ident.MatchString(r.ProductID) || !ident.MatchString(r.RepositoryID) || r.Capability != "source_check" && r.Capability != "local_oci_build" || seen[r.ID] || e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || r.Trust != "trusted_source" && r.Trust != "untrusted_source" || !digest.MatchString(r.Hash) || r.Hash != RecipeHash(r) || len(r.Parameters) > 32 {
 			return nil, errors.New("invalid immutable nonpublishing worker recipe")
@@ -167,7 +178,32 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	return &Authority{config: copy, lookup: lookup, controlFingerprint: sha256.Sum256([]byte(controlToken))}, nil
 }
 
+func CanonicalRepositoryURL(raw string) string {
+	u, e := url.Parse(strings.ToLower(raw))
+	if e != nil {
+		return ""
+	}
+	u.Host = strings.TrimSuffix(u.Host, ":443")
+	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), ".git")
+	return u.String()
+}
+func (a *Authority) CheckRecipes() []Recipe {
+	out := []Recipe{}
+	if a != nil {
+		for _, r := range a.config.Recipes {
+			if r.Check != nil {
+				copy, _ := a.Recipe(r.ID)
+				out = append(out, copy)
+			}
+		}
+	}
+	return out
+}
+
 func ValidateExecution(r Recipe) error {
+	if r.Check != nil && (!domain.ValidWorkerCheckBinding(r.Check) || r.Capability != "local_oci_build" || r.Trust != "trusted_source" || len(r.Parameters) != 0) {
+		return errors.New("invalid operator check binding")
+	}
 	e := r.Execution
 	// Context-only source-check recipes remain claimable by external protocol
 	// clients; cmd/worker requires an explicit execution definition.

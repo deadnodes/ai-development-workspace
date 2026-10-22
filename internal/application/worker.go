@@ -102,6 +102,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if op.Kind == "CHECK_PUBLICATION" {
+		return true, s.tickCheck(callCtx, *op, token)
+	}
 	if op.Kind == "REFRESH_RUNTIME" {
 		return true, s.tickRuntime(callCtx, *op, token)
 	}

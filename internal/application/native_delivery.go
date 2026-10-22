@@ -78,6 +78,9 @@ func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOpe
 	if !reflect.DeepEqual(sc.Config, snap.SourceConnection) || !reflect.DeepEqual(gc.Config, snap.GitOpsConnection) {
 		return invalid("native provider authority changed")
 	}
+	if op.Native != nil && op.Native.PublicationJobID != "" && !s.workerCheckGate(st, workerJob(st, op.Native.BuildJobID)) {
+		return invalid("native build check success missing")
+	}
 	if op.Native != nil {
 		b, p, e := s.nativeRecipes(op.ProductID, snap.Application, snap.Build.Profile, snap.Build.ImageRepository, snap.Build.Native)
 		if e != nil {
@@ -128,21 +131,27 @@ func (s *Service) tickNativeDelivery(ctx context.Context, op domain.ExternalOper
 		now := time.Now().UTC()
 		n := parent.Native
 		snap := parent.Snapshot
-		appendJob := func(inputs domain.WorkerInputs, capability, key string) string {
+		appendJob := func(inputs domain.WorkerInputs, capability, key string) (string, error) {
 			m := domain.Meta{ID: id(), ProductID: parent.ProductID, FeatureID: parent.FeatureID, Actor: parent.RequestedBy, CreatedAt: now, UpdatedAt: now}
 			operation := domain.ExternalOperation{Meta: m, ParentID: parent.ID, Kind: domain.WorkerOperationKind, IntegrationID: parent.IntegrationID, RepositoryID: inputs.RepositoryID, RequestedBy: parent.RequestedBy, Status: "PENDING", Phase: "EXTERNAL_QUEUED"}
 			m.ID = id()
 			j := domain.WorkerJob{Meta: m, OperationID: operation.ID, IntegrationID: parent.IntegrationID, RequestKey: key, RequestHash: workerconfig.Fingerprint(inputs), Capability: capability, Inputs: inputs, InputHash: workerconfig.Fingerprint(inputs), Status: "QUEUED", Deadline: n.Deadline, MaxAttempts: 1}
 			st.Operations = append(st.Operations, operation)
 			st.WorkerJobs = append(st.WorkerJobs, j)
+			if e := s.queueWorkerCheck(st, j.ID); e != nil {
+				return "", e
+			}
 			workerAudit(st, &st.WorkerJobs[len(st.WorkerJobs)-1], parent.RequestedBy, "native_job_queued", now)
-			return j.ID
+			return j.ID, nil
 		}
 		// Appending Operations invalidates pointers into that slice; reacquire after each job.
 		if n.BuildJobID == "" {
 			b, _, _ := s.nativeRecipes(parent.ProductID, snap.Application, snap.Build.Profile, snap.Build.ImageRepository, snap.Build.Native)
-			inputs := domain.WorkerInputs{SourceProof: nativeSourceProof(parent), RecipeID: b.ID, RecipeRevision: b.Revision, RecipeHash: b.Hash, ConfigRevision: n.ConfigRevision, RepositoryID: b.RepositoryID, RepositoryURL: b.RepositoryURL, RevisionID: snap.Revision.ID, SourceSHA: snap.Revision.HeadCommit, Trust: b.Trust, Parameters: snap.Build.Native.Parameters, Execution: b.Execution}
-			jobID := appendJob(inputs, "local_oci_build", "native-build:"+parent.ID)
+			inputs := domain.WorkerInputs{Check: b.Check, SourceProof: nativeSourceProof(parent), RecipeID: b.ID, RecipeRevision: b.Revision, RecipeHash: b.Hash, ConfigRevision: n.ConfigRevision, RepositoryID: b.RepositoryID, RepositoryURL: b.RepositoryURL, RevisionID: snap.Revision.ID, SourceSHA: snap.Revision.HeadCommit, Trust: b.Trust, Parameters: snap.Build.Native.Parameters, Execution: b.Execution}
+			jobID, e := appendJob(inputs, "local_oci_build", "native-build:"+parent.ID)
+			if e != nil {
+				return e
+			}
 			parent = operationByID(st, op.ID)
 			parent.Native.BuildJobID = jobID
 		} else {
@@ -152,6 +161,17 @@ func (s *Service) tickNativeDelivery(ctx context.Context, op domain.ExternalOper
 			}
 			recoverWorker(st, b, now)
 			if b.Status == "SUCCEEDED" {
+				if !s.workerCheckGate(st, b) {
+					check := operationByID(st, b.CheckOperationID)
+					if check != nil && terminalOperation(check.Status) {
+						stopNativeDelivery(st, parent, "BLOCKED", "native check finalization unavailable", now)
+					} else {
+						parent.LeaseOwner = ""
+						parent.LeaseUntil = time.Time{}
+						parent.NextAttemptAt = now.Add(2 * time.Second)
+					}
+					return nil
+				}
 				a := currentWorkerAttempt(st, b)
 				if a == nil || a.Report == nil || a.Report.LocalOCI == nil || validateWorkerLocalOCI(b, a, a.Report) != nil {
 					stopNativeDelivery(st, parent, "BLOCKED", "accepted build receipt missing", now)
@@ -164,7 +184,10 @@ func (s *Service) tickNativeDelivery(ctx context.Context, op domain.ExternalOper
 						return nil
 					}
 					inputs := domain.WorkerInputs{SourceProof: nativeSourceProof(parent), RecipeID: p.ID, RecipeRevision: p.Revision, RecipeHash: p.Hash, ConfigRevision: n.ConfigRevision, RepositoryID: b.Inputs.RepositoryID, RepositoryURL: b.Inputs.RepositoryURL, RevisionID: b.Inputs.RevisionID, SourceSHA: b.Inputs.SourceSHA, Trust: "publication", Parameters: map[string]any{}, Publication: &domain.WorkerPublication{ComponentID: p.ComponentID, Profile: p.Profile, Origin: p.Origin, Repository: p.Repository, Receipt: *a.Report.LocalOCI}}
-					jobID := appendJob(inputs, "registry_publish", "native-publish:"+parent.ID)
+					jobID, e := appendJob(inputs, "registry_publish", "native-publish:"+parent.ID)
+					if e != nil {
+						return e
+					}
 					parent = operationByID(st, op.ID)
 					parent.Native.PublicationJobID = jobID
 				} else {
