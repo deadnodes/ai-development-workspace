@@ -311,12 +311,12 @@ func (p *Provider) LookupGitOpsProposal(ctx context.Context, c delivery.Connecti
 	if err != nil {
 		return out, err
 	}
-	image, _ := registryRepository(request.Request.ImageRepository)
+	image, _ := gitopsImageRepository(request.Request.ImageRepository)
 	value := request.Digest
 	if request.Request.DigestField == "spec.values.image.tag" {
 		value = "rcp@" + value
 	}
-	expected, err := replaceImageScalars(before, docs, "ghcr.io/"+image, value)
+	expected, err := replaceImageScalars(before, docs, image, value)
 	if err != nil {
 		return out, err
 	}

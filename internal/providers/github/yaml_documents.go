@@ -16,11 +16,10 @@ func imageDocuments(content string, r delivery.GitOpsRequest) ([]imageDocument, 
 	decoder := yaml.NewDecoder(strings.NewReader(content))
 	out := []imageDocument{}
 	count := 0
-	desired, e := registryRepository(r.ImageRepository)
+	desired, e := gitopsImageRepository(r.ImageRepository)
 	if e != nil {
 		return nil, e
 	}
-	desired = "ghcr.io/" + desired
 	for {
 		var doc yaml.Node
 		e := decoder.Decode(&doc)

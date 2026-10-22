@@ -15,13 +15,21 @@ import (
 )
 
 func gitopsPath(r delivery.GitOpsRequest) error {
+	if !validSourceBranch(r.Ref) {
+		return errors.New("invalid GitOps branch")
+	}
 	if e := gitopsReadPath(r); e != nil {
 		return e
 	}
-	_, e := registryRepository(r.ImageRepository)
+	_, e := gitopsImageRepository(r.ImageRepository)
 	return e
 }
 func gitopsReadPath(r delivery.GitOpsRequest) error {
+	for _, ch := range r.Path {
+		if ch < 0x20 || ch == 0x7f {
+			return errors.New("invalid GitOps path")
+		}
+	}
 	if r.Path == "" || path.IsAbs(r.Path) || path.Clean(r.Path) != r.Path || r.Path == ".." || strings.HasPrefix(r.Path, "../") || strings.Contains(r.Path, "\\") || r.Ref == "" {
 		return errors.New("GitOps requires branch and clean repository-relative file path")
 	}
@@ -101,6 +109,11 @@ func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r deli
 	if e := gitopsReadPath(r); e != nil {
 		return out, e
 	}
+	if r.ImageRepository != "" {
+		if _, err := gitopsImageRepository(r.ImageRepository); err != nil {
+			return out, err
+		}
+	}
 	repo, e := p.repository(ctx, c, r.Repository)
 	if e != nil {
 		return out, e
@@ -170,8 +183,7 @@ func (p *Provider) ApplyGitOps(ctx context.Context, c delivery.Connection, r del
 		return out, e
 	}
 	image, digest := docs[0].image, docs[0].digest
-	desiredRepo, _ := registryRepository(request.ImageRepository)
-	desiredRepo = "ghcr.io/" + desiredRepo
+	desiredRepo, _ := gitopsImageRepository(request.ImageRepository)
 	if image.Value == desiredRepo && digestValue(digest.Value, request) == r.Digest {
 		return delivery.GitOpsResult{CommitSHA: snapshot.HeadSHA, BlobSHA: snapshot.BlobSHA, AlreadyApplied: true}, nil
 	}

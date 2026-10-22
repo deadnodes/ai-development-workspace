@@ -4,71 +4,38 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
-	"strings"
 	"testing"
 )
 
-// Git/source/build/registry use production code. Only the external PR server
-// and its separately initiated merge are simulated in this fixture.
+// Every GitOps interface delegates to the production GitHub adapter. Only its
+// explicit local HTTP peer models GitHub persistence and an external merge.
 type mainCandidateActivationProvider struct {
 	*composedPipelineProvider
-	lostProposal bool
-	lookups      int
-	merged       bool
+	gitops  *candidateGitOpsHTTPFixture
+	lookups int
 }
 
 func (p *mainCandidateActivationProvider) ProposeGitOpsGuarded(ctx context.Context, c delivery.Connection, a delivery.GitOpsApply, guard func(context.Context) error) (delivery.GitOpsPullRequest, error) {
-	if guard == nil {
-		return delivery.GitOpsPullRequest{}, fmt.Errorf("fixture missing mutation guard")
-	}
-	// This fixture models one physical PR mutation. The production adapter's
-	// per-HTTP ref/commit/PR boundaries are verified by its own HTTP tests.
-	if err := guard(ctx); err != nil {
-		return delivery.GitOpsPullRequest{}, err
-	}
-	return p.ProposeGitOps(ctx, c, a)
+	p.proposals = append(p.proposals, a)
+	return p.Provider.ProposeGitOpsGuarded(ctx, c, a, guard)
 }
-
 func (p *mainCandidateActivationProvider) ProposeGitOps(ctx context.Context, c delivery.Connection, a delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
-	r, e := p.composedPipelineProvider.ProposeGitOps(ctx, c, a)
-	if e == nil && p.lostProposal {
-		p.lostProposal = false
-		return delivery.GitOpsPullRequest{}, fmt.Errorf("fixture lost response after creating exact PR")
-	}
-	return r, e
+	return p.Provider.ProposeGitOps(ctx, c, a)
 }
-func (p *mainCandidateActivationProvider) LookupGitOpsProposal(_ context.Context, _ delivery.Connection, a delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
+func (p *mainCandidateActivationProvider) LookupGitOpsProposal(ctx context.Context, c delivery.Connection, a delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
 	p.lookups++
-	for n, old := range p.proposals {
-		if reflect.DeepEqual(old, a) {
-			return delivery.GitOpsPullRequest{Number: n + 1, URL: fmt.Sprintf("https://github.com/fixture/gitops/pull/%d", n+1), HeadSHA: strings.Repeat("d", 40), State: "open"}, nil
-		}
-	}
-	return delivery.GitOpsPullRequest{}, fmt.Errorf("fixture no exact proposal; no write authorized")
+	return p.Provider.LookupGitOpsProposal(ctx, c, a)
 }
 func (p *mainCandidateActivationProvider) ObserveGitOpsPR(ctx context.Context, c delivery.Connection, a delivery.GitOpsApply, r delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
-	r, e := p.composedPipelineProvider.ObserveGitOpsPR(ctx, c, a, r)
-	if e == nil && p.merged {
-		r.Merged = true
-		r.State = "closed"
-	}
-	return r, e
+	return p.Provider.ObserveGitOpsPR(ctx, c, a, r)
 }
 func (p *mainCandidateActivationProvider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
-	if p.merged {
-		for _, a := range p.proposals {
-			if a.Request.Repository == r.Repository && a.Request.Ref == r.Ref && a.Request.Path == r.Path {
-				return delivery.GitOpsSnapshot{HeadSHA: strings.Repeat("f", 40), BlobSHA: strings.Repeat("b", 40), ImageRepository: a.Request.ImageRepository, Digest: a.Digest}, nil
-			}
-		}
-	}
-	return p.composedPipelineProvider.ReadGitOps(ctx, c, r)
+	return p.Provider.ReadGitOps(ctx, c, r)
 }
 func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate string, provider *mainCandidateActivationProvider, ticks func(), read func() domain.State, post func(domain.Command, any, bool)) []byte {
 	t.Helper()
@@ -127,7 +94,7 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	held := environment(read())
 	input := map[string]any{"reservation_operation_id": reservation.ID, "request_key": "real-candidate-activation-deploy", "expected_selection": selection(held)}
 	var activation domain.ExternalOperation
-	provider.lostProposal = true
+	provider.gitops.loseNextPRReply()
 	request("deploy", input, &activation, true)
 	if activation.Kind != "DEV_CANDIDATE_DEPLOY" || activation.EnvironmentID != "dev" || activation.ID == candidate {
 		t.Fatal("not a separate Dev activation")
@@ -151,8 +118,9 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	if len(provider.proposals) != 1 || provider.lookups < 1 || provider.proposals[0].Digest != built.Artifact.Digest || provider.proposals[0].Request.Path != child.Snapshot.Target.Path || provider.forbidden != 0 {
 		t.Fatal("lost response caused repeat write or unbound PR")
 	}
+	provider.gitops.assertExactPatch(t, built.Snapshot.Build.ImageRepository, built.Artifact.Digest)
 	request("release", map[string]any{"reservation_operation_id": reservation.ID, "request_key": "unsafe-release-after-activation", "expected_selection": selection(held)}, nil, false)
-	provider.merged = true // External merge fixture; RCP never merges the PR.
+	provider.gitops.externalMerge(t) // External HTTP peer state; RCP never merges the PR.
 	ticks()
 	after := read()
 	done := operation(after, activation.ID)
@@ -164,6 +132,9 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	if !reflect.DeepEqual(environment(after), held) || len(after.WorkerJobs) != len(before.WorkerJobs) || len(after.DeliveryArtifacts) != len(before.DeliveryArtifacts) || len(after.RuntimeObservations) != len(before.RuntimeObservations) || len(after.Releases) != len(before.Releases) || !reflect.DeepEqual(after.ComponentBuilds, before.ComponentBuilds) {
 		t.Fatal("activation changed baseline/maps/config/runtime or rebuilt/published")
 	}
+	if !reflect.DeepEqual(after.DeliveryArtifacts, before.DeliveryArtifacts) || !reflect.DeepEqual(after.ComponentBuilds, before.ComponentBuilds) || !reflect.DeepEqual(after.EnvironmentBindings, before.EnvironmentBindings) || !reflect.DeepEqual(after.Applications, before.Applications) || !reflect.DeepEqual(after.RepositoryBindings, before.RepositoryBindings) {
+		t.Fatal("activation changed original admitted artifacts or application/GitOps configuration")
+	}
 	currentCandidate, _ := json.Marshal(operation(after, candidate))
 	if !bytes.Equal(original, currentCandidate) {
 		t.Fatal("activation rewrote original candidate/provenance")
@@ -173,6 +144,6 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 		t.Fatal("historical merged replay repeated effect")
 	}
 	b, _ := json.Marshal(read().Environments)
-	t.Log("Actual main Git→OCI→Distribution artifact delivered through authenticated named Dev HTTP; lost proposal recovered read-only; external merge observed; baseline unchanged, no extra build/publication/source write, no runtime acceptance/promotion/unlock")
+	t.Log("Actual main Git→OCI→Distribution artifact delivered through authenticated named Dev HTTP and production GitHub GitOps adapter against local HTTP peer; lost proposal recovered read-only; external merge observed; baseline unchanged, no extra build/publication/source write, no runtime acceptance/promotion/unlock")
 	return b
 }

@@ -32,9 +32,13 @@ func cacheProposalTestToken(t *testing.T, p *Provider, c delivery.Connection) {
 }
 
 func TestGuardedGitOpsProposalRechecksBeforeEachHTTPMutation(t *testing.T) {
-	for _, invalidateAfter := range []string{"none", "ref", "commit"} {
-		t.Run(invalidateAfter, func(t *testing.T) {
+	for _, scenario := range []string{"none", "ref", "commit", "private-none", "private-ref", "private-commit"} {
+		t.Run(scenario, func(t *testing.T) {
+			invalidateAfter := strings.TrimPrefix(scenario, "private-")
 			req := guardedProposalRequest()
+			if strings.HasPrefix(scenario, "private-") {
+				req.Request.ImageRepository = "registry.example:5443/team/deep/image"
+			}
 			branch, head := "rcp/gitops/"+req.OperationID, strings.Repeat("b", 40)
 			var allowed atomic.Bool
 			allowed.Store(true)
@@ -79,7 +83,7 @@ func TestGuardedGitOpsProposalRechecksBeforeEachHTTPMutation(t *testing.T) {
 					if applied {
 						digest = req.Digest
 					}
-					content := "image:\n  repository: ghcr.io/acme/image\n  digest: " + digest + "\n"
+					content := "image:\n  repository: " + req.Request.ImageRepository + "\n  digest: " + digest + "\n"
 					jsonOut(w, map[string]string{"type": "file", "sha": req.ExpectedBlobSHA, "encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(content))})
 				case strings.HasSuffix(path, "/pulls"):
 					if r.Method == http.MethodPost {

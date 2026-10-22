@@ -14,7 +14,7 @@ import (
 )
 
 func TestGitOpsProposalLookupExactReadOnlyRecovery(t *testing.T) {
-	for _, mutation := range []string{"valid", "default-message", "missing-auth", "expired-auth", "numeric-repository-required", "repository-id", "head-repository", "base-repository", "foreign-name", "ambiguous-pr", "no-pr", "paginated-pr", "truncated-tree", "missing-truncation", "duplicate-entry", "oversized-tree", "extra-file", "unrelated-edit", "mode-change", "target-mode-change", "target-extra-text", "marker", "parents", "base-identity", "base-blob", "blob-content-hash", "blob-size", "missing-blob-size", "branch-only", "moved-branch", "moved-pr", "missing-branch", "provider-error", "bad-ref", "bad-digest", "bad-blob", "bad-head", "bad-operation", "deep-path", "conflicting-base-pin", "same-branch"} {
+	for _, mutation := range []string{"valid", "default-message", "missing-auth", "expired-auth", "numeric-repository-required", "repository-id", "head-repository", "base-repository", "foreign-name", "ambiguous-pr", "no-pr", "paginated-pr", "truncated-tree", "missing-truncation", "duplicate-entry", "oversized-tree", "extra-file", "unrelated-edit", "mode-change", "target-mode-change", "target-extra-text", "marker", "parents", "base-identity", "base-blob", "blob-content-hash", "blob-size", "missing-blob-size", "branch-only", "moved-branch", "moved-pr", "missing-branch", "provider-error", "bad-ref", "bad-digest", "bad-blob", "bad-head", "bad-operation", "deep-path", "conflicting-base-pin", "same-branch", "private-domain", "private-loopback", "private-ipv6", "bare-ghcr", "private-wrong-host", "private-wrong-repo", "private-wrong-digest"} {
 		t.Run(mutation, func(t *testing.T) {
 			base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
 			baseTree, headTree := strings.Repeat("c", 40), strings.Repeat("d", 40)
@@ -22,6 +22,15 @@ func TestGitOpsProposalLookupExactReadOnlyRecovery(t *testing.T) {
 			digest := "sha256:" + strings.Repeat("1", 64)
 			op := "abcdef0123456789"
 			branch := "rcp/gitops/" + op
+			image := "ghcr.io/acme/image"
+			switch mutation {
+			case "private-domain", "private-wrong-host", "private-wrong-repo", "private-wrong-digest":
+				image = "registry.example:5443/team/deep/image"
+			case "private-loopback":
+				image = "127.0.0.1:5000/team/image"
+			case "private-ipv6":
+				image = "[::1]:5000/team/image"
+			}
 			before := "# retained comment\nimage:\n  repository: ghcr.io/acme/image\n  digest: sha256:" + strings.Repeat("2", 64) + "\nextra: retained\n"
 			// The production writer quotes both scalar tokens and preserves every
 			// other byte. Spell that expected output independently in the fixture.
@@ -29,8 +38,25 @@ func TestGitOpsProposalLookupExactReadOnlyRecovery(t *testing.T) {
 			if mutation == "target-extra-text" {
 				after += "injected: true\n"
 			}
+			before = strings.ReplaceAll(before, "ghcr.io/acme/image", image)
+			after = strings.ReplaceAll(after, "ghcr.io/acme/image", image)
+			if mutation == "private-ipv6" {
+				before = strings.ReplaceAll(before, "repository: "+image, "repository: '"+image+"'")
+			}
+			if mutation == "private-wrong-host" {
+				after = strings.ReplaceAll(after, "registry.example", "other.example")
+			}
+			if mutation == "private-wrong-repo" {
+				after = strings.ReplaceAll(after, "team/deep/image", "team/deep/other")
+			}
+			if mutation == "private-wrong-digest" {
+				after = strings.ReplaceAll(after, digest, "sha256:"+strings.Repeat("9", 64))
+			}
 			oldBlob, newBlob := gitOpsBlobSHA([]byte(before)), gitOpsBlobSHA([]byte(after))
-			req := delivery.GitOpsApply{Request: delivery.GitOpsRequest{Repository: "101", Ref: "main", Path: "apps/app.yaml", ImageRepository: "ghcr.io/acme/image"}, ExpectedHeadSHA: base, ExpectedBlobSHA: oldBlob, Digest: digest, OperationID: op, Message: "release"}
+			req := delivery.GitOpsApply{Request: delivery.GitOpsRequest{Repository: "101", Ref: "main", Path: "apps/app.yaml", ImageRepository: image}, ExpectedHeadSHA: base, ExpectedBlobSHA: oldBlob, Digest: digest, OperationID: op, Message: "release"}
+			if mutation == "bare-ghcr" {
+				req.Request.ImageRepository = "acme/image"
+			}
 			if mutation == "default-message" {
 				req.Message = ""
 			}
@@ -221,7 +247,7 @@ func TestGitOpsProposalLookupExactReadOnlyRecovery(t *testing.T) {
 				req.Request.Ref = branch
 			}
 			result, err := p.LookupGitOpsProposal(context.Background(), c, req)
-			if mutation == "valid" || mutation == "default-message" {
+			if mutation == "valid" || mutation == "default-message" || mutation == "private-domain" || mutation == "private-loopback" || mutation == "private-ipv6" || mutation == "bare-ghcr" {
 				if err != nil || result.Number != 7 || result.HeadSHA != head || result.State != "open" {
 					t.Fatalf("exact recovery: %+v %v requests=%v", result, err, paths)
 				}

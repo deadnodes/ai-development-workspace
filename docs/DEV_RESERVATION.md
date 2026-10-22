@@ -35,3 +35,34 @@ Durable intent cannot revoke an HTTP mutation already in flight. Late invalidati
 Environment/operation queries expose `candidate_deployment_id`, status and desired GitOps state separately from baseline intent. The aggregate reaches `GITOPS_APPLIED` only when every child confirms the exact desired GitOps result. This means `PENDING_RECONCILIATION`: a prepared PR is not a merge, a merge is not healthy runtime, and neither is Dev acceptance or permission to promote Prod.
 
 Existing eligibility and writer limits still apply. The original native candidate's one-hour authority deadline remains a fence even after its build completes; this protocol does not grant arbitrary-age reuse. The existing Helm image-field selector matches the requested repository in current documents and fails closed when Dev currently uses a different repository; this slice does not broaden it into a general manifest editor. Validate the actual target/profile mapping before a live pilot.
+
+## Own OCI registry and GitOps image fields
+
+The GitOps adapter accepts an explicit canonical image repository such as
+`registry.example:5443/team/component` as well as GHCR. It writes that exact
+repository with the admitted digest; it does not prepend `ghcr.io/`, fetch the
+image, or send GitHub credentials to the registry. Native publication and
+artifact inspection remain separate operations with their existing configured
+registry authority. The Actions/GHCR artifact inspector remains GHCR-specific.
+
+Explicit repositories must already match `CanonicalImageRepository`: registry
+host and optional port, then a lowercase repository path, without scheme,
+credentials, tag, digest, query, fragment or whitespace. Noncanonical explicit
+identities are rejected rather than rewritten. Previously supported bare GHCR
+owner/image inputs retain their existing interpretation; native artifact
+identities use an explicit registry.
+
+The writer, initial PR verification and uncertain-result lookup use the same
+validated repository and exact byte-preserving YAML rendering. Root
+`image.repository`/`image.digest` still requires one document. HelmRelease
+`spec.values.image.repository`/`spec.values.image.tag` still selects only
+resources already using the requested repository; all selected roles must
+agree on the current version. A candidate from a different repository cannot
+silently replace the existing Helm repository. Configure and verify the target
+mapping separately before activating such a candidate. Unrelated YAML bytes,
+resources and files remain outside the writer's authority.
+
+Invalid proposal identity, mapping or pinned input is rejected before a
+mutating HTTP request, including authentication or ref creation. Accepting a
+private repository here grants no registry access, GitOps merge permission,
+runtime acceptance, restoration or production promotion.

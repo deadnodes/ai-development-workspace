@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"releasecontrol/internal/delivery"
+	"strings"
 )
 
 type gitOpsPR struct {
@@ -27,9 +28,22 @@ func prResult(pr gitOpsPR) delivery.GitOpsPullRequest {
 }
 func (p *Provider) ProposeGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
 	var out delivery.GitOpsPullRequest
-	if !operationID.MatchString(r.OperationID) || !fullSHA.MatchString(r.ExpectedHeadSHA) {
-		return out, errors.New("pinned operation/base required")
+	if !operationID.MatchString(r.OperationID) || !fullSHA.MatchString(r.ExpectedHeadSHA) || !fullSHA.MatchString(r.ExpectedBlobSHA) || !digestPattern.MatchString(r.Digest) || !validSourceBranch(r.Request.Ref) || len(r.Message) > 4096 {
+		return out, errors.New("pinned operation/base/blob/digest and valid proposal inputs required")
 	}
+	if err := gitopsPath(r.Request); err != nil {
+		return out, err
+	}
+	if r.Request.ExpectedHeadSHA != "" && r.Request.ExpectedHeadSHA != r.ExpectedHeadSHA {
+		return out, ErrConflict
+	}
+	if r.Request.Ref == "rcp/gitops/"+r.OperationID {
+		return out, ErrConflict
+	}
+	if strings.TrimSpace(r.Request.Repository) != r.Request.Repository || r.Request.Repository == "" {
+		return out, errors.New("GitOps repository required")
+	}
+	desiredRepo, _ := gitopsImageRepository(r.Request.ImageRepository)
 	repo, err := p.repository(ctx, c, r.Request.Repository)
 	if err != nil {
 		return out, err
@@ -47,7 +61,7 @@ func (p *Provider) ProposeGitOps(ctx context.Context, c delivery.Connection, r d
 		return out, err
 	}
 	if head != r.ExpectedHeadSHA {
-		if current.Digest != r.Digest || current.ImageRepository != r.Request.ImageRepository {
+		if current.Digest != r.Digest || current.ImageRepository != desiredRepo {
 			return out, ErrConflict
 		}
 		var commit struct {

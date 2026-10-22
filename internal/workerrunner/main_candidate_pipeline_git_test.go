@@ -82,8 +82,14 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				t.Fatal(e)
 			}
 			t.Setenv("RCP_MAIN_FIXTURE_KEY", string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})))
-			client := &http.Client{Transport: sourceRoundTrip(f.roundTrip)}
-			provider := &mainCandidateActivationProvider{composedPipelineProvider: &composedPipelineProvider{Provider: githubprovider.NewWithClient(client), t: t}}
+			gitops := newCandidateGitOpsHTTPFixture(t)
+			client := &http.Client{Transport: sourceRoundTrip(func(r *http.Request) (*http.Response, error) {
+				if gitops.handles(r) {
+					return gitops.roundTrip(r)
+				}
+				return f.roundTrip(r)
+			})}
+			provider := &mainCandidateActivationProvider{composedPipelineProvider: &composedPipelineProvider{Provider: githubprovider.NewWithClient(client), t: t}, gitops: gitops}
 			cfg := sourceFetchConfig(t)
 			cfg.ProductID = "p"
 			cfg.RepositoryID = "source"
@@ -107,6 +113,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			prodPub.BuildRecipeHash = prod.Hash
 			prodPub.Repository = fmt.Sprintf("fixture/main-prod-%t", pg)
 			prodPub.Hash = workerconfig.PublicationHash(prodPub)
+			gitops.configure(strings.TrimPrefix(origin, "http://") + "/" + prodPub.Repository)
 			control := "main-candidate-control-token-000000001"
 			t.Setenv("RC_TOKEN", control)
 			t.Setenv(cfg.TokenEnv, "main-candidate-build-token-000000001")
