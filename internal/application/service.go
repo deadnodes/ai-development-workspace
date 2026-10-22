@@ -424,7 +424,7 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 			}
 		}
 	}
-	if c.ID != "" && !sameDeliveryRetry && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action) {
+	if c.ID != "" && !sameDeliveryRetry && !slices.Contains([]string{"release_artifact_pin", "update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action) {
 		b, _ := json.Marshal(st)
 		var arrays map[string][]map[string]any
 		_ = json.Unmarshal(b, &arrays)
@@ -437,6 +437,16 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 		}
 	}
 	switch c.Action {
+	case "pin_artifact", "release_artifact_pin":
+		var changed bool
+		var err error
+		out, m, changed, err = applyArtifactPin(st, c, m)
+		if err != nil {
+			return nil, err
+		}
+		if !changed {
+			return out, nil
+		}
 	case "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution":
 		var err error
 		out, m, err = applyCompositionConflict(st, c, m)
@@ -1055,7 +1065,11 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 	if c.Action == "create_feature" || c.Action == "update_feature" {
 		m.FeatureID = m.ID
 	}
-	st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: time.Now().UTC(), EntityID: m.ID, ProductID: m.ProductID, FeatureID: m.FeatureID, Data: c})
+	eventAt := time.Now().UTC()
+	if c.Action == "release_artifact_pin" {
+		eventAt = m.UpdatedAt
+	}
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: eventAt, EntityID: m.ID, ProductID: m.ProductID, FeatureID: m.FeatureID, Data: c})
 	derive(st)
 	return out, nil
 }

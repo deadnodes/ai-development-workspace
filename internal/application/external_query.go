@@ -20,7 +20,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		return domain.EvaluateRetention(st, id), nil
+		return domain.EvaluateRetention(st, id, time.Now().UTC()), nil
 	case "get_product_configuration":
 		return productConfiguration(st, id)
 	case "test_connection", "discover_repositories":

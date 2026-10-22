@@ -160,7 +160,7 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		v, e := service.Query(ctx, "get_operation", in.OperationID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_artifact_retention", Description: "Evaluate component retention against recorded availability; advisory only, never deletes artifacts."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_artifact_retention", Description: "Read the normalized protected-root inventory, effective minimum-10 policies, recorded availability/freshness and blockers. Pure stored evidence; no registry fetch. deletion_allowed is always false and InputHash is not deletion authority."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		ProductID string `json:"product_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_artifact_retention", in.ProductID)

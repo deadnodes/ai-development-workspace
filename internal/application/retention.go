@@ -1,6 +1,9 @@
 package application
 
-import "releasecontrol/internal/domain"
+import (
+	"releasecontrol/internal/domain"
+	"time"
+)
 
 func applyRetention(st *domain.State, c domain.Command, m domain.Meta) (any, domain.Meta, error) {
 	var input struct {
@@ -25,16 +28,20 @@ func applyRetention(st *domain.State, c domain.Command, m domain.Meta) (any, dom
 	return *app, m, nil
 }
 func retentionAttention(st domain.State, product string) []map[string]any {
+	return retentionAttentionAt(st, product, time.Now().UTC())
+}
+func retentionAttentionAt(st domain.State, product string, now time.Time) []map[string]any {
 	out := []map[string]any{}
-	for _, e := range domain.EvaluateRetention(st, product) {
-		if !e.ExpectedAvailable || e.Availability == "PRESENT" {
+	report := domain.EvaluateRetention(st, product, now)
+	for _, e := range report.Images {
+		if !e.Protected || (e.Availability == "PRESENT" && e.Freshness == "FRESH" && len(e.Blockers) == 0) {
 			continue
 		}
 		reason := "RETENTION_AVAILABILITY_UNKNOWN"
 		if e.Availability == "MISSING" {
 			reason = "RETENTION_ARTIFACT_MISSING"
 		}
-		out = append(out, map[string]any{"id": "retention:" + e.ArtifactID, "reason": reason, "application_id": e.ApplicationID, "artifact_id": e.ArtifactID, "digest": e.Digest, "detail": "Retention expects this image to remain available. Verify registry availability; rebuild from recorded provenance if missing. No artifact is deleted automatically.", "retention_reasons": e.Reasons})
+		out = append(out, map[string]any{"id": "retention:" + e.Identity, "reason": reason, "application_ids": e.ApplicationIDs, "artifact_ids": e.ArtifactIDs, "image_repository": e.ImageRepository, "digest": e.Digest, "detail": "A protected image has missing, stale, unknown or incomplete stored evidence. No registry query or deletion was performed.", "retention_reasons": e.Reasons, "blockers": e.Blockers, "freshness": e.Freshness, "input_hash": report.InputHash})
 	}
 	return out
 }

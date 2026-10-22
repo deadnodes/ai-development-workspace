@@ -29,6 +29,11 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 	if nativeQuarantined(st, c.ProductID) {
 		return invalid("native-quarantined product cannot be deleted; ownership transfer is not implemented")
 	}
+	for _, pin := range st.ArtifactPins {
+		if pin.ProductID == c.ProductID && pin.ReleasedAt == nil {
+			return invalid("product has active artifact pins; release each pin explicitly before deletion")
+		}
+	}
 	for _, op := range st.Operations {
 		if op.ProductID == c.ProductID && !terminalOperation(op.Status) {
 			return invalid("product has unfinished operations; finish or cancel them before deletion")

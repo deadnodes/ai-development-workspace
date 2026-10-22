@@ -154,7 +154,13 @@ func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
 		}
 		st.Events = append(st.Events, event)
 	}
-	return st, rows.Err()
+	if e = rows.Err(); e != nil {
+		return st, e
+	}
+	if e = domain.ValidateArtifactPins(st); e != nil {
+		return st, e
+	}
+	return st, nil
 }
 func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error {
 	tx, e := s.pool.Begin(ctx)
