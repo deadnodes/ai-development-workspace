@@ -231,6 +231,7 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		return v, m, nil
 	case "plan_composition":
 		var input struct {
+			AutoRefresh   bool                          `json:"auto_refresh"`
 			EnvironmentID string                        `json:"environment_id"`
 			Name          string                        `json:"name"`
 			Components    []domain.CompositionComponent `json:"components"`
@@ -248,7 +249,7 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 		if strings.TrimSpace(input.Name) == "" || len(input.Components) == 0 {
 			return nil, m, invalid("composition name and components required")
 		}
-		v := domain.Composition{Meta: m, Name: input.Name, EnvironmentID: input.EnvironmentID, Status: "planned", Components: input.Components, ApplicationSnapshots: []domain.Application{}, RevisionSnapshots: []domain.IntegrationRevision{}, EnvironmentSnapshot: *environment}
+		v := domain.Composition{AutoRefresh: input.AutoRefresh, Meta: m, Name: input.Name, EnvironmentID: input.EnvironmentID, Status: "planned", Components: input.Components, ApplicationSnapshots: []domain.Application{}, RevisionSnapshots: []domain.IntegrationRevision{}, EnvironmentSnapshot: *environment}
 		apps := map[string]bool{}
 		revisions := map[string]bool{}
 		selected := map[string]bool{}
@@ -324,6 +325,9 @@ func applyComposition(st *domain.State, c domain.Command, m domain.Meta) (any, d
 				return nil, m, invalid("environment target changed; create a new composition plan")
 			}
 			if err := selectionAllowed(st, environment.ID); err != nil {
+				return nil, m, err
+			}
+			if err := advanceSelection(environment); err != nil {
 				return nil, m, err
 			}
 			environment.DesiredOperationID = ""

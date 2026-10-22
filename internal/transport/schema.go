@@ -15,14 +15,16 @@ func CommandSchema() map[string]any {
 	}
 	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Optional attribution; defaults to agent. This is not authentication."}
 	data := map[string]any{}
-	for _, k := range strings.Fields("request_key recipe_id recipe_revision recipe_hash config_revision deadline outcome conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit source_sha version checksum uri build_url") {
+	for _, k := range strings.Fields("idempotency_key request_key recipe_id recipe_revision recipe_hash config_revision deadline outcome conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit source_sha version checksum uri build_url") {
 		data[k] = str()
 	}
 	data["digest"] = str()
-	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
+	data["expected_selection"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"composition_id", "operation_id", "generation"}, "properties": map[string]any{"composition_id": str(), "operation_id": str(), "generation": map[string]any{"type": "integer", "minimum": 0}}}
+	data["idempotency_key"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
+	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids revision_ids") {
 		data[k] = map[string]any{"type": "array", "items": str()}
 	}
-	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "keep_current", "approve", "approve_main_update"} {
+	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "keep_current", "approve", "approve_main_update", "auto_refresh"} {
 		data[k] = map[string]any{"type": "boolean"}
 	}
 	for _, k := range []string{"app_id", "installation_id", "max_attempts", "keep_last", "keep_previous"} {
@@ -81,6 +83,7 @@ func CommandSchema() map[string]any {
 		{"queue_worker_job", "product_id integration_id", "request_key recipe_id recipe_revision recipe_hash config_revision revision_id source_sha deadline max_attempts parameters"},
 		{"cancel_worker_job", "product_id id", ""},
 		{"reconcile_worker_job", "product_id id", "outcome"},
+		{"update_environment_feature", "feature_id", "environment_id revision_ids idempotency_key expected_selection"},
 		{"assemble_environment", "product_id", "environment_id"},
 		{"claim_composition_conflict", "product_id", "conflict_id"},
 		{"record_conflict_resolution", "product_id", "conflict_id commit rationale"},

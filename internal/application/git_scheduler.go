@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"releasecontrol/internal/domain"
 	"strings"
 	"time"
@@ -204,7 +205,7 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 			continue
 		}
 		composition := compositionByID(&st, env.DesiredCompositionID)
-		if composition == nil || composition.ProductID != env.ProductID {
+		if composition == nil || !composition.AutoRefresh || composition.ProductID != env.ProductID {
 			continue
 		}
 		compositionTarget := false
@@ -258,10 +259,14 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 			continue
 		}
 		_, err := s.Execute(ctx, domain.Command{Action: "assemble_environment", Actor: autoComposeActor, ProductID: env.ProductID, Data: map[string]any{
-			"environment_id":  env.ID,
-			"name":            composition.Name + " (refresh)",
-			"integration_ids": selected,
+			"environment_id":     env.ID,
+			"name":               composition.Name + " (refresh)",
+			"integration_ids":    selected,
+			"expected_selection": selectionToken(env),
 		}})
+		if errors.Is(err, ErrSelectionChanged) {
+			return nil
+		}
 		return err
 	}
 	return nil

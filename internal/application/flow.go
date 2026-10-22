@@ -171,18 +171,31 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 		v := domain.RuntimeObservation{Meta: m, OperationID: op.ID, EnvironmentID: in.EnvironmentID, GitOpsCommit: in.GitOpsCommit, ArtifactDigest: in.ArtifactDigest, Healthy: in.Healthy, Details: in.Details}
 		st.RuntimeObservations = append(st.RuntimeObservations, v)
 		return v, m, nil
-	case "assemble_environment", "reconcile_composition", "prepare_release_candidate":
+	case "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate":
 		var comp *domain.Composition
 		var resolutions []string
 		production := c.Action == "prepare_release_candidate"
-		if c.Action == "assemble_environment" {
+		if c.Action == "update_environment_feature" {
+			var err error
+			comp, err = planFeatureUpdate(st, c, m)
+			if err != nil {
+				return nil, m, err
+			}
+			m.ID = id()
+		} else if c.Action == "assemble_environment" {
 			var input struct {
-				EnvironmentID  string   `json:"environment_id"`
-				Name           string   `json:"name"`
-				IntegrationIDs []string `json:"integration_ids"`
+				EnvironmentID     string                       `json:"environment_id"`
+				Name              string                       `json:"name"`
+				IntegrationIDs    []string                     `json:"integration_ids"`
+				ExpectedSelection *domain.EnvironmentSelection `json:"expected_selection"`
 			}
 			if err := decode(c.Data, &input); err != nil {
 				return nil, m, err
+			}
+			if input.ExpectedSelection != nil {
+				if err := checkSelection(environmentByID(st, input.EnvironmentID), input.ExpectedSelection); err != nil {
+					return nil, m, err
+				}
 			}
 			if strings.TrimSpace(input.Name) == "" {
 				input.Name = "Active work · " + input.EnvironmentID + " · " + m.CreatedAt.Format("2006-01-02 15:04")
@@ -191,7 +204,7 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 			if err != nil {
 				return nil, m, err
 			}
-			result, _, err := applyComposition(st, domain.Command{Action: "plan_composition", Actor: c.Actor, ProductID: c.ProductID, Data: map[string]any{"name": input.Name, "environment_id": input.EnvironmentID, "components": components}}, m)
+			result, _, err := applyComposition(st, domain.Command{Action: "plan_composition", Actor: c.Actor, ProductID: c.ProductID, Data: map[string]any{"name": input.Name, "environment_id": input.EnvironmentID, "components": components, "auto_refresh": true}}, m)
 			if err != nil {
 				return nil, m, err
 			}
@@ -287,11 +300,24 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 		if production {
 			kind = "RELEASE_CANDIDATE"
 		} else {
+			if err := advanceSelection(env); err != nil {
+				return nil, m, err
+			}
 			env.DesiredCompositionID = comp.ID
 			env.DesiredOperationID = m.ID
 			env.UpdatedAt = m.UpdatedAt
 		}
 		op := domain.ExternalOperation{Meta: m, Kind: kind, EnvironmentID: comp.EnvironmentID, Status: "PENDING", Phase: "COMPOSE_SOURCE", RequestedBy: c.Actor, CompositionSnapshot: comp, Sources: sources, PreparedDeployments: prepared, IntegrationIDs: selectedIntegrations(*comp), ChildIDs: []string{}, NextAttemptAt: time.Now().UTC()}
+		if c.Action == "update_environment_feature" {
+			input, hash, err := featureUpdateInput(c)
+			if err != nil {
+				return nil, m, err
+			}
+			op.FeatureUpdate = &input
+			op.RequestKey, op.RequestHash = input.IdempotencyKey, hash
+			op.FeatureID = c.FeatureID
+			m.FeatureID = c.FeatureID
+		}
 		st.Operations = append(st.Operations, op)
 		return op, m, nil
 	case "promote_release_candidate":
@@ -334,6 +360,9 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 			return nil, m, invalid("environment missing")
 		}
 		if err := selectionAllowed(st, env.ID); err != nil {
+			return nil, m, err
+		}
+		if err := advanceSelection(env); err != nil {
 			return nil, m, err
 		}
 		env.DesiredCompositionID = op.CompositionSnapshot.ID

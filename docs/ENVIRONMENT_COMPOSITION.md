@@ -32,7 +32,57 @@ Shared test compositions are not promoted as production artifacts. Production ca
 ## Execution slice
 On a deployment request: resolve and verify immutable source refs → isolated composition/merge preview → conflict report or generated commit → build each affected application → retain image digests and test evidence → update GitOps desired state → record attributed runtime evidence. Automatic Flux/Kubernetes collection remains future work. A Deployment record must link the composition ID, repository outputs, artifact digests and observed outcome. Merge conflicts stop the operation for a human/agent resolution; they are not automatically guessed away. Partial rollout remains distinguishable from success.
 
-### Assemble active work (the normal DEV path)
+### Patch one feature while keeping shared work pinned
+
+Use `update_environment_feature` with top-level `feature_id` and data:
+
+```json
+{
+  "environment_id": "dev",
+  "revision_ids": ["A2"],
+  "idempotency_key": "feature-A-update-2026-10-22",
+  "expected_selection": {"composition_id": "A1-B1", "operation_id": "current-compose", "generation": 12}
+}
+```
+
+Read all three expected values from `get_environment_state.environment`. The
+command atomically changes A1+B1 to A2+B1, preserving the pinned main base, merge
+order and selected application cohort even if B2 and main M2 have been observed.
+Only explicit revision pairs of the target Feature are patched; truly new pairs
+within an existing selected repository are appended in caller order. Shared-repo
+applications keep identical ordered selections. New repositories/applications,
+removals, base changes and released target work require an explicit baseline
+replan. A missing baseline is never invented. Dependency validation still applies.
+
+The command returns the ordinary COMPOSE parent and freezes current build/target
+configuration through existing delivery preparation. It requires configured,
+enabled DEV/TEST reviewed PR-only GitOps targets for every selected component and
+current execution authority; production and active uncertain GitOps writes refuse.
+It performs no provider calls inside the transaction. Current main-first delivery
+policy still governs live execution; this source capability grants no permission
+for pre-main deployment, protected merges or production promotion.
+
+Selection CAS includes a monotonic `selection_generation`, advanced by every
+selection, reconcile and target reset, even an identical selection. A stale request
+leaves no new composition, operation, receipt or audit. Reread current desired
+intent and explicitly reapply; the server never retries a conflicting first patch.
+Overflow refuses atomically; observations never change this generation.
+
+The nonempty bounded opaque idempotency key binds actor, Product, Feature,
+environment and exact typed payload (including revision order and CAS). Exact
+replay returns the same historical operation after supersession, reopen or backup
+restore, without reselecting or creating events. Conflicting reuse refuses. Replay
+grants no execution permission. An unchanged patch under a new key refuses with
+the current operation/composition and explicit reconcile guidance.
+
+Every patched composition has `auto_refresh: false`. New B2/main M2 observations
+cannot change A2+B1/base M, including after COMPOSE completes. A later explicit
+full replacement is a separate intent. Prior compositions and snapshots remain
+immutable; observed runtime/reconciled state stays separate. This slice preserves
+pinned source inputs and current request-time configuration; it does not prove
+historical build/config reconstruction, retained source objects or real rollout.
+
+### Assemble active work (explicit full refresh)
 
 Agents and the UI can use `assemble_environment` when several developers need one
 shared test target. The command accepts `product_id` and `data.environment_id`,
@@ -51,9 +101,13 @@ parent and child steps finish. A source conflict changes the operation to
 `BLOCKED` and creates a semantic conflict record; claim and resolve that record
 through MCP before retrying. New pushes are picked up by the background Git
 refresh. When an environment already has this composition selected, the
-background scheduler automatically queues one new assembly after a newer
-revision is observed; otherwise run `assemble_environment` again to produce a
-new immutable snapshot that includes the push. Older compositions and their
+background scheduler queues one new assembly after a newer
+revision is observed only when its immutable `auto_refresh` boolean is explicitly
+true. `assemble_environment` sets that boolean true; manual `plan_composition`
+defaults false and may explicitly opt in. Scheduler refresh carries the captured
+composition, operation and generation into the transaction, so stale snapshots
+skip without new work or audit. To replace pinned feature updates with the latest
+full selection, explicitly run `assemble_environment` again. Older compositions and their
 operation evidence remain available for rollback or comparison.
 
 Production stays separate: use the main-derived release-candidate flow and an

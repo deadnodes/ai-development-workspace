@@ -94,7 +94,25 @@ type DeliverySnapshot struct {
 	BuildRequest     delivery.BuildRequest  `json:"build_request"`
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
+
+// EnvironmentSelection is a CAS token for desired intent, independent of runtime evidence.
+type EnvironmentSelection struct {
+	CompositionID string `json:"composition_id"`
+	OperationID   string `json:"operation_id"`
+	Generation    uint64 `json:"generation"`
+}
+
+// FeatureUpdateRequest is the durable, exact input receipt of one feature patch.
+type FeatureUpdateRequest struct {
+	EnvironmentID     string                `json:"environment_id"`
+	RevisionIDs       []string              `json:"revision_ids"`
+	Name              string                `json:"name,omitempty"`
+	IdempotencyKey    string                `json:"idempotency_key"`
+	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
+}
 type ExternalOperation struct {
+	FeatureUpdate *FeatureUpdateRequest `json:"feature_update,omitempty"`
+
 	RegistryObservation *WorkerInputs               `json:"registry_observation,omitempty"`
 	CheckPublication    *CheckPublication           `json:"check_publication,omitempty"`
 	RequestKey          string                      `json:"request_key,omitempty"`

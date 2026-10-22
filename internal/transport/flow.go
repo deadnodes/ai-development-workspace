@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -16,7 +17,8 @@ import (
 type flowAction struct{ action, pattern, refName, refField, fields, required, description string }
 
 var flowActions = []flowAction{
-	{"assemble_environment", "POST /api/products/{id}/assemble-environment", "product_id", "product_id", "environment_id name integration_ids", "environment_id", "Assemble current captured active integration revisions into disposable generated branches, build artifacts and apply the configured environment GitOps targets. Returns immediately with a persistent operation; conflicts require resolution."},
+	{"update_environment_feature", "POST /api/features/{id}/update-environment", "feature_id", "feature_id", "environment_id revision_ids name idempotency_key expected_selection", "environment_id revision_ids idempotency_key expected_selection", "Atomically patch explicit revisions of one feature into the existing pinned DEV/TEST composition, preserving other features and base. Requires the current desired selection CAS token and a durable idempotency key; queues the existing COMPOSE operation through PR-only targets."},
+	{"assemble_environment", "POST /api/products/{id}/assemble-environment", "product_id", "product_id", "environment_id name integration_ids expected_selection", "environment_id", "Assemble current captured active integration revisions into disposable generated branches, build artifacts and apply the configured environment GitOps targets. Returns immediately with a persistent operation; conflicts require resolution."},
 	{"claim_composition_conflict", "POST /api/products/{id}/conflicts/claim", "product_id", "product_id", "conflict_id", "conflict_id", "Claim responsibility for externally resolving a composition conflict."},
 	{"record_conflict_resolution", "POST /api/products/{id}/conflicts/resolution", "product_id", "product_id", "conflict_id commit rationale", "conflict_id commit rationale", "Record the claim owner resolution commit; this does not deploy or imply verification."},
 	{"verify_conflict_resolution", "POST /api/products/{id}/conflicts/verify", "product_id", "product_id", "conflict_id result_ids", "conflict_id result_ids", "Verify exact-commit passing evidence for each affected integration and all blocking checks."},
@@ -72,8 +74,13 @@ func registerFlowRoutes(mux *http.ServeMux, service Service) {
 				return
 			}
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+			var raw json.RawMessage
 			var input map[string]any
-			if err := decoder.Decode(&input); err != nil || input == nil {
+			err := decoder.Decode(&raw)
+			if err == nil {
+				input, err = decodeFlowInput(raw)
+			}
+			if err != nil || input == nil {
 				write(w, 400, map[string]string{"error": "Expected one JSON object"})
 				return
 			}
@@ -102,9 +109,38 @@ func registerFlowRoutes(mux *http.ServeMux, service Service) {
 }
 func registerFlowTools(server *mcp.Server, service Service) {
 	for _, spec := range flowActions {
-		mcp.AddTool(server, &mcp.Tool{Name: spec.action, Description: spec.description, InputSchema: flowSchema(spec)}, func(ctx context.Context, _ *mcp.CallToolRequest, input map[string]any) (*mcp.CallToolResult, any, error) {
+		mcp.AddTool(server, &mcp.Tool{Name: spec.action, Description: spec.description, InputSchema: flowSchema(spec)}, func(ctx context.Context, request *mcp.CallToolRequest, input map[string]any) (*mcp.CallToolResult, any, error) {
+			var err error
+			input, err = decodeFlowInput(request.Params.Arguments)
+			if err != nil {
+				return nil, nil, err
+			}
 			v, e := service.Execute(ctx, flowCommand(spec, input))
 			return nil, v, e
 		})
 	}
+}
+
+// Preserve only the CAS integer; existing flow field decoding stays unchanged.
+func decodeFlowInput(raw []byte) (map[string]any, error) {
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Expected json.RawMessage `json:"expected_selection"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Expected != nil {
+		var exact any
+		decoder := json.NewDecoder(bytes.NewReader(envelope.Expected))
+		decoder.UseNumber()
+		if err := decoder.Decode(&exact); err != nil {
+			return nil, err
+		}
+		input["expected_selection"] = exact
+	}
+	return input, nil
 }

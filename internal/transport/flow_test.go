@@ -36,6 +36,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		tool, path, refName, ref string
 		data                     map[string]any
 	}{
+		{"update_environment_feature", "/api/features/feature/update-environment", "feature_id", "feature", map[string]any{"environment_id": "dev", "revision_ids": []string{"A2"}, "idempotency_key": "key", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reconcile_composition", "/api/compositions/composition/reconcile", "composition_id", "composition", map[string]any{}},
 		{"prepare_release_candidate", "/api/release-candidates", "product_id", "product", map[string]any{"name": "Release", "environment_id": "prod", "components": []any{component}, "approve_main_update": true}},
 		{"promote_release_candidate", "/api/release-candidates/candidate/promote", "candidate_operation_id", "candidate", map[string]any{"approve": true}},
@@ -76,6 +77,13 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 			}
 			if viaHTTP.Action != tc.tool || viaHTTP.Actor != "human/flow" {
 				t.Fatal("command attribution/action lost")
+			}
+			if tc.tool == "update_environment_feature" {
+				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
+				var token domain.EnvironmentSelection
+				if err := json.Unmarshal(raw, &token); err != nil || token.Generation != 9007199254740993 || viaMCP.FeatureID != "feature" {
+					t.Fatalf("exact patch CAS/scope lost: %s", raw)
+				}
 			}
 			if tc.tool == "record_runtime_observation" && viaHTTP.Data["healthy"] != false {
 				t.Fatal("unhealthy observation altered")

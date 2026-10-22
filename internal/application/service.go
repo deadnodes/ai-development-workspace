@@ -372,7 +372,7 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 	if !slices.Contains(domain.Actions, c.Action) {
 		return nil, invalid("unknown action")
 	}
-	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id"} {
+	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id", "selection_generation"} {
 		if _, exists := c.Data[key]; exists {
 			return nil, invalid("field %s cannot be supplied in data", key)
 		}
@@ -412,6 +412,13 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 	}
 	m.ProductID = c.ProductID
 	m.FeatureID = c.FeatureID
+	if c.Action == "update_environment_feature" {
+		if op, err := replayFeatureUpdate(st, c); err != nil {
+			return nil, err
+		} else if op != nil {
+			return *op, nil
+		}
+	}
 	// A caller may supply both the durable intent key and a stable creation ID.
 	// Only that exact scoped DEPLOY reaches the ordinary typed replay/hash check;
 	// all other collisions retain the global entity-ID protection below.
@@ -524,7 +531,7 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 		if err != nil {
 			return nil, err
 		}
-	case "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
+	case "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
 		var err error
 		out, m, err = applyFlow(st, c, m, authority)
 		if err != nil {
@@ -945,6 +952,9 @@ func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig
 		}
 		if old != nil && (old.Cluster != v.Cluster || old.Namespace != v.Namespace) {
 			if e := selectionAllowed(st, old.ID); e != nil {
+				return nil, e
+			}
+			if e := advanceSelection(&v); e != nil {
 				return nil, e
 			}
 			v.DesiredCompositionID = ""
