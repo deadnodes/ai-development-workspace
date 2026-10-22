@@ -66,3 +66,8 @@ Invalid proposal identity, mapping or pinned input is rejected before a
 mutating HTTP request, including authentication or ref creation. Accepting a
 private repository here grants no registry access, GitOps merge permission,
 runtime acceptance, restoration or production promotion.
+
+An applied candidate can request a separate server-owned
+[`verify_candidate_dev_runtime`](DEV_RUNTIME_VERIFICATION.md) proof for its
+configured complete workload groups. That point-in-time runtime check does not
+accept functional tests, restore the baseline or release this reservation.

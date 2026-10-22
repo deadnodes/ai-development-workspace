@@ -36,6 +36,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		tool, path, refName, ref string
 		data                     map[string]any
 	}{
+		{"verify_candidate_dev_runtime", "/api/products/product/candidate-dev/verify-runtime", "product_id", "product", map[string]any{"activation_operation_id": "activation", "request_key": "candidate-dev-runtime-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"deploy_candidate_dev", "/api/products/product/candidate-dev/deploy", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "candidate-dev-deploy-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reserve_candidate_dev", "/api/products/product/candidate-dev/reserve", "product_id", "product", map[string]any{"candidate_operation_id": "candidate", "environment_id": "dev", "request_key": "reservation-request-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"release_candidate_dev", "/api/products/product/candidate-dev/release", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "reservation-release-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740994")}}},
@@ -79,7 +80,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 			if !reflect.DeepEqual(viaHTTP, viaMCP) {
 				t.Fatalf("different shared domain commands HTTP=%+v MCP=%+v", viaHTTP, viaMCP)
 			}
-			if tc.tool == "deploy_candidate_dev" {
+			if tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" {
 				generic, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: viaHTTP})
 				if err != nil || generic.IsError {
 					t.Fatalf("generic execute rejected candidate Dev request: %v %+v", err, generic)
@@ -99,7 +100,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 					t.Fatalf("exact patch CAS/scope lost: %s", raw)
 				}
 			}
-			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" || tc.tool == "deploy_candidate_dev" {
+			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" || tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" {
 				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
 				var token domain.EnvironmentSelection
 				want := uint64(9007199254740993)
@@ -165,6 +166,12 @@ func TestCandidateDevReservationRejectsAmbiguousTransportInput(t *testing.T) {
 	server := httptest.NewServer(transport.New(service, transport.Options{}))
 	defer server.Close()
 	for _, tc := range []struct{ path, body string }{
+		{"verify-runtime", `{"product_id":"other","request_key":"candidate-runtime-1"}`},
+		{"verify-runtime", `{"activation_operation_id":"a","activation_operation_id":"b","request_key":"candidate-runtime-1"}`},
+		{"verify-runtime", `{"Activation_operation_id":"a","request_key":"candidate-runtime-1"}`},
+		{"verify-runtime", `{"activation_operation_id":"a","request_key":"candidate-runtime-1","healthy":true}`},
+		{"verify-runtime", `{"activation_operation_id":"a","request_key":"candidate-runtime-1","targets":[]}`},
+		{"verify-runtime", `{"activation_operation_id":"a","request_key":"candidate-runtime-1","expected_selection":{"composition_id":"c","operation_id":"o","generation":1,"generation":2}}`},
 		{"deploy", `{"product_id":"other","request_key":"candidate-dev-deploy-1"}`},
 		{"deploy", `{"reservation_operation_id":"a","reservation_operation_id":"b","request_key":"candidate-dev-deploy-1"}`},
 		{"deploy", `{"request_key":"candidate-dev-deploy-1","expected_selection":{"composition_id":"a","operation_id":"b","generation":1,"generation":2}}`},

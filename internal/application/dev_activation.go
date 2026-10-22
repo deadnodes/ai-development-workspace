@@ -195,6 +195,9 @@ func (s *Service) devActivationAllowed(st *domain.State, op domain.ExternalOpera
 func activationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.Kind == devRuntimeKind && op.RequestKey == in.RequestKey {
+			return nil, invalid("request_key already binds a runtime verification")
+		}
 		if op.ProductID == c.ProductID && op.RequestKey == in.RequestKey && (op.Kind == devActivationKind || op.Kind == "DEV_RESERVATION" || op.Kind == "DEV_RESERVATION_RELEASE") {
 			if op.Kind != devActivationKind || op.RequestHash != hash || op.RequestedBy != c.Actor {
 				return nil, invalid("request_key already binds another reservation/activation payload or actor")

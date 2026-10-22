@@ -427,7 +427,7 @@ func TestDevActivationMergedDesiredStateAndRestoreQuarantine(t *testing.T) {
 
 // Both native components are configured, built, published and admitted through
 // supported commands. No candidate, artifact or source-proof row is forged.
-func devActivationMultiFixture(t *testing.T, kind string) (*nativeFixture, *devActivationProvider, domain.ExternalOperation, domain.Command) {
+func devActivationMultiFixture(t *testing.T, kind string, setup ...func(*nativeFixture)) (*nativeFixture, *devActivationProvider, domain.ExternalOperation, domain.Command) {
 	t.Helper()
 	ctx := context.Background()
 	f, source, c := mainCandidateFixture(t, kind)
@@ -454,6 +454,9 @@ func devActivationMultiFixture(t *testing.T, kind string) (*nativeFixture, *devA
 			purpose = "PROD"
 		}
 		exec(t, f.s, domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": env, "application_id": "component-b", "purpose": purpose, "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": "component-b.yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}})
+	}
+	for _, configure := range setup {
+		configure(f)
 	}
 	var request domain.MainCandidateRequest
 	raw, _ := json.Marshal(c.Data)

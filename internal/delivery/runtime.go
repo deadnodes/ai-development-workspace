@@ -52,3 +52,24 @@ type RuntimeFluxSnapshot struct {
 	Status   string `json:"status"`
 	Error    string `json:"error,omitempty"`
 }
+
+// RuntimeVerificationScope identifies operator-declared complete workload coverage.
+// BindingHash is an opaque fingerprint of the resolved endpoint and TLS/auth binding;
+// URLs, credentials and their paths must never appear in this structure.
+type RuntimeVerificationScope struct {
+	ProductID         string `json:"product_id"`
+	EnvironmentID     string `json:"environment_id"`
+	ApplicationID     string `json:"application_id"`
+	Context           string `json:"context"`
+	Namespace         string `json:"namespace"`
+	Deployment        string `json:"deployment"`
+	Container         string `json:"container"`
+	FluxNamespace     string `json:"flux_namespace"`
+	Kustomization     string `json:"kustomization"`
+	VerificationGroup string `json:"verification_group"`
+	BindingHash       string `json:"binding_hash"`
+}
+type RuntimeVerificationObserver interface {
+	RuntimeSnapshotObserver
+	RuntimeVerificationScope() (RuntimeVerificationScope, error)
+}

@@ -3,8 +3,10 @@ package runtimeobserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,28 +20,31 @@ import (
 )
 
 type Target struct {
-	InCluster      bool   `json:"in_cluster,omitempty"`
-	Kubeconfig     string `json:"kubeconfig,omitempty"`
-	Context        string `json:"context,omitempty"`
-	ProductID      string `json:"product_id"`
-	EnvironmentID  string `json:"environment_id"`
-	ApplicationID  string `json:"application_id"`
-	APIURL         string `json:"api_url"`
-	TokenFile      string `json:"token_file"`
-	CAFile         string `json:"ca_file"`
-	ClientCertFile string `json:"client_cert_file"`
-	ClientKeyFile  string `json:"client_key_file"`
-	FluxNamespace  string `json:"flux_namespace"`
-	Kustomization  string `json:"kustomization"`
-	Namespace      string `json:"namespace"`
-	Deployment     string `json:"deployment"`
-	Container      string `json:"container"`
+	VerificationGroup string `json:"verification_group,omitempty"`
+	InCluster         bool   `json:"in_cluster,omitempty"`
+	Kubeconfig        string `json:"kubeconfig,omitempty"`
+	Context           string `json:"context,omitempty"`
+	ProductID         string `json:"product_id"`
+	EnvironmentID     string `json:"environment_id"`
+	ApplicationID     string `json:"application_id"`
+	APIURL            string `json:"api_url"`
+	TokenFile         string `json:"token_file"`
+	CAFile            string `json:"ca_file"`
+	ClientCertFile    string `json:"client_cert_file"`
+	ClientKeyFile     string `json:"client_key_file"`
+	FluxNamespace     string `json:"flux_namespace"`
+	Kustomization     string `json:"kustomization"`
+	Namespace         string `json:"namespace"`
+	Deployment        string `json:"deployment"`
+	Container         string `json:"container"`
 }
 type Result = delivery.RuntimeEvidence
 type Observer struct {
-	Target Target
-	client *http.Client
-	token  string
+	Target            Target
+	client            *http.Client
+	token             string
+	binding           []byte
+	verificationTrust bool
 }
 
 func Load(path string) ([]*Observer, error) {
@@ -82,6 +87,7 @@ func newObserver(t Target, accountDirectory string) (*Observer, error) {
 	if (t.FluxNamespace == "") != (t.Kustomization == "") {
 		return nil, fmt.Errorf("Flux namespace and kustomization must be configured together")
 	}
+	binding := []string{material.serverName}
 	tc := &tls.Config{MinVersion: tls.VersionTLS12}
 	tc.ServerName = material.serverName
 	if t.CAFile != "" || len(material.ca) > 0 {
@@ -93,6 +99,7 @@ func newObserver(t Target, accountDirectory string) (*Observer, error) {
 		if e != nil {
 			return nil, e
 		}
+		binding = append(binding, string(b))
 		tc.RootCAs = x509.NewCertPool()
 		if !tc.RootCAs.AppendCertsFromPEM(b) {
 			return nil, fmt.Errorf("invalid observer CA")
@@ -113,13 +120,16 @@ func newObserver(t Target, accountDirectory string) (*Observer, error) {
 				return nil, fmt.Errorf("client key unavailable")
 			}
 		}
+		binding = append(binding, string(cert), string(key))
 		c, e := tls.X509KeyPair(cert, key)
 		if e != nil {
 			return nil, e
 		}
 		tc.Certificates = []tls.Certificate{c}
 	}
-	return &Observer{Target: t, token: material.token, client: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tc}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	encodedBinding, _ := json.Marshal(binding)
+	bindingDigest := sha256.Sum256(encodedBinding)
+	return &Observer{Target: t, token: material.token, binding: bindingDigest[:], verificationTrust: tc.RootCAs != nil, client: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tc}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (o *Observer) get(ctx context.Context, path string, out any) error {
 	req, e := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(o.Target.APIURL, "/")+path, nil)
@@ -269,4 +279,31 @@ func (o *Observer) Observe(ctx context.Context, commit, digest string) Result {
 
 func (o *Observer) TargetIdentity() delivery.RuntimeTarget {
 	return delivery.RuntimeTarget{ProductID: o.Target.ProductID, EnvironmentID: o.Target.EnvironmentID, ApplicationID: o.Target.ApplicationID}
+}
+
+var _ delivery.RuntimeVerificationObserver = (*Observer)(nil)
+
+func (o *Observer) RuntimeVerificationScope() (delivery.RuntimeVerificationScope, error) {
+	t := o.Target
+	scope := delivery.RuntimeVerificationScope{ProductID: t.ProductID, EnvironmentID: t.EnvironmentID, ApplicationID: t.ApplicationID, Context: t.Context, Namespace: t.Namespace, Deployment: t.Deployment, Container: t.Container, FluxNamespace: t.FluxNamespace, Kustomization: t.Kustomization, VerificationGroup: t.VerificationGroup}
+	if len(o.binding) == 0 || o.client == nil {
+		return scope, fmt.Errorf("observer binding unavailable")
+	}
+	if !o.verificationTrust {
+		return scope, fmt.Errorf("runtime verification requires explicit resolved TLS trust material")
+	}
+	token := o.token
+	if t.TokenFile != "" {
+		b, err := os.ReadFile(t.TokenFile)
+		if err != nil || strings.TrimSpace(string(b)) == "" {
+			return scope, fmt.Errorf("observer token unavailable")
+		}
+		token = strings.TrimSpace(string(b))
+	}
+	// Fingerprint actual loaded TLS material and the effective endpoint/token used
+	// by get. No credential, URL or filesystem path is retained in public evidence.
+	b, _ := json.Marshal([]string{t.APIURL, hex.EncodeToString(o.binding), token})
+	digest := sha256.Sum256(b)
+	scope.BindingHash = hex.EncodeToString(digest[:])
+	return scope, nil
 }

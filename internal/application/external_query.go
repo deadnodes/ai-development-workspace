@@ -182,7 +182,11 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				snapshots = append(snapshots, v)
 			}
 		}
-		return map[string]any{"dev_reservation": ReservationState(&st, id), "runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."}, nil
+		out := s.candidateRuntimeState(&st, id, "")
+		for k, v := range map[string]any{"dev_reservation": ReservationState(&st, id), "runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."} {
+			out[k] = v
+		}
+		return out, nil
 	case "get_worker_job":
 		j := workerJob(&st, id)
 		if j == nil {
@@ -224,7 +228,18 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 						contexts[in.FeatureID] = value
 					}
 				}
-				return map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)}, nil
+				activationID := ""
+				if op.Kind == devActivationKind {
+					activationID = op.ID
+				}
+				if op.Kind == devRuntimeKind {
+					activationID = op.ParentID
+				}
+				out := s.candidateRuntimeState(&st, op.EnvironmentID, activationID)
+				for k, v := range map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)} {
+					out[k] = v
+				}
+				return out, nil
 			}
 		}
 		return nil, missing("operation", id)

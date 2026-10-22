@@ -172,7 +172,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			post(domain.Command{Action: "start_integration", IntegrationID: "ia"}, nil, true)
 			post(domain.Command{Action: "complete_integration", IntegrationID: "ia"}, nil, true)
 			for _, env := range []struct{ id, purpose string }{{"dev", "DEV"}, {"prod", "PROD"}} {
-				post(domain.Command{Action: "create_environment", ID: env.id, ProductID: "p", Data: map[string]any{"name": env.id}}, nil, true)
+				post(domain.Command{Action: "create_environment", ID: env.id, ProductID: "p", Data: map[string]any{"name": env.id, "cluster": "fixture-dev", "namespace": env.id}}, nil, true)
 				post(domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": env.id, "application_id": "component", "purpose": env.purpose, "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": env.id + ".yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}}, nil, true)
 			}
 			read := func() domain.State {
@@ -305,7 +305,19 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			assertOwnedResourcesGone(t, cfg)
 			ticks()
 			var failed domain.CheckResult
-			environments = assertRealCandidateDevActivation(t, server.URL, control, parent.ID, provider, ticks, read, post)
+			runtimePeer, runtimeObservers := newCandidateRuntimeHTTPFixture(t, a.ImageRepository, a.Digest, gitops)
+			service.SetRuntimeObservers(runtimeObservers)
+			// Run the informational control through a production read-only worker.
+			// The accelerated candidate tick helper makes all candidate retries due
+			// on every tick, which would starve lower-priority inventory reads.
+			inventoryWorker := application.New(store)
+			inventoryWorker.SetRuntimeObservers(runtimeObservers)
+			inventoryTick := func() {
+				if worked, err := inventoryWorker.Tick(ctx); err != nil || !worked {
+					t.Fatalf("informational worker tick: worked=%v err=%v", worked, err)
+				}
+			}
+			environments = assertRealCandidateDevActivation(t, server.URL, control, parent.ID, provider, runtimePeer, ticks, inventoryTick, read, post)
 			post(domain.Command{Action: "record_check_result", CheckID: "source-check", Data: map[string]any{"result": "failed", "commit": f.aHead, "observations": "later causal failure"}}, &failed, true)
 			if e := store.Update(ctx, func(s *domain.State) error {
 				for i := range s.Results {

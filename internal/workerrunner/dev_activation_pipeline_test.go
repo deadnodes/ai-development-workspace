@@ -37,7 +37,7 @@ func (p *mainCandidateActivationProvider) ObserveGitOpsPR(ctx context.Context, c
 func (p *mainCandidateActivationProvider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
 	return p.Provider.ReadGitOps(ctx, c, r)
 }
-func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate string, provider *mainCandidateActivationProvider, ticks func(), read func() domain.State, post func(domain.Command, any, bool)) []byte {
+func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate string, provider *mainCandidateActivationProvider, runtimePeer *candidateRuntimeHTTPFixture, ticks func(), inventoryTick func(), read func() domain.State, post func(domain.Command, any, bool)) []byte {
 	t.Helper()
 	environment := func(s domain.State) domain.Environment {
 		for _, e := range s.Environments {
@@ -143,6 +143,7 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	if replay.ID != activation.ID || len(provider.proposals) != 1 {
 		t.Fatal("historical merged replay repeated effect")
 	}
+	assertRealCandidateRuntimeVerification(t, endpoint, token, activation.ID, runtimePeer, ticks, inventoryTick, read, post)
 	b, _ := json.Marshal(read().Environments)
 	t.Log("Actual main Git→OCI→Distribution artifact delivered through authenticated named Dev HTTP and production GitHub GitOps adapter against local HTTP peer; lost proposal recovered read-only; external merge observed; baseline unchanged, no extra build/publication/source write, no runtime acceptance/promotion/unlock")
 	return b

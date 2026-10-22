@@ -147,6 +147,9 @@ func devReservationInput(c domain.Command) (domain.DevReservationRequest, string
 func devReservationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.Kind == devRuntimeKind && op.RequestKey == in.RequestKey {
+			return nil, invalid("request_key already binds a runtime verification")
+		}
 		if op.ProductID == c.ProductID && op.RequestKey == in.RequestKey && (op.Kind == "DEV_RESERVATION" || op.Kind == "DEV_RESERVATION_RELEASE" || op.Kind == devActivationKind) {
 			if op.RequestHash != hash || op.RequestedBy != c.Actor {
 				return nil, invalid("request_key already binds another reservation payload or actor")
