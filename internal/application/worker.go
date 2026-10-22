@@ -542,16 +542,8 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if op.ReservationMutationIntent == "BUILD" && op.Run != nil && op.Run.Status == "completed" {
 			op.ReservationMutationIntent = ""
 		}
-		if op.ReservationMutationIntent == "SOURCE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" && len(op.Sources) > 0 {
-			all := true
-			for _, source := range op.Sources {
-				if source.Result == nil {
-					all = false
-				}
-			}
-			if all {
-				op.ReservationMutationIntent = ""
-			}
+		if op.ReservationMutationIntent == "SOURCE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" && confirmedSourceMutation(*current, op, phase, evidence) {
+			op.ReservationMutationIntent = ""
 		}
 		now := time.Now().UTC()
 		op.Phase = phase
@@ -634,4 +626,47 @@ func (s *Service) recordArtifactObservation(ctx context.Context, op domain.Exter
 		st.DeliveryArtifacts = append(st.DeliveryArtifacts, domain.DeliveryArtifact{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, ApplicationID: op.ApplicationID, RepositoryID: op.Snapshot.Revision.RepositoryID, SourceCommit: op.Snapshot.Revision.HeadCommit, ImageRepository: op.Snapshot.Build.ImageRepository, Tag: op.Snapshot.BuildRequest.ImageTag, Digest: op.ExpectedDigest, Availability: availability, ObservedAt: a.ObservedAt, BuildRequest: op.Snapshot.BuildRequest})
 		return nil
 	})
+}
+
+// A source intent covers one external mutation, not the entire repository set.
+// Acknowledge only its exact result transition in the same transaction that
+// persists that result. A retry, failure or unchanged result cannot clear it.
+func confirmedSourceMutation(before, after domain.ExternalOperation, phase string, evidence map[string]string) bool {
+	if before.Phase != phase || len(before.Sources) != len(after.Sources) || len(before.Sources) == 0 {
+		return false
+	}
+	acknowledged := 0
+	for i, old := range before.Sources {
+		next := after.Sources[i]
+		if reflect.DeepEqual(old, next) {
+			continue
+		}
+		if old.RepositoryID != evidence["repository_id"] || next.RepositoryID != old.RepositoryID {
+			return false
+		}
+		switch phase {
+		case "COMPOSE_SOURCE":
+			if old.Result != nil || next.Result == nil || next.Result.Conflict || !fullSHA.MatchString(next.Result.SHA) || next.Result.Branch != next.Plan.TargetBranch || next.Result.SHA != evidence["source_sha"] || next.Result.Branch != evidence["branch"] {
+				return false
+			}
+			normalized := next
+			normalized.Result = old.Result
+			if !reflect.DeepEqual(old, normalized) {
+				return false
+			}
+		case "ADVANCE_MAIN":
+			if old.MainAdvanced || !next.MainAdvanced || next.Result == nil || next.Result.Conflict || next.Result.SHA != evidence["source_sha"] {
+				return false
+			}
+			normalized := next
+			normalized.MainAdvanced = old.MainAdvanced
+			if !reflect.DeepEqual(old, normalized) {
+				return false
+			}
+		default:
+			return false
+		}
+		acknowledged++
+	}
+	return acknowledged == 1
 }
