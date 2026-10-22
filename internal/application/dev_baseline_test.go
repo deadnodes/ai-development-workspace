@@ -16,6 +16,9 @@ import (
 
 func (p *devActivationProvider) VerifyGitOpsRevision(_ context.Context, _ delivery.Connection, r delivery.GitOpsRevisionRequest) (delivery.GitOpsRevisionProof, error) {
 	head := p.baselineHead
+	if p.merged {
+		head = strings.Repeat("f", 40)
+	}
 	if head == "" {
 		head = strings.Repeat("b", 40)
 	}
@@ -100,7 +103,7 @@ func prepareActivationFixtureBaseline(t *testing.T, f *nativeFixture, p *devActi
 		for _, role := range []string{"http", "worker"} {
 			scope := delivery.RuntimeVerificationScope{ProductID: hold.ProductID, EnvironmentID: hold.EnvironmentID, ApplicationID: app.ID, Context: hold.DevReservation.Environment.Cluster, Namespace: hold.DevReservation.Environment.Namespace, Deployment: app.ID + "-workload", Container: role, FluxNamespace: "flux-system", Kustomization: "apps-dev", VerificationGroup: "complete-v1", BindingHash: strings.Repeat("a", 64)}
 			image := current.ImageRepository + "@" + digest
-			o := &devRuntimeObserver{scope: scope, value: delivery.RuntimeSnapshot{Context: scope.Context, ProductID: scope.ProductID, EnvironmentID: scope.EnvironmentID, ApplicationID: scope.ApplicationID, Namespace: scope.Namespace, Deployment: scope.Deployment, Container: scope.Container, Generation: 2, ObservedGeneration: 2, DesiredReplicas: 1, Health: "HEALTHY", WorkloadImage: image, Pods: []delivery.RuntimePod{{Name: scope.Deployment + "-pod", UID: scope.Deployment + "-uid", Phase: "Running", Image: image, ImageID: "containerd://" + digest, Ready: true}}, Flux: &delivery.RuntimeFluxSnapshot{Status: "READY", Revision: "main@sha1:" + p.baselineHead}}}
+			o := &devRuntimeObserver{scope: scope, value: delivery.RuntimeSnapshot{Context: scope.Context, ProductID: scope.ProductID, EnvironmentID: scope.EnvironmentID, ApplicationID: scope.ApplicationID, Namespace: scope.Namespace, Deployment: scope.Deployment, Container: scope.Container, Generation: 2, ObservedGeneration: 2, DesiredReplicas: 1, Health: "HEALTHY", WorkloadImage: image, Pods: []delivery.RuntimePod{{Name: scope.Deployment + "-pod", UID: scope.Deployment + "-uid", Phase: "Running", Image: image, ImageID: "containerd://" + digest, Ready: true}}, Flux: &delivery.RuntimeFluxSnapshot{Status: "READY", Revision: target.Ref + "@sha1:" + p.baselineHead}}}
 			observers = append(observers, o)
 		}
 	}

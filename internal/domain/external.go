@@ -113,21 +113,23 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
-	DevBaseline               *DevBaselineProof    `json:"dev_baseline,omitempty"`
-	DevBaselineResult         *DevBaselineResult   `json:"dev_baseline_result,omitempty"`
-	DevRuntime                *DevRuntimeProof     `json:"dev_runtime,omitempty"`
-	DevRuntimeResult          *DevRuntimeResult    `json:"dev_runtime_result,omitempty"`
-	DevActivation             *DevActivationProof  `json:"dev_activation,omitempty"`
-	DevActivationIntentHash   string               `json:"dev_activation_intent_hash,omitempty"`
-	DevActivationPRHash       string               `json:"dev_activation_pr_hash,omitempty"`
-	DevActivationResultHash   string               `json:"dev_activation_result_hash,omitempty"`
-	ReservationMutationIntent string               `json:"reservation_mutation_intent,omitempty"`
-	ReservationEpoch          uint64               `json:"reservation_epoch"`
-	DevReservation            *DevReservationProof `json:"dev_reservation,omitempty"`
-	ReservationQuarantined    bool                 `json:"reservation_quarantined,omitempty"`
-	MainCandidate             *MainCandidateProof  `json:"main_candidate,omitempty"`
-	SourceRetentionOriginID   string               `json:"source_retention_origin_id,omitempty"`
-	SourceRetentionParentID   string               `json:"source_retention_parent_id,omitempty"`
+	DevBaseline               *DevBaselineProof          `json:"dev_baseline,omitempty"`
+	DevBaselineResult         *DevBaselineResult         `json:"dev_baseline_result,omitempty"`
+	DevRuntime                *DevRuntimeProof           `json:"dev_runtime,omitempty"`
+	DevRuntimeResult          *DevRuntimeResult          `json:"dev_runtime_result,omitempty"`
+	DevActivation             *DevActivationProof        `json:"dev_activation,omitempty"`
+	DevActivationGroupID      string                     `json:"dev_activation_group_id,omitempty"`
+	DevActivationBatch        *delivery.GitOpsBatchApply `json:"dev_activation_batch,omitempty"`
+	DevActivationIntentHash   string                     `json:"dev_activation_intent_hash,omitempty"`
+	DevActivationPRHash       string                     `json:"dev_activation_pr_hash,omitempty"`
+	DevActivationResultHash   string                     `json:"dev_activation_result_hash,omitempty"`
+	ReservationMutationIntent string                     `json:"reservation_mutation_intent,omitempty"`
+	ReservationEpoch          uint64                     `json:"reservation_epoch"`
+	DevReservation            *DevReservationProof       `json:"dev_reservation,omitempty"`
+	ReservationQuarantined    bool                       `json:"reservation_quarantined,omitempty"`
+	MainCandidate             *MainCandidateProof        `json:"main_candidate,omitempty"`
+	SourceRetentionOriginID   string                     `json:"source_retention_origin_id,omitempty"`
+	SourceRetentionParentID   string                     `json:"source_retention_parent_id,omitempty"`
 
 	FeatureUpdate *FeatureUpdateRequest `json:"feature_update,omitempty"`
 

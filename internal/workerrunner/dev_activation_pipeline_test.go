@@ -20,6 +20,19 @@ type mainCandidateActivationProvider struct {
 	lookups int
 }
 
+func (p *mainCandidateActivationProvider) ProposeGitOpsBatchGuarded(ctx context.Context, c delivery.Connection, a delivery.GitOpsBatchApply, guard func(context.Context) error) (delivery.GitOpsPullRequest, error) {
+	first := a.Changes[0]
+	p.proposals = append(p.proposals, delivery.GitOpsApply{Request: first.Selector, Digest: first.Digest})
+	return p.Provider.ProposeGitOpsBatchGuarded(ctx, c, a, guard)
+}
+func (p *mainCandidateActivationProvider) LookupGitOpsBatchProposal(ctx context.Context, c delivery.Connection, a delivery.GitOpsBatchApply) (delivery.GitOpsPullRequest, error) {
+	p.lookups++
+	return p.Provider.LookupGitOpsBatchProposal(ctx, c, a)
+}
+func (p *mainCandidateActivationProvider) ObserveGitOpsBatchPR(ctx context.Context, c delivery.Connection, a delivery.GitOpsBatchApply, r delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
+	return p.Provider.ObserveGitOpsBatchPR(ctx, c, a, r)
+}
+
 func (p *mainCandidateActivationProvider) ProposeGitOpsGuarded(ctx context.Context, c delivery.Connection, a delivery.GitOpsApply, guard func(context.Context) error) (delivery.GitOpsPullRequest, error) {
 	p.proposals = append(p.proposals, a)
 	return p.Provider.ProposeGitOpsGuarded(ctx, c, a, guard)

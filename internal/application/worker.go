@@ -417,16 +417,25 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		}
 		op.Artifact = &artifact
 		if devActivationParent(&state, *op) != nil {
+			callCtx = delivery.WithCachedAuthentication(callCtx)
 			if e := s.verifyNativeSource(callCtx, *op); e != nil {
 				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
 			}
-			base, e := s.provider.ReadGitOps(callCtx, snapshot.GitOpsConnection, snapshot.GitOpsRequest)
+			component := activationComponent(devActivationParent(&state, *op).DevActivation, op.ID)
+			if component == nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "group member missing", nil)
+			}
+			base, e := s.provider.ReadGitOps(callCtx, snapshot.GitOpsConnection, component.Selector)
 			if e != nil {
-				return true, s.retry(ctx, *op, token, "candidate Dev GitOps read: "+e.Error())
+				return true, s.retry(ctx, *op, token, "candidate Dev GitOps read failed")
 			}
 			if base.HeadSHA == "" || base.BlobSHA == "" {
 				return true, s.finish(ctx, *op, token, "BLOCKED", "candidate Dev GitOps base evidence missing", nil)
 			}
+			if base.BlobSHA != component.Baseline.BlobSHA || base.ImageRepository != component.Baseline.ImageRepository || base.Digest != component.Baseline.Digest || workerconfig.Fingerprint(base.Content) != component.Baseline.ContentHash {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "candidate Dev baseline blob changed", nil)
+			}
+			base.Content = ""
 			op.GitOpsBase = &base
 		}
 		return true, s.advance(ctx, *op, token, "APPLY", "ARTIFACT_READY", "artifact digest observed; GitOps update pending", map[string]string{"digest": artifact.Digest})
@@ -525,6 +534,9 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
 		}
+		if devActivationParent(st, op) != nil && (!current.LeaseUntil.After(time.Now().UTC()) || ctx.Err() != nil) {
+			return invalid("candidate Dev final save lease unavailable")
+		}
 		if status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
 			if devActivationParent(st, op) != nil {
 				if err := s.devActivationAllowed(st, op); err != nil {
@@ -564,7 +576,7 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if phase == "APPLY_UNCERTAIN" {
 			op.ReservationMutationIntent = "GITOPS"
 			if devActivationParent(st, op) != nil && current.DevActivationIntentHash == "" && current.Phase == "APPLY" && status == "GITOPS_PENDING" && op.Snapshot != nil && op.GitOpsBase != nil && op.Artifact != nil {
-				op.DevActivationIntentHash = workerconfig.Fingerprint(gitOpsPRApply(op))
+				op.DevActivationIntentHash = workerconfig.Fingerprint(op.DevActivationBatch)
 			}
 		}
 		if phase == "BUILD_LOOKUP" && !release {
@@ -632,7 +644,31 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 			}
 		}
 
+		if parent := devActivationParent(st, op); parent != nil {
+			proofs := []domain.ExternalOperation{}
+			for _, cid := range parent.ChildIDs {
+				v := operationByID(st, cid)
+				if v == nil {
+					continue
+				}
+				value := *v
+				if cid == op.ID {
+					value = op
+				}
+				proofs = append(proofs, domain.ExternalOperation{DevActivationBatch: value.DevActivationBatch, GitOpsBase: value.GitOpsBase, GitOpsPR: value.GitOpsPR, GitOpsResult: value.GitOpsResult})
+			}
+			if e := activationGroupBounds(parent.DevActivation, proofs); e != nil {
+				return e
+			}
+		}
 		*current = op
+		if status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if parent := devActivationParent(st, op); parent != nil {
+				if e := validateActivationGroups(st, parent); e != nil {
+					return e
+				}
+			}
+		}
 		if op.Run != nil {
 			bm := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}
 			st.DeliveryBuildRuns = append(st.DeliveryBuildRuns, domain.DeliveryBuildRun{Meta: bm, OperationID: op.ID, ApplicationID: op.ApplicationID, Request: op.Snapshot.BuildRequest, Result: *op.Run})

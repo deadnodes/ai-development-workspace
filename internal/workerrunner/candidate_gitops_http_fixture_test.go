@@ -116,6 +116,58 @@ func (f *candidateGitOpsHTTPFixture) serveHTTP(w http.ResponseWriter, r *http.Re
 			return
 		}
 		reply(200, map[string]any{"ref": "refs/heads/" + branch, "object": map[string]string{"sha": sha, "type": "commit"}})
+	case r.Method == "POST" && p == "git/trees":
+		var v struct {
+			BaseTree string `json:"base_tree"`
+			Tree     []struct{ Path, Mode, Type, Content string }
+		}
+		if json.NewDecoder(r.Body).Decode(&v) != nil || f.trees[v.BaseTree] == nil || len(v.Tree) == 0 {
+			reply(422, nil)
+			return
+		}
+		entries := make([]map[string]string, 0, len(f.trees[v.BaseTree]))
+		patches := map[string]string{}
+		for _, patch := range v.Tree {
+			if patch.Mode != "100644" || patch.Type != "blob" || patches[patch.Path] != "" {
+				reply(422, nil)
+				return
+			}
+			blob := candidateGitHash("blob", patch.Content)
+			f.blobs[blob] = patch.Content
+			patches[patch.Path] = blob
+		}
+		for _, old := range f.trees[v.BaseTree] {
+			next := map[string]string{}
+			for k, x := range old {
+				next[k] = x
+			}
+			if blob := patches[next["path"]]; blob != "" {
+				next["sha"] = blob
+				delete(patches, next["path"])
+			}
+			entries = append(entries, next)
+		}
+		if len(patches) != 0 {
+			reply(422, nil)
+			return
+		}
+		encoded, _ := json.Marshal(entries)
+		sha := candidateGitHash("tree", string(encoded))
+		f.trees[sha] = entries
+		reply(201, map[string]any{"sha": sha, "tree": entries, "truncated": false})
+	case r.Method == "POST" && p == "git/commits":
+		var v struct {
+			Message, Tree string
+			Parents       []string
+		}
+		if json.NewDecoder(r.Body).Decode(&v) != nil || f.trees[v.Tree] == nil || len(v.Parents) != 1 || f.commits[v.Parents[0]] == nil {
+			reply(422, nil)
+			return
+		}
+		sha := candidateGitHash("commit", v.Parents[0]+v.Tree+v.Message)
+		f.commits[sha] = map[string]any{"sha": sha, "message": v.Message, "tree": map[string]string{"sha": v.Tree}, "parents": []map[string]string{{"sha": v.Parents[0]}}}
+		f.head = sha
+		reply(201, f.commits[sha])
 	case r.Method == "POST" && p == "git/refs":
 		var v struct{ Ref, SHA string }
 		if json.NewDecoder(r.Body).Decode(&v) != nil || f.commits[v.SHA] == nil {
@@ -247,7 +299,7 @@ func (f *candidateGitOpsHTTPFixture) assertExactPatch(t *testing.T, repo, digest
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if repo != f.repo || f.pr == nil || f.recoveryWrites != 0 || len(f.mutations) != 3 || f.mutations[0] != "POST /repos/fixture/gitops/git/refs" || f.mutations[1] != "PUT /repos/fixture/gitops/contents/dev.yaml" || f.mutations[2] != "POST /repos/fixture/gitops/pulls" {
+	if repo != f.repo || f.pr == nil || f.recoveryWrites != 0 || len(f.mutations) != 4 || f.mutations[0] != "POST /repos/fixture/gitops/git/trees" || f.mutations[1] != "POST /repos/fixture/gitops/git/commits" || f.mutations[2] != "POST /repos/fixture/gitops/git/refs" || f.mutations[3] != "POST /repos/fixture/gitops/pulls" {
 		t.Fatalf("wrong production GitOps effects repo=%s want=%s mutations=%v recoveryWrites=%d", repo, f.repo, f.mutations, f.recoveryWrites)
 	}
 	expected := strings.ReplaceAll(f.initial, "'"+repo+"'", strconv.Quote(repo))

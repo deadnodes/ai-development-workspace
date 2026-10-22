@@ -89,11 +89,13 @@ pending or after it fails. A late older result cannot supersede it.
 
 The verifier pins one fresh GitOps head for each physical API authority and numeric repository/ref and
 proves that it contains every activated child's historical GitOps result. Different credentials for the same API may share a head; numeric IDs at different API endpoints do not identify the same physical repository.
-Sequential component merges at C1 then C2 can therefore verify at the common
-C2 head. Each current target must contain its exact candidate image/digest at
-that head. A detectable branch move during the group read invalidates the
-check; it is not silently repinned. Historical child commits and blobs are
-preserved, including when siblings share a Helm file.
+For a [grouped activation](DEV_GITOPS_BATCH.md), components sharing one physical
+destination have the same proposal commit and PR, while retaining their own
+artifact and file/blob evidence. Separate physical destinations retain their
+own ancestry proofs. Each current target must contain its exact candidate
+image/digest at the common head for that destination. A detectable branch move
+during the read invalidates the check; it is not silently repinned. Historical
+child commits and blobs are preserved, including when siblings share a Helm file.
 
 Every configured role must report Flux READY at that common head, current
 Deployment generation, positive replica count and a complete set of Running,

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"time"
 
+	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
 )
@@ -360,7 +361,7 @@ func (s *Service) verifyNativeSource(ctx context.Context, op domain.ExternalOper
 		if err := s.devActivationAllowed(&st, op); err != nil {
 			return err
 		}
-		return s.observeMainCandidate(ctx, operationByID(&st, parent.DevActivation.CandidateOperationID), false)
+		return s.observeMainCandidate(delivery.WithCachedAuthentication(ctx), operationByID(&st, parent.DevActivation.CandidateOperationID), false)
 	}
 	if op.Snapshot != nil && op.Snapshot.MainCandidate != nil {
 		st, err := s.store.Read(ctx)

@@ -32,6 +32,21 @@ type devRuntimeProvider struct {
 	blob                                    string
 }
 
+func (p *devRuntimeProvider) ProposeGitOpsBatchGuarded(ctx context.Context, c delivery.Connection, b delivery.GitOpsBatchApply, g func(context.Context) error) (delivery.GitOpsPullRequest, error) {
+	for _, v := range b.Changes {
+		key := v.Selector.Path + "|" + v.ImageRepository
+		p.images[key] = v.ImageRepository
+		p.digests[key] = v.Digest
+	}
+	return p.devActivationProvider.ProposeGitOpsBatchGuarded(ctx, c, b, g)
+}
+func (p *devRuntimeProvider) ObserveGitOpsBatchPR(ctx context.Context, c delivery.Connection, b delivery.GitOpsBatchApply, pr delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
+	out, e := p.devActivationProvider.ObserveGitOpsBatchPR(ctx, c, b, pr)
+	if out.Merged {
+		p.activationReadHead = strings.Repeat("f", 40)
+	}
+	return out, e
+}
 func (p *devRuntimeProvider) ProposeGitOpsGuarded(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply, g func(context.Context) error) (delivery.GitOpsPullRequest, error) {
 	p.images[r.Request.Path+"|"+r.Request.ImageRepository] = r.Request.ImageRepository
 	p.digests[r.Request.Path+"|"+r.Request.ImageRepository] = r.Digest
@@ -77,6 +92,16 @@ func (p *devRuntimeProvider) ReadGitOps(ctx context.Context, c delivery.Connecti
 func (p *devRuntimeProvider) VerifyGitOpsRevision(_ context.Context, connection delivery.Connection, r delivery.GitOpsRevisionRequest) (delivery.GitOpsRevisionProof, error) {
 	if !p.runtime && !p.merged {
 		return p.devActivationProvider.VerifyGitOpsRevision(context.Background(), connection, r)
+	}
+	if !p.runtime {
+		head := p.activationReadHead
+		if head == "" {
+			head = strings.Repeat("f", 40)
+		}
+		if r.HeadSHA != "" && r.HeadSHA != head {
+			return delivery.GitOpsRevisionProof{}, errors.New("activation head drift")
+		}
+		return delivery.GitOpsRevisionProof{Repository: r.Repository, Ref: r.Ref, HeadSHA: head, AncestorSHAs: r.AncestorSHAs}, nil
 	}
 	p.revisions++
 	if p.onRevision != nil {
@@ -169,6 +194,11 @@ func devRuntimeFixture(t *testing.T, kind string, multi bool, endpoint ...string
 			// Separate already-authorized connection aliases address one numeric repo.
 			// Configure fixture identities before any candidate/reservation proof exists.
 			if err := f.store.Update(context.Background(), func(st *domain.State) error {
+				if len(endpoint) == 0 {
+					environmentBinding(st, "dev", "component-b").Path = "components-shared.yaml"
+					environmentBinding(st, "dev", "component").Path = "components-shared.yaml"
+					return nil
+				}
 				conn := *connection(st, "conn")
 				conn.ID = "gitops-connection-b"
 				conn.Config.ID = conn.ID
@@ -218,11 +248,8 @@ func devRuntimeFixture(t *testing.T, kind string, multi bool, endpoint ...string
 	}
 	activation := v.(domain.ExternalOperation)
 	provider.activationHeads = map[string]string{}
-	for i, cid := range activation.ChildIDs {
+	for _, cid := range activation.ChildIDs {
 		head := strings.Repeat("f", 40)
-		if i > 0 {
-			head = strings.Repeat("b", 40)
-		}
 		provider.activationHeads[cid] = head
 	}
 	activationTicks(t, f, 10)
@@ -604,18 +631,18 @@ func TestDevRuntimeConcurrentGenerationsAndInflightInvalidation(t *testing.T) {
 	}
 }
 
-func TestDevRuntimeSequentialSiblingCommitsAndSharedPodContainers(t *testing.T) {
+func TestDevRuntimeCommonGroupCommitAndSharedPodContainers(t *testing.T) {
 	for _, kind := range []string{"local", "postgres"} {
 		t.Run(kind, func(t *testing.T) {
 			f, p, activation, observers := devRuntimeFixture(t, kind, true)
 			before, _ := f.store.Read(context.Background())
 			first := operationByID(&before, activation.ChildIDs[0])
 			second := operationByID(&before, activation.ChildIDs[1])
-			if first.Snapshot.Target.Path != second.Snapshot.Target.Path || first.Snapshot.GitOpsConnection.ID == second.Snapshot.GitOpsConnection.ID {
-				t.Fatal("fixture did not share physical path across connection aliases")
+			if first.Snapshot.Target.Path != second.Snapshot.Target.Path || first.Snapshot.GitOpsConnection.ID != second.Snapshot.GitOpsConnection.ID {
+				t.Fatal("fixture did not share exact physical path and connection")
 			}
-			if first.GitOpsResult.CommitSHA == second.GitOpsResult.CommitSHA {
-				t.Fatal("fixture did not produce sequential distinct commits")
+			if first.GitOpsResult.CommitSHA != second.GitOpsResult.CommitSHA || p.proposals != 1 {
+				t.Fatal("group did not produce one common commit and proposal")
 			}
 			// One Deployment with two separately configured containers legitimately shares
 			// the pod UID. Both roles must still have exact immutable images and coverage.
@@ -634,7 +661,7 @@ func TestDevRuntimeSequentialSiblingCommitsAndSharedPodContainers(t *testing.T) 
 				t.Fatal("sequential sibling verification failed", op.Status, op.Detail)
 			}
 			result := op.DevRuntimeResult
-			if len(result.Components[0].Revision.AncestorSHAs) != 2 || result.Components[0].GitOps.HeadSHA != p.head || result.Components[1].GitOps.HeadSHA != p.head {
+			if len(result.Components[0].Revision.AncestorSHAs) != 1 || result.Components[0].GitOps.HeadSHA != p.head || result.Components[1].GitOps.HeadSHA != p.head {
 				t.Fatal("did not use one shared current head/all ancestors")
 			}
 			for name, mutate := range map[string]func(*domain.DevRuntimeResult){"missing-component": func(r *domain.DevRuntimeResult) { r.Components = r.Components[:1] }, "foreign-ancestry": func(r *domain.DevRuntimeResult) {

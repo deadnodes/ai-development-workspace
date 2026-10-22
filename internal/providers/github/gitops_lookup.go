@@ -22,10 +22,13 @@ var _ delivery.GitOpsProposalLookup = (*Provider)(nil)
 // refresh, ref creation, image write, or PR creation can happen on this path.
 // Ordinary authenticated reads must have populated the connection token cache.
 type proposalReader struct {
-	p               *Provider
-	ctx             context.Context
-	base, token     string
-	requests, bytes int
+	p                     *Provider
+	ctx                   context.Context
+	base, token           string
+	requests, bytes       int
+	maxRequests, maxBytes int
+	sessionExpires        time.Time
+	batchExpires          time.Time
 }
 
 func (p *Provider) proposalReader(ctx context.Context, c delivery.Connection) (*proposalReader, error) {
@@ -40,12 +43,22 @@ func (p *Provider) proposalReader(ctx context.Context, c delivery.Connection) (*
 	if t.value == "" || !t.expires.After(p.now().Add(time.Minute)) {
 		return nil, errors.New("proposal lookup requires an existing unexpired connection session; outcome unresolved")
 	}
-	return &proposalReader{p: p, ctx: ctx, base: base, token: t.value}, nil
+	return &proposalReader{p: p, ctx: ctx, base: base, token: t.value, sessionExpires: t.expires}, nil
 }
 
 func (r *proposalReader) get(path string, out any) error {
+	if !r.batchExpires.IsZero() && !r.batchExpires.After(r.p.now().Add(time.Minute)) {
+		return errors.New("batch session expired; outcome unresolved")
+	}
 	r.requests++
-	if r.requests > 48 {
+	maxRequests, maxBytes := r.maxRequests, r.maxBytes
+	if maxRequests == 0 {
+		maxRequests = 48
+	}
+	if maxBytes == 0 {
+		maxBytes = 8 << 20
+	}
+	if r.requests > maxRequests {
 		return errors.New("proposal lookup request budget exceeded")
 	}
 	b, h, _, err := r.p.do(r.ctx, http.MethodGet, r.base+path, r.token, nil)
@@ -53,7 +66,7 @@ func (r *proposalReader) get(path string, out any) error {
 		return err
 	}
 	r.bytes += len(b)
-	if len(b) > 2<<20 || r.bytes > 8<<20 || h.Get("Link") != "" {
+	if len(b) > 2<<20 || r.bytes > maxBytes || h.Get("Link") != "" {
 		return errors.New("proposal lookup evidence oversized or paginated")
 	}
 	if json.Unmarshal(b, out) != nil {

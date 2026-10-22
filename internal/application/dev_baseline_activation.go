@@ -85,7 +85,7 @@ func (s *Service) recheckActivationBaseline(ctx context.Context, op domain.Exter
 		target := c.GitOps
 		target.ExpectedHeadSHA = revision.HeadSHA
 		current, e := s.provider.ReadGitOps(ctx, connection.Config, target)
-		if e != nil || current.ImageRepository != c.ImageRepository || current.Digest != c.Digest || current.HeadSHA != revision.HeadSHA || !fullSHA.MatchString(current.BlobSHA) {
+		if e != nil || current.ImageRepository != c.ImageRepository || current.Digest != c.Digest || current.HeadSHA != revision.HeadSHA || c.ObservedGitOps == nil || current.BlobSHA != c.ObservedGitOps.BlobSHA || workerconfig.Fingerprint(current.Content) != c.ObservedGitOps.ContentHash {
 			return invalid("original shared baseline drifted before candidate effect")
 		}
 	}
@@ -101,7 +101,7 @@ func (s *Service) recheckActivationBaseline(ctx context.Context, op domain.Exter
 			return e
 		}
 		current, e := s.provider.ReadGitOps(ctx, connection.Config, target)
-		if e != nil || current.HeadSHA != heads[key] || current.ImageRepository != c.ImageRepository || current.Digest != c.Digest {
+		if e != nil || current.HeadSHA != heads[key] || current.ImageRepository != c.ImageRepository || current.Digest != c.Digest || c.ObservedGitOps == nil || current.BlobSHA != c.ObservedGitOps.BlobSHA || workerconfig.Fingerprint(current.Content) != c.ObservedGitOps.ContentHash {
 			return invalid("shared baseline changed during pre-effect read")
 		}
 	}

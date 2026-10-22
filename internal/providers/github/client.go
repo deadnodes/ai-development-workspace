@@ -231,6 +231,9 @@ func (p *Provider) token(ctx context.Context, c delivery.Connection) (string, er
 	if t := p.tokens[key]; t.value != "" && t.expires.After(p.now().Add(time.Minute)) {
 		return t.value, nil
 	}
+	if delivery.CachedAuthenticationOnly(ctx) {
+		return "", errors.New("existing unexpired connection session required; authentication refresh forbidden")
+	}
 	signed, e := jwt(c, p.now())
 	if e != nil {
 		return "", e

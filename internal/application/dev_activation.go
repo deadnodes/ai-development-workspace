@@ -50,6 +50,9 @@ func devActivationGuard(st *domain.State, op domain.ExternalOperation) error {
 	if op.Kind == devActivationKind && (!reflect.DeepEqual(op.DevActivation, parent.DevActivation) || !reflect.DeepEqual(op.ChildIDs, parent.ChildIDs) || !reflect.DeepEqual(op.PreparedDeployments, parent.PreparedDeployments) || op.RequestHash != parent.RequestHash || op.RequestKey != parent.RequestKey || op.ReservationEpoch != parent.ReservationEpoch || op.ParentID != "" || op.BuildOnly || op.Native != nil || op.Snapshot != nil || op.MainCandidate != nil || op.ReleaseCandidateID != "" || len(op.Sources) != 0) {
 		return invalid("candidate Dev aggregate worker proof changed")
 	}
+	if err := validateActivationGroups(st, parent); err != nil {
+		return err
+	}
 	if p.SnapshotHash == "" || p.SnapshotHash != activationProofHash(*p) || parent.RequestKey != p.Request.RequestKey || p.Request.ReservationOperationID != p.ReservationOperationID || parent.RequestHash != workerconfig.Fingerprint(struct {
 		Action, Product, Actor string
 		Input                  domain.DevReservationRequest
@@ -113,7 +116,7 @@ func devActivationGuard(st *domain.State, op domain.ExternalOperation) error {
 			return invalid("candidate Dev original artifact identity changed")
 		}
 		child := operationByID(st, component.ChildID)
-		if child == nil || child.Kind != "DEPLOY" || child.ParentID != parent.ID || child.ProductID != parent.ProductID || child.EnvironmentID != env.ID || child.RequestedBy != parent.RequestedBy || child.ApplicationID != origin.ApplicationID || child.ReservationEpoch != parent.ReservationEpoch || child.BuildOnly || child.Native != nil || child.MainCandidate != nil || child.DevActivation != nil || child.ReleaseCandidateID != "" || child.Run != nil || child.ExistingArtifact == nil || !reflect.DeepEqual(*child.ExistingArtifact, component.Artifact) || child.Snapshot == nil || !reflect.DeepEqual(*child.Snapshot, snap) || child.ExpectedDigest != component.Artifact.Digest || !slices.Contains([]string{"INSPECT", "APPLY", "APPLY_UNCERTAIN", "WAIT_GITOPS_PR"}, child.Phase) {
+		if child == nil || child.Status == "FAILED" || child.Status == "CANCELLED" || child.Kind != "DEPLOY" || child.ParentID != parent.ID || child.ProductID != parent.ProductID || child.EnvironmentID != env.ID || child.RequestedBy != parent.RequestedBy || child.ApplicationID != origin.ApplicationID || child.ReservationEpoch != parent.ReservationEpoch || child.BuildOnly || child.Native != nil || child.MainCandidate != nil || child.DevActivation != nil || child.ReleaseCandidateID != "" || child.Run != nil || child.ExistingArtifact == nil || !reflect.DeepEqual(*child.ExistingArtifact, component.Artifact) || child.Snapshot == nil || !reflect.DeepEqual(*child.Snapshot, snap) || child.ExpectedDigest != component.Artifact.Digest || !slices.Contains([]string{"INSPECT", "APPLY", "APPLY_UNCERTAIN", "WAIT_GITOPS_PR"}, child.Phase) {
 			return invalid("candidate Dev exact child capability changed")
 		}
 		if child.Artifact != nil && (!child.Artifact.Available || child.Artifact.Digest != component.Artifact.Digest || child.Artifact.ObservedAt.IsZero()) || child.Phase != "INSPECT" && child.Artifact == nil {
@@ -132,21 +135,21 @@ func devActivationGuard(st *domain.State, op domain.ExternalOperation) error {
 			return invalid("candidate Dev child desired-state result missing")
 		}
 		if child.Phase == "APPLY_UNCERTAIN" || child.Phase == "WAIT_GITOPS_PR" {
-			if child.Artifact == nil || child.GitOpsBase == nil || child.DevActivationIntentHash == "" || child.DevActivationIntentHash != workerconfig.Fingerprint(gitOpsPRApply(*child)) {
+			if child.Artifact == nil || child.GitOpsBase == nil || child.DevActivationBatch == nil || child.DevActivationIntentHash != workerconfig.Fingerprint(child.DevActivationBatch) {
 				return invalid("candidate Dev durable GitOps intent changed")
 			}
 		}
 	}
 	if op.Kind == "DEPLOY" {
 		current := operationByID(st, op.ID)
-		if current == nil || !slices.Contains(parent.ChildIDs, op.ID) || current.ParentID != op.ParentID || current.Snapshot == nil || !reflect.DeepEqual(current.Snapshot, op.Snapshot) || current.ExistingArtifact == nil || !reflect.DeepEqual(current.ExistingArtifact, op.ExistingArtifact) || op.BuildOnly || op.Native != nil || op.Run != nil || op.ExpectedDigest != current.ExpectedDigest || op.ReservationEpoch != current.ReservationEpoch {
+		if current == nil || !slices.Contains(parent.ChildIDs, op.ID) || current.ParentID != op.ParentID || current.DevActivationGroupID != op.DevActivationGroupID || current.Snapshot == nil || !reflect.DeepEqual(current.Snapshot, op.Snapshot) || current.ExistingArtifact == nil || !reflect.DeepEqual(current.ExistingArtifact, op.ExistingArtifact) || op.BuildOnly || op.Native != nil || op.Run != nil || op.ExpectedDigest != current.ExpectedDigest || op.ReservationEpoch != current.ReservationEpoch {
 			return invalid("candidate Dev worker capability changed")
 		}
 		if op.Artifact != nil && (!op.Artifact.Available || op.Artifact.Digest != current.ExpectedDigest || op.Artifact.ObservedAt.IsZero()) || current.Phase != "INSPECT" && op.Artifact == nil {
 			return invalid("candidate Dev leased artifact changed")
 		}
 		if current.Phase == "APPLY_UNCERTAIN" || current.Phase == "WAIT_GITOPS_PR" {
-			if current.GitOpsBase == nil || !reflect.DeepEqual(current.GitOpsBase, op.GitOpsBase) || current.DevActivationIntentHash != op.DevActivationIntentHash {
+			if current.GitOpsBase == nil || !reflect.DeepEqual(current.GitOpsBase, op.GitOpsBase) || current.DevActivationIntentHash != op.DevActivationIntentHash || !reflect.DeepEqual(current.DevActivationBatch, op.DevActivationBatch) {
 				return invalid("candidate Dev durable GitOps base changed")
 			}
 		}
@@ -248,7 +251,10 @@ func (s *Service) executeDevActivation(ctx context.Context, c domain.Command) (a
 	if err = s.mainCandidateAllowed(&st, candidate); err != nil {
 		return nil, err
 	}
-	ioctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	if err = activationDestinationsAllowed(&st, candidate, hold.EnvironmentID, c.ProductID); err != nil {
+		return nil, err
+	}
+	ioctx, cancel := context.WithTimeout(delivery.WithCachedAuthentication(ctx), 25*time.Second)
 	defer cancel()
 	if err = s.observeMainCandidate(ioctx, candidate, false); err != nil {
 		return nil, err
@@ -334,6 +340,9 @@ func (s *Service) executeDevActivation(ctx context.Context, c domain.Command) (a
 			out.PreparedDeployments = append(out.PreparedDeployments, snap)
 			proof.Components = append(proof.Components, domain.DevActivationComponent{ChildID: child.ID, OriginalChildID: origin.ID, Artifact: *artifact, Snapshot: snap})
 		}
+		if err := freezeActivationGroups(proof, children, *baseline); err != nil {
+			return err
+		}
 		proof.SnapshotHash = activationProofHash(*proof)
 		st.Operations = append(st.Operations, out)
 		st.Operations = append(st.Operations, children...)
@@ -347,6 +356,7 @@ func (s *Service) executeDevActivation(ctx context.Context, c domain.Command) (a
 }
 
 func (s *Service) tickDevActivation(ctx context.Context, op domain.ExternalOperation, token string) error {
+	ctx = delivery.WithCachedAuthentication(ctx)
 	st, err := s.store.Read(ctx)
 	if err != nil {
 		return err
@@ -354,8 +364,10 @@ func (s *Service) tickDevActivation(ctx context.Context, op domain.ExternalOpera
 	if err = s.devActivationAllowed(&st, op); err != nil {
 		return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
 	}
-	if err = s.observeMainCandidate(ctx, operationByID(&st, op.DevActivation.CandidateOperationID), false); err != nil {
-		return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+	if !activationHasBaselineEffect(&st, op) {
+		if err = s.observeMainCandidate(ctx, operationByID(&st, op.DevActivation.CandidateOperationID), false); err != nil {
+			return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+		}
 	}
 	for _, cid := range op.ChildIDs {
 		child := operationByID(&st, cid)

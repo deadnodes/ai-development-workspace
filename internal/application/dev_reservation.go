@@ -55,6 +55,9 @@ func reservationFree(st *domain.State, environmentID string) error {
 	return nil
 }
 func reservationOperationAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if (op.DevActivationGroupID != "" || op.DevActivationBatch != nil || op.DevActivationIntentHash != "" || op.DevActivationPRHash != "" || op.DevActivationResultHash != "") && devActivationParent(st, op) == nil {
+		return invalid("orphaned candidate Dev group authority cannot resume")
+	}
 	if devActivationParent(st, op) != nil {
 		return devActivationGuard(st, op)
 	}
@@ -355,6 +358,17 @@ func ReservationState(st *domain.State, environmentID string) map[string]any {
 			out["candidate_deployment_id"] = activation.ID
 			out["candidate_deployment_status"] = activation.Status
 			out["candidate_deployment_state"] = activation.DeploymentState
+			groups := []map[string]any{}
+			for _, g := range activation.DevActivation.Groups {
+				v := map[string]any{"group_id": g.ID, "leader_id": g.LeaderID, "member_ids": append([]string(nil), g.MemberIDs...)}
+				if leader := operationByID(st, g.LeaderID); leader != nil && leader.GitOpsPR != nil {
+					v["pull_request_number"] = leader.GitOpsPR.Number
+					v["pull_request_url"] = leader.GitOpsPR.URL
+					v["head_sha"] = leader.GitOpsPR.HeadSHA
+				}
+				groups = append(groups, v)
+			}
+			out["candidate_gitops_groups"] = groups
 			out["release_action"] = "verified_restoration_required"
 		}
 	}

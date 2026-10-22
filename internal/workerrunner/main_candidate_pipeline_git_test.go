@@ -31,6 +31,14 @@ import (
 )
 
 func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
+	testRealMainCandidateHistoricalGitProdProfile(t, false)
+}
+
+func TestRealDevGitOpsBatchNativePipeline(t *testing.T) {
+	testRealMainCandidateHistoricalGitProdProfile(t, true)
+}
+
+func testRealMainCandidateHistoricalGitProdProfile(t *testing.T, grouped bool) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("owned Docker fixture requires opt-in")
 	}
@@ -113,9 +121,21 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			prodPub.ID = "prod-publish"
 			prodPub.Profile = "prod"
 			prodPub.BuildRecipeHash = prod.Hash
-			// Same repository is the supported Helm writer path; profiles and source differ.
+			// The historical narrow-A control keeps its original repository mapping.
 			prodPub.Repository = devPub.Repository
 			prodPub.Hash = workerconfig.PublicationHash(prodPub)
+			devPubB, prodPubB := devPub, prodPub
+			if grouped {
+				prodPub.Repository = fmt.Sprintf("fixture/batch-prod-a-%t", pg)
+				prodPub.Hash = workerconfig.PublicationHash(prodPub)
+				devPubB.ID, devPubB.ComponentID = "dev-publish-b", "component-b"
+				devPubB.Repository = fmt.Sprintf("fixture/batch-dev-b-%t", pg)
+				devPubB.Hash = workerconfig.PublicationHash(devPubB)
+				prodPubB = prodPub
+				prodPubB.ID, prodPubB.ComponentID = "prod-publish-b", "component-b"
+				prodPubB.Repository = fmt.Sprintf("fixture/batch-prod-b-%t", pg)
+				prodPubB.Hash = workerconfig.PublicationHash(prodPubB)
+			}
 			gitops.configure(strings.TrimPrefix(origin, "http://") + "/" + prodPub.Repository)
 			control := "main-candidate-control-token-000000001"
 			t.Setenv("RC_TOKEN", control)
@@ -125,7 +145,11 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			observerRecipe := workerconfig.RegistryObserveRecipe{ID: "baseline-observer", Revision: "v1", ProductID: "p", RepositoryID: "source", ComponentID: "component", Origin: origin, Repository: devPub.Repository, Pull: workerconfig.RegistryRead{FixtureLoopbackHTTP: true}, Limits: domain.RegistryObserveLimits{MaxResponseBytes: 16 << 20, MaxTotalBytes: 32 << 20, MaxNodes: 128, MaxEdges: 256, MaxDepth: 8, MaxPages: 64, MaxRequests: 256, TimeoutSeconds: 30}}
 			observerRecipe.Hash = workerconfig.ObservationHash(observerRecipe)
 			t.Setenv("MAIN_BASELINE_OBSERVER_TOKEN", "main-baseline-read-token-000000001")
-			auth, e := workerconfig.New(workerconfig.Config{Revision: cfg.ConfigRevision, LeaseSeconds: 20, Recipes: []workerconfig.Recipe{dev, prod}, Publications: []workerconfig.PublicationRecipe{devPub, prodPub}, Observations: []workerconfig.RegistryObserveRecipe{observerRecipe}, Credentials: []workerconfig.Credential{{ID: "observe", Principal: "worker/observe", TokenEnv: "MAIN_BASELINE_OBSERVER_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_observe"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "build", Principal: "worker/build", TokenEnv: cfg.TokenEnv, ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "MAIN_CANDIDATE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}, control, os.Getenv)
+			publications := []workerconfig.PublicationRecipe{devPub, prodPub}
+			if grouped {
+				publications = append(publications, devPubB, prodPubB)
+			}
+			auth, e := workerconfig.New(workerconfig.Config{Revision: cfg.ConfigRevision, LeaseSeconds: 20, Recipes: []workerconfig.Recipe{dev, prod}, Publications: publications, Observations: []workerconfig.RegistryObserveRecipe{observerRecipe}, Credentials: []workerconfig.Credential{{ID: "observe", Principal: "worker/observe", TokenEnv: "MAIN_BASELINE_OBSERVER_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_observe"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "build", Principal: "worker/build", TokenEnv: cfg.TokenEnv, ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "MAIN_CANDIDATE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}, control, os.Getenv)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -181,6 +205,13 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				post(domain.Command{Action: "create_environment", ID: env.id, ProductID: "p", Data: map[string]any{"name": env.id, "cluster": "fixture-dev", "namespace": env.id}}, nil, true)
 				post(domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": env.id, "application_id": "component", "purpose": env.purpose, "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": env.id + ".yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}}, nil, true)
 			}
+			if grouped {
+				post(domain.Command{Action: "create_application", ID: "component-b", ProductID: "p", Data: map[string]any{"name": "second native component", "repository_id": "source"}}, nil, true)
+				post(domain.Command{Action: "configure_component", ProductID: "p", Data: map[string]any{"application_id": "component-b", "connection_id": "conn", "mode": "NATIVE", "native": domain.NativeBinding{BuildRecipeID: dev.ID, PublicationRecipeID: devPubB.ID, Parameters: map[string]any{}}, "profile": "dev", "image_repository": strings.TrimPrefix(origin, "http://") + "/" + devPubB.Repository}}, nil, true)
+				for _, env := range []struct{ id, purpose string }{{"dev", "DEV"}, {"prod", "PROD"}} {
+					post(domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": env.id, "application_id": "component-b", "purpose": env.purpose, "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": env.id + ".yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}}, nil, true)
+				}
+			}
 			read := func() domain.State {
 				t.Helper()
 				s, e := store.Read(ctx)
@@ -227,7 +258,14 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				}
 			}
 			data := func(key, result string) map[string]any {
-				return map[string]any{"name": "A main candidate", "environment_id": "prod", "idempotency_key": "fixture-main-candidate:" + key, "main_sources": []domain.MainCandidateSource{{ApplicationID: "component", MainSHA: f.mainA, Native: domain.NativeBinding{BuildRecipeID: prod.ID, PublicationRecipeID: prodPub.ID, Parameters: map[string]any{}}, Revisions: []domain.MainCandidateRevision{{RevisionID: "a1", PullRequestNumber: 1, VerificationResultIDs: []string{result}}}}}}
+				sources := []domain.MainCandidateSource{{ApplicationID: "component", MainSHA: f.mainA, Native: domain.NativeBinding{BuildRecipeID: prod.ID, PublicationRecipeID: prodPub.ID, Parameters: map[string]any{}}, Revisions: []domain.MainCandidateRevision{{RevisionID: "a1", PullRequestNumber: 1, VerificationResultIDs: []string{result}}}}}
+				if grouped {
+					second := sources[0]
+					second.ApplicationID = "component-b"
+					second.Native.PublicationRecipeID = prodPubB.ID
+					sources = append(sources, second)
+				}
+				return map[string]any{"name": "A main candidate", "environment_id": "prod", "idempotency_key": "fixture-main-candidate:" + key, "main_sources": sources}
 			}
 			dir := t.TempDir()
 			dir, _ = filepath.EvalSymlinks(dir)
@@ -264,6 +302,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			post(domain.Command{Action: "queue_worker_publication", ProductID: "p", Data: map[string]any{"build_job_id": baselineJob.ID, "component_id": "component", "recipe_id": devPub.ID, "recipe_revision": devPub.Revision, "recipe_hash": devPub.Hash, "config_revision": cfg.ConfigRevision, "request_key": "actual-original-dev-publication", "deadline": time.Now().Add(10 * time.Minute)}}, nil, true)
 			devPublisher := pub
 			devPublisher.Recipe = devPub
+			devPublisher.Publisher.AllowedRepository = devPub.Repository
 			devPublisher.Publisher.StateDir = filepath.Join(dir, "dev-publisher")
 			if err := os.Mkdir(devPublisher.Publisher.StateDir, 0700); err != nil {
 				t.Fatal(err)
@@ -278,11 +317,45 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			if baselineArtifact.Native == nil || baselineArtifact.Native.Profile != "dev" || baselineArtifact.SourceCommit != f.mainB || baselineArtifact.Digest != baselineReport.LocalOCI.ManifestDigest {
 				t.Fatal("original Dev artifact provenance mismatch")
 			}
-			externalDigest := publishIndependentBaselineImage(t, origin, observerRecipe.Repository)
-			if externalDigest == baselineArtifact.Digest {
+			var baselineArtifactB domain.DeliveryArtifact
+			if grouped {
+				post(domain.Command{Action: "queue_worker_job", ProductID: "p", IntegrationID: "baseline-integration", Data: map[string]any{"request_key": "actual-original-dev-build-b", "recipe_id": dev.ID, "recipe_revision": dev.Revision, "recipe_hash": dev.Hash, "config_revision": cfg.ConfigRevision, "revision_id": "baseline-revision", "source_sha": f.mainB, "parameters": map[string]any{}, "deadline": time.Now().Add(10 * time.Minute), "max_attempts": 1}}, &baselineJob, true)
+				second, e := runOne(ctx, devCfg, client)
+				if e != nil || second == nil || second.Result != "PASSED" || second.LocalOCI == nil {
+					t.Fatalf("second original native Dev build: %+v %v", second, e)
+				}
+				assertOwnedResourcesGone(t, devCfg)
+				post(domain.Command{Action: "queue_worker_publication", ProductID: "p", Data: map[string]any{"build_job_id": baselineJob.ID, "component_id": "component-b", "recipe_id": devPubB.ID, "recipe_revision": devPubB.Revision, "recipe_hash": devPubB.Hash, "config_revision": cfg.ConfigRevision, "request_key": "actual-original-dev-publication-b", "deadline": time.Now().Add(10 * time.Minute)}}, nil, true)
+				publisherB := devPublisher
+				publisherB.Recipe = devPubB
+				publisherB.Publisher.AllowedRepository = devPubB.Repository
+				publisherB.Publisher.StateDir = filepath.Join(dir, "dev-publisher-b")
+				if e := os.Mkdir(publisherB.Publisher.StateDir, 0700); e != nil {
+					t.Fatal(e)
+				}
+				if _, e := publishrunner.RunOnce(ctx, publisherB); e != nil {
+					t.Fatal(e)
+				}
+				for _, artifact := range read().DeliveryArtifacts {
+					if artifact.ApplicationID == "component-b" {
+						baselineArtifactB = artifact
+					}
+				}
+				if baselineArtifactB.Native == nil || baselineArtifactB.SourceCommit != f.mainB || baselineArtifactB.Native.Profile != "dev" || baselineArtifactB.Digest != second.LocalOCI.ManifestDigest {
+					t.Fatal("second original Dev provenance missing")
+				}
+			}
+			externalDigest := ""
+			if !grouped {
+				externalDigest = publishIndependentBaselineImage(t, origin, observerRecipe.Repository)
+			}
+			if !grouped && externalDigest == baselineArtifact.Digest {
 				t.Fatal("independent image must differ from admitted Dev artifact")
 			}
 			gitops.configureBaseline(baselineArtifact.ImageRepository, baselineArtifact.Digest)
+			if grouped {
+				gitops.configureBatchBaseline([]domain.DeliveryArtifact{baselineArtifact, baselineArtifactB})
+			}
 			before := read()
 			baseline, _ := json.Marshal(before.ComponentBuilds)
 			environments, _ := json.Marshal(before.Environments)
@@ -306,7 +379,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				t.Fatal("replay created work")
 			}
 			ticks()
-			if len(read().WorkerJobs) != 3 {
+			if !grouped && len(read().WorkerJobs) != 3 {
 				t.Fatalf("native build not queued %+v", read().Operations)
 			}
 			var job domain.WorkerJob
@@ -324,12 +397,49 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				t.Fatalf("real main worker %+v %v", report, e)
 			}
 			assertOwnedResourcesGone(t, cfg)
+			if grouped {
+				second, e := runOne(ctx, cfg, client)
+				if e != nil || second == nil || second.Result != "PASSED" || second.LocalOCI == nil || second.LocalOCI.SourceSHA != f.mainA {
+					t.Fatalf("second independent main Prod build %+v %v", second, e)
+				}
+				assertOwnedResourcesGone(t, cfg)
+			}
 			ticks()
 			if _, e := publishrunner.RunOnce(ctx, pub); e != nil {
 				t.Fatal(e)
 			}
+			if grouped {
+				publisherB := pub
+				publisherB.Recipe = prodPubB
+				publisherB.Publisher.AllowedRepository = prodPubB.Repository
+				publisherB.Publisher.StateDir = filepath.Join(dir, "prod-publisher-b")
+				if e := os.Mkdir(publisherB.Publisher.StateDir, 0700); e != nil {
+					t.Fatal(e)
+				}
+				if _, e := publishrunner.RunOnce(ctx, publisherB); e != nil {
+					t.Fatal(e)
+				}
+			}
 			ticks()
 			parent = operation(parent.ID)
+			if grouped {
+				if parent.Status != "SUCCEEDED" || parent.DeploymentState != "READY_FOR_VERIFICATION" || len(parent.ChildIDs) != 2 || len(read().DeliveryArtifacts) != 4 {
+					t.Fatalf("two-component independently built candidate not ready %+v", parent)
+				}
+				// Declare the real original shared Dev selection before reserving it.
+				// This records intent only; capture below independently verifies all
+				// existing GitOps/runtime/native-registry evidence for both members.
+				var originalDev domain.Composition
+				post(domain.Command{Action: "plan_composition", ProductID: "p", Data: map[string]any{"environment_id": "dev", "name": "actual original native Dev pair", "components": []domain.CompositionComponent{{ApplicationID: "component", BaseRef: "main", BaseCommit: f.mainB, TargetBranch: "generated/batch-original", RevisionIDs: []string{}}, {ApplicationID: "component-b", BaseRef: "main", BaseCommit: f.mainB, TargetBranch: "generated/batch-original", RevisionIDs: []string{}}}}}, &originalDev, true)
+				post(domain.Command{Action: "select_composition", ID: originalDev.ID}, nil, true)
+				assertRealGroupedDevGitOpsPipeline(t, server.URL, control, parent, []domain.DeliveryArtifact{baselineArtifact, baselineArtifactB}, provider, service, ticks, read, func(fail bool) {
+					setRegistryFault("/v2/"+devPub.Repository+"/manifests/"+baselineArtifact.Digest, fail)
+				})
+				if f.writes.Load() != 0 || f.merges != 0 || string(f.git("rev-parse", "main")) != f.mainB {
+					t.Fatal("batch altered actual source Git")
+				}
+				return
+			}
 			if parent.Status != "SUCCEEDED" || parent.DeploymentState != "READY_FOR_VERIFICATION" || len(parent.ChildIDs) != 1 {
 				t.Fatalf("candidate not ready %+v", parent)
 			}

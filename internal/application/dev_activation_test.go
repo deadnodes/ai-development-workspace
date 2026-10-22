@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,8 +31,65 @@ type devActivationProvider struct {
 	digest, image                    string
 	failPath                         string
 	lookupHead                       string
+	sourceReads, uncachedSourceReads atomic.Int64
 	physicalWrites                   int
 	afterPhysicalWrite               func(int)
+}
+
+func (p *devActivationProvider) Branches(ctx context.Context, c delivery.Connection, r string) ([]delivery.BranchInfo, error) {
+	p.sourceReads.Add(1)
+	if !delivery.CachedAuthenticationOnly(ctx) {
+		p.uncachedSourceReads.Add(1)
+	}
+	return p.mainCandidateProvider.Branches(ctx, c, r)
+}
+
+func (p *devActivationProvider) ProposeGitOpsBatchGuarded(ctx context.Context, c delivery.Connection, b delivery.GitOpsBatchApply, guard func(context.Context) error) (delivery.GitOpsPullRequest, error) {
+	for range 3 {
+		if e := guard(ctx); e != nil {
+			return delivery.GitOpsPullRequest{}, e
+		}
+		p.physicalWrites++
+		if p.afterPhysicalWrite != nil {
+			p.afterPhysicalWrite(p.physicalWrites)
+		}
+	}
+	p.proposals++
+	if p.beforePropose != nil {
+		p.beforePropose()
+	}
+	if p.desiredImages == nil {
+		p.desiredImages = map[string]string{}
+		p.desiredDigests = map[string]string{}
+	}
+	for _, v := range b.Changes {
+		if v.Selector.Path == p.failPath {
+			return delivery.GitOpsPullRequest{}, errors.New("uncertain group")
+		}
+		key := v.Selector.Path + "|" + v.ImageRepository
+		p.desiredImages[key] = v.ImageRepository
+		p.desiredDigests[key] = v.Digest
+		p.digest, p.image = v.Digest, v.ImageRepository
+	}
+	if p.afterPropose != nil {
+		p.afterPropose()
+	}
+	if p.lost {
+		return delivery.GitOpsPullRequest{}, errors.New("lost group response")
+	}
+	return delivery.GitOpsPullRequest{Number: 81, URL: "https://fixture.invalid/pulls/81", HeadSHA: strings.Repeat("a", 40), State: "open"}, nil
+}
+func (p *devActivationProvider) LookupGitOpsBatchProposal(ctx context.Context, c delivery.Connection, b delivery.GitOpsBatchApply) (delivery.GitOpsPullRequest, error) {
+	for _, v := range b.Changes {
+		if p.absent && (p.failPath == "" || v.Selector.Path == p.failPath) {
+			p.lookups++
+			return delivery.GitOpsPullRequest{}, nil
+		}
+	}
+	return p.LookupGitOpsProposal(ctx, c, delivery.GitOpsApply{Request: b.Changes[0].Selector})
+}
+func (p *devActivationProvider) ObserveGitOpsBatchPR(ctx context.Context, c delivery.Connection, b delivery.GitOpsBatchApply, pr delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
+	return p.ObserveGitOpsPR(ctx, c, delivery.GitOpsApply{}, pr)
 }
 
 func (p *devActivationProvider) ProposeGitOpsGuarded(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply, guard func(context.Context) error) (delivery.GitOpsPullRequest, error) {
@@ -88,6 +146,8 @@ func (p *devActivationProvider) ReadGitOps(ctx context.Context, c delivery.Conne
 		result.Content = "fixture baseline complete shared Helm bytes"
 	}
 	if p.merged {
+		result.HeadSHA = strings.Repeat("f", 40)
+		result.BlobSHA = strings.Repeat("d", 40)
 		result.Digest, result.ImageRepository = p.digest, p.image
 		if p.desiredImages != nil {
 			key := r.Path + "|" + r.ImageRepository
@@ -550,7 +610,9 @@ func TestDevActivationMultiComponentPartialOutcomeRetainsHold(t *testing.T) {
 	for _, kind := range []string{"local", "postgres"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
-			f, p, hold, c := devActivationMultiFixture(t, kind)
+			f, p, hold, c := devActivationMultiFixture(t, kind, func(f *nativeFixture) {
+				exec(t, f.s, domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": "dev", "application_id": "component-b", "purpose": "DEV", "connection_id": "conn", "repository_id": "gitops", "ref": "another-dev", "path": "component-b.yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": "PR"}})
+			})
 			before, _ := f.store.Read(ctx)
 			v, err := f.s.Execute(ctx, c)
 			if err != nil {
@@ -781,7 +843,7 @@ func TestDevActivationNeverFallsBackToUnguardedProposer(t *testing.T) {
 			forceActivationTick(t, f, op.ChildIDs[0])
 			st, _ := f.store.Read(ctx)
 			child := operationByID(&st, op.ChildIDs[0])
-			if legacy.proposals != 0 || child.Phase != "APPLY_UNCERTAIN" || child.ReservationMutationIntent != "GITOPS" || child.GitOpsPR != nil {
+			if legacy.proposals != 0 || child.Status != "FAILED" || child.DevActivationBatch != nil || child.ReservationMutationIntent != "" || child.GitOpsPR != nil {
 				t.Fatal("activation fell back to legacy unguarded mutation")
 			}
 			if _, err = f.s.Execute(ctx, releaseReservationCommand(st, hold)); err == nil {

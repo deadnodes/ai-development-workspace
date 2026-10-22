@@ -124,7 +124,8 @@ merge or promote production. Unknown original write outcomes still need exact
 reconciliation. Restoration needs a separately confirmed, reviewed Flux image
 change, complete post-restore runtime proof and an explicit scoped unlock.
 
-Cross-repository Helm image selection, sibling changes in shared files and a
-bounded combined Flux PR remain separate writer work. Capture must not be
-represented as completing that restoration lifecycle. The governing human-only
-protected Flux merge policy remains in force.
+[Grouped candidate proposals](DEV_GITOPS_BATCH.md) use this capture's current
+selectors separately from desired candidate repositories and combine sibling
+image changes in shared files. Capture and proposal preparation do not complete
+the restoration lifecycle. The governing human-only protected Flux merge policy
+remains in force.

@@ -24,17 +24,17 @@ The receipt is a new `DEV_CANDIDATE_DEPLOY` aggregate with new `DEPLOY` children
 
 An immutable proof links the reservation/epoch/selection, original candidate and component artifacts to the new children and exact Dev destination. Dedicated guards recheck this relation, recipes/grants/configuration, causal source/build checks, registry eligibility and read-only original-main ancestry at worker boundaries and before effects. A deleted author branch or a newer main descendant does not invalidate the original pinned main artifact. Generic operations still cannot use the hold.
 
-Before its first proposal each child commits a durable `APPLY_UNCERTAIN` intent and revalidates immediately before invoking the bounded PR provider. An unknown response may only use the optional GET-only `GitOpsProposalLookup` capability. An absent PR, partial branch/commit, ambiguity, incomplete evidence or unavailable capability remains uncertain and never authorizes another proposal. Production lookup validates exact numeric repository identities, operation branch/base, marker, single parent, original base and complete byte-preserving image-field tree/blob patch; unrelated edits or mode/path changes reject recovery. A known PR is observed read-only against its pinned head. Literal GET-only lookup requires an already cached usable installation token; inability to obtain it without refreshing authentication is an unresolved lookup, not retry permission.
+Selected children are frozen into [GitOps groups](DEV_GITOPS_BATCH.md). All components sharing a physical API, numeric repository and ref use one commit and PR through the same exact configured connection. The baseline repository selects current resources; the original candidate artifact supplies the desired repository and digest. Each group's leader commits the complete prepared batch as durable `APPLY_UNCERTAIN` intent before its first proposal. Followers never race individual writes. Unknown responses use GET-only full tree/blob proof with a cached usable token. An absent PR, partial branch/commit, ambiguity, incomplete evidence or unavailable capability remains uncertain and never authorizes another proposal. Repository identities, operation branch/base, marker, single parent and every allowed image-field patch must match; unrelated edits or mode/path changes reject recovery. A known PR is observed against its pinned head. Authentication refresh is not recovery permission.
 
-New activation proposals require `GitOpsGuardedPRProvider`; an unguarded legacy proposer is never a fallback. A server-owned pure-store callback checks the current lease, reservation, configuration and causal RCP gates immediately before each physical non-GET/HEAD HTTP send, including internal ref/commit/PR writes, redirects and authentication POSTs. The callback performs no provider IO; original-main source preflight remains outside the compound proposal. Revocation after one request suppresses later mutation sends. The already in-flight request can still have an uncertain effect. Before initially admitting a returned PR head, the same complete GET-only lookup must agree with its number, URL and head; a successful POST response alone is insufficient.
+New activation proposals require `GitOpsBatchPRProvider`; individual or unguarded legacy proposers are never a fallback. A server-owned pure-store callback checks the leader lease, reservation, every member's configuration and causal RCP gates immediately before each physical non-GET/HEAD HTTP send, including tree/commit/ref/PR writes, redirects and authentication POSTs. The callback performs no provider IO; original-main source preflight remains outside the initial compound proposal. Unknown proposal recovery performs no mutating authentication preflight. Revocation after one request suppresses later sends. The already in-flight request can still have an uncertain effect. Before initially admitting a returned PR head, complete GET-only proof must agree with its number, URL and head; a successful POST response alone is insufficient.
 
-The cached token must belong to the exact GitOps connection. Original-main verification can use a different source connection and does not necessarily populate that cache. After a process restart, lookup may remain unresolved until an otherwise permitted ordinary authenticated GitOps observation populates the exact connection's cache; this protocol does not refresh authentication inside GET-only lookup or acquire new credentials.
+Cached tokens must belong to the exact source and GitOps connections used by grouped admission and preparation. Original-main verification can use a different connection and does not necessarily populate the GitOps cache. A cold or expired session fails closed before proposal writes. After a process restart, preparation or lookup may remain unresolved until otherwise permitted ordinary authenticated observations populate the exact caches; grouped preparation and GET-only recovery do not refresh authentication or acquire new credentials.
 
 Durable intent cannot revoke an HTTP mutation already in flight. Late invalidation suppresses further writes and successful acceptance of the result; the uncertain intent and reservation remain visible. A partial multi-component outcome never causes automatic rollback or release. Once an activation is admitted, blind `release_candidate_dev` is denied even after failure, cancellation, closure or merge of its PR. There is no TTL unlock. Verified restoration/successor release is not implemented by this slice. Restored activation records and holds are quarantined; replay is historical only.
 
-Environment/operation queries expose `candidate_deployment_id`, status and desired GitOps state separately from baseline intent. The aggregate reaches `GITOPS_APPLIED` only when every child confirms the exact desired GitOps result. This means `PENDING_RECONCILIATION`: a prepared PR is not a merge, a merge is not healthy runtime, and neither is Dev acceptance or permission to promote Prod.
+Environment/operation queries expose `candidate_deployment_id`, status and desired GitOps state separately from baseline intent. After external merge, all results within a group are saved atomically at a common stable target head. The aggregate reaches `GITOPS_APPLIED` only when every child confirms its exact desired result. This means `PENDING_RECONCILIATION`: a prepared PR is not a merge, a merge is not healthy runtime, and neither is Dev acceptance or permission to promote Prod.
 
-Existing eligibility and writer limits still apply. The original native candidate's one-hour authority deadline remains a fence even after its build completes; this protocol does not grant arbitrary-age reuse. The existing Helm image-field selector matches the requested repository in current documents and fails closed when Dev currently uses a different repository; this slice does not broaden it into a general manifest editor. Validate the actual target/profile mapping before a live pilot.
+Existing eligibility and writer limits still apply. The original native candidate's one-hour authority deadline remains a fence even after its build completes; this protocol does not grant arbitrary-age reuse. Grouped proposals separate the exact current baseline selector from the desired artifact repository and preserve all unrelated YAML. They do not provide a general manifest editor. Validate the actual target/profile mapping before a live pilot.
 
 ## Own OCI registry and GitOps image fields
 
@@ -52,15 +52,15 @@ identities are rejected rather than rewritten. Previously supported bare GHCR
 owner/image inputs retain their existing interpretation; native artifact
 identities use an explicit registry.
 
-The writer, initial PR verification and uncertain-result lookup use the same
-validated repository and exact byte-preserving YAML rendering. Root
+The writer, initial PR verification and uncertain-result lookup use validated
+repositories and exact byte-preserving rendering. Root
 `image.repository`/`image.digest` still requires one document. HelmRelease
-`spec.values.image.repository`/`spec.values.image.tag` still selects only
-resources already using the requested repository; all selected roles must
-agree on the current version. A candidate from a different repository cannot
-silently replace the existing Helm repository. Configure and verify the target
-mapping separately before activating such a candidate. Unrelated YAML bytes,
-resources and files remain outside the writer's authority.
+`spec.values.image.repository`/`spec.values.image.tag` selects exact current
+resources; all selected roles must agree on the current version. Grouped
+candidate activation freezes that selector from its baseline separately from
+the desired artifact repository. Generic legacy delivery retains its existing
+single-repository selector contract. Unrelated YAML bytes, resources and files
+remain outside either writer's authority.
 
 Invalid proposal identity, mapping or pinned input is rejected before a
 mutating HTTP request, including authentication or ref creation. Accepting a
