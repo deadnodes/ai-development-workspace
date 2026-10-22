@@ -23,7 +23,7 @@ var flowActions = []flowAction{
 	{"record_conflict_resolution", "POST /api/products/{id}/conflicts/resolution", "product_id", "product_id", "conflict_id commit rationale", "conflict_id commit rationale", "Record the claim owner resolution commit; this does not deploy or imply verification."},
 	{"verify_conflict_resolution", "POST /api/products/{id}/conflicts/verify", "product_id", "product_id", "conflict_id result_ids", "conflict_id result_ids", "Verify exact-commit passing evidence for each affected integration and all blocking checks."},
 	{"reconcile_composition", "POST /api/compositions/{id}/reconcile", "composition_id", "id", "resolution_conflict_ids", "", "Execute the selected immutable composition in its configured environment. Queues Git/build/GitOps work; inspect parent and child operation evidence."},
-	{"prepare_release_candidate", "POST /api/release-candidates", "product_id", "product_id", "name environment_id components approve_main_update", "name environment_id components approve_main_update", "Explicitly approve advancing configured main branches to the selected candidate and building its exact artifacts. This is a real Git mutation. Verification is required before promotion."},
+	{"prepare_release_candidate", "POST /api/release-candidates", "product_id", "product_id", "name environment_id components approve_main_update main_sources idempotency_key", "name environment_id", "Build an exact already-merged main snapshot using main_sources and an idempotency_key with attributed RCP source verification; native candidates cannot promote. Legacy GitHub Actions input components/approve_main_update explicitly advances main."},
 	{"promote_release_candidate", "POST /api/release-candidates/{id}/promote", "candidate_operation_id", "id", "approve", "approve", "Promote this exact candidate and its verified artifact digests to the configured environment. Requires explicit approval; the application rejects missing/stale scenarios and blocking findings."},
 	{"create_hotfix", "POST /api/features/{id}/hotfix", "feature_id", "feature_id", "title objective finding_id repositories remaining", "title objective", "Create a small hotfix integration linked to its feature and optional finding. Does not silently deploy or bypass verification."},
 	{"record_runtime_observation", "POST /api/operations/{id}/runtime", "operation_id", "id", "gitops_commit artifact_digest healthy environment_id details", "gitops_commit artifact_digest healthy environment_id details", "Record an attributed runtime observation against exact child GitOps commit, image digest and environment. This is caller-supplied evidence, not server-collected Flux telemetry."},
@@ -126,6 +126,11 @@ func decodeFlowInput(raw []byte) (map[string]any, error) {
 	var input map[string]any
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil, err
+	}
+	if _, native := input["main_sources"]; native {
+		if err := uniqueMainCandidateJSON(raw); err != nil {
+			return nil, err
+		}
 	}
 	var envelope struct {
 		Expected json.RawMessage `json:"expected_selection"`

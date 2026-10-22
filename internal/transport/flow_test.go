@@ -39,6 +39,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		{"update_environment_feature", "/api/features/feature/update-environment", "feature_id", "feature", map[string]any{"environment_id": "dev", "revision_ids": []string{"A2"}, "idempotency_key": "key", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reconcile_composition", "/api/compositions/composition/reconcile", "composition_id", "composition", map[string]any{}},
 		{"prepare_release_candidate", "/api/release-candidates", "product_id", "product", map[string]any{"name": "Release", "environment_id": "prod", "components": []any{component}, "approve_main_update": true}},
+		{"prepare_release_candidate", "/api/release-candidates", "product_id", "product", map[string]any{"name": "Main candidate", "environment_id": "prod", "idempotency_key": "main-key", "main_sources": []any{map[string]any{"application_id": "app", "main_sha": strings.Repeat("c", 40), "native": map[string]any{"build_recipe_id": "build", "publication_recipe_id": "publish", "parameters": map[string]any{}}, "revisions": []any{map[string]any{"revision_id": "revision", "pull_request_number": 17, "verification_result_ids": []string{"result"}}}}}}},
 		{"promote_release_candidate", "/api/release-candidates/candidate/promote", "candidate_operation_id", "candidate", map[string]any{"approve": true}},
 		{"create_hotfix", "/api/features/feature/hotfix", "feature_id", "feature", map[string]any{"title": "Fix double charge", "objective": "Keep callbacks idempotent", "finding_id": "finding", "repositories": []string{"repo"}, "remaining": []string{"Regression check"}}},
 		{"record_runtime_observation", "/api/operations/child/runtime", "operation_id", "child", map[string]any{"environment_id": "dev", "gitops_commit": strings.Repeat("b", 40), "artifact_digest": "sha256:" + strings.Repeat("d", 64), "healthy": false, "details": "Observed one unavailable replica"}},
@@ -110,5 +111,27 @@ func TestFlowRoutesRejectContradictoryReferencesAndUnknownFields(t *testing.T) {
 	}
 	if len(service.commands) != 0 {
 		t.Fatal("invalid flow request reached shared application")
+	}
+}
+
+func TestMainCandidateDuplicateJSONRejected(t *testing.T) {
+	service := &boundaryService{commands: make(chan domain.Command, 1), queries: make(chan [2]string, 1)}
+	server := httptest.NewServer(transport.New(service, transport.Options{}))
+	defer server.Close()
+	for _, raw := range []string{
+		`{"product_id":"p","name":"candidate","environment_id":"prod","idempotency_key":"key","main_sources":[],"main_sources":[]}`,
+		`{"product_id":"p","name":"candidate","environment_id":"prod","idempotency_key":"key","main_sources":[{"application_id":"a","application_id":"b"}]}`,
+	} {
+		response, err := http.Post(server.URL+"/api/release-candidates", "application/json", strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 400 {
+			t.Fatalf("duplicate candidate input accepted HTTP%d", response.StatusCode)
+		}
+	}
+	if len(service.commands) != 0 {
+		t.Fatal("ambiguous input reached command layer")
 	}
 }

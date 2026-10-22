@@ -66,6 +66,11 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return s.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "prepare_release_candidate" {
+		if _, present := c.Data["main_sources"]; present {
+			return s.executeMainCandidate(ctx, c)
+		}
+	}
 	if c.Action == "cancel_native_delivery" {
 		return s.cancelNativeDelivery(ctx, c)
 	}

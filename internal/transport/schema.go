@@ -68,6 +68,11 @@ func CommandSchema() map[string]any {
 	for _, key := range []string{"application_id", "operation_id", "source_sha", "artifact_digest", "deployment_evidence"} {
 		scenarioComponent[key] = str()
 	}
+	data["main_sources"] = map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"application_id", "main_sha", "native", "revisions"}, "properties": map[string]any{
+		"application_id": str(), "main_sha": map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"},
+		"native":    map[string]any{"type": "object", "additionalProperties": false, "required": []string{"build_recipe_id", "publication_recipe_id", "parameters"}, "properties": map[string]any{"build_recipe_id": str(), "publication_recipe_id": str(), "parameters": data["parameters"]}},
+		"revisions": map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"revision_id", "pull_request_number", "verification_result_ids"}, "properties": map[string]any{"revision_id": str(), "pull_request_number": map[string]any{"type": "integer", "minimum": 1, "maximum": 2147483647}, "verification_result_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 100, "items": str()}}}},
+	}}}
 	data["components"] = map[string]any{"anyOf": []any{compositionComponents, map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": scenarioComponent, "additionalProperties": false, "required": []string{"application_id", "operation_id", "source_sha", "artifact_digest"}}}}}
 	data["observations"] = map[string]any{"anyOf": []any{str(), map[string]any{"type": "array", "items": str()}}}
 	data["role"] = map[string]any{"type": "string", "enum": domain.RepositoryRoles()}
@@ -92,7 +97,7 @@ func CommandSchema() map[string]any {
 		{"protect_integration_revision", "integration_id", "application_id revision_id approve"},
 		{"delete_product", "product_id", "name"},
 		{"reconcile_composition", "id", ""},
-		{"prepare_release_candidate", "product_id", "name environment_id components approve_main_update"},
+		{"prepare_release_candidate", "product_id", "name environment_id"},
 		{"promote_release_candidate", "id", "approve"},
 		{"create_hotfix", "feature_id", "title objective"},
 		{"record_runtime_observation", "id", "gitops_commit artifact_digest healthy environment_id details"},

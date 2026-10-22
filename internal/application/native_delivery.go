@@ -37,7 +37,13 @@ func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOpe
 		return invalid("native delivery unavailable or stopped")
 	}
 	snap := op.Snapshot
-	if op.BuildOnly || op.ReleaseCandidateID != "" || snap.Target.GitOpsMode != "PR" || snap.Target.Purpose != "DEV" && snap.Target.Purpose != "TEST" || !snap.Target.AllowDeploy || snap.Build.RebuildMissing || op.Run != nil {
+	candidate := snap.MainCandidate != nil
+	if candidate {
+		if err := s.nativeMainChildAllowed(st, op); err != nil {
+			return err
+		}
+	}
+	if (!candidate && (op.BuildOnly || snap.Target.Purpose != "DEV" && snap.Target.Purpose != "TEST")) || op.ReleaseCandidateID != "" || snap.Target.GitOpsMode != "PR" || !snap.Target.AllowDeploy || snap.Build.RebuildMissing || op.Run != nil {
 		return invalid("native delivery policy denied")
 	}
 	if e := s.flowChildAllowed(st, *op); e != nil {
@@ -51,6 +57,10 @@ func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOpe
 	}
 	env := environmentByID(st, op.EnvironmentID)
 	current := componentBuild(st, op.ApplicationID)
+	expectedBuild := &snap.Build
+	if candidate {
+		expectedBuild = snap.BuildBaseline
+	}
 	target := environmentBinding(st, op.EnvironmentID, op.ApplicationID)
 	source := repositoryBinding(st, snap.Source.RepositoryID)
 	gitops := repositoryBinding(st, snap.GitOps.RepositoryID)
@@ -64,7 +74,7 @@ func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOpe
 	if op.Native != nil && !repoMatch {
 		return invalid("native recipe repository changed")
 	}
-	if env == nil || env.Cluster != snap.Environment.Cluster || env.Namespace != snap.Environment.Namespace || current == nil || !reflect.DeepEqual(*current, snap.Build) || target == nil || !reflect.DeepEqual(*target, snap.Target) || source == nil || !reflect.DeepEqual(*source, snap.Source) || gitops == nil || !reflect.DeepEqual(*gitops, snap.GitOps) {
+	if env == nil || env.Cluster != snap.Environment.Cluster || env.Namespace != snap.Environment.Namespace || current == nil || !reflect.DeepEqual(current, expectedBuild) || target == nil || !reflect.DeepEqual(*target, snap.Target) || source == nil || !reflect.DeepEqual(*source, snap.Source) || gitops == nil || !reflect.DeepEqual(*gitops, snap.GitOps) {
 		return invalid("native delivery configuration changed")
 	}
 	sc, e := scopedConnection(st, snap.Source.ConnectionID, op.ProductID)
@@ -119,10 +129,23 @@ func (s *Service) managedWorkerAllowed(st *domain.State, j *domain.WorkerJob) er
 	return invalid("managed worker link mismatch")
 }
 func (s *Service) tickNativeDelivery(ctx context.Context, op domain.ExternalOperation, token string) error {
+	if op.Snapshot != nil && op.Snapshot.MainCandidate != nil {
+		if err := s.verifyNativeSource(ctx, op); err != nil {
+			return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+		}
+	}
 	return s.store.Update(ctx, func(st *domain.State) error {
 		parent := operationByID(st, op.ID)
 		if parent == nil || parent.LeaseOwner != token {
 			return invalid("native delivery lease lost")
+		}
+		if parent.Snapshot != nil && parent.Snapshot.MainCandidate != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !parent.LeaseUntil.After(time.Now().UTC()) {
+				return invalid("main candidate child lease expired")
+			}
 		}
 		if e := s.nativeDeliveryAllowed(st, parent); e != nil {
 			stopNativeDelivery(st, parent, "BLOCKED", e.Error(), time.Now().UTC())
@@ -268,6 +291,28 @@ func (s *Service) cancelNativeDelivery(ctx context.Context, c domain.Command) (a
 			return invalid("invalid native cancellation scope")
 		}
 		op := operationByID(st, c.ID)
+		candidate := op != nil && op.Kind == "RELEASE_CANDIDATE" && op.MainCandidate != nil
+		if candidate {
+			if op.ProductID != c.ProductID || terminalOperation(op.Status) {
+				return invalid("native main candidate cannot cancel after completion")
+			}
+			for _, cid := range op.ChildIDs {
+				child := operationByID(st, cid)
+				if child == nil || !child.BuildOnly || child.Snapshot == nil || child.Snapshot.MainCandidate == nil || child.GitOpsPR != nil || child.GitOpsResult != nil {
+					return invalid("candidate child is not build-only")
+				}
+			}
+			for _, cid := range op.ChildIDs {
+				child := operationByID(st, cid)
+				if !terminalOperation(child.Status) {
+					stopNativeDelivery(st, child, "CANCELLED", "main candidate cancelled; physical execution requires reconciliation", time.Now().UTC())
+				}
+			}
+			stopNativeDelivery(st, op, "CANCELLED", "main candidate cancelled", time.Now().UTC())
+			st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: time.Now().UTC(), EntityID: op.ID, ProductID: op.ProductID, Data: c})
+			out = *op
+			return nil
+		}
 		if op == nil || op.ProductID != c.ProductID || op.Kind != "DEPLOY" || op.Snapshot == nil || op.Snapshot.Build.Mode != "NATIVE" || terminalOperation(op.Status) || op.Phase == "APPLY_UNCERTAIN" || op.Phase == "WAIT_GITOPS_PR" || op.GitOpsPR != nil || op.GitOpsResult != nil {
 			return invalid("native delivery cannot cancel after external PR intent or completion")
 		}
@@ -301,6 +346,17 @@ func nativeWorkerOrigin(st *domain.State, j *domain.WorkerJob) error {
 	return invalid("immutable native job link mismatch")
 }
 func (s *Service) verifyNativeSource(ctx context.Context, op domain.ExternalOperation) error {
+	if op.Snapshot != nil && op.Snapshot.MainCandidate != nil {
+		st, err := s.store.Read(ctx)
+		if err != nil {
+			return err
+		}
+		if err = s.nativeMainChildAllowed(&st, &op); err != nil {
+			return err
+		}
+		parent := operationByID(&st, op.ParentID)
+		return s.observeMainCandidate(ctx, parent, false)
+	}
 	if op.Snapshot == nil || op.Snapshot.Build.Mode != "NATIVE" {
 		return nil
 	}
@@ -365,6 +421,13 @@ func nativeReleaseDenied(st *domain.State, op domain.ExternalOperation) error {
 }
 
 func nativeParentHash(parent *domain.ExternalOperation) string {
+	if parent.MainCandidate != nil {
+		return workerconfig.Fingerprint(struct {
+			Composition *domain.Composition
+			Proof       *domain.MainCandidateProof
+			Prepared    []domain.DeliverySnapshot
+		}{parent.CompositionSnapshot, parent.MainCandidate, parent.PreparedDeployments})
+	}
 	return workerconfig.Fingerprint(struct {
 		Composition *domain.Composition
 		Sources     []domain.FlowSource
@@ -393,6 +456,9 @@ func (s *Service) validateFrozenNative(product string, snap domain.DeliverySnaps
 	return nil
 }
 func (s *Service) flowGuard(st *domain.State, op domain.ExternalOperation) error {
+	if op.MainCandidate != nil {
+		return s.mainCandidateAllowed(st, &op)
+	}
 	if err := flowGuard(st, op); err != nil {
 		return err
 	}

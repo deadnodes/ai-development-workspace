@@ -371,6 +371,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 		}
 		if report != nil && a.Report != nil {
 			if reflect.DeepEqual(a.Report, report) {
+				if err := nativeWorkerOrigin(st, j); err != nil {
+					return err
+				}
 				out = domain.WorkerLease{Job: *j, Attempt: *a}
 				return nil
 			}

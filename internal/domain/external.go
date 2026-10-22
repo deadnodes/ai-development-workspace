@@ -81,6 +81,8 @@ type GitObservation struct {
 	ObservedAt    time.Time `json:"observed_at"`
 }
 type DeliverySnapshot struct {
+	MainCandidate    *MainCandidateProof    `json:"main_candidate,omitempty"`
+	BuildBaseline    *ComponentBuild        `json:"build_baseline,omitempty"`
 	Native           *NativeDelivery        `json:"native,omitempty"`
 	Revision         IntegrationRevision    `json:"revision"`
 	Application      Application            `json:"application"`
@@ -111,8 +113,9 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
-	SourceRetentionOriginID string `json:"source_retention_origin_id,omitempty"`
-	SourceRetentionParentID string `json:"source_retention_parent_id,omitempty"`
+	MainCandidate           *MainCandidateProof `json:"main_candidate,omitempty"`
+	SourceRetentionOriginID string              `json:"source_retention_origin_id,omitempty"`
+	SourceRetentionParentID string              `json:"source_retention_parent_id,omitempty"`
 
 	FeatureUpdate *FeatureUpdateRequest `json:"feature_update,omitempty"`
 

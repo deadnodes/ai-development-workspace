@@ -136,6 +136,15 @@ func (s *Service) publicationEligibleWithParent(st *domain.State, j *domain.Work
 		return err
 	}
 	build := componentBuild(st, p.ComponentID)
+	if j.Inputs.SourceProof != nil {
+		origin := operationByID(st, j.Inputs.SourceProof.DeliveryID)
+		if origin != nil && origin.Snapshot != nil && origin.Snapshot.MainCandidate != nil {
+			if build == nil || origin.Snapshot.BuildBaseline == nil || !reflect.DeepEqual(*build, *origin.Snapshot.BuildBaseline) {
+				return invalid("candidate baseline profile changed")
+			}
+			build = &origin.Snapshot.Build
+		}
+	}
 	if build == nil || build.Mode != "NATIVE" || build.Profile != p.Profile {
 		return invalid("native component profile changed")
 	}
