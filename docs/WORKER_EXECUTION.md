@@ -62,6 +62,17 @@ contents. This slice grants no external write credentials. A receipt is a worker
 assertion about a check or verified local OCI output, never proof of registry
 availability, independent provenance attestation or rollout.
 
+An optional immutable `execution.source_fetch` profile lets the external
+supervisor obtain a pinned GitHub file-tree before its existing offline checks
+or build. It binds the numeric repository identity and resource bounds into the
+recipe/job hash. Supervisor-only `source_github` configuration chooses explicit
+anonymous access or a separate Contents-read token reference; it is never a
+job field or a credential forwarded to source execution. Source strategy is
+exclusive with `source_mirror`, with no retry using a broader strategy or token.
+The reader verifies tree/blob identities while trusting GitHub's commit-to-tree
+mapping. It does not grant source writes, execute COMPOSE externally, ingest Git
+packs or expose source bytes through RCP. See [source configuration and limits](LOCAL_WORKER.md#github-source-without-a-preseeded-mirror).
+
 Recipes accept only bounded booleans, integers and enumerated strings. No raw
 stdout, arbitrary error, URL, prompt, secret or tool payload is persisted. Result
 codes are closed; evidence is an optional sha256 fingerprint, not raw output.

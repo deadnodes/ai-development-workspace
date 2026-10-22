@@ -334,7 +334,7 @@ func TestRealLocalCleanupRecovery(t *testing.T) {
 	execution := &domain.WorkerExecution{Kind: "source_check", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", Platform: "linux/arm64", CheckArgv: []string{"/bin/true"}, Network: "none", TimeoutSeconds: 30, MemoryMB: 128, StorageMB: 16, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 1 << 20, LogBytes: 4096}
 	recipe := workerconfig.Recipe{ID: "unrelated", Revision: "v1", ProductID: "p", RepositoryID: "r", RepositoryURL: "https://github.com/fixture/unrelated", Capability: "source_check", Trust: "trusted_source", Parameters: map[string]workerconfig.Parameter{}, Execution: execution}
 	recipe.Hash = workerconfig.RecipeHash(recipe)
-	cfg := Config{Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_CLEANUP_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "fixture", Recipe: recipe, StateDir: state, DockerContext: d.context, DockerConfig: d.config}
+	cfg := Config{Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_CLEANUP_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "fixture", Recipe: recipe, SourceMirror: filepath.Join(t.TempDir(), "mirror"), StateDir: state, DockerContext: d.context, DockerConfig: d.config}
 	configFile := filepath.Join(t.TempDir(), "operator.json")
 	raw, _ := json.Marshal(cfg)
 	if e = os.WriteFile(configFile, raw, 0600); e != nil {

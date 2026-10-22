@@ -21,14 +21,70 @@ become shell text or argv. Reuse a project's Make entrypoints when its offline
 dependencies are available. The example uses a dependency-free Go fixture rather
 than duplicating this repository's checks into a new workflow.
 
-The executor requires an operator-preseeded Git object mirror and verifies the
-exact captured commit before streaming a bounded archive into its private
-snapshot. It disables Git user/system configuration, replacement objects, hooks,
-SSH and interactive credential lookup. Symlinks, hardlinks, special files,
-escaping paths, `.git` content and excessive input are rejected. The compiler
-receives only the ephemeral read-only snapshot, never a managed checkout,
-mirror, Git metadata, home directory, worker token or Docker socket. Public
-fetch is explicitly unsupported until pack/storage limits are implemented.
+The operator selects exactly one source strategy: a preseeded Git object mirror,
+or the recipe-pinned GitHub file-tree reader described below. There is no fallback
+between them. Mirror mode verifies the exact captured commit before streaming a
+bounded archive through a fresh bare view; it disables user/system Git
+configuration, replacement objects, hooks, SSH and interactive credentials.
+Both modes reject links, special files, escaping paths, `.git` content and
+excessive input. The compiler receives only the completed ephemeral read-only
+snapshot, never a managed checkout, mirror, Git metadata, home directory, source
+credential, worker token or Docker socket. Git clone/fetch and pack ingestion
+remain unsupported.
+
+### GitHub source without a preseeded mirror
+
+Set `execution.source_fetch` in the immutable recipe, then recompute its hash:
+
+```json
+{"provider":"github","repository_id":123,"timeout_seconds":60,"max_download_bytes":16777216,"max_requests":1024,"max_entries":10000,"max_depth":32}
+```
+
+This fragment is inactive configuration: replace `123` with the approved numeric
+GitHub repository identity. The recipe URL must be canonical
+`https://github.com/owner/repo`. The profile and bounds enter the recipe and job
+input hashes; callers cannot provide another URL, branch, command or credential.
+This mode accepts only pinned 40-hex GitHub commit IDs.
+
+Remove `source_mirror` from the supervisor configuration and explicitly select
+either `"source_github":{"anonymous":true}` for public reads, or
+`"source_github":{"anonymous":false,"token_env":"RCP_SOURCE_READ_TOKEN"}`.
+Use a separately provisioned repository-scoped Contents-read credential; no
+credential is issued by this profile. References and values must differ from
+the worker credential and `RC_TOKEN`. Separation is checked before claim and
+before every source request, including rotation and credentials captured by the
+running supervisor. Anonymous mode references no source token. Mirror mode
+requires `source_mirror` and refuses `source_github`.
+
+The supervisor makes HTTPS GET requests only to `api.github.com`, using locally
+constructed repository, commit, tree and blob paths. It verifies repository ID
+and exact full name, then obtains the pinned commit's tree. Redirects, provider
+URL fields, truncated trees and alternate hosts are refused. GitHub is trusted
+for the commit-to-tree mapping; the reader reconstructs every tree object and
+verifies each raw blob's Git object hash and size. This does not reconstruct or
+cryptographically verify the complete commit object. See the GitHub contracts
+for [trees](https://docs.github.com/en/rest/git/trees#get-a-tree),
+[raw blobs](https://docs.github.com/en/rest/git/blobs#get-a-blob) and
+[commit objects](https://docs.github.com/en/rest/git/commits#get-a-commit-object).
+
+The snapshot contains the raw file tree: no `export-ignore` or `export-subst`
+processing, submodule checkout, LFS download or dependency fetch. Such content
+must already fit the trusted offline recipe. Tree closure, directory/type
+consistency, modes, names and duplicate/case-colliding paths are validated before
+blob download. Expanded bytes include repeated files, even when their blob IDs
+match. Metadata responses are capped at 8 MiB; recipe bounds additionally cap
+cumulative decoded HTTP body bytes (at most 512 MiB), requests (4096), entries
+(20000), depth (64) and source timeout (120 seconds). Existing `source_bytes`
+also caps the expanded snapshot. The current job/lease cancellation context
+continues to apply.
+
+Only a complete verified snapshot is made readable by the nonroot compiler:
+directories become 0755, regular files 0444 and executable files 0555, beneath
+the private 0700 attempt directory. The compiler mount remains read-only and
+its network remains disabled. Fetch, verification or preparation failure starts
+no compiler and cannot produce PASSED or a local OCI receipt. Responses and
+credentials are not journaled or reported; failures use bounded categories.
+There is no shared source cache, source-history store or automatic source GC.
 
 Compiler profile: UID/GID 65532, all capabilities dropped, no-new-privileges,
 read-only rootfs and snapshot, network none, bounded exec-enabled work/tmp tmpfs,

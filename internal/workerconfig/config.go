@@ -245,6 +245,9 @@ func ValidateExecution(r Recipe) error {
 	if r.Trust != "trusted_source" || e.Kind != r.Capability || !pinned.MatchString(e.ToolchainImage) || e.Network != "none" || e.Platform != "linux/amd64" && e.Platform != "linux/arm64" || e.TimeoutSeconds < 1 || e.TimeoutSeconds > 1800 || e.MemoryMB < 64 || e.MemoryMB > 16384 || e.StorageMB < 16 || e.StorageMB > 4096 || e.CPUs < 1 || e.CPUs > 16 || e.PIDs < 16 || e.PIDs > 1024 || e.SourceBytes < 1 || e.SourceBytes > 256<<20 || e.OutputBytes < 1 || e.OutputBytes > 512<<20 || e.LogBytes < 1 || e.LogBytes > 1<<20 || !validArgv(e.CheckArgv) {
 		return errors.New("invalid trusted isolated execution definition")
 	}
+	if e.SourceFetch != nil && (!domain.ValidWorkerSourceFetch(e.SourceFetch, e.SourceBytes) || !ValidGitHubSourceRepositoryURL(r.RepositoryURL)) {
+		return errors.New("invalid pinned GitHub source fetch definition")
+	}
 	if e.Kind == "local_oci_build" {
 		if r := e.RuntimeRootFS; r != nil && (!digest.MatchString(r.Hash) || !digest.MatchString(r.InputsHash) || r.ArchiveBytes < 1 || r.ArchiveBytes > 128<<20 || r.MaxExpandedBytes < 1 || r.MaxExpandedBytes > 128<<20 || r.MaxEntries < 1 || r.MaxEntries > 20000) {
 			return errors.New("invalid runtime rootfs pins or bounds")
@@ -256,6 +259,18 @@ func ValidateExecution(r Recipe) error {
 		return errors.New("source check cannot declare OCI outputs")
 	}
 	return nil
+}
+
+// Remote source access accepts only the canonical repository URL. Numeric
+// repository identity is checked separately by the source reader.
+func ValidGitHubSourceRepositoryURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || u.Opaque != "" || u.ForceQuery {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	component := regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
+	return len(parts) == 2 && strings.HasPrefix(u.Path, "/") && component.MatchString(parts[0]) && component.MatchString(parts[1]) && parts[0] != "." && parts[0] != ".." && parts[1] != "." && parts[1] != ".." && !strings.HasSuffix(parts[1], ".git")
 }
 func validArgv(argv []string) bool {
 	if len(argv) == 0 || len(argv) > 32 {

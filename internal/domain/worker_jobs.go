@@ -7,6 +7,7 @@ const WorkerOperationKind = "WORKER_EXECUTION"
 // WorkerExecution is operator-owned, immutable recipe content. Commands are
 // literal argv, never request parameters or shell templates.
 type WorkerExecution struct {
+	SourceFetch    *WorkerSourceFetch   `json:"source_fetch,omitempty"`
 	RuntimeRootFS  *WorkerRuntimeRootFS `json:"runtime_rootfs,omitempty"`
 	Kind           string               `json:"kind"`
 	ToolchainImage string               `json:"toolchain_image"`
@@ -26,6 +27,22 @@ type WorkerExecution struct {
 	SourceBytes    int64                `json:"source_bytes"`
 	OutputBytes    int64                `json:"output_bytes"`
 	LogBytes       int64                `json:"log_bytes"`
+}
+
+// WorkerSourceFetch pins a bounded GitHub file-tree reader. Credentials remain
+// local to the supervisor and never enter recipes or job snapshots.
+type WorkerSourceFetch struct {
+	Provider         string `json:"provider"`
+	RepositoryID     int64  `json:"repository_id"`
+	TimeoutSeconds   int    `json:"timeout_seconds"`
+	MaxDownloadBytes int64  `json:"max_download_bytes"`
+	MaxRequests      int    `json:"max_requests"`
+	MaxEntries       int    `json:"max_entries"`
+	MaxDepth         int    `json:"max_depth"`
+}
+
+func ValidWorkerSourceFetch(spec *WorkerSourceFetch, sourceBytes int64) bool {
+	return spec != nil && spec.Provider == "github" && spec.RepositoryID > 0 && spec.TimeoutSeconds >= 1 && spec.TimeoutSeconds <= 120 && spec.MaxDownloadBytes >= 1 && spec.MaxDownloadBytes <= 512<<20 && spec.MaxRequests >= 1 && spec.MaxRequests <= 4096 && spec.MaxEntries >= 1 && spec.MaxEntries <= 20000 && spec.MaxDepth >= 1 && spec.MaxDepth <= 64 && sourceBytes >= 1 && sourceBytes <= 256<<20
 }
 
 // WorkerRuntimeRootFS pins an operator-prepared bundle baked into the immutable

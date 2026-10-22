@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,7 +23,13 @@ import (
 	"releasecontrol/internal/workerconfig"
 )
 
+type SourceGitHubAccess struct {
+	Anonymous bool   `json:"anonymous"`
+	TokenEnv  string `json:"token_env,omitempty"`
+}
 type Config struct {
+	SourceGitHub *SourceGitHubAccess `json:"source_github,omitempty"`
+
 	ArtifactSpool           *artifactspool.Config `json:"artifact_spool,omitempty"`
 	Endpoint                string                `json:"endpoint"`
 	TokenEnv                string                `json:"token_env"`
@@ -60,6 +67,9 @@ func validateConfig(c Config) error {
 	}
 	if c.Recipe.Hash != workerconfig.RecipeHash(c.Recipe) || c.Recipe.Execution == nil || workerconfig.ValidateExecution(c.Recipe) != nil || c.Recipe.Trust != "trusted_source" || c.Recipe.ProductID != c.ProductID || c.Recipe.RepositoryID != c.RepositoryID || c.ConfigRevision == "" || !filepath.IsAbs(c.StateDir) || c.SourceMirror != "" && !filepath.IsAbs(c.SourceMirror) || !regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`).MatchString(c.TokenEnv) || c.DockerContext != "" && !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(c.DockerContext) {
 		return errors.New("invalid pinned worker configuration")
+	}
+	if err := validateSourceStrategy(c); err != nil {
+		return err
 	}
 	if c.Recipe.Capability == "local_oci_build" && !c.AllowRootlessUnconfined {
 		return errors.New("rootless BuildKit security exceptions require explicit operator opt-in")
@@ -129,6 +139,11 @@ func (j *journalState) completeCreate(name, id string, createErr error) error {
 // RunOne claims and executes one real isolated job. No source command receives
 // control-plane credentials, host sockets, Git metadata or registry credentials.
 func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
+	return runOne(parent, c, nil)
+}
+
+// Tests inject transport for the production API URL, not an operator host option.
+func runOne(parent context.Context, c Config, sourceClient *http.Client) (*domain.WorkerReport, error) {
 	if c.DockerConfig == "" {
 		home, e := os.UserHomeDir()
 		if e != nil {
@@ -158,7 +173,9 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 	if e := Recover(c.StateDir); e != nil {
 		return nil, e
 	}
-	client, e := workerclient.New(c.Endpoint, os.Getenv(c.TokenEnv))
+	workerToken := os.Getenv(c.TokenEnv)
+	sourceCredential := sourceCredential(c, workerToken)
+	client, e := workerclient.New(c.Endpoint, workerToken)
 	if e != nil {
 		return nil, e
 	}
@@ -172,6 +189,11 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 		j, err := readJournal(filepath.Join(c.StateDir, entry.Name(), "journal.json"))
 		if err == nil && j.Report != nil {
 			_, _ = client.Report(parent, *j.Report)
+		}
+	}
+	if c.Recipe.Execution.SourceFetch != nil {
+		if _, err := sourceCredential(); err != nil {
+			return nil, err
 		}
 	}
 	lease, e := client.Claim(parent, domain.WorkerClaim{ProductID: c.ProductID, RepositoryID: c.RepositoryID, Capability: c.Recipe.Capability, RecipeID: c.Recipe.ID, RecipeHash: c.Recipe.Hash})
@@ -220,7 +242,7 @@ func RunOne(parent context.Context, c Config) (*domain.WorkerReport, error) {
 	}
 	stopHeartbeat := superviseWorkerHeartbeat(ctx, cancel, client, request, js)
 	defer stopHeartbeat()
-	result, runErr := execute(ctx, c, root, js)
+	result, runErr := execute(ctx, c, root, js, sourceClient, sourceCredential)
 	report, runErr := prepareReport(ctx, c, root, request, result, runErr)
 	// The terminal report must not race a heartbeat rejected after its own
 	// acceptance. Join supervision first, then honor any lease failure observed
@@ -314,8 +336,12 @@ func prepareReport(ctx context.Context, c Config, root string, request domain.Wo
 	}
 	return report, runErr
 }
-func execute(ctx context.Context, c Config, root string, js *journalState) (*domain.WorkerLocalOCI, error) {
+func execute(ctx context.Context, c Config, root string, js *journalState, sourceClient *http.Client, sourceCredential func() (string, error)) (*domain.WorkerLocalOCI, error) {
 	e := c.Recipe.Execution
+	source, err := materializeSource(ctx, c, root, jsSource(js), sourceClient, sourceCredential)
+	if err != nil {
+		return nil, err
+	}
 	d := docker{context: c.DockerContext, config: c.DockerConfig}
 	info, err := d.output(ctx, nil, 128, "info", "--format", "{{.OSType}}/{{.Architecture}}")
 	native := strings.ReplaceAll(stringTrim(info), "aarch64", "arm64")
@@ -333,10 +359,7 @@ func execute(ctx context.Context, c Config, root string, js *journalState) (*dom
 			return nil, errors.New("pinned native image unavailable")
 		}
 	}
-	source, err := materialize(ctx, root, c.SourceMirror, c.Recipe.RepositoryURL, jsSource(js), e.SourceBytes)
-	if err != nil {
-		return nil, err
-	}
+
 	checkName := "rcp-" + js.snapshot().Owner + "-check"
 	if err = js.beginResource(checkName); err != nil {
 		return nil, err
