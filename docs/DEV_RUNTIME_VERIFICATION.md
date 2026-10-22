@@ -3,7 +3,9 @@
 `verify_candidate_dev_runtime` collects a server-owned point-in-time proof for
 an already applied `DEV_CANDIDATE_DEPLOY`. It does not accept functional tests,
 restore the shared baseline, release its reservation, approve a merge or promote
-production. The original candidate and its artifacts remain immutable.
+production. The original candidate and its artifacts remain immutable. New
+activations first require a [complete physical baseline capture](DEV_BASELINE_CAPTURE.md);
+the later candidate runtime proof does not replace that pre-candidate evidence.
 
 ## Configure complete coverage
 

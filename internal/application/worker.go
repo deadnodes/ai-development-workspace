@@ -118,6 +118,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	if op.Kind == "REFRESH_REPOSITORY_GIT" {
 		return true, s.observeRepositoryGit(callCtx, *op, token)
 	}
+	if op.Kind == devBaselineKind {
+		return true, s.tickDevBaseline(callCtx, *op, token)
+	}
 	if op.Kind == devRuntimeKind {
 		return true, s.tickDevRuntime(callCtx, *op, token)
 	}

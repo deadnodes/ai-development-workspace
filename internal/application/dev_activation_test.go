@@ -18,6 +18,11 @@ import (
 )
 
 type devActivationProvider struct {
+	desiredImages   map[string]string
+	desiredDigests  map[string]string
+	baselineImages  map[string]string
+	baselineDigests map[string]string
+	baselineHead    string
 	*mainCandidateProvider
 	proposals, lookups, observations int
 	lost, merged, closed, absent     bool
@@ -53,6 +58,13 @@ func (p *devActivationProvider) ProposeGitOps(_ context.Context, _ delivery.Conn
 		return delivery.GitOpsPullRequest{}, errors.New("second component proposal outcome uncertain")
 	}
 	p.digest, p.image = r.Digest, r.Request.ImageRepository
+	if p.desiredImages == nil {
+		p.desiredImages = map[string]string{}
+		p.desiredDigests = map[string]string{}
+	}
+	key := r.Request.Path + "|" + r.Request.ImageRepository
+	p.desiredImages[key] = r.Request.ImageRepository
+	p.desiredDigests[key] = r.Digest
 	if p.beforePropose != nil {
 		p.beforePropose()
 	}
@@ -67,8 +79,21 @@ func (p *devActivationProvider) ProposeGitOps(_ context.Context, _ delivery.Conn
 }
 func (p *devActivationProvider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
 	result, err := p.mainCandidateProvider.ReadGitOps(ctx, c, r)
+	if !p.merged && p.baselineImages != nil {
+		key := r.Path + "|" + r.ImageRepository
+		result.ImageRepository = p.baselineImages[key]
+		result.Digest = p.baselineDigests[key]
+		result.HeadSHA = p.baselineHead
+		result.BlobSHA = strings.Repeat("d", 40)
+		result.Content = "fixture baseline complete shared Helm bytes"
+	}
 	if p.merged {
 		result.Digest, result.ImageRepository = p.digest, p.image
+		if p.desiredImages != nil {
+			key := r.Path + "|" + r.ImageRepository
+			result.Digest = p.desiredDigests[key]
+			result.ImageRepository = p.desiredImages[key]
+		}
 	}
 	return result, err
 }
@@ -101,6 +126,7 @@ func devActivationFixture(t *testing.T, kind string) (*nativeFixture, *devActiva
 		t.Fatal(err)
 	}
 	hold := v.(domain.ExternalOperation)
+	prepareActivationFixtureBaseline(t, f, p, hold)
 	return f, p, hold, domain.Command{Action: "deploy_candidate_dev", Actor: hold.RequestedBy, ProductID: hold.ProductID, Data: map[string]any{"reservation_operation_id": hold.ID, "request_key": "fixture-activate-main-A", "expected_selection": hold.DevReservation.ReservedSelection}}
 }
 func activationTicks(t *testing.T, f *nativeFixture, n int) {
@@ -435,6 +461,7 @@ func devActivationMultiFixture(t *testing.T, kind string, setup ...func(*nativeF
 	second := f.recipe
 	second.ID = "publish-b"
 	second.ComponentID = "component-b"
+	second.Repository += "-b"
 	second.Hash = workerconfig.PublicationHash(second)
 	cfg := workerconfig.Config{Revision: "cfg1", LeaseSeconds: 5, Recipes: []workerconfig.Recipe{b}, Publications: []workerconfig.PublicationRecipe{f.recipe, second}, Credentials: []workerconfig.Credential{
 		{ID: "build", Principal: "worker/build", TokenEnv: "NATIVE_BUILD_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)},
@@ -489,6 +516,8 @@ func devActivationMultiFixture(t *testing.T, kind string, setup ...func(*nativeF
 			t.Fatal(err)
 		}
 		pub := lease.Job.Inputs.Publication
+		f.publisher.AllowedOrigin = pub.Origin
+		f.publisher.AllowedRepository = pub.Repository
 		f.publisher.Plan = ocipublisher.Plan{ID: lease.Job.ID, Approved: true, ProductID: "p", ComponentID: pub.ComponentID, RepositoryID: "source", Origin: pub.Origin, Repository: pub.Repository, Receipt: pub.Receipt}
 		if _, err = ocipublisher.Publish(ctx, f.publisher); err != nil {
 			t.Fatal(err)
@@ -513,6 +542,7 @@ func devActivationMultiFixture(t *testing.T, kind string, setup ...func(*nativeF
 	hold := v.(domain.ExternalOperation)
 	p := &devActivationProvider{mainCandidateProvider: source}
 	f.s.provider = p
+	prepareActivationFixtureBaseline(t, f, p, hold)
 	return f, p, hold, domain.Command{Action: "deploy_candidate_dev", Actor: "operator", ProductID: "p", Data: map[string]any{"reservation_operation_id": hold.ID, "request_key": "fixture-activate-multi-A", "expected_selection": hold.DevReservation.ReservedSelection}}
 }
 
@@ -725,6 +755,7 @@ func TestDevActivationRevalidatesBetweenPhysicalWrites(t *testing.T) {
 }
 
 type devActivationUnguardedProvider struct {
+	baselineReader *devActivationProvider
 	*mainCandidateProvider
 	proposals int
 }
@@ -739,7 +770,7 @@ func TestDevActivationNeverFallsBackToUnguardedProposer(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			f, p, hold, c := devActivationFixture(t, kind)
-			legacy := &devActivationUnguardedProvider{mainCandidateProvider: p.mainCandidateProvider}
+			legacy := &devActivationUnguardedProvider{mainCandidateProvider: p.mainCandidateProvider, baselineReader: p}
 			f.s.provider = legacy
 			v, err := f.s.Execute(ctx, c)
 			if err != nil {

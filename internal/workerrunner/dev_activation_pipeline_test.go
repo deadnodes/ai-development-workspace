@@ -37,7 +37,7 @@ func (p *mainCandidateActivationProvider) ObserveGitOpsPR(ctx context.Context, c
 func (p *mainCandidateActivationProvider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
 	return p.Provider.ReadGitOps(ctx, c, r)
 }
-func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate string, provider *mainCandidateActivationProvider, runtimePeer *candidateRuntimeHTTPFixture, ticks func(), inventoryTick func(), read func() domain.State, post func(domain.Command, any, bool)) []byte {
+func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate string, provider *mainCandidateActivationProvider, runtimePeer *candidateRuntimeHTTPFixture, ticks func(), inventoryTick func(), read func() domain.State, post func(domain.Command, any, bool), registryFault func(bool)) []byte {
 	t.Helper()
 	environment := func(s domain.State) domain.Environment {
 		for _, e := range s.Environments {
@@ -92,6 +92,10 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	var reservation domain.ExternalOperation
 	request("reserve", map[string]any{"candidate_operation_id": candidate, "environment_id": "dev", "request_key": "real-candidate-activation-reserve", "expected_selection": selection(baseline)}, &reservation, true)
 	held := environment(read())
+	capture := assertRealDevBaselineCapture(t, reservation, selection(held), runtimePeer, provider, ticks, read, request, registryFault)
+	baselineProof, _ := json.Marshal(capture)
+	assertRealBaselineQuery(t, endpoint, token, capture, true)
+	assertRealBaselineRetained(t, endpoint, token, capture)
 	input := map[string]any{"reservation_operation_id": reservation.ID, "request_key": "real-candidate-activation-deploy", "expected_selection": selection(held)}
 	var activation domain.ExternalOperation
 	provider.gitops.loseNextPRReply()
@@ -121,6 +125,7 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	provider.gitops.assertExactPatch(t, built.Snapshot.Build.ImageRepository, built.Artifact.Digest)
 	request("release", map[string]any{"reservation_operation_id": reservation.ID, "request_key": "unsafe-release-after-activation", "expected_selection": selection(held)}, nil, false)
 	provider.gitops.externalMerge(t) // External HTTP peer state; RCP never merges the PR.
+	runtimePeer.setImage(built.Snapshot.Build.ImageRepository, built.Artifact.Digest)
 	ticks()
 	after := read()
 	done := operation(after, activation.ID)
@@ -143,7 +148,13 @@ func assertRealCandidateDevActivation(t *testing.T, endpoint, token, candidate s
 	if replay.ID != activation.ID || len(provider.proposals) != 1 {
 		t.Fatal("historical merged replay repeated effect")
 	}
+	assertRealBaselineQuery(t, endpoint, token, capture, false)
+	retainedBaseline, _ := json.Marshal(operation(read(), capture.ID))
+	if !bytes.Equal(baselineProof, retainedBaseline) {
+		t.Fatal("activation changed immutable original baseline proof")
+	}
 	assertRealCandidateRuntimeVerification(t, endpoint, token, activation.ID, runtimePeer, ticks, inventoryTick, read, post)
+	assertRealBaselineRetained(t, endpoint, token, capture)
 	b, _ := json.Marshal(read().Environments)
 	t.Log("Actual main Git→OCI→Distribution artifact delivered through authenticated named Dev HTTP and production GitHub GitOps adapter against local HTTP peer; lost proposal recovered read-only; external merge observed; baseline unchanged, no extra build/publication/source write, no runtime acceptance/promotion/unlock")
 	return b

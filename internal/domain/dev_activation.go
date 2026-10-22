@@ -3,6 +3,9 @@ package domain
 // DevActivationProof binds a new Dev execution to original, immutable Prod
 // build provenance. It does not grant merge, acceptance or restoration rights.
 type DevActivationProof struct {
+	BaselineCaptureID      string                   `json:"baseline_capture_id"`
+	BaselineCaptureHash    string                   `json:"baseline_capture_hash"`
+	OriginalBaselineHash   string                   `json:"original_baseline_hash"`
 	Request                DevReservationRequest    `json:"request"`
 	ReservationOperationID string                   `json:"reservation_operation_id"`
 	ReservationHash        string                   `json:"reservation_hash"`

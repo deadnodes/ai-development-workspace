@@ -90,19 +90,26 @@ func validRevisionProof(r delivery.GitOpsRevisionRequest, p delivery.GitOpsRevis
 	return p.Repository == r.Repository && p.Ref == r.Ref && fullSHA.MatchString(p.HeadSHA) && (r.HeadSHA == "" || p.HeadSHA == r.HeadSHA) && reflect.DeepEqual(p.AncestorSHAs, r.AncestorSHAs)
 }
 func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperation, st *domain.State) (domain.DevRuntimeResult, error) {
-	out := domain.DevRuntimeResult{ExpectedHash: op.DevRuntime.SnapshotHash, Outcome: "VERIFIED", Reason: "EXACT_CONFIGURED_RUNTIME_MATCH"}
+	connections := map[string]delivery.Connection{}
+	for _, c := range op.DevRuntime.Components {
+		connections[c.ApplicationID] = operationByID(st, c.ChildID).Snapshot.GitOpsConnection
+	}
+	return s.readRuntimeProof(ctx, *op.DevRuntime, connections, func(ctx context.Context) error { return s.validateDevRuntimeIO(ctx, op) })
+}
+func (s *Service) readRuntimeProof(ctx context.Context, proof domain.DevRuntimeProof, connections map[string]delivery.Connection, guard func(context.Context) error) (domain.DevRuntimeResult, error) {
+	out := domain.DevRuntimeResult{ExpectedHash: proof.SnapshotHash, Outcome: "VERIFIED", Reason: "EXACT_CONFIGURED_RUNTIME_MATCH"}
 	groups := map[string]*runtimeGitOpsGroup{}
 	keys := []string{}
 	verifier, ok := s.provider.(delivery.GitOpsRevisionVerifier)
 	if !ok {
 		return out, invalid("runtime GitOps revision verifier unavailable")
 	}
-	for _, component := range op.DevRuntime.Components {
-		child := operationByID(st, component.ChildID)
-		key := runtimeGitOpsGroupKey(child.Snapshot.GitOpsConnection, component.GitOps)
+	for _, component := range proof.Components {
+		connection := connections[component.ApplicationID]
+		key := runtimeGitOpsGroupKey(connection, component.GitOps)
 		group := groups[key]
 		if group == nil {
-			group = &runtimeGitOpsGroup{Connection: child.Snapshot.GitOpsConnection, Request: delivery.GitOpsRevisionRequest{Repository: component.GitOps.Repository, Ref: component.GitOps.Ref}}
+			group = &runtimeGitOpsGroup{Connection: connection, Request: delivery.GitOpsRevisionRequest{Repository: component.GitOps.Repository, Ref: component.GitOps.Ref}}
 			groups[key] = group
 			keys = append(keys, key)
 		}
@@ -116,20 +123,19 @@ func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperatio
 		group := groups[key]
 		sort.Strings(group.Request.AncestorSHAs)
 		var request delivery.GitOpsRequest
-		for _, c := range op.DevRuntime.Components {
-			child := operationByID(st, c.ChildID)
-			if runtimeGitOpsGroupKey(child.Snapshot.GitOpsConnection, c.GitOps) == key {
+		for _, c := range proof.Components {
+			if runtimeGitOpsGroupKey(connections[c.ApplicationID], c.GitOps) == key {
 				request = c.GitOps
 				break
 			}
 		}
-		if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+		if err := guard(ctx); err != nil {
 			return out, err
 		}
 		if _, err := s.provider.ReadGitOps(ctx, group.Connection, request); err != nil {
 			return out, invalid("runtime GitOps read unavailable")
 		}
-		if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+		if err := guard(ctx); err != nil {
 			return out, err
 		}
 		proof, err := verifier.VerifyGitOpsRevision(ctx, group.Connection, group.Request)
@@ -139,15 +145,15 @@ func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperatio
 		group.Proof = proof
 	}
 	pods := 0
-	for _, component := range op.DevRuntime.Components {
-		child := operationByID(st, component.ChildID)
-		group := groups[runtimeGitOpsGroupKey(child.Snapshot.GitOpsConnection, component.GitOps)]
+	for _, component := range proof.Components {
+		connection := connections[component.ApplicationID]
+		group := groups[runtimeGitOpsGroupKey(connection, component.GitOps)]
 		request := component.GitOps
 		request.ExpectedHeadSHA = group.Proof.HeadSHA
-		if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+		if err := guard(ctx); err != nil {
 			return out, err
 		}
-		before, err := s.provider.ReadGitOps(ctx, child.Snapshot.GitOpsConnection, request)
+		before, err := s.provider.ReadGitOps(ctx, connection, request)
 		if err != nil {
 			return out, invalid("runtime pinned GitOps read unavailable")
 		}
@@ -174,7 +180,7 @@ func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperatio
 			if chosen == nil {
 				return out, invalid("frozen runtime role unavailable")
 			}
-			if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+			if err := guard(ctx); err != nil {
 				return out, err
 			}
 			actual := chosen.Snapshot(ctx)
@@ -188,25 +194,25 @@ func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperatio
 			// Successful snapshots contain only the typed operational fields and no errors.
 			cr.Roles = append(cr.Roles, actual)
 		}
-		if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+		if err := guard(ctx); err != nil {
 			return out, err
 		}
-		after, err := s.provider.ReadGitOps(ctx, child.Snapshot.GitOpsConnection, request)
+		after, err := s.provider.ReadGitOps(ctx, connection, request)
 		if err != nil || !reflect.DeepEqual(before, after) {
 			return out, invalid("runtime target changed during observation")
 		}
 		out.Components = append(out.Components, cr)
 	}
 	// Check every target again after ALL role reads, including shared-file siblings.
-	for _, component := range op.DevRuntime.Components {
-		child := operationByID(st, component.ChildID)
-		group := groups[runtimeGitOpsGroupKey(child.Snapshot.GitOpsConnection, component.GitOps)]
+	for _, component := range proof.Components {
+		connection := connections[component.ApplicationID]
+		group := groups[runtimeGitOpsGroupKey(connection, component.GitOps)]
 		request := component.GitOps
 		request.ExpectedHeadSHA = group.Proof.HeadSHA
-		if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+		if err := guard(ctx); err != nil {
 			return out, err
 		}
-		after, err := s.provider.ReadGitOps(ctx, child.Snapshot.GitOpsConnection, request)
+		after, err := s.provider.ReadGitOps(ctx, connection, request)
 		if err != nil {
 			return out, invalid("runtime final target unavailable")
 		}
@@ -225,7 +231,7 @@ func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperatio
 		group := groups[key]
 		request := group.Request
 		request.HeadSHA = group.Proof.HeadSHA
-		if err := s.validateDevRuntimeIO(ctx, op); err != nil {
+		if err := guard(ctx); err != nil {
 			return out, err
 		}
 		proof, err := verifier.VerifyGitOpsRevision(ctx, group.Connection, request)
@@ -235,7 +241,7 @@ func (s *Service) readDevRuntime(ctx context.Context, op domain.ExternalOperatio
 	}
 	out.ObservedAt = time.Now().UTC()
 	out.Hash = devRuntimeResultHash(out)
-	if err := validateDevRuntimeResult(*op.DevRuntime, out); err != nil {
+	if err := validateDevRuntimeResult(proof, out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -247,8 +253,11 @@ func validateRuntimeGitOps(c domain.DevRuntimeComponent, g domain.DevRuntimeGitO
 	return nil
 }
 func validateRuntimeRole(c domain.DevRuntimeComponent, scope delivery.RuntimeVerificationScope, r delivery.RuntimeSnapshot, head string) error {
+	return validateRuntimeRoleAt(c, scope, r, head, time.Now().UTC())
+}
+func validateRuntimeRoleAt(c domain.DevRuntimeComponent, scope delivery.RuntimeVerificationScope, r delivery.RuntimeSnapshot, head string, now time.Time) error {
 
-	if r.ProductID != scope.ProductID || r.EnvironmentID != scope.EnvironmentID || r.ApplicationID != scope.ApplicationID || r.Context != scope.Context || r.Namespace != scope.Namespace || r.Deployment != scope.Deployment || r.Container != scope.Container || r.ObservedAt.IsZero() || r.ObservedAt.After(time.Now().UTC()) || time.Since(r.ObservedAt) > 5*time.Minute || len(r.Errors) != 0 || r.Generation <= 0 || r.ObservedGeneration != r.Generation || r.DesiredReplicas <= 0 || r.Health != "HEALTHY" || !exactRuntimeImage(r.WorkloadImage, c.ImageRepository, c.Digest) || len(r.Pods) != r.DesiredReplicas || len(r.Pods) > 512 || r.Flux == nil || r.Flux.Status != "READY" || r.Flux.Error != "" || r.Flux.Revision != head && r.Flux.Revision != c.GitOps.Ref+"@sha1:"+head {
+	if r.ProductID != scope.ProductID || r.EnvironmentID != scope.EnvironmentID || r.ApplicationID != scope.ApplicationID || r.Context != scope.Context || r.Namespace != scope.Namespace || r.Deployment != scope.Deployment || r.Container != scope.Container || r.ObservedAt.IsZero() || r.ObservedAt.After(now) || now.Sub(r.ObservedAt) > 5*time.Minute || len(r.Errors) != 0 || r.Generation <= 0 || r.ObservedGeneration != r.Generation || r.DesiredReplicas <= 0 || r.Health != "HEALTHY" || !exactRuntimeImage(r.WorkloadImage, c.ImageRepository, c.Digest) || len(r.Pods) != r.DesiredReplicas || len(r.Pods) > 512 || r.Flux == nil || r.Flux.Status != "READY" || r.Flux.Error != "" || r.Flux.Revision != head && r.Flux.Revision != c.GitOps.Ref+"@sha1:"+head {
 		return invalid("runtime complete healthy exact role and Flux revision required")
 	}
 	seen := map[string]bool{}
@@ -270,6 +279,9 @@ func validRuntimeImageID(v, repository, digest string) bool {
 	return exactRuntimeImage(strings.TrimPrefix(v, "docker-pullable://"), repository, digest)
 }
 func validateDevRuntimeResult(p domain.DevRuntimeProof, r domain.DevRuntimeResult) error {
+	return validateDevRuntimeResultAt(p, r, time.Now().UTC())
+}
+func validateDevRuntimeResultAt(p domain.DevRuntimeProof, r domain.DevRuntimeResult, now time.Time) error {
 	if len(p.Components) == 0 || len(p.Components) > 16 || p.Generation == 0 || p.SnapshotHash != devRuntimeProofHash(p) || r.Outcome != "VERIFIED" || r.Reason != "EXACT_CONFIGURED_RUNTIME_MATCH" || r.ExpectedHash != p.SnapshotHash || len(r.Components) != len(p.Components) || r.Hash == "" || r.Hash != devRuntimeResultHash(r) || r.ObservedAt.IsZero() {
 		return invalid("runtime result proof mismatch")
 	}
@@ -303,7 +315,7 @@ func validateDevRuntimeResult(p domain.DevRuntimeProof, r domain.DevRuntimeResul
 		}
 		for j, scope := range c.Scopes {
 			role := cr.Roles[j]
-			if err := validateRuntimeRole(c, scope, role, cr.Revision.HeadSHA); err != nil {
+			if err := validateRuntimeRoleAt(c, scope, role, cr.Revision.HeadSHA, now); err != nil {
 				return err
 			}
 			pods += len(role.Pods)

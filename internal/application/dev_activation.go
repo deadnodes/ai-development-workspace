@@ -174,6 +174,9 @@ func (s *Service) devActivationAllowed(st *domain.State, op domain.ExternalOpera
 		return err
 	}
 	parent := devActivationParent(st, op)
+	if err := s.activationBaselineAllowed(st, *parent); err != nil {
+		return err
+	}
 	if nativeQuarantined(st, parent.ProductID) {
 		return invalid("candidate Dev activation quarantined")
 	}
@@ -195,6 +198,9 @@ func (s *Service) devActivationAllowed(st *domain.State, op domain.ExternalOpera
 func activationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.Kind == devBaselineKind && op.RequestKey == in.RequestKey {
+			return nil, invalid("request_key already binds a baseline capture")
+		}
 		if op.Kind == devRuntimeKind && op.RequestKey == in.RequestKey {
 			return nil, invalid("request_key already binds a runtime verification")
 		}
@@ -228,6 +234,12 @@ func (s *Service) executeDevActivation(ctx context.Context, c domain.Command) (a
 	hold := operationByID(&st, in.ReservationOperationID)
 	if hold == nil || hold.DevReservation == nil || hold.ProductID != c.ProductID || hold.RequestedBy != c.Actor {
 		return nil, invalid("same attributed reservation owner required")
+	}
+	if err = checkSelection(environmentByID(&st, hold.EnvironmentID), in.ExpectedSelection); err != nil {
+		return nil, err
+	}
+	if _, err = s.currentBaselineForHold(&st, hold); err != nil {
+		return nil, err
 	}
 	candidate := operationByID(&st, hold.DevReservation.CandidateOperationID)
 	if candidate == nil {
@@ -273,7 +285,11 @@ func (s *Service) executeDevActivation(ctx context.Context, c domain.Command) (a
 			return err
 		}
 		m := meta(c)
-		proof := &domain.DevActivationProof{Request: in, ReservationOperationID: hold.ID, ReservationHash: workerconfig.Fingerprint(hold.DevReservation), CandidateOperationID: candidate.ID, CandidateHash: workerconfig.Fingerprint(candidate.MainCandidate)}
+		baseline, err := s.currentBaselineForHold(st, hold)
+		if err != nil {
+			return err
+		}
+		proof := &domain.DevActivationProof{BaselineCaptureID: baseline.ID, BaselineCaptureHash: baselineCaptureHash(*baseline), OriginalBaselineHash: workerconfig.Fingerprint(baseline.DevBaselineResult.Components), Request: in, ReservationOperationID: hold.ID, ReservationHash: workerconfig.Fingerprint(hold.DevReservation), CandidateOperationID: candidate.ID, CandidateHash: workerconfig.Fingerprint(candidate.MainCandidate)}
 		out = domain.ExternalOperation{Meta: m, Kind: devActivationKind, RequestedBy: c.Actor, EnvironmentID: env.ID, ReservationEpoch: hold.ReservationEpoch, RequestKey: in.RequestKey, RequestHash: hash, DevActivation: proof, Status: "PENDING", Phase: "WAIT_CHILDREN", CurrentStep: "WAIT_CHILDREN", Detail: "Candidate Dev activation admitted; PR preparation is not deployment or acceptance", NextAttemptAt: m.CreatedAt}
 		children := []domain.ExternalOperation{}
 		for _, cid := range candidate.ChildIDs {

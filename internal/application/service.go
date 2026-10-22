@@ -66,6 +66,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return s.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "capture_candidate_dev_baseline" {
+		return s.executeDevBaseline(ctx, c)
+	}
 	if c.Action == "verify_candidate_dev_runtime" {
 		return s.executeDevRuntime(ctx, c)
 	}

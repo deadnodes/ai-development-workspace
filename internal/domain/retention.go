@@ -764,6 +764,7 @@ func (c *retentionCollector) evaluate() {
 	c.relevantEvidence()
 	c.artifacts()
 	c.operations()
+	c.baselineRoots()
 	c.environments()
 	c.releases()
 	for _, p := range c.st.ArtifactPins {
@@ -1098,6 +1099,10 @@ func (c *retentionCollector) sharedScopeEvidence(repositories map[string]bool) s
 			continue
 		}
 		match := o.Snapshot != nil && inScope(c.frozenImageRepository(*o.Snapshot)) || o.GitOpsBase != nil && inScope(o.GitOpsBase.ImageRepository) || o.ExistingArtifact != nil && inScope(c.artifactRepo(*o.ExistingArtifact))
+		if baselineInScope(o, inScope) {
+			match = true
+			evidence = append(evidence, c.baselineEvidence(o))
+		}
 		for _, s := range o.PreparedDeployments {
 			match = match || inScope(c.frozenImageRepository(s))
 		}

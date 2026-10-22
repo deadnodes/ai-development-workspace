@@ -17,7 +17,7 @@ func (c *Command) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &scope); err != nil {
 		return err
 	}
-	if scope.Action == "reserve_candidate_dev" || scope.Action == "release_candidate_dev" || scope.Action == "deploy_candidate_dev" || scope.Action == "verify_candidate_dev_runtime" {
+	if scope.Action == "reserve_candidate_dev" || scope.Action == "release_candidate_dev" || scope.Action == "deploy_candidate_dev" || scope.Action == "verify_candidate_dev_runtime" || scope.Action == "capture_candidate_dev_baseline" {
 		if err := uniqueReservationJSON(raw); err != nil {
 			return err
 		}

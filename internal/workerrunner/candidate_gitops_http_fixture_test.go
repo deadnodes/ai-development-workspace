@@ -24,6 +24,7 @@ type candidateGitOpsHTTPFixture struct {
 	trees                       map[string][]map[string]string
 	blobs                       map[string]string
 	initial, repo, branch, head string
+	baselineDigest              string
 	pr                          map[string]any
 	lost, recovering            bool
 	mutations                   []string
@@ -41,12 +42,16 @@ func newCandidateGitOpsHTTPFixture(t *testing.T) *candidateGitOpsHTTPFixture {
 	return f
 }
 func (f *candidateGitOpsHTTPFixture) configure(repo string) {
+	f.configureBaseline(repo, "sha256:"+strings.Repeat("a", 64))
+}
+func (f *candidateGitOpsHTTPFixture) configureBaseline(repo, digest string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.repo = repo
+	f.baselineDigest = digest
 	// Both roles move together; comments, Unicode and unrelated resources stay.
 	role := func(name string) string {
-		return "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: " + name + "\nspec:\n  values:\n    note: 'оставить # untouched'\n    image:\n      repository: '" + repo + "' # selected own repository\n      tag: 'old@sha256:" + strings.Repeat("a", 64) + "' # exact scalar only\n"
+		return "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: " + name + "\nspec:\n  values:\n    note: 'оставить # untouched'\n    image:\n      repository: '" + repo + "' # selected own repository\n      tag: 'old@sha256:" + strings.TrimPrefix(digest, "sha256:") + "' # exact scalar only\n"
 	}
 	f.initial = "# preserved header\n" + role("api") + "---\n" + role("worker") + "---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: untouched}\ndata: {key: 'preserve me'}\n"
 	blob := candidateGitHash("blob", f.initial)
@@ -246,7 +251,7 @@ func (f *candidateGitOpsHTTPFixture) assertExactPatch(t *testing.T, repo, digest
 		t.Fatalf("wrong production GitOps effects repo=%s want=%s mutations=%v recoveryWrites=%d", repo, f.repo, f.mutations, f.recoveryWrites)
 	}
 	expected := strings.ReplaceAll(f.initial, "'"+repo+"'", strconv.Quote(repo))
-	expected = strings.ReplaceAll(expected, "'old@sha256:"+strings.Repeat("a", 64)+"'", strconv.Quote("rcp@"+digest))
+	expected = strings.ReplaceAll(expected, "'old@"+f.baselineDigest+"'", strconv.Quote("rcp@"+digest))
 	actual := f.blobs[f.fileBlob(f.head, "dev.yaml")]
 	if actual != expected {
 		t.Fatalf("production adapter did not preserve exact private OCI YAML bytes\nactual=%s\nexpected=%s", actual, expected)

@@ -95,6 +95,7 @@ func CommandSchema() map[string]any {
 		{"reserve_candidate_dev", "product_id", "candidate_operation_id environment_id request_key expected_selection"},
 		{"deploy_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"verify_candidate_dev_runtime", "product_id", "activation_operation_id request_key expected_selection"},
+		{"capture_candidate_dev_baseline", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"release_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"claim_composition_conflict", "product_id", "conflict_id"},
 		{"record_conflict_resolution", "product_id", "conflict_id commit rationale"},

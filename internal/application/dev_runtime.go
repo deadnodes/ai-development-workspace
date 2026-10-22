@@ -74,6 +74,9 @@ func devRuntimeInput(c domain.Command) (domain.DevRuntimeRequest, string, error)
 func devRuntimeReplay(st *domain.State, c domain.Command, in domain.DevRuntimeRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.Kind == devBaselineKind && op.RequestKey == in.RequestKey {
+			return nil, invalid("request_key already binds a baseline capture")
+		}
 		if op.RequestKey != in.RequestKey {
 			continue
 		}
@@ -187,15 +190,19 @@ func (s *Service) runtimeExpectedProof(st *domain.State, activation *domain.Exte
 		return out, invalid("runtime verification component/role bounds exceeded")
 	}
 	out.SnapshotHash = devRuntimeProofHash(out)
-	failure := domain.DevRuntimeResult{ExpectedHash: out.SnapshotHash, Outcome: "UNVERIFIED", Reason: strings.Repeat("x", 64), ObservedAt: time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC), Hash: "sha256:" + strings.Repeat("0", 64)}
-	b, err := json.Marshal(struct {
-		Proof  domain.DevRuntimeProof
-		Result domain.DevRuntimeResult
-	}{out, failure})
-	if err != nil || len(b) > devRuntimeMaxBytes {
+	if !devRuntimeProofFits(out) {
 		return out, invalid("runtime expected proof bound exceeded")
 	}
 	return out, nil
+}
+
+func devRuntimeProofFits(proof domain.DevRuntimeProof) bool {
+	failure := domain.DevRuntimeResult{ExpectedHash: proof.SnapshotHash, Outcome: "UNVERIFIED", Reason: strings.Repeat("x", 64), ObservedAt: time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC), Hash: "sha256:" + strings.Repeat("0", 64)}
+	b, err := json.Marshal(struct {
+		Proof  domain.DevRuntimeProof
+		Result domain.DevRuntimeResult
+	}{proof, failure})
+	return err == nil && len(b) <= devRuntimeMaxBytes
 }
 func latestDevRuntime(st *domain.State, activation string) (*domain.ExternalOperation, bool) {
 	var latest *domain.ExternalOperation

@@ -113,6 +113,8 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
+	DevBaseline               *DevBaselineProof    `json:"dev_baseline,omitempty"`
+	DevBaselineResult         *DevBaselineResult   `json:"dev_baseline_result,omitempty"`
 	DevRuntime                *DevRuntimeProof     `json:"dev_runtime,omitempty"`
 	DevRuntimeResult          *DevRuntimeResult    `json:"dev_runtime_result,omitempty"`
 	DevActivation             *DevActivationProof  `json:"dev_activation,omitempty"`

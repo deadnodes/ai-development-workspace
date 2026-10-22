@@ -33,8 +33,8 @@ type devRuntimeProvider struct {
 }
 
 func (p *devRuntimeProvider) ProposeGitOpsGuarded(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply, g func(context.Context) error) (delivery.GitOpsPullRequest, error) {
-	p.images[r.Request.Path] = r.Request.ImageRepository
-	p.digests[r.Request.Path] = r.Digest
+	p.images[r.Request.Path+"|"+r.Request.ImageRepository] = r.Request.ImageRepository
+	p.digests[r.Request.Path+"|"+r.Request.ImageRepository] = r.Digest
 	return p.devActivationProvider.ProposeGitOpsGuarded(ctx, c, r, g)
 }
 func (p *devRuntimeProvider) ObserveGitOpsPR(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply, pr delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
@@ -72,9 +72,12 @@ func (p *devRuntimeProvider) ReadGitOps(ctx context.Context, c delivery.Connecti
 	if blob == "" {
 		blob = strings.Repeat("d", 40)
 	}
-	return delivery.GitOpsSnapshot{HeadSHA: head, BlobSHA: blob, ImageRepository: p.images[r.Path], Digest: p.digests[r.Path], Content: "shared-file-with-A-and-B-at-current-head"}, nil
+	return delivery.GitOpsSnapshot{HeadSHA: head, BlobSHA: blob, ImageRepository: p.images[r.Path+"|"+r.ImageRepository], Digest: p.digests[r.Path+"|"+r.ImageRepository], Content: "shared-file-with-A-and-B-at-current-head"}, nil
 }
 func (p *devRuntimeProvider) VerifyGitOpsRevision(_ context.Context, connection delivery.Connection, r delivery.GitOpsRevisionRequest) (delivery.GitOpsRevisionProof, error) {
+	if !p.runtime && !p.merged {
+		return p.devActivationProvider.VerifyGitOpsRevision(context.Background(), connection, r)
+	}
 	p.revisions++
 	if p.onRevision != nil {
 		p.onRevision()
@@ -236,7 +239,7 @@ func devRuntimeFixture(t *testing.T, kind string, multi bool, endpoint ...string
 	for _, cid := range activation.ChildIDs {
 		child := operationByID(&st, cid)
 		for _, role := range []string{"http", "worker"} {
-			scope := delivery.RuntimeVerificationScope{ProductID: "p", EnvironmentID: "dev", ApplicationID: child.ApplicationID, Context: "local", Namespace: "dev", Deployment: child.ApplicationID + "-" + role, Container: role, FluxNamespace: "flux-system", Kustomization: "apps-dev", VerificationGroup: "complete-v1", BindingHash: strings.Repeat("a", 64)}
+			scope := delivery.RuntimeVerificationScope{ProductID: "p", EnvironmentID: "dev", ApplicationID: child.ApplicationID, Context: "local", Namespace: "dev", Deployment: child.ApplicationID + "-workload", Container: role, FluxNamespace: "flux-system", Kustomization: "apps-dev", VerificationGroup: "complete-v1", BindingHash: strings.Repeat("a", 64)}
 			image := child.ExistingArtifact.ImageRepository + "@" + child.ExpectedDigest
 			o := &devRuntimeObserver{scope: scope, value: delivery.RuntimeSnapshot{Context: scope.Context, ProductID: "p", EnvironmentID: "dev", ApplicationID: scope.ApplicationID, Namespace: scope.Namespace, Deployment: scope.Deployment, Container: scope.Container, Generation: 2, ObservedGeneration: 2, DesiredReplicas: 1, Health: "HEALTHY", WorkloadImage: image, Pods: []delivery.RuntimePod{{Name: scope.Deployment + "-pod", UID: scope.Deployment + "-uid", Phase: "Running", Image: image, ImageID: "containerd://" + child.ExpectedDigest, Ready: true}}, Flux: &delivery.RuntimeFluxSnapshot{Status: "READY", Revision: "main@sha1:" + provider.head}}}
 			observers = append(observers, o)
@@ -457,7 +460,7 @@ func TestDevRuntimeRoleAndGitOpsNegativeEvidence(t *testing.T) {
 			}, "blob-drift": func() { observers[1].onSnapshot = func() { p.blob = strings.Repeat("e", 40) } }}
 			// The actual configured path is fixture-defined; use it for target-drift cases.
 			st, _ := f.store.Read(context.Background())
-			path := operationByID(&st, activation.ChildIDs[0]).Snapshot.Target.Path
+			path := operationByID(&st, activation.ChildIDs[0]).Snapshot.Target.Path + "|" + operationByID(&st, activation.ChildIDs[0]).Snapshot.Build.ImageRepository
 			digest := p.digests[path]
 			delete(cases, "gitops-missing")
 			cases["gitops-missing"] = func() { p.digests[path] = "" }
@@ -791,66 +794,64 @@ func TestDevRuntimePhysicalGitOpsAuthorityIsolation(t *testing.T) {
 }
 
 func TestDevRuntimeFailureEnvelopeReservesBound(t *testing.T) {
-	f, p, activation, original := devRuntimeFixture(t, "local", false)
+	f, _, activation, original := devRuntimeFixture(t, "local", false)
 	st, _ := f.store.Read(context.Background())
 	command := runtimeVerifyCommand(activation, "runtime-near-proof-byte-bound-0001")
 	in, _, e := devRuntimeInput(command)
 	if e != nil {
 		t.Fatal(e)
 	}
-	configure := func(padding int) {
-		roles := []delivery.RuntimeSnapshotObserver{}
+	base, e := f.s.runtimeExpectedProof(&st, &activation, in, 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Size admission is pure: changing an already captured observer group would
+	// correctly invalidate baseline authority before reaching the size bound.
+	configure := func(padding int) domain.DevRuntimeProof {
+		proof := base
+		proof.Components = append([]domain.DevRuntimeComponent(nil), base.Components...)
+		proof.Components[0].Scopes = nil
 		for i := range 64 {
-			o := *original[0]
-			o.scope.Deployment = fmt.Sprintf("role-%02d-", i) + strings.Repeat("d", padding)
-			o.scope.Container = strings.Repeat("c", padding)
-			o.scope.FluxNamespace = strings.Repeat("f", padding)
-			o.scope.Kustomization = strings.Repeat("k", padding)
-			o.scope.VerificationGroup = strings.Repeat("g", padding)
-			roles = append(roles, &o)
+			o := original[0].scope
+			o.Deployment = fmt.Sprintf("role-%02d-", i) + strings.Repeat("d", padding)
+			o.Container = strings.Repeat("c", padding)
+			o.FluxNamespace = strings.Repeat("f", padding)
+			o.Kustomization = strings.Repeat("k", padding)
+			o.VerificationGroup = strings.Repeat("g", padding)
+			proof.Components[0].Scopes = append(proof.Components[0].Scopes, o)
 		}
-		f.s.SetRuntimeObservers(roles)
+		proof.SnapshotHash = devRuntimeProofHash(proof)
+		return proof
 	}
 	low, high := 1, 1000
 	for low < high {
 		middle := (low + high + 1) / 2
-		configure(middle)
-		if _, e := f.s.runtimeExpectedProof(&st, &activation, in, 1); e == nil {
+		if devRuntimeProofFits(configure(middle)) {
 			low = middle
 		} else {
 			high = middle - 1
 		}
 	}
-	configure(low)
-	proof, e := f.s.runtimeExpectedProof(&st, &activation, in, 1)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if low < 1 {
-		t.Fatal("no bounded proof available")
-	}
-	configure(low + 1)
-	if _, e = f.s.runtimeExpectedProof(&st, &activation, in, 1); e == nil {
+	proof := configure(low)
+	if !devRuntimeProofFits(proof) || devRuntimeProofFits(configure(low+1)) {
 		t.Fatal("proof bound did not include failure overhead")
 	}
-	configure(low)
-	p.failRead = true
-	op := runRuntimeVerification(t, f, command)
-	if op.Status != "FAILED" || len(op.DevRuntime.Components[0].Scopes) != 64 {
-		t.Fatal("failed proof dropped roles or did not terminate")
-	}
+	result := domain.DevRuntimeResult{ExpectedHash: proof.SnapshotHash, Outcome: "UNVERIFIED", Reason: "AUTHORITY_CHANGED", ObservedAt: time.Now().UTC()}
+	result.Hash = devRuntimeResultHash(result)
 	encoded, _ := json.Marshal(struct {
 		Proof  domain.DevRuntimeProof
 		Result domain.DevRuntimeResult
-	}{proof, *op.DevRuntimeResult})
-	if len(encoded) > devRuntimeMaxBytes || len(encoded) < devRuntimeMaxBytes-2048 {
+	}{proof, result})
+	if len(encoded) > devRuntimeMaxBytes || len(encoded) < devRuntimeMaxBytes-2048 || len(proof.Components[0].Scopes) != 64 {
 		t.Fatal("failure envelope bound not verified near limit", len(encoded))
 	}
-	// A 65th role cannot be silently dropped into a certifiable group.
 	roles := append([]delivery.RuntimeSnapshotObserver(nil), f.s.runtimeObservers...)
-	extra := *original[0]
-	extra.scope.Deployment = "sixty-fifth-role"
-	f.s.SetRuntimeObservers(append(roles, &extra))
+	for len(roles) < 65 {
+		o := *original[0]
+		o.scope.Deployment = fmt.Sprint("distinct-role-", len(roles))
+		roles = append(roles, &o)
+	}
+	f.s.SetRuntimeObservers(roles)
 	if _, e = f.s.runtimeCoverage("p", "dev", "component", "local", "dev"); e == nil {
 		t.Fatal("65 configured roles accepted")
 	}

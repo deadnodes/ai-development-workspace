@@ -55,13 +55,13 @@ func (m *nativeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(b)
 	case "POST":
 		m.writes.Add(1)
-		w.Header().Set("Location", "/v2/fixture/image/blobs/uploads/session")
+		w.Header().Set("Location", strings.TrimSuffix(key, "/")+"/session")
 		w.WriteHeader(202)
 	case "PUT":
 		m.writes.Add(1)
 		b, _ := io.ReadAll(r.Body)
 		if strings.Contains(key, "/uploads/") {
-			key = "/v2/fixture/image/blobs/" + r.URL.Query().Get("digest")
+			key = strings.SplitN(key, "/uploads/", 2)[0] + "/" + r.URL.Query().Get("digest")
 		}
 		m.data[key] = b
 		w.WriteHeader(201)

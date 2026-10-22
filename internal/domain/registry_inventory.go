@@ -73,15 +73,16 @@ type RegistryRoot struct {
 	Blockers []string `json:"blockers"`
 }
 type RegistryGraph struct {
-	Nodes                   []RegistryNode `json:"nodes"`
-	Edges                   []RegistryEdge `json:"edges"`
-	Roots                   []RegistryRoot `json:"roots"`
-	TagCount                int            `json:"tag_count"`
-	TagSetHash              string         `json:"tag_set_hash"`
-	Discovery               string         `json:"discovery"`
-	GlobalInventoryComplete bool           `json:"global_inventory_complete"`
-	Blockers                []string       `json:"blockers"`
-	GraphHash               string         `json:"graph_hash"`
+	ImageContentRoots       []RegistryImageContentRoot `json:"image_content_roots,omitempty"`
+	Nodes                   []RegistryNode             `json:"nodes"`
+	Edges                   []RegistryEdge             `json:"edges"`
+	Roots                   []RegistryRoot             `json:"roots"`
+	TagCount                int                        `json:"tag_count"`
+	TagSetHash              string                     `json:"tag_set_hash"`
+	Discovery               string                     `json:"discovery"`
+	GlobalInventoryComplete bool                       `json:"global_inventory_complete"`
+	Blockers                []string                   `json:"blockers"`
+	GraphHash               string                     `json:"graph_hash"`
 }
 type WorkerRegistryReport struct {
 	Kind           string        `json:"kind"`
@@ -156,6 +157,7 @@ func registryBlockers(v []string) bool {
 // Normalization copies all collections, rejects conflicting object identities,
 // and never removes a reported fact to make a malformed graph appear complete.
 func NormalizeRegistryGraph(g RegistryGraph) (RegistryGraph, error) {
+	g.ImageContentRoots = normalizeImageContent(g.ImageContentRoots)
 	g.Nodes = append([]RegistryNode{}, g.Nodes...)
 	g.Edges = append([]RegistryEdge{}, g.Edges...)
 	g.Roots = append([]RegistryRoot{}, g.Roots...)
@@ -201,6 +203,9 @@ func RegistryGraphHash(g RegistryGraph) string {
 func ValidateRegistryGraph(g RegistryGraph, l RegistryObserveLimits, knownRoots []string) error {
 	fail := func() error { return fmt.Errorf("invalid bounded registry graph") }
 	if ValidateRegistryObserveLimits(l) != nil || len(g.Nodes) > l.MaxNodes || len(g.Edges) > l.MaxEdges || len(g.Roots) > l.MaxNodes || g.TagCount < 0 || g.TagCount > l.MaxNodes*l.MaxPages || g.GlobalInventoryComplete || !registryStatus(g.Discovery) || !registryBlockers(g.Blockers) || !retentionDigest.MatchString(g.TagSetHash) {
+		return fail()
+	}
+	if !boundedImageContent(g.ImageContentRoots, l) {
 		return fail()
 	}
 	normalized, e := NormalizeRegistryGraph(g)
@@ -290,6 +295,9 @@ func ValidateRegistryGraph(g RegistryGraph, l RegistryObserveLimits, knownRoots 
 		}
 	}
 	if !retentionHasCode(g.Blockers, "registry_global_inventory_unproven") {
+		return fail()
+	}
+	if validateImageContent(g, l, knownRoots) != nil {
 		return fail()
 	}
 	b, _ := json.Marshal(g)

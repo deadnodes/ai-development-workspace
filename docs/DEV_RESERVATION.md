@@ -18,7 +18,7 @@ This excludes RCP-managed commands; it is not physical cluster isolation against
 
 ## Activate an existing candidate in Dev
 
-`deploy_candidate_dev` accepts Product and attributed actor plus only `reservation_operation_id`, a new `request_key` (16–128 bytes), and exact `expected_selection`. The same owner must hold the active, nonquarantined reservation. The server selects the completed candidate's admitted immutable native artifacts; callers cannot substitute a digest, build profile, source, target, approval or configuration.
+`deploy_candidate_dev` accepts Product and attributed actor plus only `reservation_operation_id`, a new `request_key` (16–128 bytes), and exact `expected_selection`. The same owner must hold the active, nonquarantined reservation and have a fresh verified [complete physical baseline](DEV_BASELINE_CAPTURE.md) before activation. The server selects the completed candidate's admitted immutable native artifacts; callers cannot substitute a digest, build profile, source, target, approval or configuration.
 
 The receipt is a new `DEV_CANDIDATE_DEPLOY` aggregate with new `DEPLOY` children. Each starts at `INSPECT` with an exact existing artifact and the original effective Prod build/main-source proof. Only the execution destination changes to the reserved DEV/TEST PR target. There are no new builds, publications, source writes, direct GitOps writes, merges or mutations of the original candidate. Global Dev build configuration, shared baseline IDs/maps and original provenance stay intact. Request replay returns historical records before current configuration/source checks and grants no new authority.
 
@@ -71,3 +71,7 @@ An applied candidate can request a separate server-owned
 [`verify_candidate_dev_runtime`](DEV_RUNTIME_VERIFICATION.md) proof for its
 configured complete workload groups. That point-in-time runtime check does not
 accept functional tests, restore the baseline or release this reservation.
+
+Before candidate activation, use [`capture_candidate_dev_baseline`](DEV_BASELINE_CAPTURE.md)
+to record the complete physical shared baseline and available original images.
+A reserved desired composition alone does not establish restoration evidence.

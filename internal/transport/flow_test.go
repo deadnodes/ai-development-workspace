@@ -36,6 +36,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		tool, path, refName, ref string
 		data                     map[string]any
 	}{
+		{"capture_candidate_dev_baseline", "/api/products/product/candidate-dev/capture-baseline", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "candidate-baseline-0001", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"verify_candidate_dev_runtime", "/api/products/product/candidate-dev/verify-runtime", "product_id", "product", map[string]any{"activation_operation_id": "activation", "request_key": "candidate-dev-runtime-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"deploy_candidate_dev", "/api/products/product/candidate-dev/deploy", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "candidate-dev-deploy-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reserve_candidate_dev", "/api/products/product/candidate-dev/reserve", "product_id", "product", map[string]any{"candidate_operation_id": "candidate", "environment_id": "dev", "request_key": "reservation-request-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
@@ -80,7 +81,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 			if !reflect.DeepEqual(viaHTTP, viaMCP) {
 				t.Fatalf("different shared domain commands HTTP=%+v MCP=%+v", viaHTTP, viaMCP)
 			}
-			if tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" {
+			if tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" || tc.tool == "capture_candidate_dev_baseline" {
 				generic, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: viaHTTP})
 				if err != nil || generic.IsError {
 					t.Fatalf("generic execute rejected candidate Dev request: %v %+v", err, generic)
@@ -100,7 +101,7 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 					t.Fatalf("exact patch CAS/scope lost: %s", raw)
 				}
 			}
-			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" || tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" {
+			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" || tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" || tc.tool == "capture_candidate_dev_baseline" {
 				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
 				var token domain.EnvironmentSelection
 				want := uint64(9007199254740993)

@@ -60,6 +60,11 @@ func newCandidateRuntimeHTTPFixture(t *testing.T, image, digest string, gitops *
 	}
 	return f, observers
 }
+func (f *candidateRuntimeHTTPFixture) setImage(image, digest string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.image, f.digest = image, digest
+}
 func (f *candidateRuntimeHTTPFixture) setWrongDigest(wrong bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

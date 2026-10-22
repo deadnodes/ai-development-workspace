@@ -11,6 +11,9 @@ func (s *Service) applyDevActivation(callCtx, ctx context.Context, op domain.Ext
 	if op.Artifact == nil || op.GitOpsBase == nil || op.Snapshot == nil || op.Snapshot.Target.GitOpsMode != "PR" {
 		return s.finish(ctx, op, token, "BLOCKED", "candidate Dev exact artifact/base/PR target required", nil)
 	}
+	if err := s.recheckActivationBaseline(callCtx, op); err != nil {
+		return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+	}
 	if err := s.verifyNativeSource(callCtx, op); err != nil {
 		return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
 	}

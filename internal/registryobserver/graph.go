@@ -65,6 +65,8 @@ type scanner struct {
 	tagHash         string
 	discovery       string
 	graphBytes      int
+	content         map[string]domain.RegistryImageContentManifest
+	contentBytes    int
 }
 
 func hash(b []byte) string           { s := sha256.Sum256(b); return "sha256:" + hex.EncodeToString(s[:]) }
@@ -348,6 +350,7 @@ func (s *scanner) visit(d string, expected *descriptor, depth int, raw []byte) {
 		s.block("registry_unsupported")
 		return
 	}
+	s.recordImageContent(d, m, int64(len(raw)))
 	if !s.node(d, kind, m.MediaType, "PRESENT", int64(len(raw))) {
 		return
 	}
@@ -412,7 +415,7 @@ func Observe(ctx context.Context, r workerconfig.RegistryObserveRecipe, in domai
 	if len(in.Roots) > 256 {
 		return nil, errScan
 	}
-	s := &scanner{graphBytes: len(in.Roots) * 200, ctx: ctx, c: c, recipe: r, in: in, nodes: map[string]domain.RegistryNode{}, edges: map[string]domain.RegistryEdge{}, roots: map[string]bool{}, visited: map[string]bool{}, depths: map[string]int{}, subjects: map[string]string{}, media: map[string]string{}, refsets: map[string]string{}, blockers: map[string]bool{}, discovery: "COMPLETE"}
+	s := &scanner{content: map[string]domain.RegistryImageContentManifest{}, graphBytes: len(in.Roots) * 200, ctx: ctx, c: c, recipe: r, in: in, nodes: map[string]domain.RegistryNode{}, edges: map[string]domain.RegistryEdge{}, roots: map[string]bool{}, visited: map[string]bool{}, depths: map[string]int{}, subjects: map[string]string{}, media: map[string]string{}, refsets: map[string]string{}, blockers: map[string]bool{}, discovery: "COMPLETE"}
 	for _, d := range in.Roots {
 		if !digestPattern.MatchString(d) || !s.node(d, "UNKNOWN", "", "UNKNOWN", 0) {
 			return nil, errScan
@@ -470,11 +473,21 @@ func Observe(ctx context.Context, r workerconfig.RegistryObserveRecipe, in domai
 	for d := range s.roots {
 		g.Roots = append(g.Roots, domain.RegistryRoot{Digest: d, Closure: closure, Blockers: representative(codes)})
 	}
+	g.ImageContentRoots = s.imageContentRoots()
+	// Optional content proofs may not make an otherwise bounded historical graph
+	// oversized. Omitting them grants no image-content capability to its consumer.
+	encoded, _ := json.Marshal(g)
+	if len(encoded) > domain.RegistryReportMaxBytes-2048 {
+		g.ImageContentRoots = nil
+	}
 	g, e = domain.NormalizeRegistryGraph(g)
 	if e != nil {
 		return nil, errScan
 	}
 	g.GraphHash = domain.RegistryGraphHash(g)
+	if domain.ValidateRegistryGraph(g, r.Limits, in.Roots) != nil {
+		return nil, errScan
+	}
 	return &domain.WorkerRegistryReport{Kind: "WORKER_ATTESTED_REGISTRY_READ", Scope: in.Scope, RecipeID: r.ID, RecipeRevision: r.Revision, RecipeHash: r.Hash, RootSetHash: in.RootSetHash, StartedAt: started, FinishedAt: time.Now().UTC(), Requests: s.requests, Bytes: s.size, Graph: g}, nil
 }
 func (s *scanner) resolveTags(tags []string, include bool) string {

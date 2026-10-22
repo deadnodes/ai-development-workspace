@@ -147,6 +147,9 @@ func devReservationInput(c domain.Command) (domain.DevReservationRequest, string
 func devReservationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.Kind == devBaselineKind && op.RequestKey == in.RequestKey {
+			return nil, invalid("request_key already binds a baseline capture")
+		}
 		if op.Kind == devRuntimeKind && op.RequestKey == in.RequestKey {
 			return nil, invalid("request_key already binds a runtime verification")
 		}

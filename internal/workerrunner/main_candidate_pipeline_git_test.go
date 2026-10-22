@@ -22,6 +22,7 @@ import (
 	"releasecontrol/internal/ocipublisher"
 	githubprovider "releasecontrol/internal/providers/github"
 	"releasecontrol/internal/publishrunner"
+	"releasecontrol/internal/registryobserver"
 	"releasecontrol/internal/transport"
 	"releasecontrol/internal/workerconfig"
 	"strings"
@@ -70,6 +71,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 	if !ready {
 		t.Fatal("registry not ready")
 	}
+	origin, setRegistryFault := baselineRegistryReadFault(t, origin)
 	t.Logf("owned Distribution id=%s owner=%s", id, owner)
 	for _, pg := range []bool{false, true} {
 		t.Run(fmt.Sprintf("postgres=%t", pg), func(t *testing.T) {
@@ -111,7 +113,8 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			prodPub.ID = "prod-publish"
 			prodPub.Profile = "prod"
 			prodPub.BuildRecipeHash = prod.Hash
-			prodPub.Repository = fmt.Sprintf("fixture/main-prod-%t", pg)
+			// Same repository is the supported Helm writer path; profiles and source differ.
+			prodPub.Repository = devPub.Repository
 			prodPub.Hash = workerconfig.PublicationHash(prodPub)
 			gitops.configure(strings.TrimPrefix(origin, "http://") + "/" + prodPub.Repository)
 			control := "main-candidate-control-token-000000001"
@@ -119,7 +122,10 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			t.Setenv(cfg.TokenEnv, "main-candidate-build-token-000000001")
 			t.Setenv(cfg.SourceGitHub.TokenEnv, "fixture-source-only")
 			t.Setenv("MAIN_CANDIDATE_PUBLISH_TOKEN", "main-candidate-publish-token-000001")
-			auth, e := workerconfig.New(workerconfig.Config{Revision: cfg.ConfigRevision, LeaseSeconds: 20, Recipes: []workerconfig.Recipe{dev, prod}, Publications: []workerconfig.PublicationRecipe{devPub, prodPub}, Credentials: []workerconfig.Credential{{ID: "build", Principal: "worker/build", TokenEnv: cfg.TokenEnv, ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "MAIN_CANDIDATE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}, control, os.Getenv)
+			observerRecipe := workerconfig.RegistryObserveRecipe{ID: "baseline-observer", Revision: "v1", ProductID: "p", RepositoryID: "source", ComponentID: "component", Origin: origin, Repository: devPub.Repository, Pull: workerconfig.RegistryRead{FixtureLoopbackHTTP: true}, Limits: domain.RegistryObserveLimits{MaxResponseBytes: 16 << 20, MaxTotalBytes: 32 << 20, MaxNodes: 128, MaxEdges: 256, MaxDepth: 8, MaxPages: 64, MaxRequests: 256, TimeoutSeconds: 30}}
+			observerRecipe.Hash = workerconfig.ObservationHash(observerRecipe)
+			t.Setenv("MAIN_BASELINE_OBSERVER_TOKEN", "main-baseline-read-token-000000001")
+			auth, e := workerconfig.New(workerconfig.Config{Revision: cfg.ConfigRevision, LeaseSeconds: 20, Recipes: []workerconfig.Recipe{dev, prod}, Publications: []workerconfig.PublicationRecipe{devPub, prodPub}, Observations: []workerconfig.RegistryObserveRecipe{observerRecipe}, Credentials: []workerconfig.Credential{{ID: "observe", Principal: "worker/observe", TokenEnv: "MAIN_BASELINE_OBSERVER_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_observe"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "build", Principal: "worker/build", TokenEnv: cfg.TokenEnv, ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "MAIN_CANDIDATE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}, control, os.Getenv)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -207,41 +213,21 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
+			observerDir := t.TempDir()
+			observerDir, _ = filepath.EvalSymlinks(observerDir)
+			os.Chmod(observerDir, 0700)
+			observerCfg := registryobserver.Config{Endpoint: server.URL, TokenEnv: "MAIN_BASELINE_OBSERVER_TOKEN", ConfigRevision: cfg.ConfigRevision, StateDir: observerDir, Recipe: observerRecipe}
 			ticks := func() {
 				for range 12 {
 					tick()
+					observerCfg.Endpoint = server.URL
+					if _, err := registryobserver.RunOnce(ctx, observerCfg); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			data := func(key, result string) map[string]any {
 				return map[string]any{"name": "A main candidate", "environment_id": "prod", "idempotency_key": "fixture-main-candidate:" + key, "main_sources": []domain.MainCandidateSource{{ApplicationID: "component", MainSHA: f.mainA, Native: domain.NativeBinding{BuildRecipeID: prod.ID, PublicationRecipeID: prodPub.ID, Parameters: map[string]any{}}, Revisions: []domain.MainCandidateRevision{{RevisionID: "a1", PullRequestNumber: 1, VerificationResultIDs: []string{result}}}}}}
-			}
-			before := read()
-			baseline, _ := json.Marshal(before.ComponentBuilds)
-			environments, _ := json.Marshal(before.Environments)
-			var parent domain.ExternalOperation
-			post(domain.Command{Action: "prepare_release_candidate", ProductID: "p", Data: data("main-a", sourceResult.ID)}, &parent, true)
-			if parent.MainCandidate == nil || parent.MainCandidate.EvidenceKind != "ATTRIBUTED_RCP_VERIFICATION" || parent.Kind != "RELEASE_CANDIDATE" {
-				t.Fatal("missing truthful main candidate proof")
-			}
-			server.Close()
-			store.Close()
-			store = open()
-			service = application.NewWithProvider(store, provider)
-			service.ConfigureWorkers(auth)
-			server = httptest.NewServer(transport.New(service, transport.Options{Token: control, Workers: auth}))
-			var replay domain.ExternalOperation
-			old := read()
-			post(domain.Command{Action: "prepare_release_candidate", ProductID: "p", Data: data("main-a", sourceResult.ID)}, &replay, true)
-			if replay.ID != parent.ID || len(read().Operations) != len(old.Operations) || len(read().Events) != len(old.Events) {
-				t.Fatal("replay created work")
-			}
-			ticks()
-			if len(read().WorkerJobs) != 1 {
-				t.Fatalf("native build not queued %+v", read().Operations)
-			}
-			job := read().WorkerJobs[0]
-			if job.Inputs.SourceSHA != f.mainA || job.Inputs.RecipeHash != prod.Hash || job.Inputs.SourceProof == nil || job.Inputs.SourceProof.ParentID != parent.ID || job.Inputs.Execution.SourceFetch == nil {
-				t.Fatal("candidate source/profile proof not bound")
 			}
 			dir := t.TempDir()
 			dir, _ = filepath.EvalSymlinks(dir)
@@ -260,6 +246,79 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				t.Fatal(e)
 			}
 			pub := publishrunner.Config{ArtifactSpool: cfg.ArtifactSpool, Endpoint: server.URL, TokenEnv: "MAIN_CANDIDATE_PUBLISH_TOKEN", ConfigRevision: cfg.ConfigRevision, Recipe: prodPub, Publisher: ocipublisher.Config{AllowedOrigin: origin, AllowedRepository: prodPub.Repository, StateDir: pubState, MaxArchiveBytes: prodPub.MaxBytes, TimeoutSeconds: 30, FixtureLoopbackHTTP: true}}
+
+			// Build and publish the original A1+B1 Dev profile before the independent
+			// historical A1+B0 Prod candidate. This is real Git/BuildKit/Distribution.
+			post(domain.Command{Action: "create_feature", ID: "baseline-feature", ProductID: "p", Data: map[string]any{"title": "Original Dev", "goal": "A+B baseline"}}, nil, true)
+			post(domain.Command{Action: "create_integration", ID: "baseline-integration", FeatureID: "baseline-feature", Data: map[string]any{"title": "Original Dev", "objective": "A+B baseline"}}, nil, true)
+			post(domain.Command{Action: "record_integration_revision", ID: "baseline-revision", IntegrationID: "baseline-integration", Data: map[string]any{"repository_id": "source", "branch": "main", "base_commit": f.base, "head_commit": f.mainB, "commits": []string{f.mainB}}}, nil, true)
+			var baselineJob domain.WorkerJob
+			post(domain.Command{Action: "queue_worker_job", ProductID: "p", IntegrationID: "baseline-integration", Data: map[string]any{"request_key": "actual-original-dev-build", "recipe_id": dev.ID, "recipe_revision": dev.Revision, "recipe_hash": dev.Hash, "config_revision": cfg.ConfigRevision, "revision_id": "baseline-revision", "source_sha": f.mainB, "parameters": map[string]any{}, "deadline": time.Now().Add(10 * time.Minute), "max_attempts": 1}}, &baselineJob, true)
+			devCfg := cfg
+			devCfg.Recipe = dev
+			baselineReport, e := runOne(ctx, devCfg, client)
+			if e != nil || baselineReport == nil || baselineReport.Result != "PASSED" || baselineReport.LocalOCI == nil || baselineReport.LocalOCI.SourceSHA != f.mainB {
+				t.Fatalf("actual original Dev build: %+v %v", baselineReport, e)
+			}
+			assertOwnedResourcesGone(t, devCfg)
+			post(domain.Command{Action: "queue_worker_publication", ProductID: "p", Data: map[string]any{"build_job_id": baselineJob.ID, "component_id": "component", "recipe_id": devPub.ID, "recipe_revision": devPub.Revision, "recipe_hash": devPub.Hash, "config_revision": cfg.ConfigRevision, "request_key": "actual-original-dev-publication", "deadline": time.Now().Add(10 * time.Minute)}}, nil, true)
+			devPublisher := pub
+			devPublisher.Recipe = devPub
+			devPublisher.Publisher.StateDir = filepath.Join(dir, "dev-publisher")
+			if err := os.Mkdir(devPublisher.Publisher.StateDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, e := publishrunner.RunOnce(ctx, devPublisher); e != nil {
+				t.Fatal(e)
+			}
+			if len(read().DeliveryArtifacts) != 1 {
+				t.Fatal("original Dev publication was not admitted")
+			}
+			baselineArtifact := read().DeliveryArtifacts[0]
+			if baselineArtifact.Native == nil || baselineArtifact.Native.Profile != "dev" || baselineArtifact.SourceCommit != f.mainB || baselineArtifact.Digest != baselineReport.LocalOCI.ManifestDigest {
+				t.Fatal("original Dev artifact provenance mismatch")
+			}
+			externalDigest := publishIndependentBaselineImage(t, origin, observerRecipe.Repository)
+			if externalDigest == baselineArtifact.Digest {
+				t.Fatal("independent image must differ from admitted Dev artifact")
+			}
+			gitops.configureBaseline(baselineArtifact.ImageRepository, baselineArtifact.Digest)
+			before := read()
+			baseline, _ := json.Marshal(before.ComponentBuilds)
+			environments, _ := json.Marshal(before.Environments)
+			var parent domain.ExternalOperation
+			post(domain.Command{Action: "prepare_release_candidate", ProductID: "p", Data: data("main-a", sourceResult.ID)}, &parent, true)
+			if parent.MainCandidate == nil || parent.MainCandidate.EvidenceKind != "ATTRIBUTED_RCP_VERIFICATION" || parent.Kind != "RELEASE_CANDIDATE" {
+				t.Fatal("missing truthful main candidate proof")
+			}
+			server.Close()
+			store.Close()
+			store = open()
+			service = application.NewWithProvider(store, provider)
+			service.ConfigureWorkers(auth)
+			server = httptest.NewServer(transport.New(service, transport.Options{Token: control, Workers: auth}))
+			cfg.Endpoint = server.URL
+			pub.Endpoint = server.URL
+			var replay domain.ExternalOperation
+			old := read()
+			post(domain.Command{Action: "prepare_release_candidate", ProductID: "p", Data: data("main-a", sourceResult.ID)}, &replay, true)
+			if replay.ID != parent.ID || len(read().Operations) != len(old.Operations) || len(read().Events) != len(old.Events) {
+				t.Fatal("replay created work")
+			}
+			ticks()
+			if len(read().WorkerJobs) != 3 {
+				t.Fatalf("native build not queued %+v", read().Operations)
+			}
+			var job domain.WorkerJob
+			for _, queued := range read().WorkerJobs {
+				if queued.Inputs.SourceProof != nil && queued.Inputs.SourceProof.ParentID == parent.ID {
+					job = queued
+					break
+				}
+			}
+			if job.Inputs.SourceSHA != f.mainA || job.Inputs.RecipeHash != prod.Hash || job.Inputs.SourceProof == nil || job.Inputs.SourceProof.ParentID != parent.ID || job.Inputs.Execution.SourceFetch == nil {
+				t.Fatal("candidate source/profile proof not bound")
+			}
 			report, e := runOne(ctx, cfg, client)
 			if e != nil || report == nil || report.Result != "PASSED" || report.LocalOCI == nil || report.LocalOCI.SourceSHA != f.mainA {
 				t.Fatalf("real main worker %+v %v", report, e)
@@ -276,10 +335,18 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			}
 			child := operation(parent.ChildIDs[0])
 			s := read()
-			if !child.BuildOnly || child.Status != "SUCCEEDED" || child.DeploymentState != "ARTIFACT_READY" || child.Artifact == nil || len(s.DeliveryArtifacts) != 1 {
+			if !child.BuildOnly || child.Status != "SUCCEEDED" || child.DeploymentState != "ARTIFACT_READY" || child.Artifact == nil || len(s.DeliveryArtifacts) != 2 {
 				t.Fatal("candidate did not stop before deployment", child)
 			}
-			a := s.DeliveryArtifacts[0]
+			var a domain.DeliveryArtifact
+			for _, artifact := range s.DeliveryArtifacts {
+				if artifact.Native != nil && artifact.Native.Profile == "prod" {
+					a = artifact
+				}
+			}
+			if a.Digest == baselineArtifact.Digest {
+				t.Fatal("original Dev and Prod candidate digests must differ")
+			}
 			if a.Native == nil || a.Native.Profile != "prod" || a.SourceCommit != f.mainA || a.Digest != report.LocalOCI.ManifestDigest || a.Native.Receipt.RecipeHash != prod.Hash {
 				t.Fatal("main artifact/profile mismatch")
 			}
@@ -305,8 +372,14 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 			assertOwnedResourcesGone(t, cfg)
 			ticks()
 			var failed domain.CheckResult
-			runtimePeer, runtimeObservers := newCandidateRuntimeHTTPFixture(t, a.ImageRepository, a.Digest, gitops)
+			runtimePeer, runtimeObservers := newCandidateRuntimeHTTPFixture(t, baselineArtifact.ImageRepository, baselineArtifact.Digest, gitops)
 			service.SetRuntimeObservers(runtimeObservers)
+			t.Run("independent-preexisting-complete-closure", func(t *testing.T) {
+				assertRealPreexistingBaseline(t, server.URL, control, parent.ID, baselineArtifact.ImageRepository, externalDigest, runtimePeer, provider, ticks, read, post)
+			})
+			gitops.configureBaseline(baselineArtifact.ImageRepository, baselineArtifact.Digest)
+			runtimePeer.setImage(baselineArtifact.ImageRepository, baselineArtifact.Digest)
+
 			// Run the informational control through a production read-only worker.
 			// The accelerated candidate tick helper makes all candidate retries due
 			// on every tick, which would starve lower-priority inventory reads.
@@ -317,7 +390,9 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 					t.Fatalf("informational worker tick: worked=%v err=%v", worked, err)
 				}
 			}
-			environments = assertRealCandidateDevActivation(t, server.URL, control, parent.ID, provider, runtimePeer, ticks, inventoryTick, read, post)
+			environments = assertRealCandidateDevActivation(t, server.URL, control, parent.ID, provider, runtimePeer, ticks, inventoryTick, read, post, func(fail bool) {
+				setRegistryFault("/v2/"+devPub.Repository+"/manifests/"+baselineArtifact.Digest, fail)
+			})
 			post(domain.Command{Action: "record_check_result", CheckID: "source-check", Data: map[string]any{"result": "failed", "commit": f.aHead, "observations": "later causal failure"}}, &failed, true)
 			if e := store.Update(ctx, func(s *domain.State) error {
 				for i := range s.Results {
@@ -334,7 +409,7 @@ func TestRealMainCandidateHistoricalGitProdProfile(t *testing.T) {
 				t.Fatal(e)
 			}
 			ticks()
-			if len(read().DeliveryArtifacts) != 1 || operation(stale.ID).Status != "FAILED" {
+			if len(read().DeliveryArtifacts) != 2 || operation(stale.ID).Status != "FAILED" {
 				t.Fatal("old-clock failure admitted publication")
 			}
 			final := read()

@@ -124,7 +124,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		}
 		originalOperations := []domain.ExternalOperation{}
 		for i := range restored.Operations {
-			if restored.Operations[i].DevActivation != nil || restored.Operations[i].DevRuntime != nil {
+			if restored.Operations[i].DevActivation != nil || restored.Operations[i].DevRuntime != nil || restored.Operations[i].DevBaseline != nil {
 				restored.Operations[i].ReservationQuarantined = true
 			}
 			if active := activeDevReservation(&restored, restored.Operations[i].EnvironmentID); restored.Operations[i].Kind == "DEV_RESERVATION" && active != nil && active.ID == restored.Operations[i].ID {
