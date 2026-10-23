@@ -154,7 +154,7 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		v, e := service.Query(ctx, "get_worker_job", in.JobID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_operation", Description: "Read persisted operation status, step evidence and attention needs. Queued or pending does not mean deployed."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_operation", Description: "Read persisted operation status, step evidence and attention needs. agent_action RESOLVE_CONFLICT returns exact frozen branches/commits and the existing resolution workflow for the requesting agent; RCP does not launch another agent. UNAVAILABLE requires context reconciliation, not a partial resolution. Reconcile is a separate authorized build/GitOps request. Queued or pending does not mean deployed."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		OperationID string `json:"operation_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_operation", in.OperationID)

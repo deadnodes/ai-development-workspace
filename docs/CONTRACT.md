@@ -89,6 +89,15 @@ The instance Repository Registry stores numeric GitHub identities; Product Repos
 
 Operation lifecycle status is separate from deployment state. `SUCCEEDED` for this milestone means the GitOps mutation was confirmed; deployment remains `GITOPS_APPLIED` / pending reconciliation, never inferred DEPLOYED. See [GitHub DEV setup and build contract](GITHUB_DEV.md) for credentials, workflow evidence and the exact live acceptance boundary.
 
+## Caller-agent conflict handoff
+
+`get_operation` additionally returns `agent_action` for a persisted textual
+composition conflict. Its bounded `RESOLVE_CONFLICT` context tells the requesting
+agent the exact original branches/SHAs and existing claim/report/verify/reconcile
+steps. RCP does not start a resolver agent. `UNAVAILABLE` omits all partial inputs;
+the 32 KiB limit covers only this new field. Branch/ref observations are historical
+and the instructions grant no new execution rights. See [conflict workflow](MANAGED_BRANCHES.md).
+
 ## Full instance backup
 
 MCP `get_backup_capabilities`, `create_backup {actor}`, `restore_backup {actor, archive_base64, sha256}` share the application backup service. HTTP uses binary gzip at POST `/api/backups/export` and `/api/backups/restore`, with actor/checksum headers. Restore is atomic into empty state only; it preserves record/event order and cancels imported active operations with original evidence in restore audit. Format v1 is bounded to 8 MiB compressed / 64 MiB expanded. See [backup contract](BACKUP.md).

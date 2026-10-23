@@ -251,6 +251,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				for k, v := range map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)} {
 					out[k] = v
 				}
+				if action := operationConflictAction(&st, op, time.Now().UTC()); action != nil {
+					out["agent_action"] = action
+				}
 				return out, nil
 			}
 		}
