@@ -49,12 +49,29 @@ contracts and are **not** covered by that byte limit.
 5. `verify_conflict_resolution`: product_id, data.conflict_id, result_ids (array of passing result IDs).
 6. `reconcile_composition`: id of the original composition, data.resolution_conflict_ids array. This creates a new operation. It never restarts a historical failed operation. Both worker and GitHub adapter check resolution ancestry contains the base and every selected head before creating the generated branch and running the normal build/deploy path.
 
+Resolution evidence is checked again at reconciliation admission and through
+the existing queued parent/child and mutation guards. A stored `resolved` label
+does not preserve permission after a referenced result is superseded, disappears,
+changes scope, or no longer covers current blocking checks. Latest means stored
+append order; a caller timestamp cannot revive an older result.
+
+After running fresh checks on the **same immutable resolution commit**, call
+`verify_conflict_resolution` again with the current passing result IDs. This is
+also accepted for an already `resolved` conflict. It preserves the original
+claim, source, rationale, commit and historical results/events. It does not
+restart stopped work or queue another build: request a new explicit, authorized
+`reconcile_composition` after verification. Rejection leaves the requested
+attachment and command state unchanged; a worker may record its blocked outcome.
+These guards cannot retract a provider request already sent. Existing uncertain
+write and reservation recovery still applies.
+
 Verification alone does not deploy or alter source. The rebuilt composition must use the exact original selected inputs; different selections need fresh conflict analysis. Production candidates still use their explicit approval and verification flow; resolved DEV context is not production approval.
 
 The handoff reports the recorded conflict status and conditional workflow; a
 read has no caller identity and cannot establish claim ownership. Instructions
 and actor labels grant no new permissions. In particular, `reconcile_composition`
 may start builds and configured DEV/TEST GitOps preparation, so it needs its own
-existing execution authorization. Clean merges failing semantic checks and
-revalidation of later-superseded verification evidence remain separate stage-06
-work; this reply is not evidence that those paths are implemented.
+existing execution authorization. Clean merges failing semantic checks,
+independent review authority and semantic changes to goals or check instructions
+without new identities remain separate stage-06 work. Current result/coverage
+revalidation does not prove those semantics or live delivery.

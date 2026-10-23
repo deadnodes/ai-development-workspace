@@ -204,6 +204,9 @@ func TestCallerConflictActionStatusesAndRetainedEvidence(t *testing.T) {
 			if out.Status != "ACTION_REQUIRED" || out.Conflicts[0].Status != status || !out.Workflow[len(out.Workflow)-1].MayBuildAndDeploy {
 				t.Fatalf("wrong workflow: %+v", out)
 			}
+			if !strings.Contains(out.Workflow[2].When, "resolved with superseded evidence") || !strings.Contains(out.Workflow[3].When, "same immutable resolution commit") {
+				t.Fatal("requesting agent lacks same-commit reverification recovery instructions")
+			}
 			b, _ := json.Marshal(out)
 			if strings.Contains(string(b), "another-agent") {
 				t.Fatal("actor/ownership asserted by a query with no caller identity")

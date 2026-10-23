@@ -22,6 +22,9 @@ func flowGuard(st *domain.State, op domain.ExternalOperation) error {
 	if op.CompositionSnapshot == nil {
 		return invalid("missing composition snapshot")
 	}
+	if err := validateFlowConflictResolutions(st, op); err != nil {
+		return err
+	}
 	if op.Kind != "RELEASE_CANDIDATE" {
 		env := environmentByID(st, op.EnvironmentID)
 		if env == nil || env.DesiredOperationID != op.ID || env.DesiredCompositionID != op.CompositionSnapshot.ID {

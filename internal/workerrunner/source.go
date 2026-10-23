@@ -137,6 +137,12 @@ func extractSource(reader io.Reader, destination string, max int64) error {
 			return errors.New("links and special files forbidden in snapshot")
 		}
 	}
+	// Tar EOF can precede stdout EOF (Git pads its archive output). Consume the
+	// tail before materialize waits for Git, or its writer can remain blocked.
+	// Padding still consumes the original archive budget.
+	if _, e := io.Copy(io.Discard, limited); e != nil {
+		return e
+	}
 	if limited.N <= 0 {
 		return errors.New("source archive exceeds bound")
 	}

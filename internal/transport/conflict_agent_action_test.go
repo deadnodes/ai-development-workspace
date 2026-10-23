@@ -1,8 +1,10 @@
 package transport_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -103,6 +105,66 @@ func TestCallerConflictActionRealHTTPAndMCP(t *testing.T) {
 			_ = json.Unmarshal(mcpReply["agent_action"], &fromMCP)
 			if !reflect.DeepEqual(fromHTTP, fromMCP) {
 				t.Fatal("HTTP and actual MCP SDK caller tasks differ")
+			}
+			post := func(c domain.Command, want int) []byte {
+				t.Helper()
+				c.Actor = "agent/http-resolver"
+				b, _ := json.Marshal(c)
+				r, err := http.Post(server.URL+"/api/commands", "application/json", bytes.NewReader(b))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer r.Body.Close()
+				body, err := io.ReadAll(r.Body)
+				if err != nil || r.StatusCode != want {
+					t.Fatalf("%s: HTTP%d expected%d: %s %v", c.Action, r.StatusCode, want, body, err)
+				}
+				return body
+			}
+			for _, side := range []string{"a", "b"} {
+				post(domain.Command{Action: "create_gate", ID: "http-g" + side, FeatureID: "caller-f" + side, Data: map[string]any{"title": "Acceptance", "reason": "Both sides", "integration_ids": []string{"caller-i" + side}}}, http.StatusOK)
+				post(domain.Command{Action: "add_check", ID: "http-check" + side, GateID: "http-g" + side, Data: map[string]any{"title": "Check", "mechanism": "automated"}}, http.StatusOK)
+			}
+			command := func(action string, data map[string]any) domain.Command {
+				data["conflict_id"] = "caller-conflict"
+				return domain.Command{Action: action, ProductID: "caller-p", Data: data}
+			}
+			commit := strings.Repeat("f", 40)
+			post(command("claim_composition_conflict", map[string]any{}), http.StatusOK)
+			post(command("record_conflict_resolution", map[string]any{"commit": commit, "rationale": "Keep both captured features"}), http.StatusOK)
+			check := func(side, result string) string {
+				t.Helper()
+				body := post(domain.Command{Action: "record_check_result", CheckID: "http-check" + side, Data: map[string]any{"result": result, "commit": commit}}, http.StatusOK)
+				var r domain.CheckResult
+				if err := json.Unmarshal(body, &r); err != nil || r.ID == "" {
+					t.Fatal("missing actual result", err)
+				}
+				return r.ID
+			}
+			ids := []string{check("a", "passed"), check("b", "passed")}
+			post(command("verify_conflict_resolution", map[string]any{"result_ids": ids}), http.StatusOK)
+			verified, _ := store.Read(ctx)
+			check("a", "failed")
+			before, _ := store.Read(ctx)
+			post(command("verify_conflict_resolution", map[string]any{"result_ids": ids}), http.StatusUnprocessableEntity)
+			verifyMCP := func(resultIDs []string, wantError bool) {
+				t.Helper()
+				r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: map[string]any{"action": "verify_conflict_resolution", "actor": "agent/http-resolver", "product_id": "caller-p", "data": map[string]any{"conflict_id": "caller-conflict", "result_ids": resultIDs}}})
+				if err != nil || r.IsError != wantError {
+					t.Fatalf("MCP reverify expected error=%v: %v %+v", wantError, err, r)
+				}
+			}
+			verifyMCP(ids, true)
+			after, _ := store.Read(ctx)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected HTTP/MCP reverification mutated persistent state")
+			}
+			ids[0] = check("a", "passed")
+			verifyMCP(ids, false)
+			current, _ := store.Read(ctx)
+			old, updated := verified.CompositionConflicts[0], current.CompositionConflicts[0]
+			if updated.Status != "resolved" || !reflect.DeepEqual(updated.ResultIDs, ids) || updated.ResolutionCommit != old.ResolutionCommit || updated.ClaimedBy != old.ClaimedBy || updated.Rationale != old.Rationale || !reflect.DeepEqual(updated.Source, old.Source) || len(current.Operations) != len(verified.Operations) || len(current.Events) != len(verified.Events)+3 || !reflect.DeepEqual(current.Results[:len(verified.Results)], verified.Results) {
+				t.Fatal("HTTP/MCP same-commit reverify changed provenance/history or queued work")
 			}
 		})
 	}

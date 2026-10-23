@@ -133,8 +133,8 @@ func operationConflictAction(st *domain.State, op domain.ExternalOperation, now 
 	}, Workflow: []conflictAgentStep{
 		{Action: "claim_composition_conflict", When: "requires_resolution; an existing claim must belong to the caller", RequiredFields: []string{"product_id", "data.conflict_id"}},
 		{Action: "record_conflict_resolution", When: "claimed by the caller, after external resolution", RequiredFields: []string{"product_id", "data.conflict_id", "data.commit", "data.rationale"}},
-		{Action: "record_check_result", When: "verification_required, after actual checks on the resolution commit", RequiredFields: []string{"check_id", "data.result", "data.commit"}},
-		{Action: "verify_conflict_resolution", When: "verification_required, with passing evidence for every affected Integration and blocking check", RequiredFields: []string{"product_id", "data.conflict_id", "data.result_ids"}},
+		{Action: "record_check_result", When: "verification_required, or resolved with superseded evidence; after actual fresh checks on the same resolution commit", RequiredFields: []string{"check_id", "data.result", "data.commit"}},
+		{Action: "verify_conflict_resolution", When: "verification_required or resolved; explicitly verify current passing evidence for every affected Integration and blocking check on the same immutable resolution commit", RequiredFields: []string{"product_id", "data.conflict_id", "data.result_ids"}},
 		{Action: "reconcile_composition", When: "all required conflicts resolved; only within existing execution authorization", RequiredFields: []string{"id (original composition_id)", "data.resolution_conflict_ids"}, MayBuildAndDeploy: true},
 	}}
 	seenIDs, seenRepos := map[string]bool{}, map[string]bool{}
