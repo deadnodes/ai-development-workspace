@@ -110,11 +110,11 @@ func (p *Provider) observeGitOpsBatchReader(ctx context.Context, c delivery.Conn
 	if e = r.get(fmt.Sprintf("/repos/%s/pulls/%d", repo, pr.Number), &final); e != nil {
 		return out, e
 	}
-	if !valid(final) || final.Number != pr.Number || final.Head.SHA != head || final.URL != pr.URL || final.State != pr.State || final.Merged != pr.Merged {
+	if !valid(final) || final.Number != pr.Number || final.Head.SHA != head || final.URL != pr.URL || final.State != pr.State || final.Merged != pr.Merged || !samePRMergeTime(final.MergedAt, pr.MergedAt) {
 		return out, ErrConflict
 	}
 	if e = checkHead(); e != nil {
 		return out, e
 	}
-	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, HeadSHA: head, State: pr.State, Merged: pr.Merged}, nil
+	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, HeadSHA: head, State: pr.State, Merged: pr.Merged, MergedAt: pr.MergedAt}, nil
 }

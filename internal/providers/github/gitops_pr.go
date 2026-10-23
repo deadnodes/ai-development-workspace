@@ -7,14 +7,16 @@ import (
 	"net/url"
 	"releasecontrol/internal/delivery"
 	"strings"
+	"time"
 )
 
 type gitOpsPR struct {
-	Number int    `json:"number"`
-	URL    string `json:"html_url"`
-	State  string `json:"state"`
-	Merged bool   `json:"merged"`
-	Head   struct {
+	Number   int        `json:"number"`
+	URL      string     `json:"html_url"`
+	State    string     `json:"state"`
+	Merged   bool       `json:"merged"`
+	MergedAt *time.Time `json:"merged_at"`
+	Head     struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -24,7 +26,7 @@ type gitOpsPR struct {
 }
 
 func prResult(pr gitOpsPR) delivery.GitOpsPullRequest {
-	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, State: pr.State, HeadSHA: pr.Head.SHA, Merged: pr.Merged}
+	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, State: pr.State, HeadSHA: pr.Head.SHA, Merged: pr.Merged, MergedAt: pr.MergedAt}
 }
 func (p *Provider) ProposeGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
 	var out delivery.GitOpsPullRequest
@@ -112,4 +114,11 @@ func (p *Provider) ObserveGitOpsPR(ctx context.Context, c delivery.Connection, r
 		return out, ErrConflict
 	}
 	return prResult(pr), nil
+}
+
+func samePRMergeTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }

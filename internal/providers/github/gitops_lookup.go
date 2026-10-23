@@ -210,11 +210,12 @@ func (r *proposalReader) blob(repo, sha string) (string, error) {
 }
 
 type lookupPR struct {
-	Number int    `json:"number"`
-	URL    string `json:"html_url"`
-	State  string `json:"state"`
-	Merged bool   `json:"merged"`
-	Head   struct {
+	Number   int        `json:"number"`
+	URL      string     `json:"html_url"`
+	State    string     `json:"state"`
+	Merged   bool       `json:"merged"`
+	MergedAt *time.Time `json:"merged_at"`
+	Head     struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
 		Repo struct {
@@ -351,7 +352,7 @@ func (p *Provider) LookupGitOpsProposal(ctx context.Context, c delivery.Connecti
 	validPR := func(v lookupPR) bool {
 		return v.Number == prs[0].Number && v.Head.Ref == branch && v.Head.SHA == head && v.Head.Repo.ID == id && v.Base.Ref == request.Request.Ref && v.Base.Repo.ID == id && strings.EqualFold(v.Head.Repo.FullName, repo) && strings.EqualFold(v.Base.Repo.FullName, repo) && (v.State == "open" || v.State == "closed") && v.URL != "" && len(v.URL) <= 2048 && (!v.Merged || v.State == "closed")
 	}
-	if !validPR(prs[0]) || !validPR(pr) {
+	if !validPR(prs[0]) || !validPR(pr) || prs[0].Merged != pr.Merged || prs[0].State != pr.State || !samePRMergeTime(prs[0].MergedAt, pr.MergedAt) {
 		return out, ErrConflict
 	}
 	finalHead, err := readHead()
@@ -361,5 +362,5 @@ func (p *Provider) LookupGitOpsProposal(ctx context.Context, c delivery.Connecti
 	if finalHead != head {
 		return out, ErrConflict
 	}
-	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, HeadSHA: head, State: pr.State, Merged: pr.Merged}, nil
+	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, HeadSHA: head, State: pr.State, Merged: pr.Merged, MergedAt: pr.MergedAt}, nil
 }

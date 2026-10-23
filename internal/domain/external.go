@@ -113,6 +113,14 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
+	DevRestorationUnapproved   bool                         `json:"dev_restoration_unapproved,omitempty"`
+	DevRestoration             *DevRestorationProof         `json:"dev_restoration,omitempty"`
+	DevRestorationPlan         *DevRestorationPlan          `json:"dev_restoration_plan,omitempty"`
+	DevRestorationConfirmation *DevRestorationConfirmation  `json:"dev_restoration_confirmation,omitempty"`
+	DevRestorationVerification *DevRestorationVerification  `json:"dev_restoration_verification,omitempty"`
+	DevRestorationRelease      *DevRestorationRelease       `json:"dev_restoration_release,omitempty"`
+	DevRestorationAvailability []DevBaselineComponentResult `json:"dev_restoration_availability,omitempty"`
+
 	DevBaseline               *DevBaselineProof          `json:"dev_baseline,omitempty"`
 	DevBaselineResult         *DevBaselineResult         `json:"dev_baseline_result,omitempty"`
 	DevRuntime                *DevRuntimeProof           `json:"dev_runtime,omitempty"`

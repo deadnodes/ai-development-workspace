@@ -104,7 +104,7 @@ func (s *Service) nativeDeliveryAllowed(st *domain.State, op *domain.ExternalOpe
 			return e
 		}
 		n := op.Native
-		if n.ConfigRevision != s.externalWorkers.Revision() || n.BuildRecipeHash != b.Hash || n.BuildRecipeRevision != b.Revision || n.PublicationRecipeHash != p.Hash || n.PublicationRecipeRevision != p.Revision || !time.Now().UTC().Before(n.Deadline) {
+		if n.ConfigRevision != s.externalWorkers.Revision() || n.BuildRecipeHash != b.Hash || n.BuildRecipeRevision != b.Revision || n.PublicationRecipeHash != p.Hash || n.PublicationRecipeRevision != p.Revision || !s.nativeNow().Before(n.Deadline) {
 			return invalid("native authority changed or delivery deadline exceeded")
 		}
 	}
@@ -467,7 +467,7 @@ func (s *Service) validateFrozenNative(product string, snap domain.DeliverySnaps
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(*snap.Native, *expected) || !time.Now().UTC().Before(snap.Native.Deadline) {
+	if !reflect.DeepEqual(*snap.Native, *expected) || !s.nativeNow().Before(snap.Native.Deadline) {
 		return invalid("request-time native authority changed or deadline expired")
 	}
 	return nil

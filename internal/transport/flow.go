@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -17,6 +18,11 @@ import (
 type flowAction struct{ action, pattern, refName, refField, fields, required, description string }
 
 var flowActions = []flowAction{
+	{"request_candidate_dev_restoration", "POST /api/products/{id}/candidate-dev/request-restoration", "product_id", "product_id", "reservation_operation_id request_key expected_selection", "reservation_operation_id request_key expected_selection", "Request bounded restoration of every original baseline component; advances recovery fencing without renewing candidate authority. Inspect the asynchronous complete plan before a separate attributed confirmation."},
+	{"confirm_candidate_dev_restoration", "POST /api/products/{id}/candidate-dev/confirm-restoration", "product_id", "product_id", "restoration_operation_id expected_plan_hash request_key expected_selection", "restoration_operation_id expected_plan_hash request_key expected_selection", "Record ATTRIBUTED_CONTROL_CONFIRMATION for the exact ready restoration plan. Actor and control token do not prove authenticated human text or voice approval. Never merges a Flux PR."},
+	{"verify_candidate_dev_restoration", "POST /api/products/{id}/candidate-dev/verify-restoration", "product_id", "product_id", "restoration_operation_id request_key expected_selection", "restoration_operation_id request_key expected_selection", "Request fresh server-owned availability and complete original-image runtime proof after separately confirmed external human-only reviewed Flux merges. Does not unlock the hold."},
+	{"release_candidate_dev_after_restoration", "POST /api/products/{id}/candidate-dev/release-after-restoration", "product_id", "product_id", "restoration_operation_id restoration_verification_operation_id request_key expected_selection", "restoration_operation_id restoration_verification_operation_id request_key expected_selection", "Explicit scoped unlock after exact restoration confirmation, latest fresh successful complete proof and final effect settlement. No TTL unlock or physical garbage collection."},
+
 	{"capture_candidate_dev_baseline", "POST /api/products/{id}/candidate-dev/capture-baseline", "product_id", "product_id", "reservation_operation_id request_key expected_selection", "reservation_operation_id request_key expected_selection", "Capture the complete reserved shared Dev baseline with server-owned GitOps, runtime and scoped registry availability evidence before candidate effects. Existing-image receipts grant restoration evidence only, never build provenance, approval, unlock or Prod rights."},
 	{"verify_candidate_dev_runtime", "POST /api/products/{id}/candidate-dev/verify-runtime", "product_id", "product_id", "activation_operation_id request_key expected_selection", "activation_operation_id request_key expected_selection", "Read configured complete runtime groups and exact Flux/GitOps/image identity for the same owner's activated Dev candidate. Server-owned point-in-time proof only; no functional acceptance, restoration, unlock, merge or production promotion."},
 	{"deploy_candidate_dev", "POST /api/products/{id}/candidate-dev/deploy", "product_id", "product_id", "reservation_operation_id request_key expected_selection", "reservation_operation_id request_key expected_selection", "Prepare PR-only DEV/TEST delivery of exact existing main-candidate artifacts under the same owner's active reservation, fresh verified baseline and CAS. No rebuild, source write, PR merge, runtime acceptance or production promotion. Once admitted, blind reservation release requires a separate verified restoration protocol."},
@@ -48,10 +54,14 @@ func flowSchema(spec flowAction) map[string]any {
 	if spec.action == "record_scenario_run" {
 		properties["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
 	}
-	if spec.action == "reserve_candidate_dev" || spec.action == "release_candidate_dev" || spec.action == "deploy_candidate_dev" || spec.action == "verify_candidate_dev_runtime" || spec.action == "capture_candidate_dev_baseline" {
+	if restorationAction(spec.action) || spec.action == "reserve_candidate_dev" || spec.action == "release_candidate_dev" || spec.action == "deploy_candidate_dev" || spec.action == "verify_candidate_dev_runtime" || spec.action == "capture_candidate_dev_baseline" {
 		properties["request_key"] = map[string]any{"type": "string", "minLength": 16, "maxLength": 128}
 	}
 	required := append([]string{spec.refName}, strings.Fields(spec.required)...)
+	if restorationAction(spec.action) {
+		required = append(required, "actor")
+		properties["actor"] = map[string]any{"type": "string", "minLength": 1, "pattern": `\S`, "description": "Required attribution; not authenticated human approval."}
+	}
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }
 func flowCommand(spec flowAction, input map[string]any) domain.Command {
@@ -63,7 +73,10 @@ func flowCommand(spec flowAction, input map[string]any) domain.Command {
 			data[key] = value
 		}
 	}
-	c := domain.Command{Action: spec.action, Actor: defaultActor(actor), Data: data}
+	if !restorationAction(spec.action) {
+		actor = defaultActor(actor)
+	}
+	c := domain.Command{Action: spec.action, Actor: actor, Data: data}
 	switch spec.refField {
 	case "id":
 		c.ID = reference
@@ -110,7 +123,12 @@ func registerFlowRoutes(mux *http.ServeMux, service Service) {
 				}
 				input[spec.refName] = id
 			}
-			v, err := service.Execute(r.Context(), flowCommand(spec, input))
+			command := flowCommand(spec, input)
+			if err := validateRestorationTransportCommand(command); err != nil {
+				write(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			v, err := service.Execute(r.Context(), command)
 			respond(w, v, err)
 		})
 	}
@@ -119,11 +137,20 @@ func registerFlowTools(server *mcp.Server, service Service) {
 	for _, spec := range flowActions {
 		mcp.AddTool(server, &mcp.Tool{Name: spec.action, Description: spec.description, InputSchema: flowSchema(spec)}, func(ctx context.Context, request *mcp.CallToolRequest, input map[string]any) (*mcp.CallToolResult, any, error) {
 			var err error
+			if restorationAction(spec.action) {
+				if err = uniqueMainCandidateJSON(request.Params.Arguments); err != nil {
+					return nil, nil, err
+				}
+			}
 			input, err = decodeFlowInput(request.Params.Arguments)
 			if err != nil {
 				return nil, nil, err
 			}
-			v, e := service.Execute(ctx, flowCommand(spec, input))
+			command := flowCommand(spec, input)
+			if err := validateRestorationTransportCommand(command); err != nil {
+				return nil, nil, err
+			}
+			v, e := service.Execute(ctx, command)
 			return nil, v, e
 		})
 	}
@@ -159,4 +186,75 @@ func decodeFlowInput(raw []byte) (map[string]any, error) {
 		input["expected_selection"] = exact
 	}
 	return input, nil
+}
+
+// Restoration has no legacy attribution default. This checks only the wire
+// shape; the shared application owns ownership, authority and lifecycle policy.
+func restorationAction(action string) bool {
+	switch action {
+	case "request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration":
+		return true
+	}
+	return false
+}
+func validateRestorationTransportCommand(c domain.Command) error {
+	if !restorationAction(c.Action) {
+		return nil
+	}
+	if strings.TrimSpace(c.Actor) == "" || strings.TrimSpace(c.ProductID) == "" {
+		return fmt.Errorf("restoration requires explicit actor and product_id")
+	}
+	if c.ID != "" || c.FeatureID != "" || c.IntegrationID != "" || c.GateID != "" || c.CheckID != "" || c.ResultID != "" {
+		return fmt.Errorf("restoration accepts only Product scope")
+	}
+	var spec flowAction
+	for _, candidate := range flowActions {
+		if candidate.action == c.Action {
+			spec = candidate
+			break
+		}
+	}
+	allowed := map[string]bool{}
+	for _, field := range strings.Fields(spec.required) {
+		allowed[field] = true
+	}
+	for field := range c.Data {
+		if !allowed[field] {
+			return fmt.Errorf("unknown restoration field: %s", field)
+		}
+	}
+	for field := range allowed {
+		if field == "expected_selection" {
+			continue
+		}
+		value, ok := c.Data[field].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("required restoration field: %s", field)
+		}
+	}
+	key, _ := c.Data["request_key"].(string)
+	if len(key) < 16 || len(key) > 128 {
+		return fmt.Errorf("request_key must be 16–128 bytes")
+	}
+	raw, err := json.Marshal(c.Data["expected_selection"])
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &fields); err != nil || len(fields) != 3 {
+		return fmt.Errorf("exact expected_selection required")
+	}
+	for _, field := range []string{"composition_id", "operation_id", "generation"} {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("exact expected_selection required")
+		}
+		if bytes.Equal(bytes.TrimSpace(fields[field]), []byte("null")) {
+			return fmt.Errorf("invalid null expected_selection field: %s", field)
+		}
+	}
+	var selection domain.EnvironmentSelection
+	if err = json.Unmarshal(raw, &selection); err != nil {
+		return fmt.Errorf("invalid expected_selection: %w", err)
+	}
+	return nil
 }

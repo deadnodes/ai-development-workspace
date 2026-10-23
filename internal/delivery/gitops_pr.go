@@ -1,13 +1,17 @@
 package delivery
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type GitOpsPullRequest struct {
-	Number  int    `json:"number"`
-	URL     string `json:"url"`
-	HeadSHA string `json:"head_sha"`
-	State   string `json:"state"`
-	Merged  bool   `json:"merged"`
+	Number   int        `json:"number"`
+	URL      string     `json:"url"`
+	HeadSHA  string     `json:"head_sha"`
+	State    string     `json:"state"`
+	Merged   bool       `json:"merged"`
+	MergedAt *time.Time `json:"merged_at,omitempty"`
 }
 type GitOpsPRProvider interface {
 	ProposeGitOps(context.Context, Connection, GitOpsApply) (GitOpsPullRequest, error)

@@ -20,6 +20,12 @@ func activeDevReservation(st *domain.State, environmentID string) *domain.Extern
 		}
 		released := false
 		for _, receipt := range st.Operations {
+			if domain.ValidRestorationRelease(st, receipt, *hold) {
+				released = true
+				break
+			}
+		}
+		for _, receipt := range st.Operations {
 			if receipt.Kind != "DEV_RESERVATION_RELEASE" || receipt.Status != "SUCCEEDED" || receipt.Phase != "RELEASED" || receipt.ProductID != hold.ProductID || receipt.EnvironmentID != hold.EnvironmentID || receipt.RequestedBy != hold.RequestedBy || receipt.DevReservation == nil || hold.DevReservation == nil {
 				continue
 			}
@@ -150,6 +156,9 @@ func devReservationInput(c domain.Command) (domain.DevReservationRequest, string
 func devReservationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.ProductID == c.ProductID && op.RequestKey == in.RequestKey && domain.IsRestorationOperation(*op) {
+			return nil, invalid("request_key already binds restoration receipt")
+		}
 		if op.Kind == devBaselineKind && op.RequestKey == in.RequestKey {
 			return nil, invalid("request_key already binds a baseline capture")
 		}
@@ -370,6 +379,21 @@ func ReservationState(st *domain.State, environmentID string) map[string]any {
 			}
 			out["candidate_gitops_groups"] = groups
 			out["release_action"] = "verified_restoration_required"
+		}
+	}
+	if recovery, ok := latestRestoration(st, hold.ID); recovery != nil {
+		out["restoration_operation_id"] = recovery.ID
+		out["restoration_status"] = recovery.Status
+		out["restoration_phase"] = recovery.Phase
+		out["restoration_current"] = ok
+		out["release_action"] = "release_candidate_dev_after_restoration"
+		if recovery.DevRestoration != nil {
+			out["recovery_epoch"] = recovery.DevRestoration.Epoch
+			out["recovery_selection"] = recovery.DevRestoration.Selection
+			out["recovery_generation"] = recovery.DevRestoration.Generation
+		}
+		if recovery.DevRestorationPlan != nil {
+			out["restoration_plan_hash"] = recovery.DevRestorationPlan.Hash
 		}
 	}
 	return out

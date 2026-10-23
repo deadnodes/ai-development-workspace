@@ -263,3 +263,17 @@ The agent must first bind the real repository/branch to its Integration and set 
 Pushes update observed HEAD/divergence and capture new revisions. The latest ten PRs from each explicitly bound branch are discovered; linked open PRs are read directly until merged/closed. Discovery is bounded, not a complete historical import. GitHub queries are read-only. The server does not scan all organization repositories/branches or infer an unregistered agent's working branch. Local unpushed changes remain local and are not visible to the GitHub poller.
 
 Requests become persistent `REFRESH_GIT` operations attributed to `system/git-sync`, visible in Operations & attention. Pending/running requests suppress duplicates. Failed reads retry after five polling intervals; at most five integrations are queued per scheduler pass. Queue/network latency can add to the interval. Existing page polling updates the graph after observations are persisted. GitHub webhooks are not required; this is server-side polling, not instant event delivery. Git observations do not themselves mark an Integration released or prove Kubernetes deployment.
+
+## Возврат исходного shared Dev
+
+После candidate Dev используй [DEV_RESTORATION.md](DEV_RESTORATION.md):
+`request_candidate_dev_restoration` → дождись полного `dev_restoration_plan.hash`
+и проверь все PR/head/image → отдельно `confirm_candidate_dev_restoration` →
+внешний reviewed Flux merge человеком → `verify_candidate_dev_restoration` для
+всех исходных компонентов и API/worker ролей → явно
+`release_candidate_dev_after_restoration`. Для всех четырёх команд обязательны
+Actor, Product, новый request key и точный текущий selection. После request
+прочитай новый token: recovery меняет epoch/generation. Actor/shared token даёт
+только ATTRIBUTED_CONTROL_CONFIRMATION, не проверенную личность человека или
+text/voice approval. Истёкший candidate не получает новых прав. Не обещай live
+установку, автоматический rollback, TTL unlock, functional acceptance или Prod.

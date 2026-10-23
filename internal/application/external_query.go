@@ -183,6 +183,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 		}
 		out := s.candidateRuntimeState(&st, id, "")
+		for k, v := range s.restorationQuery(&st, id) {
+			out[k] = v
+		}
 		for k, v := range s.baselineQuery(&st, id) {
 			out[k] = v
 		}
@@ -239,6 +242,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 					activationID = op.ParentID
 				}
 				out := s.candidateRuntimeState(&st, op.EnvironmentID, activationID)
+				for k, v := range s.restorationQuery(&st, op.EnvironmentID) {
+					out[k] = v
+				}
 				for k, v := range s.baselineQuery(&st, op.EnvironmentID) {
 					out[k] = v
 				}

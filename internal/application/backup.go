@@ -124,10 +124,42 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		}
 		originalOperations := []domain.ExternalOperation{}
 		for i := range restored.Operations {
-			if restored.Operations[i].DevActivationGroupID != "" || restored.Operations[i].DevActivationBatch != nil || restored.Operations[i].DevActivationIntentHash != "" || restored.Operations[i].DevActivationPRHash != "" || restored.Operations[i].DevActivationResultHash != "" || restored.Operations[i].DevActivation != nil || restored.Operations[i].DevRuntime != nil || restored.Operations[i].DevBaseline != nil {
+			if domain.IsRestorationOperation(restored.Operations[i]) || restored.Operations[i].DevActivationGroupID != "" || restored.Operations[i].DevActivationBatch != nil || restored.Operations[i].DevActivationIntentHash != "" || restored.Operations[i].DevActivationPRHash != "" || restored.Operations[i].DevActivationResultHash != "" || restored.Operations[i].DevActivation != nil || restored.Operations[i].DevRuntime != nil || restored.Operations[i].DevBaseline != nil {
 				restored.Operations[i].ReservationQuarantined = true
 			}
 			if active := activeDevReservation(&restored, restored.Operations[i].EnvironmentID); restored.Operations[i].Kind == "DEV_RESERVATION" && active != nil && active.ID == restored.Operations[i].ID {
+				restored.Operations[i].ReservationQuarantined = true
+			}
+		}
+		// Quarantine malformed orphans and every referenced child of imported recovery.
+		recoveryIDs := map[string]bool{}
+		for _, o := range restored.Operations {
+			if domain.IsRestorationOperation(o) {
+				recoveryIDs[o.ID] = true
+				for _, id := range o.ChildIDs {
+					recoveryIDs[id] = true
+				}
+				if o.DevRestoration != nil {
+					recoveryIDs[o.DevRestoration.ReservationOperationID] = true
+					recoveryIDs[o.DevRestoration.BaselineCaptureID] = true
+				}
+				if o.DevRestorationConfirmation != nil {
+					recoveryIDs[o.DevRestorationConfirmation.Request.RestorationOperationID] = true
+				}
+				if o.DevRestorationVerification != nil {
+					recoveryIDs[o.DevRestorationVerification.Request.RestorationOperationID] = true
+					recoveryIDs[o.DevRestorationVerification.ConfirmationID] = true
+				}
+				if o.DevRestorationRelease != nil {
+					recoveryIDs[o.DevRestorationRelease.ReservationOperationID] = true
+					recoveryIDs[o.DevRestorationRelease.Request.RestorationOperationID] = true
+					recoveryIDs[o.DevRestorationRelease.Request.RestorationVerificationOperationID] = true
+					recoveryIDs[o.DevRestorationRelease.ConfirmationID] = true
+				}
+			}
+		}
+		for i := range restored.Operations {
+			if recoveryIDs[restored.Operations[i].ID] || recoveryIDs[restored.Operations[i].ParentID] {
 				restored.Operations[i].ReservationQuarantined = true
 			}
 		}

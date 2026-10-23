@@ -22,3 +22,9 @@ type GitOpsRevisionProof struct {
 type GitOpsRevisionVerifier interface {
 	VerifyGitOpsRevision(context.Context, Connection, GitOpsRevisionRequest) (GitOpsRevisionProof, error)
 }
+
+// GitOpsCommitReader observes an exact immutable proposal commit even after its
+// branch disappears. It is GET-only and cannot refresh authentication.
+type GitOpsCommitReader interface {
+	ReadGitOpsAtCommit(context.Context, Connection, GitOpsRequest, string) (GitOpsSnapshot, error)
+}

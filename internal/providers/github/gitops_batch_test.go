@@ -51,7 +51,7 @@ func batchTestRequest() (delivery.GitOpsBatchApply, map[string]string, map[strin
 }
 
 func TestGitOpsBatchHTTPProposalAndReadOnlyRecovery(t *testing.T) {
-	for _, mutation := range []string{"valid", "guard-1", "guard-2", "guard-3", "guard-4", "guard-redirect", "lost-tree", "lost-commit", "lost-ref", "lost-pr", "existing-base-ref", "extra-file", "deleted-file", "mode-change", "unrelated-edit", "extra-yaml", "truncated", "pagination", "changed-parent", "changed-message", "changed-head", "foreign-pr-repo", "expired-token", "missing-token", "closed-deleted-branch", "open-deleted-branch"} {
+	for _, mutation := range []string{"valid", "guard-1", "guard-2", "guard-3", "guard-4", "guard-redirect", "lost-tree", "lost-commit", "lost-ref", "lost-pr", "existing-base-ref", "extra-file", "deleted-file", "mode-change", "unrelated-edit", "extra-yaml", "truncated", "pagination", "changed-parent", "changed-message", "changed-head", "foreign-pr-repo", "expired-token", "missing-token", "closed-deleted-branch", "open-deleted-branch", "merged-deleted-branch", "merged-deleted-branch-drift"} {
 		t.Run(mutation, func(t *testing.T) {
 			b, before, after := batchTestRequest()
 			head := strings.Repeat("b", 40)
@@ -64,16 +64,28 @@ func TestGitOpsBatchHTTPProposalAndReadOnlyRecovery(t *testing.T) {
 			if strings.Contains(mutation, "deleted-branch") {
 				prExists = true
 			}
+			prReads := 0
+			mergedAt := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 			pr := func() map[string]any {
+				prReads++
 				repoID := 101
 				if mutation == "foreign-pr-repo" {
 					repoID = 202
 				}
 				state := "open"
-				if mutation == "closed-deleted-branch" {
+				if mutation == "closed-deleted-branch" || strings.HasPrefix(mutation, "merged-deleted-branch") {
 					state = "closed"
 				}
-				return map[string]any{"number": 7, "html_url": "https://github.test/acme/source/pull/7", "state": state, "head": map[string]any{"ref": branch, "sha": head, "repo": map[string]any{"id": repoID, "full_name": "acme/source"}}, "base": map[string]any{"ref": "main", "repo": map[string]any{"id": 101, "full_name": "acme/source"}}}
+				result := map[string]any{"number": 7, "html_url": "https://github.test/acme/source/pull/7", "state": state, "head": map[string]any{"ref": branch, "sha": head, "repo": map[string]any{"id": repoID, "full_name": "acme/source"}}, "base": map[string]any{"ref": "main", "repo": map[string]any{"id": 101, "full_name": "acme/source"}}}
+				if strings.HasPrefix(mutation, "merged-deleted-branch") {
+					result["merged"] = true
+					timestamp := mergedAt
+					if mutation == "merged-deleted-branch-drift" && prReads > 1 {
+						timestamp = timestamp.Add(time.Second)
+					}
+					result["merged_at"] = timestamp.Format(time.RFC3339)
+				}
+				return result
 			}
 			p, c, tokens := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 				var response any
@@ -266,9 +278,12 @@ func TestGitOpsBatchHTTPProposalAndReadOnlyRecovery(t *testing.T) {
 					return nil
 				})
 			}
-			if mutation == "valid" || mutation == "closed-deleted-branch" {
+			if mutation == "valid" || mutation == "closed-deleted-branch" || mutation == "merged-deleted-branch" {
 				if err != nil || got.Number != 7 {
 					t.Fatalf("proposal failed %+v %v", got, err)
+				}
+				if mutation == "merged-deleted-branch" && (!got.Merged || got.MergedAt == nil || !got.MergedAt.Equal(mergedAt)) {
+					t.Fatal("provider dropped authoritative merge timestamp", got)
 				}
 			} else if err == nil || got.Number != 0 {
 				t.Fatalf("invalid proof accepted %+v %v", got, err)

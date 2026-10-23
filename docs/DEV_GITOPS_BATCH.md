@@ -111,6 +111,11 @@ failed effects never release the reservation automatically. The governing
 human-only protected Flux merge policy continues to apply. This source
 protocol does not update the running control plane or authorize a live rollout.
 
-Verified restoration remains a separate lifecycle: an exact reviewed restore
-PR, separate rollback confirmation, post-restore runtime proof and a scoped
-unlock are still required.
+[Verified restoration](DEV_RESTORATION.md) reuses this bounded writer with
+independent recovery guards and original desired images; unchanged original
+components remain explicit no-write members.
+
+The separate [complete baseline restoration lifecycle](DEV_RESTORATION.md) uses
+a new recovery epoch and selection, exact-plan attributed confirmation, external
+human-only reviewed Flux merges, fresh all-original availability/runtime proof
+and explicit scoped unlock. Candidate expiry never renews candidate rights.

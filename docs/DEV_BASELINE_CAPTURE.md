@@ -129,3 +129,8 @@ selectors separately from desired candidate repositories and combine sibling
 image changes in shared files. Capture and proposal preparation do not complete
 the restoration lifecycle. The governing human-only protected Flux merge policy
 remains in force.
+
+The separate [complete baseline restoration lifecycle](DEV_RESTORATION.md) uses
+a new recovery epoch and selection, exact-plan attributed confirmation, external
+human-only reviewed Flux merges, fresh all-original availability/runtime proof
+and explicit scoped unlock. Candidate expiry never renews candidate rights.

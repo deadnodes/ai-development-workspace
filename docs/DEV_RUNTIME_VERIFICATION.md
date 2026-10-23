@@ -133,3 +133,8 @@ original artifacts, a reviewed restoration PR, separate rollback confirmation
 and a fresh post-restore runtime proof before a scoped unlock. Unknown effects
 retain the reservation. The currently governing protected Flux merge policy
 continues to apply.
+
+The separate [complete baseline restoration lifecycle](DEV_RESTORATION.md) uses
+a new recovery epoch and selection, exact-plan attributed confirmation, external
+human-only reviewed Flux merges, fresh all-original availability/runtime proof
+and explicit scoped unlock. Candidate expiry never renews candidate rights.

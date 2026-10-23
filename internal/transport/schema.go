@@ -13,7 +13,7 @@ func CommandSchema() map[string]any {
 	for _, k := range strings.Fields("action actor id product_id feature_id integration_id gate_id check_id result_id") {
 		props[k] = str()
 	}
-	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Optional attribution; defaults to agent. This is not authentication."}
+	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution; defaults to agent for legacy commands. Restoration requires explicit attribution. This is not authentication."}
 	data := map[string]any{}
 	for _, k := range strings.Fields("idempotency_key request_key recipe_id recipe_revision recipe_hash config_revision deadline outcome conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit source_sha version checksum uri build_url") {
 		data[k] = str()
@@ -21,6 +21,9 @@ func CommandSchema() map[string]any {
 	data["digest"] = str()
 	data["reservation_operation_id"] = str()
 	data["activation_operation_id"] = str()
+	data["restoration_operation_id"] = str()
+	data["restoration_verification_operation_id"] = str()
+	data["expected_plan_hash"] = str()
 	data["expected_selection"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"composition_id", "operation_id", "generation"}, "properties": map[string]any{"composition_id": str(), "operation_id": str(), "generation": map[string]any{"type": "integer", "minimum": 0}}}
 	data["idempotency_key"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids revision_ids") {
@@ -92,6 +95,10 @@ func CommandSchema() map[string]any {
 		{"reconcile_worker_job", "product_id id", "outcome"},
 		{"update_environment_feature", "feature_id", "environment_id revision_ids idempotency_key expected_selection"},
 		{"assemble_environment", "product_id", "environment_id"},
+		{"request_candidate_dev_restoration", "product_id actor", "reservation_operation_id request_key expected_selection"},
+		{"confirm_candidate_dev_restoration", "product_id actor", "restoration_operation_id expected_plan_hash request_key expected_selection"},
+		{"verify_candidate_dev_restoration", "product_id actor", "restoration_operation_id request_key expected_selection"},
+		{"release_candidate_dev_after_restoration", "product_id actor", "restoration_operation_id restoration_verification_operation_id request_key expected_selection"},
 		{"reserve_candidate_dev", "product_id", "candidate_operation_id environment_id request_key expected_selection"},
 		{"deploy_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"verify_candidate_dev_runtime", "product_id", "activation_operation_id request_key expected_selection"},
@@ -176,6 +183,20 @@ func CommandSchema() map[string]any {
 			}
 			if name == "record_scenario_run" {
 				dataRule["properties"].(map[string]any)["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
+			}
+			if restorationAction(name) {
+				exact := map[string]any{}
+				for _, field := range strings.Fields(a.required) {
+					exact[field] = data[field]
+				}
+				exact["request_key"] = map[string]any{"type": "string", "minLength": 16, "maxLength": 128}
+				dataRule = map[string]any{"type": "object", "properties": exact, "required": strings.Fields(a.required), "additionalProperties": false}
+				bp := branch["properties"].(map[string]any)
+				bp["actor"] = map[string]any{"type": "string", "minLength": 1, "pattern": `\S`}
+				bp["product_id"] = map[string]any{"type": "string", "minLength": 1, "pattern": `\S`}
+				for _, field := range []string{"id", "feature_id", "integration_id", "gate_id", "check_id", "result_id"} {
+					bp[field] = false
+				}
 			}
 			branch["properties"].(map[string]any)["data"] = dataRule
 			variants = append(variants, branch)

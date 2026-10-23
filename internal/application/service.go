@@ -24,14 +24,30 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
-	externalWorkers  *workerconfig.Authority
-	runtimeObservers []delivery.RuntimeSnapshotObserver
-	workspaceRoot    string
-	store            Store
-	provider         delivery.Provider
-	workerID         string
+	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
+	nativeAuthorityNow func() time.Time
+	// Restoration proposal deadline decisions only; read/proof/unlock clocks stay real.
+	restorationAuthorityNow func() time.Time
+	externalWorkers         *workerconfig.Authority
+	runtimeObservers        []delivery.RuntimeSnapshotObserver
+	workspaceRoot           string
+	store                   Store
+	provider                delivery.Provider
+	workerID                string
 }
 
+func (s *Service) nativeNow() time.Time {
+	if s.nativeAuthorityNow != nil {
+		return s.nativeAuthorityNow().UTC()
+	}
+	return time.Now().UTC()
+}
+func (s *Service) restorationWriteNow() time.Time {
+	if s.restorationAuthorityNow != nil {
+		return s.restorationAuthorityNow().UTC()
+	}
+	return time.Now().UTC()
+}
 func New(store Store) *Service { return &Service{store: store, workerID: id()} }
 func NewWithProvider(store Store, provider delivery.Provider) *Service {
 	s := New(store)
@@ -66,6 +82,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return s.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if restorationAction(c.Action) {
+		return s.executeDevRestoration(ctx, c)
+	}
 	if c.Action == "capture_candidate_dev_baseline" {
 		return s.executeDevBaseline(ctx, c)
 	}

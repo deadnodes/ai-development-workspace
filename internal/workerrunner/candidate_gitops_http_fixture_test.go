@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // candidateGitOpsHTTPFixture is a GitHub HTTP peer, never a delivery provider.
@@ -26,6 +27,7 @@ type candidateGitOpsHTTPFixture struct {
 	initial, repo, branch, head string
 	baselineDigest              string
 	pr                          map[string]any
+	prs                         []map[string]any
 	lost, recovering            bool
 	mutations                   []string
 	recoveryWrites              int
@@ -256,20 +258,74 @@ func (f *candidateGitOpsHTTPFixture) serveHTTP(w http.ResponseWriter, r *http.Re
 			return
 		}
 		reply(200, map[string]any{"sha": sha, "encoding": "base64", "size": len(raw), "content": base64.StdEncoding.EncodeToString([]byte(raw))})
-	case r.Method == "GET" && p == "pulls":
-		if f.pr == nil {
-			reply(200, []any{})
-			return
-		}
-		reply(200, []any{f.pr})
-	case r.Method == "POST" && p == "pulls":
-		var v struct{ Head, Base, Body string }
-		if json.NewDecoder(r.Body).Decode(&v) != nil || v.Head != f.branch || v.Base != "main" || f.head == "" || f.pr != nil {
+	case r.Method == "GET" && strings.HasPrefix(p, "compare/"):
+		pair := strings.Split(strings.TrimPrefix(p, "compare/"), "...")
+		if len(pair) != 2 {
 			reply(422, nil)
 			return
 		}
+		base, cursor := pair[0], pair[1]
+		var chain []map[string]string
+		for cursor != base && len(chain) < 100 {
+			commit := f.commits[cursor]
+			if commit == nil {
+				reply(404, nil)
+				return
+			}
+			chain = append(chain, map[string]string{"sha": cursor})
+			parents, ok := commit["parents"].([]map[string]string)
+			if !ok || len(parents) != 1 {
+				reply(409, nil)
+				return
+			}
+			cursor = parents[0]["sha"]
+		}
+		if cursor != base {
+			reply(409, nil)
+			return
+		}
+		for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+			chain[i], chain[j] = chain[j], chain[i]
+		}
+		status := "ahead"
+		if len(chain) == 0 {
+			status = "identical"
+		}
+		reply(200, map[string]any{"status": status, "ahead_by": len(chain), "behind_by": 0, "total_commits": len(chain), "base_commit": map[string]string{"sha": base}, "merge_base_commit": map[string]string{"sha": base}, "commits": chain})
+	case r.Method == "GET" && p == "pulls":
+		result := []any{}
+		for _, pr := range f.prs {
+			head := pr["head"].(map[string]any)["ref"].(string)
+			wantedHead := r.URL.Query().Get("head")
+			if wantedHead != "" && wantedHead != "fixture:"+head && wantedHead != head {
+				continue
+			}
+			state := r.URL.Query().Get("state")
+			if state != "" && state != "all" && state != pr["state"] {
+				continue
+			}
+			if base := r.URL.Query().Get("base"); base != "" && base != "main" {
+				continue
+			}
+			result = append(result, pr)
+		}
+		reply(200, result)
+	case r.Method == "POST" && p == "pulls":
+		var v struct{ Head, Base, Body string }
+		if json.NewDecoder(r.Body).Decode(&v) != nil || v.Head != f.branch || v.Base != "main" || f.head == "" {
+			reply(422, nil)
+			return
+		}
+		for _, pr := range f.prs {
+			if pr["head"].(map[string]any)["ref"] == v.Head {
+				reply(422, nil)
+				return
+			}
+		}
 		identity := map[string]any{"id": 43, "full_name": "fixture/gitops"}
-		f.pr = map[string]any{"number": 1, "html_url": "https://github.com/fixture/gitops/pull/1", "state": "open", "merged": false, "head": map[string]any{"ref": f.branch, "sha": f.head, "repo": identity}, "base": map[string]any{"ref": "main", "repo": identity}}
+		number := len(f.prs) + 1
+		f.pr = map[string]any{"number": number, "html_url": "https://github.com/fixture/gitops/pull/" + strconv.Itoa(number), "state": "open", "merged": false, "head": map[string]any{"ref": f.branch, "sha": f.head, "repo": identity}, "base": map[string]any{"ref": "main", "repo": identity}}
+		f.prs = append(f.prs, f.pr)
 		if f.lost {
 			f.lost = false
 			f.recovering = true
@@ -277,8 +333,13 @@ func (f *candidateGitOpsHTTPFixture) serveHTTP(w http.ResponseWriter, r *http.Re
 			return
 		}
 		reply(201, f.pr)
-	case r.Method == "GET" && p == "pulls/1" && f.pr != nil:
-		reply(200, f.pr)
+	case r.Method == "GET" && strings.HasPrefix(p, "pulls/"):
+		number, err := strconv.Atoi(strings.TrimPrefix(p, "pulls/"))
+		if err != nil || number < 1 || number > len(f.prs) {
+			reply(404, nil)
+			return
+		}
+		reply(200, f.prs[number-1])
 	default:
 		reply(404, map[string]string{"message": "unexpected fixture endpoint " + r.Method + " " + p})
 	}
@@ -324,5 +385,7 @@ func (f *candidateGitOpsHTTPFixture) externalMerge(t *testing.T) {
 	}
 	f.pr["state"] = "closed"
 	f.pr["merged"] = true
+	f.pr["merged_at"] = time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	f.recovering = false
 	f.refs["main"] = f.head
 }

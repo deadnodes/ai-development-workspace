@@ -16,7 +16,7 @@ func StatusCatalog() map[string][]string {
 		"check_result": {"passed", "failed", "blocked", "skipped"}, "gate_result": {"pending", "passed", "failed", "blocked", "skipped", "stale"},
 		"scenario_result": {"passed", "failed", "blocked"}, "composition": {"planned"}, "release": {"planned", "released"},
 		"operation": {"PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"}, "operation_step": {"PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"},
-		"deployment_state": {"PENDING", "COMPOSING", "SOURCE_READY", "UPDATING_MAIN", "WAITING_FOR_COMPONENTS", "WAITING_FOR_ARTIFACT", "BUILDING", "ARTIFACT_READY", "GITOPS_PENDING", "GITOPS_APPLIED", "PENDING_RECONCILIATION", "BASELINE_CAPTURED", "BASELINE_UNVERIFIED", "RUNTIME_VERIFIED", "RUNTIME_UNVERIFIED", "READY_FOR_VERIFICATION", "DEPLOYED", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"},
+		"deployment_state": {"PENDING", "COMPOSING", "SOURCE_READY", "UPDATING_MAIN", "WAITING_FOR_COMPONENTS", "WAITING_FOR_ARTIFACT", "BUILDING", "ARTIFACT_READY", "GITOPS_PENDING", "GITOPS_APPLIED", "PENDING_RECONCILIATION", "BASELINE_CAPTURED", "BASELINE_UNVERIFIED", "RESTORATION_VERIFIED", "RESTORATION_UNVERIFIED", "RELEASED", "RUNTIME_VERIFIED", "RUNTIME_UNVERIFIED", "READY_FOR_VERIFICATION", "DEPLOYED", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"},
 		"review_sync":      {"NO_FINDINGS_OBSERVED", "FINDINGS_OBSERVED"}, "git_observation": {"identical", "ahead", "behind", "diverged", "unknown"},
 		"pull_request": {"open", "draft", "closed", "merged"}, "artifact_availability": {"PRESENT", "MISSING"},
 	}

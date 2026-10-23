@@ -201,6 +201,9 @@ func (s *Service) devActivationAllowed(st *domain.State, op domain.ExternalOpera
 func activationReplay(st *domain.State, c domain.Command, in domain.DevReservationRequest, hash string) (*domain.ExternalOperation, error) {
 	for i := range st.Operations {
 		op := &st.Operations[i]
+		if op.ProductID == c.ProductID && op.RequestKey == in.RequestKey && domain.IsRestorationOperation(*op) {
+			return nil, invalid("request_key already binds restoration receipt")
+		}
 		if op.Kind == devBaselineKind && op.RequestKey == in.RequestKey {
 			return nil, invalid("request_key already binds a baseline capture")
 		}

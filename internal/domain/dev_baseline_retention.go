@@ -236,6 +236,11 @@ func (c *retentionCollector) baselineHoldSettled(o ExternalOperation) bool {
 	if !ok || hold.DevReservation == nil {
 		return false
 	}
+	for _, receipt := range c.st.Operations {
+		if ValidRestorationRelease(&c.st, receipt, hold) {
+			return true
+		}
+	}
 	for _, effect := range c.st.Operations {
 		if effect.ProductID != hold.ProductID {
 			continue

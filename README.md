@@ -62,6 +62,7 @@ A successful GitOps operation records desired state and remains pending reconcil
 ## References
 
 - [Agent quickstart](docs/AGENT_QUICKSTART.md) — run, connect, configure, deploy, resume.
+- [Complete shared Dev restoration](docs/DEV_RESTORATION.md) — attributed confirmation, external human-only Flux merge, all-original runtime proof and explicit unlock.
 - [GitHub build and GitOps contract](docs/GITHUB_DEV.md) — workflow, GHCR and evidence details.
 - [External worker protocol](docs/WORKER_EXECUTION.md) and [local execution](docs/LOCAL_WORKER.md).
 - [Application commands](docs/CONTRACT.md) — shared HTTP/MCP/domain contract.

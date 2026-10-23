@@ -225,5 +225,6 @@ func assertRealGroupedDevGitOpsPipeline(t *testing.T, endpoint, token string, ca
 	}
 	assertRealBaselineRetained(t, endpoint, token, capture)
 	peer.assertReadOnly(t)
+	assertRealGroupedDevRestoration(t, hold, capture, candidate, baselines, peer, f, ticks, read, operation, selection, request, registryFault)
 	t.Log("ACTUAL temporary Git -> independent Dev/Prod native BuildKit/spool/publications -> Distribution; local+PostgreSQL metastore. SIMULATED GitHub HTTP and Kubernetes HTTPS peers/external merge: two components, four roles, distinct Dev/Prod repositories, one grouped commit/branch/PR, GET-only lost-response recovery, exact untouched YAML, original artifacts/baseline/roots preserved, zero capture/activation builds/publications; no live Dev/Prod or unlock claim")
 }

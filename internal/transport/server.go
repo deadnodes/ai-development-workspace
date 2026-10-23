@@ -62,7 +62,13 @@ func New(service Service, options Options) http.Handler {
 			write(w, 400, map[string]string{"error": "Expected one JSON object"})
 			return
 		}
-		c.Actor = defaultActor(c.Actor)
+		if err := validateRestorationTransportCommand(c); err != nil {
+			write(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		if !restorationAction(c.Action) {
+			c.Actor = defaultActor(c.Actor)
+		}
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
@@ -91,7 +97,12 @@ func New(service Service, options Options) http.Handler {
 		if err := json.Unmarshal(request.Params.Arguments, &in); err != nil {
 			return nil, nil, err
 		}
-		in.Actor = defaultActor(in.Actor)
+		if err := validateRestorationTransportCommand(in); err != nil {
+			return nil, nil, err
+		}
+		if !restorationAction(in.Action) {
+			in.Actor = defaultActor(in.Actor)
+		}
 		v, e := service.Execute(ctx, in)
 		return nil, v, e
 	})

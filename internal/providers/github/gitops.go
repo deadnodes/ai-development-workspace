@@ -105,6 +105,19 @@ func documentImageFields(doc *yaml.Node, request delivery.GitOpsRequest) (*yaml.
 	return repo, digest, nil
 }
 func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
+	return p.readGitOps(ctx, c, r, "")
+}
+
+var _ delivery.GitOpsCommitReader = (*Provider)(nil)
+
+func (p *Provider) ReadGitOpsAtCommit(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest, commitSHA string) (delivery.GitOpsSnapshot, error) {
+	if !fullSHA.MatchString(commitSHA) || (r.ExpectedHeadSHA != "" && r.ExpectedHeadSHA != commitSHA) {
+		return delivery.GitOpsSnapshot{}, errors.New("exact GitOps commit required")
+	}
+	return p.readGitOps(delivery.WithCachedAuthentication(ctx), c, r, commitSHA)
+}
+
+func (p *Provider) readGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest, commitSHA string) (delivery.GitOpsSnapshot, error) {
 	var out delivery.GitOpsSnapshot
 	if e := gitopsReadPath(r); e != nil {
 		return out, e
@@ -123,8 +136,21 @@ func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r deli
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	if e = p.request(ctx, c, "GET", "/repos/"+repo+"/git/ref/heads/"+url.PathEscape(r.Ref), nil, &ref); e != nil {
-		return out, e
+	if commitSHA == "" {
+		if e = p.request(ctx, c, "GET", "/repos/"+repo+"/git/ref/heads/"+url.PathEscape(r.Ref), nil, &ref); e != nil {
+			return out, e
+		}
+	} else {
+		var commit struct {
+			SHA string `json:"sha"`
+		}
+		if e = p.request(ctx, c, "GET", "/repos/"+repo+"/git/commits/"+commitSHA, nil, &commit); e != nil {
+			return out, e
+		}
+		if commit.SHA != commitSHA {
+			return out, ErrConflict
+		}
+		ref.Object.SHA = commit.SHA
 	}
 	if !fullSHA.MatchString(ref.Object.SHA) {
 		return out, errors.New("invalid GitOps branch head")
