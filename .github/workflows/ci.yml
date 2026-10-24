@@ -13,6 +13,7 @@ jobs:
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
     # Configure the repository variable for your trusted local runner.
     runs-on: ${{ fromJSON(vars.RCP_RUNNER_LABELS || '["deadnodes-dev"]') }}
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17-alpine
@@ -27,6 +28,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      GOFLAGS: -timeout=40m
       TEST_DATABASE_URL: postgres://releasecontrol:releasecontrol@localhost:5432/releasecontrol_tests?sslmode=disable
     steps:
       - uses: actions/checkout@v4

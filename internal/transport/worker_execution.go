@@ -19,6 +19,16 @@ type workerService interface {
 	ReportWorker(context.Context, workerconfig.Principal, domain.WorkerReport) (domain.WorkerLease, error)
 }
 
+// Only the fixed machine protocol bypasses control-plane OIDC. Each endpoint
+// still authenticates its configured worker credential and capability scope.
+func workerEndpoint(path string) bool {
+	switch path {
+	case "/api/worker/claim", "/api/worker/start", "/api/worker/heartbeat", "/api/worker/report":
+		return true
+	}
+	return false
+}
+
 func registerWorkerRoutes(mux *http.ServeMux, service Service, o Options) {
 	mux.HandleFunc("/api/worker/", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(workerService)

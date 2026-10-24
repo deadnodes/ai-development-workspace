@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"releasecontrol/internal/agentguide"
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
 	"releasecontrol/web"
@@ -28,6 +29,7 @@ type Service interface {
 }
 
 type Options struct {
+	Auth         *auth.Manager
 	Workers      *workerconfig.Authority
 	Token        string
 	AllowedHosts []string
@@ -72,7 +74,8 @@ func New(service Service, options Options) http.Handler {
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
-	registerWorkerRoutes(mux, service, options)
+	workerMux := http.NewServeMux()
+	registerWorkerRoutes(workerMux, service, options)
 	registerQueryRoutes(mux, service)
 	registerBackupRoutes(mux, service)
 	registerReviewRoutes(mux, service)
@@ -81,10 +84,7 @@ func New(service Service, options Options) http.Handler {
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_state", Description: "Read products, features, integration/work claims, verification, findings, applications, environments, immutable source revisions, composition plans, releases, GitHub connections, delivery operations, provider observations and audit history."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-		v, e := service.State(ctx)
-		return nil, v, e
-	})
+	registerStateNavigationTool(server, service)
 	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Deterministic feature context for a fresh coding agent: intent, ordered plan, progress, decisions, discoveries, blockers, handoffs, verification evidence and other active work."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		FeatureID string `json:"feature_id" jsonschema:"Feature ID to resume"`
 	}) (*mcp.CallToolResult, any, error) {
@@ -118,7 +118,17 @@ func New(service Service, options Options) http.Handler {
 	registerAgentGuideTools(server)
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20}))
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
-	return protect(mux, options)
+	var control http.Handler = mux
+	if options.Auth != nil {
+		control = options.Auth.Wrap(control)
+	}
+	return protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if workerEndpoint(r.URL.Path) {
+			workerMux.ServeHTTP(w, r)
+			return
+		}
+		control.ServeHTTP(w, r)
+	}), options)
 }
 
 func respond(w http.ResponseWriter, v any, err error) {
@@ -129,6 +139,9 @@ func respond(w http.ResponseWriter, v any, err error) {
 	code := http.StatusInternalServerError
 	message := "Internal error"
 	switch {
+	case errors.Is(err, auth.ErrForbidden):
+		code = http.StatusForbidden
+		message = "Forbidden"
 	case errors.Is(err, application.ErrNotFound):
 		code = 404
 		message = err.Error()
@@ -164,24 +177,25 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 403, map[string]string{"error": "Host not allowed; configure ALLOWED_HOSTS"})
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" {
+		authNavigation := o.Auth != nil && o.Auth.Enabled() && r.Method == http.MethodGet && (r.URL.Path == "/auth/login" || r.URL.Path == "/auth/callback")
+		if origin := r.Header.Get("Origin"); origin != "" && !authNavigation {
 			u, e := url.Parse(origin)
 			if e != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
 				write(w, 403, map[string]string{"error": "Cross-origin requests are not allowed"})
 				return
 			}
 		}
-		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" && !authNavigation {
 			write(w, 403, map[string]string{"error": "Cross-site requests are not allowed"})
 			return
 		}
-		if o.Workers != nil && o.Workers.IsWorkerToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) && !strings.HasPrefix(r.URL.Path, "/api/worker/") {
+		if o.Workers != nil && o.Workers.IsWorkerToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) && !workerEndpoint(r.URL.Path) {
 			write(w, 401, map[string]string{"error": "worker credential restricted to worker channel"})
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			w.Header().Set("Cache-Control", "no-store")
-			if !strings.HasPrefix(r.URL.Path, "/api/worker/") && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
+			if !workerEndpoint(r.URL.Path) && (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
 				write(w, 401, map[string]string{"error": "Bearer token required"})
 				return
 			}

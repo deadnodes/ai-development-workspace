@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
@@ -59,7 +60,10 @@ func (s *Service) State(ctx context.Context) (domain.State, error) {
 	if err == nil {
 		derive(&st)
 	}
-	return st, err
+	if err != nil {
+		return st, err
+	}
+	return scopedState(ctx, st)
 }
 func id() string { var b [16]byte; _, _ = rand.Read(b[:]); return hex.EncodeToString(b[:]) }
 func invalid(f string, args ...any) error {
@@ -79,7 +83,15 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
-	return s.executeCommand(ctx, c, nil)
+	c.Actor = attributedActor(ctx, c.Actor)
+	request := *s
+	request.store = commandAuthorizationStore{Store: s.store, command: c}
+	if _, authenticated := auth.FromContext(ctx); authenticated {
+		if _, err := request.store.Read(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
 	if restorationAction(c.Action) {

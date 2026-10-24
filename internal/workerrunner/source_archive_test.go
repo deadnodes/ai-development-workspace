@@ -107,7 +107,9 @@ func TestSourceArchiveTailCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	r, w := io.Pipe()
-	stop := context.AfterFunc(ctx, func() { _ = r.CloseWithError(ctx.Err()) })
+	// Close the producer: its error is delivered to the blocked reader. Closing
+	// the reader instead delivers ctx.Err to writes and makes reads ErrClosedPipe.
+	stop := context.AfterFunc(ctx, func() { _ = w.CloseWithError(ctx.Err()) })
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -126,6 +128,47 @@ func TestSourceArchiveTailCancellation(t *testing.T) {
 	})
 	if err := extractSource(r, t.TempDir(), 1<<20); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("tail cancellation lost", err)
+	}
+}
+
+func TestSourceArchiveTailCancellationDirection(t *testing.T) {
+	for _, producer := range []bool{false, true} {
+		name := "reader-close-control"
+		want := error(io.ErrClosedPipe)
+		if producer {
+			name, want = "producer-close-cancellation", context.Canceled
+		}
+		t.Run(name, func(t *testing.T) {
+			archive := paddedSourceArchive(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			r, w := io.Pipe()
+			stop := context.AfterFunc(ctx, func() {
+				if producer {
+					_ = w.CloseWithError(ctx.Err())
+				} else {
+					_ = r.CloseWithError(ctx.Err())
+				}
+			})
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, _ = w.Write(archive)
+				// Cancel only once the complete archive was consumed. No timer or
+				// concurrent writer-close can hide which pipe direction is tested.
+				cancel()
+			}()
+			t.Cleanup(func() {
+				stop()
+				cancel()
+				_ = r.Close()
+				_ = w.Close()
+				wg.Wait()
+			})
+			if err := extractSource(r, t.TempDir(), 1<<20); !errors.Is(err, want) {
+				t.Fatalf("tail error direction: got %v, want %v", err, want)
+			}
+		})
 	}
 }
 
