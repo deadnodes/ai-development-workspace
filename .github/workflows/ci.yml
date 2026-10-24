@@ -9,10 +9,9 @@ permissions:
   contents: read
 jobs:
   check:
-    # Privileged local runners execute only trusted pushes and manual runs.
+    # This shared upstream has its own GitHub-hosted CI, independent of installs.
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
-    # Configure the repository variable for your trusted local runner.
-    runs-on: ${{ fromJSON(vars.RCP_RUNNER_LABELS || '["deadnodes-dev"]') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:
       postgres:
@@ -47,8 +46,8 @@ jobs:
     name: Publish container
     needs: check
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
-    # Configure the repository variable for your trusted local runner.
-    runs-on: ${{ fromJSON(vars.RCP_RUNNER_LABELS || '["deadnodes-dev"]') }}
+    # Publishing an upstream image does not deploy any installation.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write

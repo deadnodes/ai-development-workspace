@@ -13,10 +13,12 @@ client in an existing realm without embedding installation credentials.
 `release-control login` enrolls an agent; `release-control connect --profile`
 installs a local credential-loading MCP proxy. See [agent connection](docs/AGENT_CONNECT.md).
 
-CI runner labels are supplied by the repository variable `RCP_RUNNER_LABELS`
-(JSON array of trusted self-hosted runner labels). Fork PR code is excluded
-from these runners. Successful default-branch container builds publish an
-`rcp-image-evidence` artifact. An authenticated operator can run
+This shared upstream runs its own checks and image builds on GitHub-hosted
+`ubuntu-24.04` runners. Its workflows do not use `RCP_RUNNER_LABELS` or depend on
+an installation's runner fleet. Successful default-branch container builds
+publish an `rcp-image-evidence` artifact; they do not deploy to Dev or any other
+environment. Installation updates are a separate explicit operator action.
+An authenticated operator can run
 `scripts/deploy-gitops.py` with explicit source repository, run ID, GitOps
 repository/branch and manifest. It previews by default; `--apply` verifies
 build provenance and publishes the immutable image through Git with a file

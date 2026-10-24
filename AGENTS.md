@@ -1,5 +1,16 @@
 # Release Control Plane
 
+## Upstream CI and installation delivery
+
+This shared repository uses its own GitHub Actions workflows on the standard
+GitHub-hosted `ubuntu-24.04` runners for checks and image builds. This is the
+explicit repository-scoped exception to the workspace's local Linux runner rule;
+it does not change runner policy for downstream projects or copied examples.
+Do not route these upstream workflows through `RCP_RUNNER_LABELS` or a local
+installation's runner fleet. Building or publishing an upstream image must not
+automatically deploy to Dev or another environment. Updating an installation
+requires a separate explicit operator request and its applicable release checks.
+
 Start with [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md) for startup, MCP connection and GitHub setup.
 
 Standalone Go modular monolith. Read docs/ARCHITECTURE.md and docs/CONTRACT.md first. Domain/application behavior is shared by HTTP, embedded UI and MCP; never fork business logic in a transport.
