@@ -35,6 +35,10 @@ type backupEnvelope struct {
 func backupHash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 func (s *Service) CreateBackup(ctx context.Context, actor string) (Backup, error) {
+	if err := authorize(ctx, "admin", ""); err != nil {
+		return Backup{}, err
+	}
+	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" {
 		return Backup{}, invalid("actor required")
 	}
@@ -66,6 +70,10 @@ func (s *Service) CreateBackup(ctx context.Context, actor string) (Backup, error
 
 // RestoreBackup never merges databases or replays external side effects.
 func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected string) (any, error) {
+	if err := authorize(ctx, "admin", ""); err != nil {
+		return nil, err
+	}
+	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" || expected == "" {
 		return nil, invalid("actor and sha256 required")
 	}

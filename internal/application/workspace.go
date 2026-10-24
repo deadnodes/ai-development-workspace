@@ -101,6 +101,10 @@ func validateKnowledge(st *domain.State, product string, k domain.ProjectKnowled
 	return nil
 }
 func (s *Service) SetProjectKnowledge(ctx context.Context, product, actor string, k domain.ProjectKnowledge) (any, error) {
+	if err := authorize(ctx, "write", product); err != nil {
+		return nil, err
+	}
+	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" {
 		return nil, invalid("actor required")
 	}
@@ -123,6 +127,7 @@ func (s *Service) SetProjectKnowledge(ctx context.Context, product, actor string
 				return invalid("knowledge node belongs to another product")
 			}
 			k.Nodes[i].ProductID = product
+			k.Nodes[i].Actor = attributedActor(ctx, k.Nodes[i].Actor)
 		}
 		if err := validateKnowledge(st, product, k); err != nil {
 			return err
@@ -153,6 +158,10 @@ func normalizeKnowledgeNode(product, actor string, node domain.KnowledgeNode) do
 }
 
 func (s *Service) UpsertKnowledgeNode(ctx context.Context, product, actor string, node domain.KnowledgeNode) (any, error) {
+	if err := authorize(ctx, "write", product); err != nil {
+		return nil, err
+	}
+	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" {
 		return nil, invalid("actor required")
 	}
@@ -207,6 +216,9 @@ func knowledgeMatch(node domain.KnowledgeNode, query string) bool {
 }
 
 func (s *Service) SearchKnowledge(ctx context.Context, product, query string, limit int) (any, error) {
+	if err := authorize(ctx, "read", product); err != nil {
+		return nil, err
+	}
 	st, err := s.State(ctx)
 	if err != nil {
 		return nil, err
@@ -246,6 +258,9 @@ func (s *Service) SearchKnowledge(ctx context.Context, product, query string, li
 	return map[string]any{"product_id": product, "query": query, "nodes": nodes, "edges": edges, "total": len(nodes)}, nil
 }
 func (s *Service) ProjectContext(ctx context.Context, product string) (any, error) {
+	if err := authorize(ctx, "read", product); err != nil {
+		return nil, err
+	}
 	st, err := s.State(ctx)
 	if err != nil {
 		return nil, err
@@ -324,6 +339,10 @@ func (s *Service) MatchWorkspace(ctx context.Context, product, actor string) (an
 	return s.scanWorkspace(ctx, product, actor, true)
 }
 func (s *Service) scanWorkspace(ctx context.Context, product, actor string, attachedOnly bool) (any, error) {
+	if err := authorize(ctx, "admin", ""); err != nil {
+		return nil, err
+	}
+	actor = attributedActor(ctx, actor)
 	if s.workspaceRoot == "" {
 		return nil, invalid("configure RCP_WORKSPACE_ROOT on the server first")
 	}
@@ -448,6 +467,9 @@ func portableURL(raw string) bool {
 	return e == nil && (u.Scheme == "https" || u.Scheme == "ssh") && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && (u.User == nil || u.Scheme == "ssh" && u.User.Username() == "git" && u.User.String() == "git")
 }
 func (s *Service) ExportWorkspace(ctx context.Context, product string) (WorkspaceConfiguration, error) {
+	if err := authorize(ctx, "read", product); err != nil {
+		return WorkspaceConfiguration{}, err
+	}
 	st, err := s.State(ctx)
 	if err != nil {
 		return WorkspaceConfiguration{}, err
@@ -501,6 +523,10 @@ func (s *Service) ExportWorkspace(ctx context.Context, product string) (Workspac
 	return out, nil
 }
 func (s *Service) ImportWorkspace(ctx context.Context, actor string, in WorkspaceConfiguration) (any, error) {
+	if err := authorize(ctx, "admin", ""); err != nil {
+		return nil, err
+	}
+	actor = attributedActor(ctx, actor)
 	if actor == "" || in.Format != "release-control-workspace" || in.Product.ID == "" || in.Product.Name == "" {
 		return nil, invalid("actor, workspace format and product required")
 	}
@@ -546,6 +572,7 @@ func (s *Service) ImportWorkspace(ctx context.Context, actor string, in Workspac
 		}
 		for i := range in.Knowledge.Nodes {
 			in.Knowledge.Nodes[i].ProductID = product
+			in.Knowledge.Nodes[i].Actor = attributedActor(ctx, in.Knowledge.Nodes[i].Actor)
 		}
 		in.Knowledge.Meta = m
 		st.ProjectKnowledge = append(st.ProjectKnowledge, in.Knowledge)

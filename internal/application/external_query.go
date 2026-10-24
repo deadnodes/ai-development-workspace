@@ -9,6 +9,16 @@ import (
 )
 
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
+	if name == "test_connection" || name == "discover_repositories" {
+		if err := authorize(ctx, "admin", ""); err != nil {
+			return nil, err
+		}
+	}
+	if name == "list_branches" {
+		if err := s.authorizeReferences(ctx, "read", id); err != nil {
+			return nil, err
+		}
+	}
 	st, e := s.State(ctx)
 	if e != nil {
 		return nil, e
@@ -72,7 +82,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			for _, info := range repos {
 				registered := registeredRepositoryIdentity(current, id, info.FullName, info.ID)
 				if registered == nil {
-					current.RegisteredRepositories = append(current.RegisteredRepositories, domain.RegisteredRepository{Meta: domain.Meta{ID: generateRegistryID(), Actor: "discovery", CreatedAt: now, UpdatedAt: now}, ConnectionID: id})
+					current.RegisteredRepositories = append(current.RegisteredRepositories, domain.RegisteredRepository{Meta: domain.Meta{ID: generateRegistryID(), Actor: attributedActor(ctx, "discovery"), CreatedAt: now, UpdatedAt: now}, ConnectionID: id})
 					registered = &current.RegisteredRepositories[len(current.RegisteredRepositories)-1]
 				}
 				associateRegistryConnection(registered, v)
@@ -92,6 +102,10 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return repos, nil
 
 	case "list_branches":
+		st, e = s.store.Read(ctx)
+		if e != nil {
+			return nil, e
+		}
 		b := repositoryBinding(&st, id)
 		if b == nil {
 			return nil, missing("repository binding", id)

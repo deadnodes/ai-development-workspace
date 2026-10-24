@@ -3,7 +3,7 @@
 Development progress belongs in the configured Control Plane instance, not this file.
 
 1. Start or recover the instance: `docker compose --profile app up -d --build`.
-2. Call MCP `get_state` and select the relevant Product and Feature.
+2. Call MCP `get_state {}` for Product cards, then `get_state {"product_id":"…"}` for Feature cards. Follow `pagination.next_cursor` within the same scope; `get_state {"feature_id":"…"}` lists Integration cards. These bounded navigation projections omit history and do not establish readiness.
 3. Call `resume` with that Feature ID; follow its latest structured handoff.
 
 There is no mandatory Product, Feature ID, organization or deployment topology. A fresh database is empty. Optionally run `node scripts/dogfood.mjs` to seed historical bootstrap context for developing Release Control Plane itself; it is not required for using the application and is not a backup or current release status.
