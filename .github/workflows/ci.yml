@@ -12,7 +12,7 @@ jobs:
     # This shared upstream has its own GitHub-hosted CI, independent of installs.
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:17-alpine
@@ -27,7 +27,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      GOFLAGS: -timeout=40m
+      # Keep race-instrumented packages from competing for the hosted VM.
+      GOFLAGS: -p=1 -timeout=75m
       TEST_DATABASE_URL: postgres://releasecontrol:releasecontrol@localhost:5432/releasecontrol_tests?sslmode=disable
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +41,8 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
+      - name: Verify retained-history guards in isolation
+        run: go test -race ./internal/persistence -run '^(TestPostgresUpdateRetainsLargeOperationHistory|TestPostgresHistoricalUpdatePreservesRecordsAndTransactions)$' -count=1 -v
       - run: make check
 
   image:
