@@ -43,20 +43,21 @@ function patchLiveChildren(current,next){
 function patchLiveHTML(node,html){const template=document.createElement('template');template.innerHTML=html;patchLiveChildren(node,template.content);}
 function canPollLive(){
  const active=document.activeElement,selection=window.getSelection?.();
- return !document.hidden&&!$('#dialog').open&&!currentForm&&!refreshInFlight&&!liveMutations&&
+ return !(typeof authExpired==='boolean'&&authExpired)&&!document.hidden&&!$('#dialog').open&&!currentForm&&!refreshInFlight&&!liveMutations&&
   !(active&&(active.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(active.tagName)))&&
   !(selection&&!selection.isCollapsed);
 }
 async function pollLive(){
  if(liveInFlight||!canPollLive())return;
- liveInFlight=true;const controller=new AbortController(),timeout=window.setTimeout(()=>controller.abort(),10000);const epoch=liveEpoch,route=location.hash,product=productID,token=sessionStorage.getItem('rc-token');
+ liveInFlight=true;const controller=new AbortController(),timeout=window.setTimeout(()=>controller.abort(),10000);const epoch=liveEpoch,route=location.hash,product=productID,token=browserToken();
  try{
-  const response=await fetch('/api/state',{headers:{...(liveETag?{'If-None-Match':liveETag}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},cache:'no-store',signal:controller.signal});
-  if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==sessionStorage.getItem('rc-token')||!canPollLive())return;
+  const response=await fetch('/api/state',{credentials:'same-origin',headers:{...(liveETag?{'If-None-Match':liveETag}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},cache:'no-store',signal:controller.signal});
+  if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==browserToken()||!canPollLive())return;
+  if(response.status===401&&authMode==='oidc'){requireSignIn();return;}
   if(response.status===304){if(liveFailed)notice('Connection restored. Shared state is current.');liveFailed=false;return;}
   if(!response.ok)throw new Error(`State refresh failed (${response.status})`);
   const next=await response.json();
-  if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==sessionStorage.getItem('rc-token')||!canPollLive())return;
+  if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==browserToken()||!canPollLive())return;
   const x=window.scrollX,y=window.scrollY,focused=document.activeElement;
   state=next;if(!list(state.products).some(p=>p.id===productID))productID=state.products?.[0]?.id||'';
   const feature=selectedFeature();if(feature)productID=feature.product_id;

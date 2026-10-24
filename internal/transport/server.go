@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"releasecontrol/internal/agentguide"
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"releasecontrol/web"
 )
@@ -27,6 +28,7 @@ type Service interface {
 }
 
 type Options struct {
+	Auth         *auth.Manager
 	Token        string
 	AllowedHosts []string
 }
@@ -96,7 +98,11 @@ func New(service Service, options Options) http.Handler {
 	registerAgentGuideTools(server)
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20}))
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
-	return protect(mux, options)
+	var handler http.Handler = mux
+	if options.Auth != nil {
+		handler = options.Auth.Wrap(handler)
+	}
+	return protect(handler, options)
 }
 
 func respond(w http.ResponseWriter, v any, err error) {
@@ -107,6 +113,9 @@ func respond(w http.ResponseWriter, v any, err error) {
 	code := http.StatusInternalServerError
 	message := "Internal error"
 	switch {
+	case errors.Is(err, auth.ErrForbidden):
+		code = http.StatusForbidden
+		message = "Forbidden"
 	case errors.Is(err, application.ErrNotFound):
 		code = 404
 		message = err.Error()
@@ -142,20 +151,21 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 403, map[string]string{"error": "Host not allowed; configure ALLOWED_HOSTS"})
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" {
+		authNavigation := o.Auth != nil && o.Auth.Enabled() && r.Method == http.MethodGet && (r.URL.Path == "/auth/login" || r.URL.Path == "/auth/callback")
+		if origin := r.Header.Get("Origin"); origin != "" && !authNavigation {
 			u, e := url.Parse(origin)
 			if e != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
 				write(w, 403, map[string]string{"error": "Cross-origin requests are not allowed"})
 				return
 			}
 		}
-		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" && !authNavigation {
 			write(w, 403, map[string]string{"error": "Cross-site requests are not allowed"})
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			w.Header().Set("Cache-Control", "no-store")
-			if o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
+			if (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
 				write(w, 401, map[string]string{"error": "Bearer token required"})
 				return
 			}

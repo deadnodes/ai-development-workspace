@@ -56,6 +56,9 @@ func (s *Service) localCheckout(ctx context.Context, product, checkout string) (
 	return domain.LocalCheckout{}, domain.Repository{}, missing("local checkout", checkout)
 }
 func (s *Service) LocalGitState(ctx context.Context, product, checkout string) (workspace.GitState, error) {
+	if err := authorize(ctx, "read", product); err != nil {
+		return workspace.GitState{}, err
+	}
 	c, r, err := s.localCheckout(ctx, product, checkout)
 	if err != nil {
 		return workspace.GitState{}, err
@@ -70,6 +73,10 @@ func (s *Service) LocalGitState(ctx context.Context, product, checkout string) (
 	return v, nil
 }
 func (s *Service) PlanLocalGitSync(ctx context.Context, in LocalGitRequest) (LocalGitPlan, error) {
+	if err := authorize(ctx, "write", in.ProductID); err != nil {
+		return LocalGitPlan{}, err
+	}
+	in.Actor = attributedActor(ctx, in.Actor)
 	if strings.TrimSpace(in.Actor) == "" || (in.Mode != "FETCH" && in.Mode != "FAST_FORWARD") {
 		return LocalGitPlan{}, invalid("actor and mode FETCH or FAST_FORWARD required")
 	}
@@ -101,6 +108,10 @@ func (s *Service) PlanLocalGitSync(ctx context.Context, in LocalGitRequest) (Loc
 	return plan, err
 }
 func (s *Service) RecordLocalGitSync(ctx context.Context, in LocalGitRequest) (any, error) {
+	if err := authorize(ctx, "write", in.ProductID); err != nil {
+		return nil, err
+	}
+	in.Actor = attributedActor(ctx, in.Actor)
 	if strings.TrimSpace(in.Actor) == "" || in.PlanID == "" {
 		return nil, invalid("actor and plan_id required")
 	}

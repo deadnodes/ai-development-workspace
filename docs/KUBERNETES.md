@@ -1,5 +1,32 @@
 # Kubernetes: отдельный Control Plane на продукт
 
+## Shared OIDC installation
+
+For a shared installation, use `RCP_AUTH_MODE=oidc` and the settings in
+[AUTHENTICATION.md](AUTHENTICATION.md). Configure public HTTPS origin, issuer,
+client ID, allowed/admin roles and product grants in installation ConfigMaps;
+provide client secret and the 32-byte auth encryption key through Secrets.
+The base reads both `release-control-config` ConfigMap and Secret through
+`envFrom`. Keep credentials out of ConfigMaps and Git. `RC_TOKEN` is a legacy
+local-mode option and cannot bypass OIDC. Ingress class and addresses belong
+to the installation overlay; the application imposes no environment name.
+
+The optional `deploy/terraform/keycloak` module accepts an existing realm,
+client ID, public origin and access role. Provider credentials come from the
+operator environment; secure the Terraform state because it contains the
+client secret. Add an ID-token realm-role mapper and grant access explicitly.
+
+For migration rehearsals, set `RCP_WORKER_ENABLED=false` and
+`RCP_GIT_SYNC_INTERVAL=0` so restored pending operations cannot run. Verify
+all state and reconcile active-operation history before enabling the worker
+and switching clients. A PostgreSQL backup includes private encrypted auth
+state; the application JSON backup excludes auth credentials. Preserve the
+external encryption key separately. This task requires real login/MCP and
+restore evidence, not just an HTTP health response.
+
+The shared-token examples below describe the legacy installation mode.
+
+
 Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
 
 Поддерживаемая схема установки:
@@ -106,7 +133,7 @@ kubectl --context "$RCP_CONTEXT" -n "$RCP_NAMESPACE" describe deployment release
 kubectl --context "$RCP_CONTEXT" -n "$RCP_NAMESPACE" rollout restart deployment/release-control
 ```
 
-Probes проверяют `/healthz` с `Host: localhost`, чтобы пройти host allowlist. Это HTTP/process health после начального подключения к БД, не непрерывная проверка PostgreSQL или worker progress. Проверяй операции через `get_operation` и `get_attention_required`. Непустой API token обязателен по этой инструкции; отсутствие ключа в Secret блокирует старт, но пустое значение не валидируется сервером.
+Probes проверяют `/healthz` с `Host: localhost`, чтобы пройти host allowlist. Это HTTP/process health после начального подключения к БД, не непрерывная проверка PostgreSQL или worker progress. Проверяй операции через `get_operation` и `get_attention_required`. Для legacy local-режима оператор обязан задать непустой RC_TOKEN: необязательный ключ Secret сам по себе этого не гарантирует. В oidc-режиме доступ проверяет OIDC/agent authorization; RC_TOKEN не нужен и не даёт обхода этой проверки.
 
 Манифесты можно рендерить офлайн через `kubectl kustomize deploy/kubernetes`. Реальный rollout требует вашего image, БД, credentials и выбранного кластера; успешный render не равен успешному deployment.
 

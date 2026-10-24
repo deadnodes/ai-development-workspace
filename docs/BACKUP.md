@@ -37,7 +37,7 @@ RC_URL=http://127.0.0.1:8091 RC_ACTOR=agent/migration \
 
 Скрипт сохраняет gzip и соседний файл `.sha256`, проверяет checksum при передаче и отказывается перезаписывать существующий backup. Переноси оба файла. Сервер выполняет gzip-сжатие/распаковку; скрипт только передаёт bytes. Для повторных backup используй новые имена с датой. Успех экспорта не означает перенос: проверяй ответ restore и целевой контекст.
 
-Эквивалентные HTTP endpoints (тот же shared bearer token, что API/MCP):
+Эквивалентные HTTP endpoints: в OIDC-режиме доступны администратору с browser session и CSRF либо отдельному bootstrap maintenance credential; agent token не даёт доступ к полному backup. В legacy local-режиме используется настроенный shared bearer token API/MCP:
 
 | Запрос | Заголовки / тело |
 | --- | --- |

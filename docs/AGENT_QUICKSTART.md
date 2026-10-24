@@ -41,13 +41,13 @@ docker compose --profile app down
 ./bin/release-control connect --url http://127.0.0.1:8090 --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID
 ```
 
-Команда устанавливает проектное подключение Codex, `.agents/skills/rcp-handoff/SKILL.md`, binding `.release-control.json` и управляемый блок в `AGENTS.md`. Для защищённого сервера добавь `--token-env RC_TOKEN`; значение токена не записывается в файлы. Скилл доступен также через MCP `get_agent_skill {"name":"rcp-handoff"}` и ресурс `rcp://skills/rcp-handoff/SKILL.md`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
+Команда устанавливает проектное подключение Codex, `.agents/skills/rcp-handoff/SKILL.md`, binding `.release-control.json` и управляемый блок в `AGENTS.md`. Для защищённого сервера сначала выполни `release-control login --url https://CONTROL_HOST --profile default`, открой выданную ссылку и явно одобри код агента через человеческий вход. Затем выполни `connect` с тем же URL и `--profile default`. Независимый токен агента хранится зашифрованным вне проекта; MCP-процесс читает его при каждом запуске, поэтому перезапуск Codex не требует повторного входа человека. `--token-env RC_TOKEN` остаётся явной альтернативой для окружения с готовым токеном. Скилл доступен также через MCP `get_agent_skill {"name":"rcp-handoff"}` и ресурс `rcp://skills/rcp-handoff/SKILL.md`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
 
-Автор действия: UI автоматически пишет `human/local`; API/MCP по умолчанию `agent`. Поле `actor` необязательно, но можно передать имя конкретного агента для истории. Это атрибуция, не авторизация.
+В защищённом режиме автор действия определяется проверенной сервером identity: переданный клиентом `actor` не позволяет выдать себя за другого пользователя. В локальном режиме без OIDC UI использует `human/local`, API/MCP — `agent`; там actor остаётся только атрибуцией. UI входит через браузерную сессию; токен агента в форму браузера вводить не нужно.
 
 ## 2. Подключение агента
 
-В MCP-клиенте добавь сервер:
+Для защищённого сервиса используй `login` и `connect` выше. Для локального сервера без OIDC можно добавить прямое HTTP-подключение:
 
 ```text
 name: release-control

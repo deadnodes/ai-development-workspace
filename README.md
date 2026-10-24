@@ -1,5 +1,29 @@
 # AI Development Workspace
 
+## Shared authenticated installations
+
+Use [authentication and independent agent enrollment](docs/AUTHENTICATION.md)
+for a shared UI/API/MCP endpoint. Human login uses environment-configured OIDC;
+agents enroll through device code and receive their own persistent, revocable
+credential. Installation domains, realm/client, roles and encryption secrets
+are configuration, not application constants. The optional
+[Keycloak Terraform module](deploy/terraform/keycloak/main.tf) provisions a
+client in an existing realm without embedding installation credentials.
+
+`release-control login` enrolls an agent; `release-control connect --profile`
+installs a local credential-loading MCP proxy. See [agent connection](docs/AGENT_CONNECT.md).
+
+CI runner labels are supplied by the repository variable `RCP_RUNNER_LABELS`
+(JSON array of trusted self-hosted runner labels). Fork PR code is excluded
+from these runners. Successful default-branch container builds publish an
+`rcp-image-evidence` artifact. An authenticated operator can run
+`scripts/deploy-gitops.py` with explicit source repository, run ID, GitOps
+repository/branch and manifest. It previews by default; `--apply` verifies
+build provenance and publishes the immutable image through Git with a file
+SHA concurrency check. It never patches Kubernetes. Credentials come from the
+operator's existing GitHub CLI authentication or a scoped CI environment.
+
+
 Service installation maintenance: [updates, daily checks, backups and rollback](docs/UPDATES.md).
 
 Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](docs/DOCKER_LOCAL.md).
