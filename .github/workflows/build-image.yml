@@ -30,7 +30,7 @@ concurrency:
 jobs:
   image:
     # Configure the repository variable for your trusted local runner.
-    runs-on: ${{ fromJSON(vars.RCP_RUNNER_LABELS || '["self-hosted", "Linux", "X64"]') }}
+    runs-on: ${{ fromJSON(vars.RCP_RUNNER_LABELS || '["deadnodes-dev"]') }}
     timeout-minutes: 30
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
