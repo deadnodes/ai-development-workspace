@@ -203,6 +203,7 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 		return e
 	}
 	for kind, records := range before {
+		var deletedIDs []string
 		for _, raw := range records {
 			if beforeIndex.productRecordRemoved(afterIndex, kind, raw) {
 				var meta struct {
@@ -211,9 +212,15 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 				if e = json.Unmarshal(raw, &meta); e != nil {
 					return e
 				}
-				if _, e = tx.Exec(ctx, "DELETE FROM records WHERE id=$1 AND kind=$2", meta.ID, kind); e != nil {
-					return e
-				}
+				deletedIDs = append(deletedIDs, meta.ID)
+			}
+		}
+		// Preserve the exact product-deletion predicate while avoiding one SQL
+		// round trip per retained historical record. The transaction still owns
+		// the revision lock and rolls back every deletion on any later error.
+		if len(deletedIDs) > 0 {
+			if _, e = tx.Exec(ctx, "DELETE FROM records WHERE id=ANY($1::text[]) AND kind=$2", deletedIDs, kind); e != nil {
+				return e
 			}
 		}
 	}
