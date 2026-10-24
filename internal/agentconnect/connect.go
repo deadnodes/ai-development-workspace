@@ -29,12 +29,13 @@ const agentsStart = "<!-- BEGIN release-control managed agent instructions -->"
 const agentsEnd = "<!-- END release-control managed agent instructions -->"
 const skillMarker = "<!-- release-control managed skill -->\n"
 
-type Options struct{ URL, Workspace, ProductID, TokenEnv, Name string }
+type Options struct{ URL, Workspace, ProductID, TokenEnv, Name, Profile, Executable string }
 type Binding struct {
 	URL        string `json:"url"`
 	ProductID  string `json:"product_id"`
 	ServerName string `json:"server_name"`
 	TokenEnv   string `json:"token_env,omitempty"`
+	Profile    string `json:"credential_profile,omitempty"`
 }
 type kit struct {
 	Skill        struct{ Name, Content, SHA256 string }
@@ -49,6 +50,8 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	flags.StringVar(&o.Workspace, "workspace", "", "project directory")
 	flags.StringVar(&o.ProductID, "product-id", "", "Product ID (optional only when server has one Product)")
 	flags.StringVar(&o.TokenEnv, "token-env", "", "environment variable containing bearer token; only its name is saved")
+	flags.StringVar(&o.Profile, "profile", "", "saved agent credential profile (default if available)")
+	flags.StringVar(&o.Executable, "executable", "", "absolute release-control executable for the MCP subprocess (defaults to this executable)")
 	flags.StringVar(&o.Name, "name", "release-control", "project MCP server name")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -69,9 +72,9 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 
 func Install(ctx context.Context, o Options) (Binding, error) {
 	var binding Binding
-	base, err := url.Parse(o.URL)
-	if err != nil || base.Hostname() == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil || base.RawQuery != "" || base.Fragment != "" || strings.ContainsAny(o.URL, "\r\n\t") {
-		return binding, errors.New("provide an HTTP(S) base URL without credentials, query or fragment")
+	endpoint, err := secureEndpoint(o.URL)
+	if err != nil {
+		return binding, err
 	}
 	if o.Workspace == "" {
 		return binding, errors.New("--workspace is required")
@@ -83,13 +86,39 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return binding, errors.New("MCP name must contain only letters, digits, underscore or hyphen")
 	}
 	token := ""
+	if o.TokenEnv != "" && o.Profile != "" {
+		return binding, errors.New("choose --profile or --token-env")
+	}
 	if o.TokenEnv != "" {
-		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(o.TokenEnv) {
-			return binding, errors.New("invalid token environment variable name")
+		token, err = ResolveCredential(endpoint, "", o.TokenEnv)
+	} else {
+		profile := o.Profile
+		if profile == "" {
+			profile = "default"
 		}
-		token = os.Getenv(o.TokenEnv)
-		if token == "" {
-			return binding, errors.New("token environment variable is empty")
+		token, err = loadCredential(endpoint, profile)
+		if err == nil {
+			o.Profile = profile
+		} else if errors.Is(err, os.ErrNotExist) && o.Profile == "" {
+			err = nil
+		}
+	}
+	if err != nil {
+		return binding, err
+	}
+	if o.Profile != "" {
+		if o.Executable == "" {
+			o.Executable, err = os.Executable()
+			if err != nil {
+				return binding, err
+			}
+		}
+		if !filepath.IsAbs(o.Executable) || strings.ContainsAny(o.Executable, "\r\n") {
+			return binding, errors.New("MCP executable must be an absolute path")
+		}
+		info, statErr := os.Stat(o.Executable)
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+			return binding, errors.New("MCP executable must be an existing executable file")
 		}
 	}
 	absolute, err := filepath.Abs(o.Workspace)
@@ -109,7 +138,6 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return binding, err
 	}
 	defer rootFS.Close()
-	endpoint := strings.TrimRight(base.String(), "/")
 	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	get := func(path string, out any) error {
 		request, err := http.NewRequestWithContext(ctx, "GET", endpoint+path, nil)
@@ -168,7 +196,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if err = get("/api/products/"+url.PathEscape(o.ProductID)+"/context", &productContext); err != nil {
 		return binding, err
 	}
-	binding = Binding{URL: endpoint, ProductID: o.ProductID, ServerName: o.Name, TokenEnv: o.TokenEnv}
+	binding = Binding{URL: endpoint, ProductID: o.ProductID, ServerName: o.Name, TokenEnv: o.TokenEnv, Profile: o.Profile}
 	paths := []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json"}
 	plans := make([]filePlan, 0, len(paths))
 	for _, path := range paths {
@@ -196,6 +224,9 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		}
 	}
 	entry := "[mcp_servers." + strconv.Quote(o.Name) + "]\nurl = " + strconv.Quote(endpoint+"/mcp") + "\n"
+	if o.Profile != "" {
+		entry = "[mcp_servers." + strconv.Quote(o.Name) + "]\ncommand = " + strconv.Quote(o.Executable) + "\nargs = [\"mcp\", \"--url\", " + strconv.Quote(endpoint) + ", \"--profile\", " + strconv.Quote(o.Profile) + "]\n"
+	}
 	if o.TokenEnv != "" {
 		entry += "bearer_token_env_var = " + strconv.Quote(o.TokenEnv) + "\n"
 	}

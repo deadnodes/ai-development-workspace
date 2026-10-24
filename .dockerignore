@@ -19,3 +19,10 @@ __pycache__/
 
 *.rcp.json.gz
 *.rcp.json.gz.sha256
+
+# Terraform working files may contain instance credentials.
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/*.tfvars

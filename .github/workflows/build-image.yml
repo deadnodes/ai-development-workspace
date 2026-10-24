@@ -29,7 +29,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   image:
-    runs-on: ubuntu-latest
+    # Configure the repository variable for your trusted local runner.
+    runs-on: ${{ fromJSON(vars.RCP_RUNNER_LABELS || '["deadnodes-dev"]') }}
     timeout-minutes: 30
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
