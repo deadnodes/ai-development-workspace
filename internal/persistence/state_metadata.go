@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/domain"
+	"slices"
 	"sort"
 	"unicode/utf8"
 )
@@ -33,7 +34,7 @@ func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataReq
 	}
 	defer tx.Rollback(ctx)
 	get := func(kind, id string) (*domain.StateCard, error) {
-		c, e := scanStateCard(tx.QueryRow(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind=$1 AND id=$2`, kind, id))
+		c, e := scanStateCard(tx.QueryRow(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind=$1 AND id=$2 AND (NOT $3::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($4::text[]))`, kind, id, q.RestrictProducts, q.AllowedProductIDs))
 		if errors.Is(e, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -66,7 +67,7 @@ func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataReq
 	var rows pgx.Rows
 	switch q.Collection {
 	case "products":
-		rows, e = tx.Query(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind='products' AND id COLLATE "C">$1 COLLATE "C" ORDER BY id COLLATE "C" LIMIT $2`, q.AfterID, q.Limit)
+		rows, e = tx.Query(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind='products' AND id COLLATE "C">$1 COLLATE "C" AND (NOT $3::boolean OR id=ANY($4::text[])) ORDER BY id COLLATE "C" LIMIT $2`, q.AfterID, q.Limit, q.RestrictProducts, q.AllowedProductIDs)
 	case "features":
 		rows, e = tx.Query(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind='features' AND product_id=$1 AND id COLLATE "C">$2 COLLATE "C" ORDER BY id COLLATE "C" LIMIT $3`, q.ProductID, q.AfterID, q.Limit)
 	case "integrations":
@@ -91,6 +92,10 @@ func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataReq
 }
 func validMetadataRequest(q domain.StateMetadataRequest) bool {
 	return q.Limit >= 1 && q.Limit <= 101 && (q.Collection == "products" || q.Collection == "features" || q.Collection == "integrations")
+}
+
+func metadataAllowsProduct(q domain.StateMetadataRequest, product string) bool {
+	return !q.RestrictProducts || slices.Contains(q.AllowedProductIDs, product)
 }
 
 // Local storage is a single JSON value. Navigation therefore still scans O(blob)
@@ -118,7 +123,7 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 		// Parents are resolved before collection filtering, in their own narrow scan.
 		if q.FeatureID != "" {
 			if e := walkStateCollection(ctx, data, "features", func(c domain.StateCard) {
-				if c.ID == q.FeatureID {
+				if c.ID == q.FeatureID && metadataAllowsProduct(q, c.ProductID) {
 					v := c
 					out.Feature = &v
 				}
@@ -138,7 +143,7 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 		}
 		if productID != "" {
 			if e := walkStateCollection(ctx, data, "products", func(c domain.StateCard) {
-				if c.ID == productID {
+				if c.ID == productID && metadataAllowsProduct(q, c.ID) {
 					v := c
 					out.Product = &v
 				}
@@ -150,6 +155,13 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 			}
 		}
 		return walkStateCollection(ctx, data, q.Collection, func(c domain.StateCard) {
+			owner := c.ProductID
+			if q.Collection == "products" {
+				owner = c.ID
+			}
+			if !metadataAllowsProduct(q, owner) {
+				return
+			}
 			if c.ID <= q.AfterID {
 				return
 			}

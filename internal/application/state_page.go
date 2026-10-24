@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -31,6 +33,9 @@ func stateID(s string) bool {
 }
 func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (domain.StatePage, error) {
 	var out domain.StatePage
+	if err := authorize(ctx, "read", in.ProductID); err != nil {
+		return out, err
+	}
 	if (in.ProductID != "" && !stateID(in.ProductID)) || (in.FeatureID != "" && !stateID(in.FeatureID)) {
 		return out, invalid("get_state scope IDs must be exact nonblank UTF-8 IDs of at most 128 bytes")
 	}
@@ -41,6 +46,10 @@ func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (do
 		return out, invalid("get_state limit must be 1..100")
 	}
 	q := domain.StateMetadataRequest{ProductID: in.ProductID, FeatureID: in.FeatureID, Collection: "products", Limit: in.Limit + 1}
+	if principal, ok := auth.FromContext(ctx); ok && !instanceAdmin(principal) && !slices.Contains(principal.Products, "*") {
+		q.RestrictProducts = true
+		q.AllowedProductIDs = append([]string{}, principal.Products...)
+	}
 	if in.ProductID != "" {
 		q.Collection = "features"
 	}
@@ -62,10 +71,11 @@ func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (do
 			return out, invalid("invalid get_state cursor")
 		}
 		canon, _ := json.Marshal(c)
-		if !bytes.Equal(canon, raw) || c.Version != 1 || c.Collection != q.Collection || c.ProductID != in.ProductID || c.FeatureID != in.FeatureID || !stateID(c.LastID) {
+		last, lastErr := base64.RawURLEncoding.Strict().DecodeString(c.LastID)
+		if !bytes.Equal(canon, raw) || c.Version != 1 || c.Collection != q.Collection || c.ProductID != encodeCursorID(in.ProductID) || c.FeatureID != encodeCursorID(in.FeatureID) || lastErr != nil || encodeCursorID(string(last)) != c.LastID || !stateID(string(last)) {
 			return out, invalid("get_state cursor is invalid or belongs to another scope")
 		}
-		q.AfterID = c.LastID
+		q.AfterID = string(last)
 	}
 	reader, ok := s.store.(stateMetadataReader)
 	if !ok {
@@ -83,6 +93,13 @@ func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (do
 	}
 	out = domain.StatePage{Projection: "compact_navigation", Scope: domain.StateScope{Collection: q.Collection, Product: meta.Product, Feature: meta.Feature}, Items: []domain.StateCard{}, Consistency: "live_id_keyset: not a snapshot; concurrent inserts before the cursor require a fresh traversal", Guidance: "Navigation only; recorded_status is not gate/runtime/release acceptance. Context, requirements, histories, results, logs, operations, connections and credentials are omitted. Use get_project_context, get_integration_context or scoped query tools for details; resume includes history and is not a compact export. Use the operator backup/export mechanism for a full backup."}
 	validate := func(c *domain.StateCard) error {
+		product := c.ProductID
+		if product == "" {
+			product = c.ID
+		}
+		if err := authorize(ctx, "read", product); err != nil {
+			return err
+		}
 		if !stateID(c.ID) || (c.ProductID != "" && !stateID(c.ProductID)) || (c.FeatureID != "" && !stateID(c.FeatureID)) {
 			return invalid("get_state encountered an oversized or invalid record identity; repair the record through the owning operator")
 		}
@@ -160,6 +177,12 @@ func truncateStateLabel(s string, truncated bool) (string, bool) {
 	return s[:n], true
 }
 func encodeStateCursor(q domain.StateMetadataRequest, last string) string {
-	b, _ := json.Marshal(stateCursor{1, q.Collection, q.ProductID, q.FeatureID, last})
+	// Encode each exact ID before JSON so control characters cannot expand a
+	// 128-byte identity sixfold and exceed the cursor's accepted input limit.
+	b, _ := json.Marshal(stateCursor{1, q.Collection, encodeCursorID(q.ProductID), encodeCursorID(q.FeatureID), encodeCursorID(last)})
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func encodeCursorID(id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(id))
 }

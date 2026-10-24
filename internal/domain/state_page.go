@@ -40,6 +40,9 @@ type StatePage struct {
 type StateMetadataRequest struct {
 	ProductID, FeatureID, Collection, AfterID string
 	Limit                                     int
+	// Trusted application authorization, never client navigation arguments.
+	RestrictProducts  bool     `json:"-"`
+	AllowedProductIDs []string `json:"-"`
 }
 type StateMetadata struct {
 	Product, Feature *StateCard
