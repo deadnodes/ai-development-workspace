@@ -253,6 +253,8 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				}
 				if action := operationConflictAction(&st, op, time.Now().UTC()); action != nil {
 					out["agent_action"] = action
+				} else if action := operationBuildFailureAction(&st, op, time.Now().UTC()); action != nil {
+					out["agent_action"] = action
 				}
 				return out, nil
 			}

@@ -283,6 +283,31 @@ func TestRealComposedGitSourceWorkerPublication(t *testing.T) {
 					if !failedParent || !failedChild {
 						t.Fatalf("failed checks did not stop native parent/child: %+v", s.Operations)
 					}
+					query, err := service.Query(ctx, "get_operation", parentID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw, _ := json.Marshal(query.(map[string]any)["agent_action"])
+					var action struct {
+						Type     string `json:"type"`
+						Status   string `json:"status"`
+						Failures []struct {
+							JobID          string `json:"job_id"`
+							SourceSHA      string `json:"source_sha"`
+							ReportedResult string `json:"reported_result"`
+							Inputs         []struct {
+								RevisionID string `json:"revision_id"`
+								HeadSHA    string `json:"head_sha"`
+							} `json:"inputs"`
+						} `json:"failures"`
+					}
+					if err := json.Unmarshal(raw, &action); err != nil || action.Type != "INVESTIGATE_BUILD_FAILURE" || action.Status != "ACTION_REQUIRED" || len(action.Failures) != 1 {
+						t.Fatalf("real clean-merge failed check lacks requester investigation: %s %v", raw, err)
+					}
+					failure := action.Failures[0]
+					if failure.JobID != job.ID || failure.SourceSHA != sha || failure.ReportedResult != "CHECK_FAILED" || len(failure.Inputs) != 2 || failure.Inputs[0].RevisionID != "bad" || failure.Inputs[0].HeadSHA != bad || failure.Inputs[1].RevisionID != "b1" || failure.Inputs[1].HeadSHA != b1 {
+						t.Fatalf("real failed check lost exact A+B provenance: %s", raw)
+					}
 					artifacts, _ := json.Marshal(s.DeliveryArtifacts)
 					prs, _ := json.Marshal(provider.proposals)
 					if !bytes.Equal(acceptedArtifacts, artifacts) || !bytes.Equal(acceptedPRs, prs) {

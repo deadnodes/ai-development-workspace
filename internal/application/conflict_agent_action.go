@@ -32,14 +32,18 @@ type conflictAgentAction struct {
 type conflictAgentContext struct {
 	ConflictID       string               `json:"conflict_id"`
 	Status           string               `json:"status"`
-	RepositoryID     string               `json:"repository_id"`
-	Repository       string               `json:"provider_repository"`
-	BaseRef          string               `json:"base_ref"`
-	BaseSHA          string               `json:"base_sha"`
-	TargetBranch     string               `json:"target_branch"`
 	ResolutionCommit string               `json:"resolution_commit,omitempty"`
-	Inputs           []conflictAgentInput `json:"inputs"`
 	RequiredChecks   []conflictAgentCheck `json:"required_checks"`
+	agentSourceContext
+}
+
+type agentSourceContext struct {
+	RepositoryID string               `json:"repository_id"`
+	Repository   string               `json:"provider_repository"`
+	BaseRef      string               `json:"base_ref"`
+	BaseSHA      string               `json:"base_sha"`
+	TargetBranch string               `json:"target_branch"`
+	Inputs       []conflictAgentInput `json:"inputs"`
 }
 
 type conflictAgentInput struct {
@@ -157,104 +161,44 @@ func operationConflictAction(st *domain.State, op domain.ExternalOperation, now 
 }
 
 func conflictAgentDetails(op domain.ExternalOperation, c domain.CompositionConflict, now time.Time) (conflictAgentContext, bool) {
-	v := conflictAgentContext{ConflictID: c.ID, Status: c.Status, RepositoryID: c.RepositoryID, Repository: c.Source.Plan.Repository, BaseRef: c.Source.Plan.BaseRef, BaseSHA: c.Source.Plan.BaseSHA, TargetBranch: c.Source.Plan.TargetBranch, ResolutionCommit: c.ResolutionCommit, Inputs: []conflictAgentInput{}, RequiredChecks: []conflictAgentCheck{}}
+	v := conflictAgentContext{ConflictID: c.ID, Status: c.Status, ResolutionCommit: c.ResolutionCommit, RequiredChecks: []conflictAgentCheck{}}
 	comp := op.CompositionSnapshot
-	if !conflictLabel(c.ID, 128) || !conflictLabel(c.RepositoryID, 128) || c.CompositionID != comp.ID || c.Source.RepositoryID != c.RepositoryID || c.Source.Plan.OperationID != op.ID || c.Source.Result == nil || !c.Source.Result.Conflict || !conflictRepositoryAddress(v.Repository) || !safeBranch(v.BaseRef) || len(v.BaseRef) > 200 || !safeBranch(v.TargetBranch) || len(v.TargetBranch) > 200 || !fullSHA.MatchString(v.BaseSHA) || !domain.ValidStatus("composition_conflict", c.Status) || len(c.Source.Plan.HeadSHAs) == 0 || len(c.Source.Plan.HeadSHAs) > 20 || len(c.Source.Retained) > 20 || len(c.Integrations) > 20 || len(c.Features) > 20 || len(c.Gates) > 128 || len(c.Checks) > 128 {
+	if comp == nil || !conflictLabel(c.ID, 128) || c.CompositionID != comp.ID || c.Source.RepositoryID != c.RepositoryID || c.Source.Result == nil || !c.Source.Result.Conflict || !domain.ValidStatus("composition_conflict", c.Status) || len(c.Source.Plan.HeadSHAs) == 0 || len(c.Integrations) > 20 || len(c.Features) > 20 || len(c.Gates) > 128 || len(c.Checks) > 128 {
 		return v, false
 	}
 	if (c.Status == "verification_required" || c.Status == "resolved") && !fullSHA.MatchString(v.ResolutionCommit) || v.ResolutionCommit != "" && !fullSHA.MatchString(v.ResolutionCommit) {
 		return v, false
 	}
-	sources := 0
-	for _, source := range op.Sources {
-		if source.RepositoryID == c.RepositoryID {
-			sources++
-			if source.Result == nil || !source.Result.Conflict || !reflect.DeepEqual(source.Plan, c.Source.Plan) {
-				return v, false
-			}
-		}
-	}
-	if sources != 1 {
+	source, ok := frozenAgentSourceDetails(op, c.Source, now)
+	if !ok {
 		return v, false
 	}
-	var revisionIDs []string
-	for _, component := range comp.Components {
-		appMatches := 0
-		for _, app := range comp.ApplicationSnapshots {
-			if app.ID != component.ApplicationID {
-				continue
-			}
-			appMatches++
-			if app.ProductID != op.ProductID {
-				return v, false
-			}
-			if app.RepositoryID == c.RepositoryID {
-				if component.BaseRef != v.BaseRef || component.BaseCommit != v.BaseSHA || revisionIDs != nil && !slices.Equal(revisionIDs, component.RevisionIDs) {
-					return v, false
-				}
-				revisionIDs = component.RevisionIDs
-			}
-		}
-		if appMatches != 1 {
-			return v, false
-		}
-	}
-	if len(revisionIDs) != len(c.Source.Plan.HeadSHAs) {
-		return v, false
-	}
-	selected := map[string]bool{}
-	selectedFeatures := map[string]string{}
-	seenRevisions := map[string]bool{}
-	for i, rid := range revisionIDs {
-		var revision *domain.IntegrationRevision
-		for j := range comp.RevisionSnapshots {
-			r := &comp.RevisionSnapshots[j]
-			if r.ID == rid {
-				if revision != nil {
-					return v, false
-				}
-				revision = r
-			}
-		}
-		if seenRevisions[rid] || revision == nil || revision.ProductID != op.ProductID || revision.RepositoryID != c.RepositoryID || revision.HeadCommit != c.Source.Plan.HeadSHAs[i] || !fullSHA.MatchString(revision.HeadCommit) || len(revision.HeadCommit) != len(v.BaseSHA) || !conflictLabel(rid, 128) || !conflictLabel(revision.FeatureID, 128) || !conflictLabel(revision.IntegrationID, 128) || !safeBranch(revision.Branch) || len(revision.Branch) > 200 {
-			return v, false
-		}
-		seenRevisions[rid] = true
+	v.agentSourceContext = source
+	selected, selectedFeatures := map[string]bool{}, map[string]string{}
+	for _, input := range source.Inputs {
 		matches := 0
 		for _, in := range c.Integrations {
-			if in.ID == revision.IntegrationID {
+			if in.ID == input.IntegrationID {
 				matches++
-				if in.ProductID != op.ProductID || in.FeatureID != revision.FeatureID {
+				if in.ProductID != op.ProductID || in.FeatureID != input.FeatureID {
 					return v, false
 				}
 			}
 		}
 		featureFound := false
 		for _, f := range c.Features {
-			if f.ID == revision.FeatureID {
+			if f.ID == input.FeatureID {
 				if f.ProductID != op.ProductID {
 					return v, false
 				}
 				featureFound = true
 			}
 		}
-		if matches != 1 || !featureFound || selected[revision.IntegrationID] {
+		if matches != 1 || !featureFound {
 			return v, false
 		}
-		selected[revision.IntegrationID] = true
-		selectedFeatures[revision.IntegrationID] = revision.FeatureID
-		input := conflictAgentInput{RevisionID: rid, FeatureID: revision.FeatureID, IntegrationID: revision.IntegrationID, OriginBranch: revision.Branch, HeadSHA: revision.HeadCommit}
-		// Optional retained refs require the exact frozen intent and observation.
-		// Even an old matching observation is historical evidence, not a live check.
-		if expected, err := expectedSourceRetention(op, c.Source); err == nil && c.Source.Retention != nil && reflect.DeepEqual(expected, c.Source.Retention) {
-			for _, proof := range c.Source.Retained {
-				if proof.RevisionID == rid && proof.IntentHash == expected.InputHash && proof.HeadCommit == revision.HeadCommit && proof.Branch == "rcp/revisions/"+rid && !proof.ObservedAt.IsZero() && !proof.ObservedAt.Before(op.CreatedAt) && !proof.ObservedAt.After(now) {
-					at := proof.ObservedAt
-					input.RetainedRef, input.ObservedAt = proof.Branch, &at
-				}
-			}
-		}
-		v.Inputs = append(v.Inputs, input)
+		selected[input.IntegrationID] = true
+		selectedFeatures[input.IntegrationID] = input.FeatureID
 	}
 	if len(selected) != len(c.Integrations) {
 		return v, false
@@ -289,4 +233,91 @@ func conflictAgentDetails(op domain.ExternalOperation, c domain.CompositionConfl
 		}
 	}
 	return v, len(seenChecks) == len(c.Checks)
+}
+
+// frozenAgentSourceDetails joins only immutable operation snapshots. Semantic
+// context is read separately; current branches or Feature bodies never fill gaps.
+func frozenAgentSourceDetails(op domain.ExternalOperation, source domain.FlowSource, now time.Time) (agentSourceContext, bool) {
+	v := agentSourceContext{RepositoryID: source.RepositoryID, Repository: source.Plan.Repository, BaseRef: source.Plan.BaseRef, BaseSHA: source.Plan.BaseSHA, TargetBranch: source.Plan.TargetBranch, Inputs: []conflictAgentInput{}}
+	comp := op.CompositionSnapshot
+	if comp == nil || comp.ProductID != op.ProductID || !conflictLabel(comp.ID, 128) || !conflictLabel(op.ProductID, 128) || !conflictLabel(op.ID, 128) || !conflictLabel(source.RepositoryID, 128) || source.Plan.OperationID != op.ID || source.Result == nil || !conflictRepositoryAddress(v.Repository) || !safeBranch(v.BaseRef) || len(v.BaseRef) > 200 || !safeBranch(v.TargetBranch) || len(v.TargetBranch) > 200 || !fullSHA.MatchString(v.BaseSHA) || len(comp.Components) > 100 || len(comp.ApplicationSnapshots) > 100 || len(comp.RevisionSnapshots) > 100 || len(op.Sources) > 20 || len(source.Plan.HeadSHAs) > 20 || len(source.Retained) > 20 {
+		return v, false
+	}
+	if !source.Result.Conflict && (!fullSHA.MatchString(source.Result.SHA) || source.Result.Branch != v.TargetBranch) {
+		return v, false
+	}
+	matches := 0
+	for _, stored := range op.Sources {
+		if stored.RepositoryID == source.RepositoryID {
+			matches++
+			if stored.Result == nil || stored.Result.Conflict != source.Result.Conflict || !reflect.DeepEqual(stored.Plan, source.Plan) {
+				return v, false
+			}
+		}
+	}
+	if matches != 1 {
+		return v, false
+	}
+	var revisionIDs []string
+	sourceFound := false
+	for _, component := range comp.Components {
+		appMatches := 0
+		for _, app := range comp.ApplicationSnapshots {
+			if app.ID != component.ApplicationID {
+				continue
+			}
+			appMatches++
+			if app.ProductID != op.ProductID {
+				return v, false
+			}
+			if app.RepositoryID == source.RepositoryID {
+				if component.BaseRef != v.BaseRef || component.BaseCommit != v.BaseSHA || sourceFound && !slices.Equal(revisionIDs, component.RevisionIDs) {
+					return v, false
+				}
+				sourceFound = true
+				revisionIDs = component.RevisionIDs
+			}
+		}
+		if appMatches != 1 {
+			return v, false
+		}
+	}
+	if !sourceFound || len(revisionIDs) != len(source.Plan.HeadSHAs) {
+		return v, false
+	}
+	selected := map[string]bool{}
+	seenRevisions := map[string]bool{}
+	for i, rid := range revisionIDs {
+		var revision *domain.IntegrationRevision
+		for j := range comp.RevisionSnapshots {
+			r := &comp.RevisionSnapshots[j]
+			if r.ID == rid {
+				if revision != nil {
+					return v, false
+				}
+				revision = r
+			}
+		}
+		if seenRevisions[rid] || revision == nil || revision.ProductID != op.ProductID || revision.RepositoryID != source.RepositoryID || revision.HeadCommit != source.Plan.HeadSHAs[i] || !fullSHA.MatchString(revision.HeadCommit) || len(revision.HeadCommit) != len(v.BaseSHA) || !conflictLabel(rid, 128) || !conflictLabel(revision.FeatureID, 128) || !conflictLabel(revision.IntegrationID, 128) || !safeBranch(revision.Branch) || len(revision.Branch) > 200 {
+			return v, false
+		}
+		seenRevisions[rid] = true
+		if selected[revision.IntegrationID] {
+			return v, false
+		}
+		selected[revision.IntegrationID] = true
+		input := conflictAgentInput{RevisionID: rid, FeatureID: revision.FeatureID, IntegrationID: revision.IntegrationID, OriginBranch: revision.Branch, HeadSHA: revision.HeadCommit}
+		// Optional retained refs require the exact frozen intent and observation.
+		// Even an old matching observation is historical evidence, not a live check.
+		if expected, err := expectedSourceRetention(op, source); err == nil && source.Retention != nil && reflect.DeepEqual(expected, source.Retention) {
+			for _, proof := range source.Retained {
+				if proof.RevisionID == rid && proof.IntentHash == expected.InputHash && proof.HeadCommit == revision.HeadCommit && proof.Branch == "rcp/revisions/"+rid && !proof.ObservedAt.IsZero() && !proof.ObservedAt.Before(op.CreatedAt) && !proof.ObservedAt.After(now) {
+					at := proof.ObservedAt
+					input.RetainedRef, input.ObservedAt = proof.Branch, &at
+				}
+			}
+		}
+		v.Inputs = append(v.Inputs, input)
+	}
+	return v, true
 }

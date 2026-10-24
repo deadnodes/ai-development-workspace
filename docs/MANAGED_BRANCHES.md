@@ -75,3 +75,49 @@ existing execution authorization. Clean merges failing semantic checks,
 independent review authority and semantic changes to goals or check instructions
 without new identities remain separate stage-06 work. Current result/coverage
 revalidation does not prove those semantics or live delivery.
+
+## Failed builds after a clean source composition
+
+When a COMPOSE operation has an accepted failed managed native build report,
+`get_operation.agent_action` can instead return `INVESTIGATE_BUILD_FAILURE`.
+It identifies every accepted failed native build, delivery and worker operation, exact job,
+attempt, fence, input hash, generated source SHA, recipe/config identities, and
+the frozen base and ordered feature revisions. It supplies identifiers for
+`get_worker_job`, `get_operation`, `resume` and `get_integration_context`.
+The latter semantic context is current: it is not a frozen copy of the goals or
+decisions at execution time. Retained refs remain dated observations.
+
+The cause is **unclassified**. Both `CHECK_FAILED` and `EXECUTOR_FAILED` are
+preserved as `reported_result`. Currently a Docker execution error can also
+produce `CHECK_FAILED`; neither label proves a semantic conflict or incompatible
+feature intent. An agent first investigates the recorded attempt and exact
+source. It preserves every feature's acceptance criteria and asks the human
+when the intended behavior cannot be reconciled.
+
+The historical join validates the unique parent, listed delivery, worker
+operation, managed build, current-fence attempt and accepted report, including
+the parent's frozen recipe/configuration and source proof. The existing
+`worker_report` audit anchors the original admitted input hash and fence;
+recomputed job hashes cannot substitute a different execution payload. Missing
+attempt/report data for an admitted failure makes the complete set unavailable.
+This is a consistency check, not protection against rewriting the entire store.
+Old lease expiry and
+current operator configuration do not erase an already accepted report. They
+also confer no current execution permission. Jobs stopped without an accepted
+report, cancellation, registry publication and check-finalization failures are
+not classified as accepted build failures.
+
+Existing textual `RESOLVE_CONFLICT` responses take precedence, including an
+`UNAVAILABLE` textual response. Multiple failed builds produce the complete
+bounded set or `UNAVAILABLE`, never a partial list. The investigation block has
+the same 32-KiB JSON limit and identifier validation; recipe argv, parameters,
+private configuration, raw reports/logs, actor labels and feature memory are not
+copied. This bound does not cover the complete legacy operation reply.
+
+Reading this action changes no state and starts no worker, retry, source edit,
+reconciliation or GitOps operation. Record findings and exact evidence through
+existing progress/discovery commands. This is an investigation handoff, not
+automatic semantic-conflict registration: do not invoke textual conflict
+commands without a real conflict record. Independently reviewed semantic
+resolution, trusted review authority and the live A+B/selective-release pilot
+remain separate unfinished acceptance criteria.
