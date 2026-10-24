@@ -6,6 +6,9 @@ run:
 	go run ./cmd/server
 build:
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-publisher ./cmd/publisher
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-registry-observer ./cmd/registry-observer
 test:
 	go test -race ./...
 check:
@@ -32,3 +35,6 @@ check:
 	python3 -m unittest discover -s scripts -p 'test_*.py'
 	go test -race ./...
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-publisher ./cmd/publisher
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-registry-observer ./cmd/registry-observer

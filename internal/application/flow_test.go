@@ -129,11 +129,12 @@ func (f *fakeFlow) ApplyGitOps(_ context.Context, _ delivery.Connection, req del
 func flowFixture(t *testing.T) (*Service, *memoryStore, *fakeFlow) {
 	_, m, _ := externalFixture(t)
 	f := &fakeFlow{main: shaBase, branches: map[string]string{"feature/work": shaHead, "feature/second": strings.Repeat("e", 40)}, parents: map[string][]string{shaHead: {shaBase}, strings.Repeat("e", 40): {shaBase}}, deployments: map[string]string{}, applyCounts: map[string]int{}}
+	environmentBinding(&m.state, "dev", "component").GitOpsMode = "PR"
 	return NewWithProvider(m, f), m, f
 }
 func flowEnvironment(t *testing.T, s *Service, id, purpose string) {
 	exec(t, s, domain.Command{Action: "create_environment", ID: id, ProductID: "p", Data: map[string]any{"name": id, "cluster": "local", "namespace": id}})
-	exec(t, s, domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": id, "application_id": "component", "purpose": purpose, "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": id + ".yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true}})
+	exec(t, s, domain.Command{Action: "configure_environment", ProductID: "p", Data: map[string]any{"environment_id": id, "application_id": "component", "purpose": purpose, "connection_id": "conn", "repository_id": "gitops", "ref": "main", "path": id + ".yaml", "image_field": "spec.values.image.repository", "digest_field": "spec.values.image.tag", "allow_deploy": true, "gitops_mode": map[bool]string{true: "DIRECT", false: "PR"}[purpose == "PROD"]}})
 }
 func flowPlan(t *testing.T, s *Service, id, env string, revisions ...string) {
 	exec(t, s, domain.Command{Action: "plan_composition", ID: id, ProductID: "p", Data: map[string]any{"name": id, "environment_id": env, "components": []domain.CompositionComponent{component("component", revisions...)}}})
@@ -437,4 +438,52 @@ func TestFlowPromotionRefreshesRegistryProofAndPinsApprovedDigest(t *testing.T) 
 			}
 		})
 	}
+}
+
+func (f *fakeFlow) EnsureRef(ctx context.Context, _ delivery.Connection, _, branch, sha string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if f.branches == nil {
+		f.branches = map[string]string{}
+	}
+	if current, ok := f.branches[branch]; ok && current != sha {
+		return "", fmt.Errorf("retained ref moved")
+	}
+	f.branches[branch] = sha
+	return sha, nil
+}
+func (f *fakeFlow) ObserveBranch(ctx context.Context, _ delivery.Connection, _, branch string) (delivery.BranchInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return delivery.BranchInfo{}, err
+	}
+	sha := f.branches[branch]
+	if branch == "main" {
+		sha = f.main
+	}
+	if sha == "" {
+		return delivery.BranchInfo{}, fmt.Errorf("branch missing")
+	}
+	return delivery.BranchInfo{Name: branch, SHA: sha}, nil
+}
+func (f *fakeFlow) DiscoverBranchPullRequests(context.Context, delivery.Connection, string, string) ([]delivery.PullRequestObservation, error) {
+	return nil, nil
+}
+func (f *fakeFlow) VerifyComposedSource(ctx context.Context, _ delivery.Connection, p delivery.SourcePlan, r delivery.SourceResult) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.Branch != p.TargetBranch || f.branches[p.TargetBranch] != r.SHA {
+		return fmt.Errorf("generated source changed")
+	}
+	return nil
+}
+func (f *fakeFlow) ProposeGitOps(ctx context.Context, c delivery.Connection, a delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
+	_, err := f.ApplyGitOps(ctx, c, a)
+	return delivery.GitOpsPullRequest{Number: 1, URL: "https://fixture.test/pull/1", HeadSHA: "gitops-current", State: "open"}, err
+}
+func (f *fakeFlow) ObserveGitOpsPR(_ context.Context, _ delivery.Connection, _ delivery.GitOpsApply, p delivery.GitOpsPullRequest) (delivery.GitOpsPullRequest, error) {
+	p.Merged = true
+	p.State = "closed"
+	return p, nil
 }

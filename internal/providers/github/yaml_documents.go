@@ -16,11 +16,10 @@ func imageDocuments(content string, r delivery.GitOpsRequest) ([]imageDocument, 
 	decoder := yaml.NewDecoder(strings.NewReader(content))
 	out := []imageDocument{}
 	count := 0
-	desired, e := registryRepository(r.ImageRepository)
+	desired, e := gitopsImageRepository(r.ImageRepository)
 	if e != nil {
 		return nil, e
 	}
-	desired = "ghcr.io/" + desired
 	for {
 		var doc yaml.Node
 		e := decoder.Decode(&doc)
@@ -64,66 +63,76 @@ func imageDocuments(content string, r delivery.GitOpsRequest) ([]imageDocument, 
 
 // Replace scalar tokens in-place so unrelated resources, comments and formatting
 // remain byte-for-byte intact. Multiline/anchored/tagged/flow tokens fail closed.
+type imageReplacement struct {
+	docs         []imageDocument
+	repo, digest string
+}
+
 func replaceImageScalars(content string, docs []imageDocument, repo, digest string) (string, error) {
+	return replaceImageSelections(content, []imageReplacement{{docs, repo, digest}})
+}
+func replaceImageSelections(content string, replacements []imageReplacement) (string, error) {
 	type edit struct {
 		start, end int
 		value      string
 	}
 	edits := []edit{}
-	for _, doc := range docs {
-		for i, n := range []*yaml.Node{doc.image, doc.digest} {
-			if n.Style&(yaml.LiteralStyle|yaml.FoldedStyle|yaml.TaggedStyle) != 0 {
-				return "", errors.New("unsupported image scalar style")
-			}
-			start := 0
-			for line := 1; line < n.Line; line++ {
-				p := strings.IndexByte(content[start:], '\n')
-				if p < 0 {
+	for _, replacement := range replacements {
+		for _, doc := range replacement.docs {
+			for i, n := range []*yaml.Node{doc.image, doc.digest} {
+				if n.Style&(yaml.LiteralStyle|yaml.FoldedStyle|yaml.TaggedStyle) != 0 {
+					return "", errors.New("unsupported image scalar style")
+				}
+				start := 0
+				for line := 1; line < n.Line; line++ {
+					p := strings.IndexByte(content[start:], '\n')
+					if p < 0 {
+						return "", errors.New("invalid image position")
+					}
+					start += p + 1
+				}
+				start += n.Column - 1
+				if start >= len(content) {
 					return "", errors.New("invalid image position")
 				}
-				start += p + 1
-			}
-			start += n.Column - 1
-			if start >= len(content) {
-				return "", errors.New("invalid image position")
-			}
-			end := start
-			if content[start] == '\'' || content[start] == '"' {
-				quote := content[start]
-				end++
-				for end < len(content) {
-					if content[end] == '\n' {
-						return "", errors.New("multiline image scalar unsupported")
-					}
-					if quote == '"' && content[end] == '\\' {
-						end += 2
-						continue
-					}
-					if content[end] == quote {
-						if quote == '\'' && end+1 < len(content) && content[end+1] == '\'' {
+				end := start
+				if content[start] == '\'' || content[start] == '"' {
+					quote := content[start]
+					end++
+					for end < len(content) {
+						if content[end] == '\n' {
+							return "", errors.New("multiline image scalar unsupported")
+						}
+						if quote == '"' && content[end] == '\\' {
 							end += 2
 							continue
 						}
+						if content[end] == quote {
+							if quote == '\'' && end+1 < len(content) && content[end+1] == '\'' {
+								end += 2
+								continue
+							}
+							end++
+							break
+						}
 						end++
-						break
 					}
-					end++
+				} else {
+					for end < len(content) && !strings.ContainsRune(" \t\r\n,}]", rune(content[end])) {
+						end++
+					}
 				}
-			} else {
-				for end < len(content) && !strings.ContainsRune(" \t\r\n,}]", rune(content[end])) {
-					end++
+				var old string
+				if end > len(content) || yaml.Unmarshal([]byte(content[start:end]), &old) != nil || old != n.Value {
+					return "", errors.New("unsupported image scalar token")
 				}
+				value := replacement.repo
+				if i == 1 {
+					value = replacement.digest
+				}
+				encoded, _ := json.Marshal(value)
+				edits = append(edits, edit{start, end, string(encoded)})
 			}
-			var old string
-			if end > len(content) || yaml.Unmarshal([]byte(content[start:end]), &old) != nil || old != n.Value {
-				return "", errors.New("unsupported image scalar token")
-			}
-			value := repo
-			if i == 1 {
-				value = digest
-			}
-			encoded, _ := json.Marshal(value)
-			edits = append(edits, edit{start, end, string(encoded)})
 		}
 	}
 	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })

@@ -12,6 +12,7 @@ type PullRequestObserver interface {
 }
 type PullRequestObservation struct {
 	Number                                           int
+	BaseRepositoryID, HeadRepositoryID               int64
 	URL, Title, State, Head, Base, HeadSHA, MergeSHA string
 	CreatedAt, MergedAt                              time.Time
 }

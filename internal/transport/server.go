@@ -17,6 +17,7 @@ import (
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 	"releasecontrol/web"
 )
 
@@ -29,6 +30,7 @@ type Service interface {
 
 type Options struct {
 	Auth         *auth.Manager
+	Workers      *workerconfig.Authority
 	Token        string
 	AllowedHosts []string
 }
@@ -62,10 +64,18 @@ func New(service Service, options Options) http.Handler {
 			write(w, 400, map[string]string{"error": "Expected one JSON object"})
 			return
 		}
-		c.Actor = defaultActor(c.Actor)
+		if err := validateRestorationTransportCommand(c); err != nil {
+			write(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		if !restorationAction(c.Action) {
+			c.Actor = defaultActor(c.Actor)
+		}
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
+	workerMux := http.NewServeMux()
+	registerWorkerRoutes(workerMux, service, options)
 	registerQueryRoutes(mux, service)
 	registerBackupRoutes(mux, service)
 	registerReviewRoutes(mux, service)
@@ -74,18 +84,25 @@ func New(service Service, options Options) http.Handler {
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_state", Description: "Read products, features, integration/work claims, verification, findings, applications, environments, immutable source revisions, composition plans, releases, GitHub connections, delivery operations, provider observations and audit history."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-		v, e := service.State(ctx)
-		return nil, v, e
-	})
+	registerStateNavigationTool(server, service)
 	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Deterministic feature context for a fresh coding agent: intent, ordered plan, progress, decisions, discoveries, blockers, handoffs, verification evidence and other active work."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		FeatureID string `json:"feature_id" jsonschema:"Feature ID to resume"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Resume(ctx, in.FeatureID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Use assemble_environment to build all selected active revisions into a disposable DEV/TEST composition and queue its asynchronous Git/build/GitOps operation; poll get_operation and resolve persisted conflicts when required. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. Use create_github_connection/import_repository/configure_component/configure_environment to configure explicit DEV delivery. refresh_integration_git queues observation; deploy_integration queues a real build/artifact/GitOps operation. Poll get_operation; GitOps application does not imply runtime health. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, _ *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
-		in.Actor = defaultActor(in.Actor)
+	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Use assemble_environment to build all selected active revisions into a disposable DEV/TEST composition and queue its asynchronous Git/build/GitOps operation; poll get_operation and resolve persisted conflicts when required. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. Use create_github_connection/import_repository/configure_component/configure_environment to configure explicit DEV delivery. refresh_integration_git queues observation; deploy_integration queues a real build/artifact/GitOps operation. Poll get_operation; GitOps application does not imply runtime health. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, request *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
+		// SDK schema normalization traverses generic maps via float64. Preserve
+		// the raw integer CAS before dispatching the shared command.
+		if err := json.Unmarshal(request.Params.Arguments, &in); err != nil {
+			return nil, nil, err
+		}
+		if err := validateRestorationTransportCommand(in); err != nil {
+			return nil, nil, err
+		}
+		if !restorationAction(in.Action) {
+			in.Actor = defaultActor(in.Actor)
+		}
 		v, e := service.Execute(ctx, in)
 		return nil, v, e
 	})
@@ -101,11 +118,17 @@ func New(service Service, options Options) http.Handler {
 	registerAgentGuideTools(server)
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20}))
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
-	var handler http.Handler = mux
+	var control http.Handler = mux
 	if options.Auth != nil {
-		handler = options.Auth.Wrap(handler)
+		control = options.Auth.Wrap(control)
 	}
-	return protect(handler, options)
+	return protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if workerEndpoint(r.URL.Path) {
+			workerMux.ServeHTTP(w, r)
+			return
+		}
+		control.ServeHTTP(w, r)
+	}), options)
 }
 
 func respond(w http.ResponseWriter, v any, err error) {
@@ -166,9 +189,13 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 403, map[string]string{"error": "Cross-site requests are not allowed"})
 			return
 		}
+		if o.Workers != nil && o.Workers.IsWorkerToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) && !workerEndpoint(r.URL.Path) {
+			write(w, 401, map[string]string{"error": "worker credential restricted to worker channel"})
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			w.Header().Set("Cache-Control", "no-store")
-			if (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
+			if !workerEndpoint(r.URL.Path) && (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
 				write(w, 401, map[string]string{"error": "Bearer token required"})
 				return
 			}

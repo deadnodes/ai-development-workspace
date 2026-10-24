@@ -21,6 +21,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 		"GET /api/integrations/{id}/git":              "get_integration_git",
 		"GET /api/products/{id}/unlinked-git-commits": "get_unlinked_git_commits",
 		"GET /api/environments/{id}/state":            "get_environment_state",
+		"GET /api/worker-jobs/{id}":                   "get_worker_job",
 		"GET /api/operations/{id}":                    "get_operation",
 		"GET /api/connections/{id}/repositories":      "discover_repositories",
 		"POST /api/connections/{id}/test":             "test_connection",
@@ -58,6 +59,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 }
 
 type deployInput struct {
+	RequestKey     string `json:"request_key,omitempty"`
 	Actor          string `json:"actor,omitempty" jsonschema:"Human or agent attribution"`
 	IntegrationID  string `json:"integration_id" jsonschema:"Integration to deploy"`
 	EnvironmentID  string `json:"environment_id" jsonschema:"Explicitly configured DEV environment"`
@@ -68,6 +70,9 @@ type deployInput struct {
 
 func (in deployInput) command() domain.Command {
 	data := map[string]any{"environment_id": in.EnvironmentID}
+	if in.RequestKey != "" {
+		data["request_key"] = in.RequestKey
+	}
 	if in.ApplicationID != "" {
 		data["application_id"] = in.ApplicationID
 	}
@@ -143,13 +148,19 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		v, e := service.Query(ctx, "get_environment_state", in.EnvironmentID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_operation", Description: "Read persisted operation status, step evidence and attention needs. Queued or pending does not mean deployed."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_worker_job", Description: "Read one bounded worker job and its attempts; no global state required."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		JobID string `json:"job_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_worker_job", in.JobID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_operation", Description: "Read persisted operation status, step evidence and attention needs. agent_action RESOLVE_CONFLICT returns exact frozen branches/commits and the existing resolution workflow for the requesting agent; RCP does not launch another agent. UNAVAILABLE requires context reconciliation, not a partial resolution. Reconcile is a separate authorized build/GitOps request. Queued or pending does not mean deployed."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		OperationID string `json:"operation_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_operation", in.OperationID)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_artifact_retention", Description: "Evaluate component retention against recorded availability; advisory only, never deletes artifacts."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_artifact_retention", Description: "Read the normalized protected-root inventory, effective minimum-10 policies, recorded availability/freshness and blockers. Pure stored evidence; no registry fetch. deletion_allowed is always false and InputHash is not deletion authority."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		ProductID string `json:"product_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_artifact_retention", in.ProductID)

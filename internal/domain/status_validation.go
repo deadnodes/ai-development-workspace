@@ -9,6 +9,15 @@ import (
 // snapshots. Opaque provider responses and append-only event payloads retain
 // their original vocabulary and are deliberately not interpreted as our state.
 func ValidateStateStatuses(st State) error {
+	if err := ValidateRegistryInventories(st); err != nil {
+		return err
+	}
+	if err := ValidateArtifactPins(st); err != nil {
+		return err
+	}
+	if err := ValidateWorkerChecks(st); err != nil {
+		return err
+	}
 	if err := ValidateRepositoryKinds(st); err != nil {
 		return err
 	}
@@ -21,6 +30,16 @@ func ValidateStateStatuses(st State) error {
 			return fmt.Errorf("invalid %s status %q for entity %q", kind, value, id)
 		}
 		return nil
+	}
+	for _, v := range st.WorkerJobs {
+		if err := check("worker_job", v.ID, v.Status, false); err != nil {
+			return err
+		}
+	}
+	for _, v := range st.WorkerAttempts {
+		if err := check("worker_attempt", v.ID, v.Status, false); err != nil {
+			return err
+		}
 	}
 	for _, v := range st.RuntimeSnapshots {
 		if err := check("runtime_comparison", v.ID, v.ReferenceComparison, true); err != nil {

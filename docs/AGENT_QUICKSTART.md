@@ -57,7 +57,11 @@ url: http://127.0.0.1:8090/mcp
 
 URL должен быть доступен из процесса агента: его `127.0.0.1` может относиться к другой машине/контейнеру. Для удалённого агента используй SSH-туннель к машине Control Plane. Если сервер настроен с `RC_TOKEN`, передавай `Authorization: Bearer <token>`. Стандартный Compose запускает локальный сервер без токена; переменная из shell автоматически в контейнер не передаётся.
 
-Первый вызов — `get_state {}`. Найди нужную Feature и вызови `resume {"feature_id":"…"}`. Не предполагай фиксированные Product/Feature ID. На чистой БД сначала создай Product, Feature и Integrations.
+Первый вызов — `get_state {}`: компактный список Products. Затем `get_state {"product_id":"…"}` показывает Features выбранного Product, а `get_state {"feature_id":"…"}` — Integrations выбранной Feature с идентификаторами родителей. Если переданы оба ID, они должны соответствовать друг другу. Не предполагай фиксированные ID. На чистой БД сначала создай Product, Feature и Integrations.
+
+По умолчанию возвращается до 25 карточек; `limit` принимает целое число от 1 до 100. Для продолжения передай `pagination.next_cursor` как `cursor`, сохранив тот же Product/Feature scope. Ответ может содержать меньше `limit` из-за ограничения размера: JSON проекции ≤32 КиБ, полный MCP-результат ≤128 КиБ. Названия ограничены 256 байтами UTF-8; `truncated: true` отмечает сокращение. ID не сокращаются. Cursor задаёт живой порядок по ID, а не фиксирует снимок; это не токен авторизации.
+
+`get_state` не возвращает историю, контекст, логи, результаты проверок, операции или credentials и не подтверждает готовность/деплой. Для деталей используй `get_project_context`, `resume` выбранной Feature и специализированные queries, например `get_operation`; `resume` содержит историю и также может быть большим. Полный экспорт выполняется через operator backup. При подключении к большому экземпляру указывай `--product-id` явно: автоматический выбор Product при connect пока читает полный HTTP snapshot.
 
 Основные MCP-вызовы:
 
@@ -234,7 +238,7 @@ Codex P1/P2 review comments can become persistent findings through MCP `sync_pul
 
 Полный контракт: [TEST_AND_RELEASE_FLOW.md](TEST_AND_RELEASE_FLOW.md). В UI доступны reconcile composition, выбранный release candidate, сценарии/результаты и hotfix. Эти операции также доступны отдельными MCP tools и через `execute`.
 
-1. Для общей DEV-сборки вызови `assemble_environment` с `product_id` и `environment_id` (при необходимости передай `integration_ids`; пустой список означает все активные захваченные интеграции). Сервис сам создаст immutable composition из последних Git revisions и сразу вернёт Operation ID. Для заранее зафиксированного состава создай composition вручную и вызови `reconcile_composition` с actor и composition_id. Цель должна иметь enabled DEV/TEST mapping. Полли parent через `get_operation`, проверяй child_ids и evidence. Конфликт останавливает операцию и требует semantic resolution; после новых push запусти assemble снова.
+1. Для общей DEV-сборки вызови `assemble_environment` с `product_id` и `environment_id` (при необходимости передай `integration_ids`; пустой список означает все активные захваченные интеграции). Сервис сам создаст immutable composition из последних Git revisions и сразу вернёт Operation ID. Для заранее зафиксированного состава создай composition вручную и вызови `reconcile_composition` с actor и composition_id. Цель должна иметь enabled DEV/TEST mapping. Полли parent через `get_operation`, проверяй child_ids и evidence. При конфликте get_operation возвращает agent_action RESOLVE_CONFLICT с исходными ветками/SHA и дальнейшими шагами. Сам запросивший агент разрешает его снаружи через claim_composition_conflict → record_conflict_resolution → проверки → verify_conflict_resolution. RCP не запускает другого агента. Затем явно вызови reconcile_composition для исходного composition_id с resolution_conflict_ids в уже разрешённом build/GitOps scope. Изменение входных revisions требует новой композиции; UNAVAILABLE запрещает угадывать недостающий контекст.
 2. После реального наблюдения окружения вызови `record_runtime_observation` для каждого child: operation_id, environment_id, gitops_commit, artifact_digest, healthy, details. GitOps commit сам по себе не доказывает здоровье runtime.
 3. Опиши `create_test_scenario`: product_id, title, objective, mechanism, steps, expected_outcomes, integration_ids, blocking, optional preconditions. `revise_test_scenario` создаёт новую полную версию с scenario_id.
 4. `record_scenario_run` фиксирует реальное выполнение: product_id, scenario_version_id, composition_id **либо** candidate_operation_id, полный components с child operation_id/source_sha/artifact_digest, result и observations/artifacts. Для composition также обязательна deployment_evidence каждого component.
@@ -263,3 +267,17 @@ The agent must first bind the real repository/branch to its Integration and set 
 Pushes update observed HEAD/divergence and capture new revisions. The latest ten PRs from each explicitly bound branch are discovered; linked open PRs are read directly until merged/closed. Discovery is bounded, not a complete historical import. GitHub queries are read-only. The server does not scan all organization repositories/branches or infer an unregistered agent's working branch. Local unpushed changes remain local and are not visible to the GitHub poller.
 
 Requests become persistent `REFRESH_GIT` operations attributed to `system/git-sync`, visible in Operations & attention. Pending/running requests suppress duplicates. Failed reads retry after five polling intervals; at most five integrations are queued per scheduler pass. Queue/network latency can add to the interval. Existing page polling updates the graph after observations are persisted. GitHub webhooks are not required; this is server-side polling, not instant event delivery. Git observations do not themselves mark an Integration released or prove Kubernetes deployment.
+
+## Возврат исходного shared Dev
+
+После candidate Dev используй [DEV_RESTORATION.md](DEV_RESTORATION.md):
+`request_candidate_dev_restoration` → дождись полного `dev_restoration_plan.hash`
+и проверь все PR/head/image → отдельно `confirm_candidate_dev_restoration` →
+внешний reviewed Flux merge человеком → `verify_candidate_dev_restoration` для
+всех исходных компонентов и API/worker ролей → явно
+`release_candidate_dev_after_restoration`. Для всех четырёх команд обязательны
+Actor, Product, новый request key и точный текущий selection. После request
+прочитай новый token: recovery меняет epoch/generation. Actor/shared token даёт
+только ATTRIBUTED_CONTROL_CONFIRMATION, не проверенную личность человека или
+text/voice approval. Истёкший candidate не получает новых прав. Не обещай live
+установку, автоматический rollback, TTL unlock, functional acceptance или Prod.

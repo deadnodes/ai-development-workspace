@@ -30,7 +30,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		return domain.EvaluateRetention(st, id), nil
+		return s.evaluateRetention(st, id, time.Now().UTC()), nil
 	case "get_product_configuration":
 		return productConfiguration(st, id)
 	case "test_connection", "discover_repositories":
@@ -196,7 +196,29 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				snapshots = append(snapshots, v)
 			}
 		}
-		return map[string]any{"runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."}, nil
+		out := s.candidateRuntimeState(&st, id, "")
+		for k, v := range s.restorationQuery(&st, id) {
+			out[k] = v
+		}
+		for k, v := range s.baselineQuery(&st, id) {
+			out[k] = v
+		}
+		for k, v := range map[string]any{"dev_reservation": ReservationState(&st, id), "runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."} {
+			out[k] = v
+		}
+		return out, nil
+	case "get_worker_job":
+		j := workerJob(&st, id)
+		if j == nil {
+			return nil, missing("worker job", id)
+		}
+		attempts := []domain.WorkerAttempt{}
+		for _, a := range st.WorkerAttempts {
+			if a.JobID == j.ID {
+				attempts = append(attempts, a)
+			}
+		}
+		return map[string]any{"job": j, "attempts": attempts}, nil
 	case "get_operation":
 		for _, op := range st.Operations {
 			if op.ID == id {
@@ -226,7 +248,29 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 						contexts[in.FeatureID] = value
 					}
 				}
-				return map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts}, nil
+				activationID := ""
+				if op.Kind == devActivationKind {
+					activationID = op.ID
+				}
+				if op.Kind == devRuntimeKind {
+					activationID = op.ParentID
+				}
+				out := s.candidateRuntimeState(&st, op.EnvironmentID, activationID)
+				for k, v := range s.restorationQuery(&st, op.EnvironmentID) {
+					out[k] = v
+				}
+				for k, v := range s.baselineQuery(&st, op.EnvironmentID) {
+					out[k] = v
+				}
+				for k, v := range map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)} {
+					out[k] = v
+				}
+				if action := operationConflictAction(&st, op, time.Now().UTC()); action != nil {
+					out["agent_action"] = action
+				} else if action := operationBuildFailureAction(&st, op, time.Now().UTC()); action != nil {
+					out["agent_action"] = action
+				}
+				return out, nil
 			}
 		}
 		return nil, missing("operation", id)
@@ -234,7 +278,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		items := retentionAttention(st, id)
+		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC()))
 		items = append(items, unlinkedGitCommits(st, id)...)
 		for _, finding := range st.Findings {
 			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {
@@ -266,6 +310,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 					}
 				}
 				reason := "DEPLOY_FAILED"
+				if op.Kind == "CHECK_PUBLICATION" {
+					reason = "CHECK_PUBLICATION_RECONCILIATION_REQUIRED"
+				}
 				if op.Kind == "REFRESH_GIT" {
 					reason = "GIT_SYNC_FAILED"
 				}

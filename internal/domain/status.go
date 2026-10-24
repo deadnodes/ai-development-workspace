@@ -5,6 +5,8 @@ import "slices"
 // StatusCatalog returns fresh copies; caller configuration cannot extend it.
 func StatusCatalog() map[string][]string {
 	return map[string][]string{
+		"worker_job":           {"QUEUED", "CLAIMED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "DEADLINE_EXCEEDED", "RECONCILIATION_REQUIRED"},
+		"worker_attempt":       {"CLAIMED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED", "RECONCILIATION_REQUIRED"},
 		"runtime_comparison":   {"MATCH", "DRIFT", "UNKNOWN"},
 		"runtime_health":       {"UNKNOWN", "NOT_READY", "HEALTHY", "SCALED_ZERO"},
 		"composition_conflict": {"requires_resolution", "claimed", "verification_required", "resolved"},
@@ -14,7 +16,7 @@ func StatusCatalog() map[string][]string {
 		"check_result": {"passed", "failed", "blocked", "skipped"}, "gate_result": {"pending", "passed", "failed", "blocked", "skipped", "stale"},
 		"scenario_result": {"passed", "failed", "blocked"}, "composition": {"planned"}, "release": {"planned", "released"},
 		"operation": {"PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"}, "operation_step": {"PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"},
-		"deployment_state": {"PENDING", "COMPOSING", "SOURCE_READY", "UPDATING_MAIN", "WAITING_FOR_COMPONENTS", "WAITING_FOR_ARTIFACT", "BUILDING", "ARTIFACT_READY", "GITOPS_PENDING", "GITOPS_APPLIED", "PENDING_RECONCILIATION", "READY_FOR_VERIFICATION", "DEPLOYED", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"},
+		"deployment_state": {"PENDING", "COMPOSING", "SOURCE_READY", "UPDATING_MAIN", "WAITING_FOR_COMPONENTS", "WAITING_FOR_ARTIFACT", "BUILDING", "ARTIFACT_READY", "GITOPS_PENDING", "GITOPS_APPLIED", "PENDING_RECONCILIATION", "BASELINE_CAPTURED", "BASELINE_UNVERIFIED", "RESTORATION_VERIFIED", "RESTORATION_UNVERIFIED", "RELEASED", "RUNTIME_VERIFIED", "RUNTIME_UNVERIFIED", "READY_FOR_VERIFICATION", "DEPLOYED", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"},
 		"review_sync":      {"NO_FINDINGS_OBSERVED", "FINDINGS_OBSERVED"}, "git_observation": {"identical", "ahead", "behind", "diverged", "unknown"},
 		"pull_request": {"open", "draft", "closed", "merged"}, "artifact_availability": {"PRESENT", "MISSING"},
 	}

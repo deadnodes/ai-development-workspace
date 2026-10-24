@@ -10,6 +10,7 @@ import (
 
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 )
 
 func (s *Service) RunWorker(ctx context.Context, interval time.Duration) error {
@@ -60,6 +61,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		var candidate *domain.ExternalOperation
 		for i := range st.Operations {
 			v := &st.Operations[i]
+			if v.Kind == domain.WorkerOperationKind || v.Kind == domain.RegistryObserveOperationKind {
+				continue
+			}
 			if s.provider == nil && v.Kind != "REFRESH_RUNTIME" {
 				continue
 			}
@@ -99,6 +103,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if op.Kind == "CHECK_PUBLICATION" {
+		return true, s.tickCheck(callCtx, *op, token)
+	}
 	if op.Kind == "REFRESH_RUNTIME" {
 		return true, s.tickRuntime(callCtx, *op, token)
 	}
@@ -111,13 +118,60 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 	if op.Kind == "REFRESH_REPOSITORY_GIT" {
 		return true, s.observeRepositoryGit(callCtx, *op, token)
 	}
+	if op.Kind == devRestorationKind {
+		return true, s.tickDevRestoration(callCtx, *op, token)
+	}
+	if op.Kind == devRestorationVerificationKind {
+		return true, s.tickRestorationVerification(callCtx, *op, token)
+	}
+	if op.Kind == devBaselineKind {
+		return true, s.tickDevBaseline(callCtx, *op, token)
+	}
+	if op.Kind == devRuntimeKind {
+		return true, s.tickDevRuntime(callCtx, *op, token)
+	}
+	if op.Kind == devActivationKind {
+		return true, s.tickDevActivation(callCtx, *op, token)
+	}
 	if op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION" {
 		return true, s.tickFlow(callCtx, *op, token)
 	}
 	if op.Kind != "DEPLOY" || op.Snapshot == nil {
 		return true, s.finish(ctx, *op, token, "FAILED", "invalid operation snapshot", nil)
 	}
+	state, guardErr := s.store.Read(ctx)
+	if guardErr != nil {
+		return true, guardErr
+	}
+	if guardErr = reservationOperationAllowed(&state, *op); guardErr != nil {
+		return true, s.finish(ctx, *op, token, "BLOCKED", guardErr.Error(), nil)
+	}
 	snapshot := op.Snapshot
+	if snapshot.Build.Mode == "NATIVE" {
+		state, e := s.store.Read(ctx)
+		if e != nil {
+			return true, e
+		}
+		if e = s.nativeDeliveryAllowed(&state, op); e != nil {
+			return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+		}
+		if op.Native != nil && op.Phase == "NATIVE_BUILD" {
+			return true, s.tickNativeDelivery(ctx, *op, token)
+		}
+		if op.Native == nil && op.ExistingArtifact == nil || op.Phase == "DISPATCH" || op.Phase == "BUILD_LOOKUP" || op.Phase == "PROMOTION_PREFLIGHT" {
+			return true, s.finish(ctx, *op, token, "BLOCKED", "native automatic binding or exact existing artifact required", nil)
+		}
+		if op.ExistingArtifact != nil {
+			known := op.ExistingArtifact
+			if known.Native == nil || known.Native.Profile != snapshot.Build.Profile {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "native profile mismatch", nil)
+			}
+			if _, e = validatedExistingArtifact(&state, known.ID, op.ProductID, op.ApplicationID, snapshot.Revision.RepositoryID, snapshot.Revision.HeadCommit, snapshot.Build.ImageRepository); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
+		}
+	}
+
 	if domain.ComponentKind(snapshot.Application) != "APPLICATION" {
 		return true, s.finish(ctx, *op, token, "BLOCKED", "library components use publication, not environment deployment", nil)
 	}
@@ -126,7 +180,7 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		if e != nil {
 			return true, e
 		}
-		if e = flowChildAllowed(&state, *op); e != nil {
+		if e = s.flowChildAllowed(&state, *op); e != nil {
 			return true, s.finish(ctx, *op, token, "CANCELLED", e.Error(), nil)
 		}
 	}
@@ -235,6 +289,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			}
 			return true, s.advance(ctx, *op, token, "INSPECT", "WAITING_FOR_ARTIFACT", "recheck selected immutable artifact; CI build is disabled for this operation", map[string]string{"artifact_id": op.ExistingArtifact.ID})
 		}
+		if snapshot.Build.Mode == "NATIVE" {
+			return true, s.advance(ctx, *op, token, "NATIVE_BUILD", "BUILDING", "native frozen-source build and publication requested", nil)
+		}
 		if op.ExpectedDigest == "" {
 			state, readErr := s.State(ctx)
 			if readErr != nil {
@@ -339,7 +396,13 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			request.EvidenceOperationID = known.BuildRequest.OperationID
 			request.SourceSHA = known.SourceCommit
 		}
-		artifact, e := s.provider.InspectArtifact(callCtx, snapshot.SourceConnection, request)
+		var artifact delivery.ArtifactResult
+		var e error
+		if snapshot.Build.Mode == "NATIVE" {
+			artifact, e = s.inspectNativeArtifact(callCtx, *op)
+		} else {
+			artifact, e = s.provider.InspectArtifact(callCtx, snapshot.SourceConnection, request)
+		}
 		if e != nil {
 			if op.ExistingArtifact != nil {
 				return true, s.finish(ctx, *op, token, "BLOCKED", "selected artifact unavailable or registry evidence expired; no build dispatched: "+e.Error(), nil)
@@ -359,8 +422,38 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			return true, s.finish(ctx, *op, token, "BLOCKED", "artifact digest differs; a new approved operation is required", nil)
 		}
 		op.Artifact = &artifact
+		if devActivationParent(&state, *op) != nil {
+			callCtx = delivery.WithCachedAuthentication(callCtx)
+			if e := s.verifyNativeSource(callCtx, *op); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
+			component := activationComponent(devActivationParent(&state, *op).DevActivation, op.ID)
+			if component == nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "group member missing", nil)
+			}
+			base, e := s.provider.ReadGitOps(callCtx, snapshot.GitOpsConnection, component.Selector)
+			if e != nil {
+				return true, s.retry(ctx, *op, token, "candidate Dev GitOps read failed")
+			}
+			if base.HeadSHA == "" || base.BlobSHA == "" {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "candidate Dev GitOps base evidence missing", nil)
+			}
+			if base.BlobSHA != component.Baseline.BlobSHA || base.ImageRepository != component.Baseline.ImageRepository || base.Digest != component.Baseline.Digest || workerconfig.Fingerprint(base.Content) != component.Baseline.ContentHash {
+				return true, s.finish(ctx, *op, token, "BLOCKED", "candidate Dev baseline blob changed", nil)
+			}
+			base.Content = ""
+			op.GitOpsBase = &base
+		}
 		return true, s.advance(ctx, *op, token, "APPLY", "ARTIFACT_READY", "artifact digest observed; GitOps update pending", map[string]string{"digest": artifact.Digest})
 	case "APPLY", "APPLY_UNCERTAIN":
+		if devActivationParent(&state, *op) != nil {
+			return true, s.applyDevActivation(callCtx, ctx, *op, token)
+		}
+		if snapshot.Build.Mode == "NATIVE" {
+			if e := s.verifyNativeSource(callCtx, *op); e != nil {
+				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
+			}
+		}
 		if op.ParentID != "" {
 			if e := s.verifyPromotionSource(callCtx, *op); e != nil {
 				return true, s.finish(ctx, *op, token, "BLOCKED", e.Error(), nil)
@@ -447,16 +540,68 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
 		}
-		if phase == "APPLY_UNCERTAIN" && op.ParentID != "" && status != "CANCELLED" && status != "BLOCKED" {
-			if err := flowChildAllowed(st, op); err != nil {
+		if devActivationParent(st, op) != nil && (!current.LeaseUntil.After(time.Now().UTC()) || ctx.Err() != nil) {
+			return invalid("candidate Dev final save lease unavailable")
+		}
+		if status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if devActivationParent(st, op) != nil {
+				if err := s.devActivationAllowed(st, op); err != nil {
+					return err
+				}
+			}
+			if err := reservationOperationAllowed(st, op); err != nil {
+				return err
+			}
+		}
+		if op.Kind == "COMPOSE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.retentionLease(st, op, token); err != nil {
+				return err
+			}
+		}
+		guardChild := phase == "APPLY_UNCERTAIN"
+		if parent := operationByID(st, op.ParentID); parent != nil && flowHasNative(st, *parent) {
+			guardChild = true
+		}
+		if guardChild && op.ParentID != "" && status != "FAILED" && status != "CANCELLED" && status != "BLOCKED" {
+			if err := s.flowChildAllowed(st, op); err != nil {
 				return err
 			}
 		}
 		if (op.Kind == "COMPOSE" || op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION") && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
-			if e := flowGuard(st, op); e != nil {
+			if e := s.flowGuard(st, op); e != nil {
 				status = "BLOCKED"
 				detail = e.Error()
 			}
+		}
+		if current.ReservationMutationIntent != "" {
+			op.ReservationMutationIntent = current.ReservationMutationIntent
+		}
+		if phase == "APPLY_UNCERTAIN" {
+			op.ReservationMutationIntent = "GITOPS"
+			if devActivationParent(st, op) != nil && current.DevActivationIntentHash == "" && current.Phase == "APPLY" && status == "GITOPS_PENDING" && op.Snapshot != nil && op.GitOpsBase != nil && op.Artifact != nil {
+				op.DevActivationIntentHash = workerconfig.Fingerprint(op.DevActivationBatch)
+			}
+		}
+		if phase == "BUILD_LOOKUP" && !release {
+			op.ReservationMutationIntent = "BUILD"
+		}
+		if devActivationParent(st, op) != nil && op.GitOpsPR != nil && current.DevActivationPRHash == "" && phase == "WAIT_GITOPS_PR" && status == "GITOPS_PENDING" {
+			op.DevActivationPRHash = activationPRHash(*op.GitOpsPR)
+		}
+		if devActivationParent(st, op) != nil && op.GitOpsResult != nil && current.DevActivationResultHash == "" && status == "GITOPS_APPLIED" {
+			op.DevActivationResultHash = workerconfig.Fingerprint(op.GitOpsResult)
+		}
+		if op.ReservationMutationIntent == "GITOPS" && (op.GitOpsResult != nil && op.GitOpsResult.CommitSHA != "" && op.GitOpsResult.BlobSHA != "" || op.GitOpsPR != nil && op.GitOpsPR.Number > 0 && (phase == "WAIT_GITOPS_PR" || op.GitOpsPR.State == "closed")) {
+			op.ReservationMutationIntent = ""
+		}
+		if op.ReservationMutationIntent == "BUILD" && op.Run != nil && op.Run.Status == "completed" {
+			op.ReservationMutationIntent = ""
+		}
+		if op.ReservationMutationIntent == "SOURCE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" && confirmedSourceMutation(*current, op, phase, evidence) {
+			op.ReservationMutationIntent = ""
 		}
 		now := time.Now().UTC()
 		op.Phase = phase
@@ -494,12 +639,47 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 		if terminalOperation(op.Status) {
 			op.FinishedAt = &now
 		}
+		if op.Snapshot != nil && op.Snapshot.Build.Mode == "NATIVE" && status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if err := s.nativeDeliveryAllowed(st, current); err != nil {
+				return err
+			}
+			if op.ExistingArtifact != nil {
+				if _, err := validatedExistingArtifact(st, op.ExistingArtifact.ID, op.ProductID, op.ApplicationID, op.Snapshot.Revision.RepositoryID, op.Snapshot.Revision.HeadCommit, op.Snapshot.Build.ImageRepository); err != nil {
+					return err
+				}
+			}
+		}
+
+		if parent := devActivationParent(st, op); parent != nil {
+			proofs := []domain.ExternalOperation{}
+			for _, cid := range parent.ChildIDs {
+				v := operationByID(st, cid)
+				if v == nil {
+					continue
+				}
+				value := *v
+				if cid == op.ID {
+					value = op
+				}
+				proofs = append(proofs, domain.ExternalOperation{DevActivationBatch: value.DevActivationBatch, GitOpsBase: value.GitOpsBase, GitOpsPR: value.GitOpsPR, GitOpsResult: value.GitOpsResult})
+			}
+			if e := activationGroupBounds(parent.DevActivation, proofs); e != nil {
+				return e
+			}
+		}
 		*current = op
+		if status != "FAILED" && status != "BLOCKED" && status != "CANCELLED" {
+			if parent := devActivationParent(st, op); parent != nil {
+				if e := validateActivationGroups(st, parent); e != nil {
+					return e
+				}
+			}
+		}
 		if op.Run != nil {
 			bm := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}
 			st.DeliveryBuildRuns = append(st.DeliveryBuildRuns, domain.DeliveryBuildRun{Meta: bm, OperationID: op.ID, ApplicationID: op.ApplicationID, Request: op.Snapshot.BuildRequest, Result: *op.Run})
 		}
-		if op.Artifact != nil && op.Snapshot != nil {
+		if op.Artifact != nil && op.Snapshot != nil && op.Snapshot.Build.Mode != "NATIVE" {
 			am := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}
 			runID := int64(0)
 			if op.Run != nil {
@@ -528,4 +708,47 @@ func (s *Service) recordArtifactObservation(ctx context.Context, op domain.Exter
 		st.DeliveryArtifacts = append(st.DeliveryArtifacts, domain.DeliveryArtifact{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: op.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, ApplicationID: op.ApplicationID, RepositoryID: op.Snapshot.Revision.RepositoryID, SourceCommit: op.Snapshot.Revision.HeadCommit, ImageRepository: op.Snapshot.Build.ImageRepository, Tag: op.Snapshot.BuildRequest.ImageTag, Digest: op.ExpectedDigest, Availability: availability, ObservedAt: a.ObservedAt, BuildRequest: op.Snapshot.BuildRequest})
 		return nil
 	})
+}
+
+// A source intent covers one external mutation, not the entire repository set.
+// Acknowledge only its exact result transition in the same transaction that
+// persists that result. A retry, failure or unchanged result cannot clear it.
+func confirmedSourceMutation(before, after domain.ExternalOperation, phase string, evidence map[string]string) bool {
+	if before.Phase != phase || len(before.Sources) != len(after.Sources) || len(before.Sources) == 0 {
+		return false
+	}
+	acknowledged := 0
+	for i, old := range before.Sources {
+		next := after.Sources[i]
+		if reflect.DeepEqual(old, next) {
+			continue
+		}
+		if old.RepositoryID != evidence["repository_id"] || next.RepositoryID != old.RepositoryID {
+			return false
+		}
+		switch phase {
+		case "COMPOSE_SOURCE":
+			if old.Result != nil || next.Result == nil || next.Result.Conflict || !fullSHA.MatchString(next.Result.SHA) || next.Result.Branch != next.Plan.TargetBranch || next.Result.SHA != evidence["source_sha"] || next.Result.Branch != evidence["branch"] {
+				return false
+			}
+			normalized := next
+			normalized.Result = old.Result
+			if !reflect.DeepEqual(old, normalized) {
+				return false
+			}
+		case "ADVANCE_MAIN":
+			if old.MainAdvanced || !next.MainAdvanced || next.Result == nil || next.Result.Conflict || next.Result.SHA != evidence["source_sha"] {
+				return false
+			}
+			normalized := next
+			normalized.MainAdvanced = old.MainAdvanced
+			if !reflect.DeepEqual(old, normalized) {
+				return false
+			}
+		default:
+			return false
+		}
+		acknowledged++
+	}
+	return acknowledged == 1
 }

@@ -24,8 +24,27 @@ type RepositoryBinding struct {
 	Role          string `json:"role"`
 	DefaultBranch string `json:"default_branch"`
 }
+type NativeBinding struct {
+	BuildRecipeID       string         `json:"build_recipe_id"`
+	PublicationRecipeID string         `json:"publication_recipe_id"`
+	Parameters          map[string]any `json:"parameters"`
+}
+type NativeDelivery struct {
+	ParentHash                string    `json:"parent_hash,omitempty"`
+	ConfigRevision            string    `json:"config_revision"`
+	BuildRecipeHash           string    `json:"build_recipe_hash"`
+	BuildRecipeRevision       string    `json:"build_recipe_revision"`
+	PublicationRecipeHash     string    `json:"publication_recipe_hash"`
+	PublicationRecipeRevision string    `json:"publication_recipe_revision"`
+	Deadline                  time.Time `json:"deadline"`
+	BuildJobID                string    `json:"build_job_id,omitempty"`
+	PublicationJobID          string    `json:"publication_job_id,omitempty"`
+}
 type ComponentBuild struct {
-	RebuildMissing bool `json:"rebuild_missing"`
+	Native         *NativeBinding `json:"native,omitempty"`
+	Mode           string         `json:"mode,omitempty"`
+	Profile        string         `json:"profile,omitempty"`
+	RebuildMissing bool           `json:"rebuild_missing"`
 	Meta
 	ApplicationID   string            `json:"application_id"`
 	ConnectionID    string            `json:"connection_id"`
@@ -62,6 +81,9 @@ type GitObservation struct {
 	ObservedAt    time.Time `json:"observed_at"`
 }
 type DeliverySnapshot struct {
+	MainCandidate    *MainCandidateProof    `json:"main_candidate,omitempty"`
+	BuildBaseline    *ComponentBuild        `json:"build_baseline,omitempty"`
+	Native           *NativeDelivery        `json:"native,omitempty"`
 	Revision         IntegrationRevision    `json:"revision"`
 	Application      Application            `json:"application"`
 	Build            ComponentBuild         `json:"build"`
@@ -74,7 +96,56 @@ type DeliverySnapshot struct {
 	BuildRequest     delivery.BuildRequest  `json:"build_request"`
 	GitOpsRequest    delivery.GitOpsRequest `json:"gitops_request"`
 }
+
+// EnvironmentSelection is a CAS token for desired intent, independent of runtime evidence.
+type EnvironmentSelection struct {
+	CompositionID string `json:"composition_id"`
+	OperationID   string `json:"operation_id"`
+	Generation    uint64 `json:"generation"`
+}
+
+// FeatureUpdateRequest is the durable, exact input receipt of one feature patch.
+type FeatureUpdateRequest struct {
+	EnvironmentID     string                `json:"environment_id"`
+	RevisionIDs       []string              `json:"revision_ids"`
+	Name              string                `json:"name,omitempty"`
+	IdempotencyKey    string                `json:"idempotency_key"`
+	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
+}
 type ExternalOperation struct {
+	DevRestorationUnapproved   bool                         `json:"dev_restoration_unapproved,omitempty"`
+	DevRestoration             *DevRestorationProof         `json:"dev_restoration,omitempty"`
+	DevRestorationPlan         *DevRestorationPlan          `json:"dev_restoration_plan,omitempty"`
+	DevRestorationConfirmation *DevRestorationConfirmation  `json:"dev_restoration_confirmation,omitempty"`
+	DevRestorationVerification *DevRestorationVerification  `json:"dev_restoration_verification,omitempty"`
+	DevRestorationRelease      *DevRestorationRelease       `json:"dev_restoration_release,omitempty"`
+	DevRestorationAvailability []DevBaselineComponentResult `json:"dev_restoration_availability,omitempty"`
+
+	DevBaseline               *DevBaselineProof          `json:"dev_baseline,omitempty"`
+	DevBaselineResult         *DevBaselineResult         `json:"dev_baseline_result,omitempty"`
+	DevRuntime                *DevRuntimeProof           `json:"dev_runtime,omitempty"`
+	DevRuntimeResult          *DevRuntimeResult          `json:"dev_runtime_result,omitempty"`
+	DevActivation             *DevActivationProof        `json:"dev_activation,omitempty"`
+	DevActivationGroupID      string                     `json:"dev_activation_group_id,omitempty"`
+	DevActivationBatch        *delivery.GitOpsBatchApply `json:"dev_activation_batch,omitempty"`
+	DevActivationIntentHash   string                     `json:"dev_activation_intent_hash,omitempty"`
+	DevActivationPRHash       string                     `json:"dev_activation_pr_hash,omitempty"`
+	DevActivationResultHash   string                     `json:"dev_activation_result_hash,omitempty"`
+	ReservationMutationIntent string                     `json:"reservation_mutation_intent,omitempty"`
+	ReservationEpoch          uint64                     `json:"reservation_epoch"`
+	DevReservation            *DevReservationProof       `json:"dev_reservation,omitempty"`
+	ReservationQuarantined    bool                       `json:"reservation_quarantined,omitempty"`
+	MainCandidate             *MainCandidateProof        `json:"main_candidate,omitempty"`
+	SourceRetentionOriginID   string                     `json:"source_retention_origin_id,omitempty"`
+	SourceRetentionParentID   string                     `json:"source_retention_parent_id,omitempty"`
+
+	FeatureUpdate *FeatureUpdateRequest `json:"feature_update,omitempty"`
+
+	RegistryObservation *WorkerInputs               `json:"registry_observation,omitempty"`
+	CheckPublication    *CheckPublication           `json:"check_publication,omitempty"`
+	RequestKey          string                      `json:"request_key,omitempty"`
+	RequestHash         string                      `json:"request_hash,omitempty"`
+	Native              *NativeDelivery             `json:"native,omitempty"`
 	GitOpsPR            *delivery.GitOpsPullRequest `json:"gitops_pr,omitempty"`
 	ExistingArtifact    *DeliveryArtifact           `json:"existing_artifact,omitempty"`
 	PreparedDeployments []DeliverySnapshot          `json:"prepared_deployments,omitempty"`
@@ -112,6 +183,24 @@ type ExternalOperation struct {
 	LeaseUntil     time.Time                `json:"lease_until"`
 	FinishedAt     *time.Time               `json:"finished_at,omitempty"`
 }
+
+// CheckPublication is a server-frozen destination and bounded provider intent.
+// The passive worker operation remains solely an execution projection.
+type CheckPublication struct {
+	JobID                string                        `json:"job_id"`
+	WorkerOperationID    string                        `json:"worker_operation_id"`
+	Inputs               WorkerInputs                  `json:"inputs"`
+	InputHash            string                        `json:"input_hash"`
+	Source               RepositoryBinding             `json:"source"`
+	Connection           delivery.Connection           `json:"connection"`
+	ProviderRepositoryID int64                         `json:"provider_repository_id,omitempty"`
+	Identity             delivery.CheckRunIdentity     `json:"identity"`
+	FinalizeDeadline     time.Time                     `json:"finalize_deadline"`
+	Observations         int                           `json:"observations"`
+	Intent               *delivery.CheckRunWrite       `json:"intent,omitempty"`
+	IntentHash           string                        `json:"intent_hash,omitempty"`
+	Observed             *delivery.CheckRunObservation `json:"observed,omitempty"`
+}
 type OperationStep struct {
 	Meta
 	OperationID string            `json:"operation_id"`
@@ -141,6 +230,8 @@ type ConnectionGrant struct {
 }
 
 type DeliveryArtifact struct {
+	Provenance string          `json:"provenance,omitempty"`
+	Native     *NativeArtifact `json:"native,omitempty"`
 	Meta
 	OperationID     string                `json:"operation_id"`
 	ApplicationID   string                `json:"application_id"`

@@ -1,0 +1,31 @@
+{
+  "id": "offline-go-fixture",
+  "revision": "v1",
+  "hash": "sha256:4e67b2d91cf9afb752a1b23e6385d11f0f92067b542638076ce5e102ab941c69",
+  "product_id": "replace-product-id",
+  "repository_id": "replace-repository-id",
+  "repository_url": "https://github.com/replace-owner/replace-repository",
+  "capability": "local_oci_build",
+  "trust": "trusted_source",
+  "parameters": {},
+  "execution": {
+    "kind": "local_oci_build",
+    "toolchain_image": "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b",
+    "buildkit_image": "moby/buildkit@sha256:04cf92d6e86fcfdc7f37b7b5098978081952c11e6ac16769ab1aad95035c2441",
+    "platform": "linux/arm64",
+    "check_argv": ["go", "test", "/source/main.go", "/source/main_test.go"],
+    "build_argv": ["go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go"],
+    "output_file": "app",
+    "image_path": "app",
+    "entrypoint": ["/app"],
+    "network": "none",
+    "timeout_seconds": 300,
+    "memory_mb": 1536,
+    "storage_mb": 512,
+    "cpus": 2,
+    "pids": 128,
+    "source_bytes": 1048576,
+    "output_bytes": 16777216,
+    "log_bytes": 1048576
+  }
+}

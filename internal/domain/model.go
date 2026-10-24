@@ -130,6 +130,8 @@ type Finding struct {
 	FixCommit      string   `json:"fix_commit"`
 }
 type Environment struct {
+	ReservationEpoch     uint64            `json:"reservation_epoch"`
+	SelectionGeneration  uint64            `json:"selection_generation"`
 	Parameters           map[string]string `json:"parameters,omitempty"`
 	DesiredOperationID   string            `json:"desired_operation_id,omitempty"`
 	Cluster              string            `json:"cluster"`
@@ -168,6 +170,7 @@ type CompositionComponent struct {
 	RevisionIDs   []string `json:"revision_ids"`
 }
 type Composition struct {
+	AutoRefresh bool `json:"auto_refresh"`
 	Meta
 	EnvironmentID        string                 `json:"environment_id"`
 	Name                 string                 `json:"name"`
@@ -213,6 +216,11 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
+	RegistryInventories    []RegistryInventory    `json:"registry_inventories"`
+	ArtifactPins           []ArtifactPin          `json:"artifact_pins"`
+	NativeQuarantines      []NativeQuarantine     `json:"native_quarantines"`
+	WorkerJobs             []WorkerJob            `json:"worker_jobs"`
+	WorkerAttempts         []WorkerAttempt        `json:"worker_attempts"`
 	CompositionConflicts   []CompositionConflict  `json:"composition_conflicts"`
 	ProjectKnowledge       []ProjectKnowledge     `json:"project_knowledge"`
 	LocalCheckouts         []LocalCheckout        `json:"local_checkouts"`
@@ -256,7 +264,7 @@ type State struct {
 }
 
 func EmptyState() State {
-	return State{RuntimeSnapshots: []RuntimeSnapshot{}, ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{RegistryInventories: []RegistryInventory{}, ArtifactPins: []ArtifactPin{}, WorkerJobs: []WorkerJob{}, WorkerAttempts: []WorkerAttempt{}, RuntimeSnapshots: []RuntimeSnapshot{}, ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {
@@ -272,4 +280,4 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-var Actions = []string{"refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}
+var Actions = []string{"request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration", "capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "reserve_candidate_dev", "release_candidate_dev", "refresh_registry_inventory", "pin_artifact", "release_artifact_pin", "cancel_native_delivery", "queue_worker_publication", "reconcile_worker_publication", "queue_worker_job", "cancel_worker_job", "reconcile_worker_job", "refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}

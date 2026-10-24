@@ -15,13 +15,21 @@ import (
 )
 
 func gitopsPath(r delivery.GitOpsRequest) error {
+	if !validSourceBranch(r.Ref) {
+		return errors.New("invalid GitOps branch")
+	}
 	if e := gitopsReadPath(r); e != nil {
 		return e
 	}
-	_, e := registryRepository(r.ImageRepository)
+	_, e := gitopsImageRepository(r.ImageRepository)
 	return e
 }
 func gitopsReadPath(r delivery.GitOpsRequest) error {
+	for _, ch := range r.Path {
+		if ch < 0x20 || ch == 0x7f {
+			return errors.New("invalid GitOps path")
+		}
+	}
 	if r.Path == "" || path.IsAbs(r.Path) || path.Clean(r.Path) != r.Path || r.Path == ".." || strings.HasPrefix(r.Path, "../") || strings.Contains(r.Path, "\\") || r.Ref == "" {
 		return errors.New("GitOps requires branch and clean repository-relative file path")
 	}
@@ -97,9 +105,27 @@ func documentImageFields(doc *yaml.Node, request delivery.GitOpsRequest) (*yaml.
 	return repo, digest, nil
 }
 func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest) (delivery.GitOpsSnapshot, error) {
+	return p.readGitOps(ctx, c, r, "")
+}
+
+var _ delivery.GitOpsCommitReader = (*Provider)(nil)
+
+func (p *Provider) ReadGitOpsAtCommit(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest, commitSHA string) (delivery.GitOpsSnapshot, error) {
+	if !fullSHA.MatchString(commitSHA) || (r.ExpectedHeadSHA != "" && r.ExpectedHeadSHA != commitSHA) {
+		return delivery.GitOpsSnapshot{}, errors.New("exact GitOps commit required")
+	}
+	return p.readGitOps(delivery.WithCachedAuthentication(ctx), c, r, commitSHA)
+}
+
+func (p *Provider) readGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsRequest, commitSHA string) (delivery.GitOpsSnapshot, error) {
 	var out delivery.GitOpsSnapshot
 	if e := gitopsReadPath(r); e != nil {
 		return out, e
+	}
+	if r.ImageRepository != "" {
+		if _, err := gitopsImageRepository(r.ImageRepository); err != nil {
+			return out, err
+		}
 	}
 	repo, e := p.repository(ctx, c, r.Repository)
 	if e != nil {
@@ -110,8 +136,21 @@ func (p *Provider) ReadGitOps(ctx context.Context, c delivery.Connection, r deli
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	if e = p.request(ctx, c, "GET", "/repos/"+repo+"/git/ref/heads/"+url.PathEscape(r.Ref), nil, &ref); e != nil {
-		return out, e
+	if commitSHA == "" {
+		if e = p.request(ctx, c, "GET", "/repos/"+repo+"/git/ref/heads/"+url.PathEscape(r.Ref), nil, &ref); e != nil {
+			return out, e
+		}
+	} else {
+		var commit struct {
+			SHA string `json:"sha"`
+		}
+		if e = p.request(ctx, c, "GET", "/repos/"+repo+"/git/commits/"+commitSHA, nil, &commit); e != nil {
+			return out, e
+		}
+		if commit.SHA != commitSHA {
+			return out, ErrConflict
+		}
+		ref.Object.SHA = commit.SHA
 	}
 	if !fullSHA.MatchString(ref.Object.SHA) {
 		return out, errors.New("invalid GitOps branch head")
@@ -170,8 +209,7 @@ func (p *Provider) ApplyGitOps(ctx context.Context, c delivery.Connection, r del
 		return out, e
 	}
 	image, digest := docs[0].image, docs[0].digest
-	desiredRepo, _ := registryRepository(request.ImageRepository)
-	desiredRepo = "ghcr.io/" + desiredRepo
+	desiredRepo, _ := gitopsImageRepository(request.ImageRepository)
 	if image.Value == desiredRepo && digestValue(digest.Value, request) == r.Digest {
 		return delivery.GitOpsResult{CommitSHA: snapshot.HeadSHA, BlobSHA: snapshot.BlobSHA, AlreadyApplied: true}, nil
 	}

@@ -206,7 +206,7 @@ func (p *Provider) do(ctx context.Context, method, target, auth string, input an
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, e := p.client.Do(req)
+	res, e := p.guardedClient(ctx).Do(req)
 	if e != nil {
 		return nil, nil, 0, errors.New("provider request failed or timed out")
 	}
@@ -230,6 +230,9 @@ func (p *Provider) token(ctx context.Context, c delivery.Connection) (string, er
 	defer p.mu.Unlock()
 	if t := p.tokens[key]; t.value != "" && t.expires.After(p.now().Add(time.Minute)) {
 		return t.value, nil
+	}
+	if delivery.CachedAuthenticationOnly(ctx) {
+		return "", errors.New("existing unexpired connection session required; authentication refresh forbidden")
 	}
 	signed, e := jwt(c, p.now())
 	if e != nil {

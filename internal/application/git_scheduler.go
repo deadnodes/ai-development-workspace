@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"releasecontrol/internal/domain"
 	"strings"
 	"time"
@@ -200,11 +201,18 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 		return err
 	}
 	for _, env := range st.Environments {
+		if reservationFree(&st, env.ID) != nil {
+			continue
+		}
 		if env.DesiredCompositionID == "" {
 			continue
 		}
 		composition := compositionByID(&st, env.DesiredCompositionID)
-		if composition == nil || composition.ProductID != env.ProductID {
+		if composition == nil || !composition.AutoRefresh || composition.ProductID != env.ProductID {
+			continue
+		}
+		parent := operationByID(&st, env.DesiredOperationID)
+		if parent == nil || parent.Kind != "COMPOSE" || !sourceRetentionRefreshAllowed(&st, *parent) {
 			continue
 		}
 		compositionTarget := false
@@ -257,11 +265,15 @@ func (s *Service) ScheduleCompositionRefresh(ctx context.Context, now time.Time,
 		if pending {
 			continue
 		}
-		_, err := s.Execute(ctx, domain.Command{Action: "assemble_environment", Actor: autoComposeActor, ProductID: env.ProductID, Data: map[string]any{
-			"environment_id":  env.ID,
-			"name":            composition.Name + " (refresh)",
-			"integration_ids": selected,
-		}})
+		_, err := s.executeCommand(ctx, domain.Command{Action: "assemble_environment", Actor: autoComposeActor, ProductID: env.ProductID, Data: map[string]any{
+			"environment_id":     env.ID,
+			"name":               composition.Name + " (refresh)",
+			"integration_ids":    selected,
+			"expected_selection": selectionToken(env),
+		}}, &composeRefreshOrigin{Selection: selectionToken(env), ParentID: parent.ID})
+		if errors.Is(err, ErrSelectionChanged) {
+			return nil
+		}
 		return err
 	}
 	return nil

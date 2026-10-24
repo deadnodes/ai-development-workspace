@@ -13,8 +13,17 @@ import (
 )
 
 func flowGuard(st *domain.State, op domain.ExternalOperation) error {
+	if err := reservationOperationAllowed(st, op); err != nil {
+		return err
+	}
+	if op.MainCandidate != nil {
+		return mainCandidateGuard(st, &op)
+	}
 	if op.CompositionSnapshot == nil {
 		return invalid("missing composition snapshot")
+	}
+	if err := validateFlowConflictResolutions(st, op); err != nil {
+		return err
 	}
 	if op.Kind != "RELEASE_CANDIDATE" {
 		env := environmentByID(st, op.EnvironmentID)
@@ -56,6 +65,10 @@ func flowGuard(st *domain.State, op domain.ExternalOperation) error {
 			return invalid("provider connection changed; create a new operation")
 		}
 	}
+	if e := nativeReleaseDenied(st, op); e != nil {
+		return e
+	}
+
 	if op.Kind == "RELEASE_CANDIDATE" || op.Kind == "RELEASE_PROMOTION" {
 		if err := releaseWorkReady(st, *op.CompositionSnapshot); err != nil {
 			return err
@@ -68,15 +81,35 @@ func flowGuard(st *domain.State, op domain.ExternalOperation) error {
 }
 
 func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, token string) error {
+	op = cloneFlowOperation(op)
 	st, err := s.State(ctx)
 	if err != nil {
 		return err
 	}
-	if err = flowGuard(&st, op); err != nil {
+	if err = s.flowGuard(&st, op); err != nil {
 		return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+	}
+	if op.Kind == "COMPOSE" {
+		if err := validSourceRetention(op); err != nil {
+			return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+		}
+	}
+	if op.MainCandidate != nil {
+		if err := s.observeMainCandidate(ctx, &op, false); err != nil {
+			return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+		}
 	}
 	switch op.Phase {
 	case "COMPOSE_SOURCE":
+		if op.Kind == "COMPOSE" {
+			pending, err := s.retainFlowSources(ctx, op, token)
+			if pending {
+				return err
+			}
+			if err != nil {
+				return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+			}
+		}
 		provider, ok := s.provider.(delivery.SourceProvider)
 		if !ok {
 			return s.finish(ctx, op, token, "BLOCKED", "source provider does not support composition", nil)
@@ -84,18 +117,58 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 		for i := range op.Sources {
 			source := &op.Sources[i]
 			if source.Result != nil {
+				if op.Kind == "COMPOSE" {
+					if err := s.verifyRetainedSource(ctx, op, *source); err != nil {
+						return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+					}
+				}
 				continue
 			}
 			if e := validateFlowSource(ctx, s.provider, op, *source); e != nil {
 				return s.finish(ctx, op, token, "BLOCKED", e.Error(), nil)
 			}
-			result, e := provider.ComposeSource(ctx, source.Connection, source.Plan)
+			if op.Kind == "COMPOSE" {
+				if err := s.checkRetentionLease(ctx, op, token); err != nil {
+					return err
+				}
+			}
+			recovering, e := s.reservationMutationRecovery(ctx, op, token)
+			if e != nil {
+				return e
+			}
+			var result delivery.SourceResult
+			if recovering {
+				observer, ok := s.provider.(delivery.ScopedGitObserver)
+				if !ok {
+					return invalid("source read-only recovery unavailable")
+				}
+				observed, err := observer.ObserveBranch(ctx, source.Connection, source.Plan.Repository, source.Plan.TargetBranch)
+				if err != nil || observed.Name != source.Plan.TargetBranch || !fullSHA.MatchString(observed.SHA) {
+					return invalid("source composition outcome unresolved; no write repeated")
+				}
+				result = delivery.SourceResult{Branch: observed.Name, SHA: observed.SHA}
+				verifier, ok := s.provider.(delivery.ComposedSourceVerifier)
+				if !ok {
+					return invalid("source read-only verifier unavailable")
+				}
+				if err = verifier.VerifyComposedSource(ctx, source.Connection, source.Plan, result); err != nil {
+					return err
+				}
+			} else {
+				if e = s.beginReservationMutation(ctx, op, token, "SOURCE"); e != nil {
+					return e
+				}
+				result, e = provider.ComposeSource(ctx, source.Connection, source.Plan)
+			}
 			if e != nil {
 				return s.finish(ctx, op, token, "FAILED", "source composition failed: "+e.Error(), nil)
 			}
-			source.Result = &result
 			evidence := map[string]string{"repository_id": source.RepositoryID, "branch": result.Branch, "source_sha": result.SHA}
 			if result.Conflict {
+				if op.Kind == "COMPOSE" {
+					return s.admitSourceConflict(ctx, op, i, result, token, evidence)
+				}
+				source.Result = &result
 				if err := s.saveCompositionConflict(ctx, op, *source, token); err != nil {
 					return err
 				}
@@ -104,6 +177,15 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 			if !fullSHA.MatchString(result.SHA) || result.Branch != source.Plan.TargetBranch {
 				return s.finish(ctx, op, token, "BLOCKED", "provider returned invalid composition identity", evidence)
 			}
+			if op.Kind == "COMPOSE" {
+				after := cloneFlowOperation(op)
+				after.Sources[i].Result = &result
+				if err := s.verifyRetainedSource(ctx, after, after.Sources[i]); err != nil {
+					return s.finish(ctx, op, token, "BLOCKED", err.Error(), evidence)
+				}
+				return s.admitSourceProgress(ctx, op, after, token, "COMPOSE_SOURCE", "COMPOSING", "retained generated source verified", evidence)
+			}
+			source.Result = &result
 			return s.advance(ctx, op, token, "COMPOSE_SOURCE", "COMPOSING", "source composition recorded", evidence)
 		}
 		phase := "QUEUE_BUILDS"
@@ -123,6 +205,9 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 			}
 			if source.Result == nil {
 				return s.finish(ctx, op, token, "FAILED", "missing selected source result", nil)
+			}
+			if e := s.beginReservationMutation(ctx, op, token, "SOURCE"); e != nil {
+				return e
 			}
 			result, e := provider.AdvanceMain(ctx, source.Connection, source.Plan.Repository, source.Plan.BaseRef, source.Plan.BaseSHA, source.Result.SHA)
 			if e != nil {
@@ -192,13 +277,45 @@ func cloneDeliverySnapshot(v domain.DeliverySnapshot) domain.DeliverySnapshot {
 	return out
 }
 func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOperation, token string) error {
+	if op.MainCandidate != nil {
+		if err := s.observeMainCandidate(ctx, &op, false); err != nil {
+			return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+		}
+	}
+	if op.Kind == "COMPOSE" {
+		if err := s.checkRetentionLease(ctx, op, token); err != nil {
+			return err
+		}
+		for _, source := range op.Sources {
+			if err := s.verifyRetainedSource(ctx, op, source); err != nil {
+				return s.finish(ctx, op, token, "BLOCKED", err.Error(), nil)
+			}
+		}
+	}
+	verifiedAt := time.Now().UTC()
 	return s.store.Update(ctx, func(st *domain.State) error {
 		parent := operationByID(st, op.ID)
 		if parent == nil || parent.LeaseOwner != token {
 			return invalid("operation lease lost")
 		}
-		if err := flowGuard(st, *parent); err != nil {
+		if err := s.flowGuard(st, *parent); err != nil {
 			return err
+		}
+		if op.Kind == "COMPOSE" {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.retentionLease(st, op, token); err != nil {
+				return err
+			}
+		}
+		if op.MainCandidate != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !parent.LeaseUntil.After(time.Now().UTC()) || nativeParentHash(parent) != nativeParentHash(&op) {
+				return invalid("main candidate lease or frozen source changed")
+			}
 		}
 		if len(parent.ChildIDs) > 0 {
 			return invalid("component operations already queued")
@@ -237,13 +354,20 @@ func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOpera
 						source = &op.Sources[i]
 					}
 				}
+				if op.MainCandidate != nil {
+					for _, pinned := range op.MainCandidate.Sources {
+						if pinned.RepositoryID == snap.Application.RepositoryID {
+							source = &domain.FlowSource{RepositoryID: pinned.RepositoryID, Plan: delivery.SourcePlan{BaseSHA: pinned.MainSHA, BaseRef: pinned.MainRef}, Result: &delivery.SourceResult{SHA: pinned.MainSHA, Branch: pinned.MainRef}}
+						}
+					}
+				}
 				if source == nil || source.Result == nil || !fullSHA.MatchString(source.Result.SHA) {
 					return invalid("component composed source missing")
 				}
 				cm := domain.Meta{ID: id(), ProductID: op.ProductID, Actor: op.RequestedBy, CreatedAt: now, UpdatedAt: now}
 				branch := source.Result.Branch
 				if op.Kind == "RELEASE_CANDIDATE" {
-					if !source.MainAdvanced {
+					if !source.MainAdvanced && op.MainCandidate == nil {
 						return invalid("main not advanced")
 					}
 					branch = source.Plan.BaseRef
@@ -260,11 +384,32 @@ func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOpera
 				snap.BuildRequest.Inputs["image_tag"] = snap.BuildRequest.ImageTag
 				snap.BuildRequest.Inputs["operation_id"] = cm.ID
 				snap.BuildRequest.Inputs["image_repository"] = snap.Build.ImageRepository
-				children = append(children, domain.ExternalOperation{Meta: cm, ParentID: op.ID, Kind: "DEPLOY", Status: "PENDING", Phase: "PREFLIGHT", CurrentStep: "PREFLIGHT", EnvironmentID: op.EnvironmentID, ApplicationID: snap.Application.ID, Snapshot: &snap, BuildOnly: op.Kind == "RELEASE_CANDIDATE", RequestedBy: op.RequestedBy, NextAttemptAt: now})
+				var native *domain.NativeDelivery
+				if snap.Build.Mode == "NATIVE" {
+					if err := s.validateFrozenNative(op.ProductID, snap, op.CreatedAt); err != nil {
+						return err
+					}
+					frozen := *snap.Native
+					frozen.ParentHash = nativeParentHash(parent)
+					native = &frozen
+				}
+				phase := "PREFLIGHT"
+				if op.MainCandidate != nil {
+					phase = "NATIVE_BUILD"
+				}
+				children = append(children, domain.ExternalOperation{Native: native, Meta: cm, ParentID: op.ID, Kind: "DEPLOY", Status: "PENDING", Phase: phase, CurrentStep: phase, EnvironmentID: op.EnvironmentID, ApplicationID: snap.Application.ID, Snapshot: &snap, BuildOnly: op.Kind == "RELEASE_CANDIDATE", RequestedBy: op.RequestedBy, NextAttemptAt: now})
 			}
 		}
 		if len(children) == 0 {
 			return invalid("no child operations prepared")
+		}
+		if op.Kind == "COMPOSE" {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !parent.LeaseUntil.After(time.Now().UTC()) {
+				return invalid("composition lease expired before child admission")
+			}
 		}
 		parent.ChildIDs = []string{}
 		for _, child := range children {
@@ -278,7 +423,15 @@ func (s *Service) queueFlowChildren(ctx context.Context, op domain.ExternalOpera
 		parent.NextAttemptAt = now.Add(2 * time.Second)
 		parent.LeaseOwner = ""
 		parent.LeaseUntil = time.Time{}
-		st.OperationSteps = append(st.OperationSteps, domain.OperationStep{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, Phase: "QUEUE_COMPONENTS", Status: "SUCCEEDED", Detail: fmt.Sprintf("queued %d component operations", len(children))})
+		var evidence map[string]string
+		if op.Kind == "COMPOSE" {
+			payload, _ := json.Marshal(op.Sources)
+			evidence = map[string]string{"source_snapshot_hash": backupHash(payload), "observed_at": verifiedAt.Format(time.RFC3339Nano)}
+		}
+		st.OperationSteps = append(st.OperationSteps, domain.OperationStep{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, OperationID: op.ID, Phase: "QUEUE_COMPONENTS", Status: "SUCCEEDED", Detail: fmt.Sprintf("queued %d component operations", len(children)), Evidence: evidence})
+		for i := range children {
+			children[i].ReservationEpoch = parent.ReservationEpoch
+		}
 		st.Operations = append(st.Operations, children...)
 		return nil
 	})
@@ -290,7 +443,7 @@ func (s *Service) finishFlowRelease(ctx context.Context, op domain.ExternalOpera
 		if parent == nil || parent.LeaseOwner != token {
 			return invalid("operation lease lost")
 		}
-		if err := flowGuard(st, *parent); err != nil {
+		if err := s.flowGuard(st, *parent); err != nil {
 			return err
 		}
 		now := time.Now().UTC()

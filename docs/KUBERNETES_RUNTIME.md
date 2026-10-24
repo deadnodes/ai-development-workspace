@@ -68,6 +68,13 @@ Optionally supply `application_id` to limit the observation to one component. Re
 
 Matching mutable tags alone cannot establish image-byte identity. Missing data stays UNKNOWN; failed/partial API reads preserve errors and do not reuse old health as current. Digest comparisons are conservative about multi-platform image indexes versus per-platform runtime digests. Snapshots never authorize deployment or advance release readiness.
 
+For an applied reserved Dev candidate, the separate
+[`verify_candidate_dev_runtime`](DEV_RUNTIME_VERIFICATION.md) command uses
+operator-declared complete `verification_group` coverage and exact
+GitOps/Flux/image identity. Informational snapshots remain separate. A verified
+runtime is not functional acceptance, restoration, reservation release or
+production approval.
+
 Validation: `make check`, `node web/runtime-check.mjs`; normal tests use deterministic HTTPS fixtures and require no live Kubernetes credentials.
 
 ## Inside Kubernetes: Pod ServiceAccount

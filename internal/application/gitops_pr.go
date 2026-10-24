@@ -26,6 +26,13 @@ func (s *Service) proposeGitOpsPR(callCtx, ctx context.Context, op domain.Extern
 	return s.advance(ctx, op, token, "WAIT_GITOPS_PR", "GITOPS_PENDING", "GitOps pull request awaits external review and merge; no deployment yet", map[string]string{"pull_request": pr.URL, "head": pr.HeadSHA})
 }
 func (s *Service) waitGitOpsPR(callCtx, ctx context.Context, op domain.ExternalOperation, token string) error {
+	state, readErr := s.store.Read(ctx)
+	if readErr != nil {
+		return readErr
+	}
+	if devActivationParent(&state, op) != nil {
+		return s.waitDevActivationGroup(callCtx, ctx, op, token)
+	}
 	p, ok := s.provider.(delivery.GitOpsPRProvider)
 	if !ok || op.GitOpsPR == nil || op.GitOpsBase == nil || op.Artifact == nil {
 		return s.finish(ctx, op, token, "FAILED", "missing GitOps PR evidence/provider", nil)

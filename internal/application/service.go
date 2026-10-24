@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 	"slices"
 	"strings"
 	"time"
@@ -23,13 +25,30 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
-	runtimeObservers []delivery.RuntimeSnapshotObserver
-	workspaceRoot    string
-	store            Store
-	provider         delivery.Provider
-	workerID         string
+	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
+	nativeAuthorityNow func() time.Time
+	// Restoration proposal deadline decisions only; read/proof/unlock clocks stay real.
+	restorationAuthorityNow func() time.Time
+	externalWorkers         *workerconfig.Authority
+	runtimeObservers        []delivery.RuntimeSnapshotObserver
+	workspaceRoot           string
+	store                   Store
+	provider                delivery.Provider
+	workerID                string
 }
 
+func (s *Service) nativeNow() time.Time {
+	if s.nativeAuthorityNow != nil {
+		return s.nativeAuthorityNow().UTC()
+	}
+	return time.Now().UTC()
+}
+func (s *Service) restorationWriteNow() time.Time {
+	if s.restorationAuthorityNow != nil {
+		return s.restorationAuthorityNow().UTC()
+	}
+	return time.Now().UTC()
+}
 func New(store Store) *Service { return &Service{store: store, workerID: id()} }
 func NewWithProvider(store Store, provider delivery.Provider) *Service {
 	s := New(store)
@@ -65,13 +84,60 @@ func decode(data map[string]any, v any) error {
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	c.Actor = attributedActor(ctx, c.Actor)
+	request := *s
+	request.store = commandAuthorizationStore{Store: s.store, command: c}
+	if _, authenticated := auth.FromContext(ctx); authenticated {
+		if _, err := request.store.Read(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return request.executeCommand(ctx, c, nil)
+}
+func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if restorationAction(c.Action) {
+		return s.executeDevRestoration(ctx, c)
+	}
+	if c.Action == "capture_candidate_dev_baseline" {
+		return s.executeDevBaseline(ctx, c)
+	}
+	if c.Action == "verify_candidate_dev_runtime" {
+		return s.executeDevRuntime(ctx, c)
+	}
+	if c.Action == "deploy_candidate_dev" {
+		return s.executeDevActivation(ctx, c)
+	}
+	if c.Action == "reserve_candidate_dev" || c.Action == "release_candidate_dev" {
+		return s.executeDevReservation(ctx, c)
+	}
+	if c.Action == "prepare_release_candidate" {
+		if _, present := c.Data["main_sources"]; present {
+			return s.executeMainCandidate(ctx, c)
+		}
+	}
+	if c.Action == "cancel_native_delivery" {
+		return s.cancelNativeDelivery(ctx, c)
+	}
+	if c.Action == "queue_worker_publication" || c.Action == "reconcile_worker_publication" {
+		return s.executeNativePublication(ctx, c)
+	}
+	if c.Action == "refresh_registry_inventory" {
+		return s.refreshRegistryInventory(ctx, c)
+	}
+	if c.Action == "queue_worker_job" || c.Action == "cancel_worker_job" || c.Action == "reconcile_worker_job" {
+		return s.executeWorkerCommand(ctx, c)
+	}
 	var result any
 	err := s.store.Update(ctx, func(st *domain.State) error {
-		if err := authorizeCommand(ctx, *st, c); err != nil {
-			return err
+		if c.Action == "configure_component" && c.Data["mode"] == "NATIVE" {
+			component, _ := c.Data["application_id"].(string)
+			profile, _ := c.Data["profile"].(string)
+			image, _ := c.Data["image_repository"].(string)
+			if !s.externalWorkers.AllowsNativeComponent(c.ProductID, component, profile, image) {
+				return invalid("native component requires exact operator publication configuration")
+			}
 		}
 		var err error
-		result, err = apply(st, c)
+		result, err = applyAuthorizedOrigin(st, c, s.externalWorkers, origin)
 		return err
 	})
 	return result, err
@@ -349,14 +415,18 @@ func validateIntegration(st *domain.State, in domain.Integration) error {
 	}
 	return nil
 }
-func apply(st *domain.State, c domain.Command) (any, error) {
+func apply(st *domain.State, c domain.Command) (any, error) { return applyAuthorized(st, c, nil) }
+func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig.Authority) (any, error) {
+	return applyAuthorizedOrigin(st, c, authority, nil)
+}
+func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *workerconfig.Authority, origin *composeRefreshOrigin) (any, error) {
 	if strings.TrimSpace(c.Actor) == "" {
 		return nil, invalid("actor required")
 	}
 	if !slices.Contains(domain.Actions, c.Action) {
 		return nil, invalid("unknown action")
 	}
-	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id"} {
+	for _, key := range []string{"id", "product_id", "feature_id", "integration_id", "gate_id", "check_id", "result_id", "actor", "created_at", "updated_at", "resolution", "fix_commit", "desired_composition_id", "desired_operation_id", "selection_generation", "reservation_epoch", "dev_reservation", "reservation_quarantined", "reservation_mutation_intent"} {
 		if _, exists := c.Data[key]; exists {
 			return nil, invalid("field %s cannot be supplied in data", key)
 		}
@@ -372,6 +442,10 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	if _, ok := c.Data["result"]; ok && !slices.Contains([]string{"record_check_result", "record_scenario_run"}, c.Action) {
 		return nil, invalid("result is server-managed for %s", c.Action)
 	}
+	if err := reservationCommandAllowed(st, c); err != nil {
+		return nil, err
+	}
+	operationCount := len(st.Operations)
 	m := meta(c)
 	var out any
 	if c.IntegrationID != "" {
@@ -396,7 +470,29 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	}
 	m.ProductID = c.ProductID
 	m.FeatureID = c.FeatureID
-	if c.ID != "" && !slices.Contains([]string{"update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action) {
+	if c.Action == "update_environment_feature" {
+		if op, err := replayFeatureUpdate(st, c); err != nil {
+			return nil, err
+		} else if op != nil {
+			return *op, nil
+		}
+	}
+	// A caller may supply both the durable intent key and a stable creation ID.
+	// Only that exact scoped DEPLOY reaches the ordinary typed replay/hash check;
+	// all other collisions retain the global entity-ID protection below.
+	sameDeliveryRetry := false
+	if c.ID != "" && (c.Action == "deploy_integration" || c.Action == "deploy_existing_artifact") {
+		key, _ := c.Data["request_key"].(string)
+		if workerRequestKey.MatchString(key) {
+			for _, op := range st.Operations {
+				if op.ID == c.ID && op.Kind == "DEPLOY" && op.ProductID == c.ProductID && op.IntegrationID == c.IntegrationID && op.RequestKey == key {
+					sameDeliveryRetry = true
+					break
+				}
+			}
+		}
+	}
+	if c.ID != "" && !sameDeliveryRetry && !slices.Contains([]string{"release_artifact_pin", "update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action) {
 		b, _ := json.Marshal(st)
 		var arrays map[string][]map[string]any
 		_ = json.Unmarshal(b, &arrays)
@@ -409,6 +505,16 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	}
 	switch c.Action {
+	case "pin_artifact", "release_artifact_pin":
+		var changed bool
+		var err error
+		out, m, changed, err = applyArtifactPin(st, c, m)
+		if err != nil {
+			return nil, err
+		}
+		if !changed {
+			return out, nil
+		}
 	case "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution":
 		var err error
 		out, m, err = applyCompositionConflict(st, c, m)
@@ -483,9 +589,9 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-	case "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
+	case "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation":
 		var err error
-		out, m, err = applyFlow(st, c, m)
+		out, m, err = applyFlow(st, c, m, authority, origin)
 		if err != nil {
 			return nil, err
 		}
@@ -497,7 +603,7 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 		}
 	case "refresh_environment_runtime", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact":
 		var err error
-		out, m, err = applyExternal(st, c, m)
+		out, m, err = applyExternal(st, c, m, authority)
 		if err != nil {
 			return nil, err
 		}
@@ -906,6 +1012,9 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 			if e := selectionAllowed(st, old.ID); e != nil {
 				return nil, e
 			}
+			if e := advanceSelection(&v); e != nil {
+				return nil, e
+			}
 			v.DesiredCompositionID = ""
 			v.DesiredOperationID = ""
 		}
@@ -1027,7 +1136,20 @@ func apply(st *domain.State, c domain.Command) (any, error) {
 	if c.Action == "create_feature" || c.Action == "update_feature" {
 		m.FeatureID = m.ID
 	}
-	st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: time.Now().UTC(), EntityID: m.ID, ProductID: m.ProductID, FeatureID: m.FeatureID, Data: c})
+	for i := operationCount; i < len(st.Operations); i++ {
+		op := &st.Operations[i]
+		if e := environmentByID(st, op.EnvironmentID); e != nil {
+			op.ReservationEpoch = e.ReservationEpoch
+		}
+		if returned, ok := out.(domain.ExternalOperation); ok && returned.ID == op.ID {
+			out = *op
+		}
+	}
+	eventAt := time.Now().UTC()
+	if c.Action == "release_artifact_pin" {
+		eventAt = m.UpdatedAt
+	}
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: eventAt, EntityID: m.ID, ProductID: m.ProductID, FeatureID: m.FeatureID, Data: c})
 	derive(st)
 	return out, nil
 }

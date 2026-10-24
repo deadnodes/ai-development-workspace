@@ -8,6 +8,12 @@ import (
 )
 
 func flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if devActivationParent(st, op) != nil {
+		return devActivationGuard(st, op)
+	}
+	if err := reservationOperationAllowed(st, op); err != nil {
+		return err
+	}
 	if op.ParentID == "" {
 		return nil
 	}
@@ -41,12 +47,27 @@ func flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
 	return nil
 }
 
+// A native component makes its request-time authority a fence for the whole
+// composition, including GitHub siblings that might be scheduled first.
+func (s *Service) flowChildAllowed(st *domain.State, op domain.ExternalOperation) error {
+	if devActivationParent(st, op) != nil {
+		return s.devActivationAllowed(st, op)
+	}
+	if err := flowChildAllowed(st, op); err != nil {
+		return err
+	}
+	if parent := operationByID(st, op.ParentID); parent != nil {
+		return s.flowGuard(st, *parent)
+	}
+	return nil
+}
+
 func (s *Service) verifyPromotionSource(ctx context.Context, op domain.ExternalOperation) error {
 	st, err := s.State(ctx)
 	if err != nil {
 		return err
 	}
-	if err = flowChildAllowed(&st, op); err != nil {
+	if err = s.flowChildAllowed(&st, op); err != nil {
 		return err
 	}
 	parent := operationByID(&st, op.ParentID)
@@ -69,6 +90,9 @@ func (s *Service) verifyPromotionSource(ctx context.Context, op domain.ExternalO
 // While an external GitOps write is in flight, selection waits for its bounded
 // worker lease. This avoids accepting a new intent between CAS intent and POST.
 func selectionAllowed(st *domain.State, environmentID string) error {
+	if err := reservationFree(st, environmentID); err != nil {
+		return err
+	}
 	for _, op := range st.Operations {
 		if op.EnvironmentID == environmentID && op.Phase == "APPLY_UNCERTAIN" && op.LeaseUntil.After(time.Now().UTC()) && !terminalOperation(op.Status) {
 			return invalid("GitOps write in flight; retry composition selection after operation step completes")

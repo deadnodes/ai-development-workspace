@@ -3,7 +3,9 @@ package application
 import (
 	"encoding/json"
 	"releasecontrol/internal/domain"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRetentionPolicyValidationAndWarnings(t *testing.T) {
@@ -18,14 +20,42 @@ func TestRetentionPolicyValidationAndWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.DeliveryArtifacts = []domain.DeliveryArtifact{{Meta: domain.Meta{ID: "missing", ProductID: "p"}, ApplicationID: "a", Digest: "sha256:x", Availability: "MISSING"}}
-	items := retentionAttention(st, "p")
-	if len(items) != 1 || items[0]["reason"] != "RETENTION_ARTIFACT_MISSING" {
+	now := time.Now().UTC()
+	st.DeliveryArtifacts = []domain.DeliveryArtifact{{Meta: domain.Meta{ID: "missing", ProductID: "p"}, ApplicationID: "a", ImageRepository: "registry.example/image", Digest: "sha256:" + strings.Repeat("a", 64), Availability: "MISSING", ObservedAt: now}}
+	items := retentionAttentionAt(st, "p", now)
+	found := false
+	report := domain.EvaluateRetention(st, "p", now, nil)
+	for _, item := range items {
+		if item["input_hash"] != report.InputHash {
+			t.Fatal("attention used different report")
+		}
+		if item["reason"] == "RETENTION_ARTIFACT_MISSING" {
+			found = true
+		}
+	}
+	if !found {
 		t.Fatal(items)
 	}
-	st.DeliveryArtifacts[0].Availability = "PRESENT"
-	if len(retentionAttention(st, "p")) != 0 {
-		t.Fatal("present artifact warning")
+	if report.DeletionAllowed || len(report.Blockers) == 0 {
+		t.Fatal("inventory granted deletion")
+	}
+}
+
+func TestRetentionAttentionHasNoPhantomWarningsWithoutImageEvidence(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	for _, withComponent := range []bool{false, true} {
+		st := domain.EmptyState()
+		st.Products = []domain.Product{{Meta: domain.Meta{ID: "p"}}}
+		if withComponent {
+			st.Applications = []domain.Application{{Meta: domain.Meta{ID: "a", ProductID: "p"}, Retention: &domain.ArtifactRetention{KeepLast: 3}}}
+		}
+		report := domain.EvaluateRetention(st, "p", now, nil)
+		if report.DeletionAllowed || len(report.Blockers) == 0 || report.InputHash == "" {
+			t.Fatal("report lost mandatory deletion blockers or evidence hash")
+		}
+		if warnings := retentionAttentionAt(st, "p", now); len(warnings) != 0 {
+			t.Fatalf("no recorded image needs attention: %+v", warnings)
+		}
 	}
 }
 

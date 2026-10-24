@@ -28,11 +28,17 @@ func (p *Provider) ObservePullRequest(ctx context.Context, c delivery.Connection
 		CreatedAt time.Time `json:"created_at"`
 		MergedAt  time.Time `json:"merged_at"`
 		Head      struct {
-			Ref string `json:"ref"`
-			SHA string `json:"sha"`
+			Ref  string `json:"ref"`
+			SHA  string `json:"sha"`
+			Repo struct {
+				ID int64 `json:"id"`
+			} `json:"repo"`
 		} `json:"head"`
 		Base struct {
-			Ref string `json:"ref"`
+			Ref  string `json:"ref"`
+			Repo struct {
+				ID int64 `json:"id"`
+			} `json:"repo"`
 		} `json:"base"`
 	}
 	if err = p.request(ctx, c, "GET", fmt.Sprintf("/repos/%s/pulls/%d", repo, number), nil, &pr); err != nil {
@@ -53,5 +59,5 @@ func (p *Provider) ObservePullRequest(ctx context.Context, c delivery.Connection
 	if state != "DRAFT" && state != "OPEN" && state != "CLOSED" && state != "MERGED" {
 		return out, fmt.Errorf("unknown pull request state")
 	}
-	return delivery.PullRequestObservation{Number: pr.Number, URL: pr.URL, Title: pr.Title, State: state, Head: pr.Head.Ref, Base: pr.Base.Ref, HeadSHA: pr.Head.SHA, MergeSHA: pr.MergeSHA, CreatedAt: pr.CreatedAt, MergedAt: pr.MergedAt}, nil
+	return delivery.PullRequestObservation{Number: pr.Number, BaseRepositoryID: pr.Base.Repo.ID, HeadRepositoryID: pr.Head.Repo.ID, URL: pr.URL, Title: pr.Title, State: state, Head: pr.Head.Ref, Base: pr.Base.Ref, HeadSHA: pr.Head.SHA, MergeSHA: pr.MergeSHA, CreatedAt: pr.CreatedAt, MergedAt: pr.MergedAt}, nil
 }

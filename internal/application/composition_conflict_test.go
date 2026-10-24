@@ -1,7 +1,6 @@
 package application
 
 import (
-	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"strings"
 	"testing"
@@ -10,7 +9,9 @@ import (
 func TestConflictClaimAndExactTwoSidedVerification(t *testing.T) {
 	st := domain.EmptyState()
 	st.Products = append(st.Products, domain.Product{Meta: domain.Meta{ID: "p"}})
-	st.CompositionConflicts = append(st.CompositionConflicts, domain.CompositionConflict{Meta: domain.Meta{ID: "conflict", ProductID: "p"}, Status: "requires_resolution", Integrations: []domain.Integration{{Meta: domain.Meta{ID: "ia", FeatureID: "a"}}, {Meta: domain.Meta{ID: "ib", FeatureID: "b"}}}})
+	st.Features = []domain.Feature{{Meta: domain.Meta{ID: "a", ProductID: "p"}}, {Meta: domain.Meta{ID: "b", ProductID: "p"}}}
+	st.Integrations = []domain.Integration{{Meta: domain.Meta{ID: "ia", ProductID: "p", FeatureID: "a"}}, {Meta: domain.Meta{ID: "ib", ProductID: "p", FeatureID: "b"}}}
+	st.CompositionConflicts = append(st.CompositionConflicts, domain.CompositionConflict{Meta: domain.Meta{ID: "conflict", ProductID: "p"}, Status: "requires_resolution", Integrations: append([]domain.Integration{}, st.Integrations...)})
 	run := func(action, actor string, data map[string]any) error {
 		data["conflict_id"] = "conflict"
 		_, e := apply(&st, domain.Command{Action: action, Actor: actor, ProductID: "p", Data: data})
@@ -29,8 +30,8 @@ func TestConflictClaimAndExactTwoSidedVerification(t *testing.T) {
 	if err := run("record_conflict_resolution", "agent/a", map[string]any{"commit": sha, "rationale": "both contracts preserved"}); err != nil {
 		t.Fatal(err)
 	}
-	st.Gates = []domain.Gate{{Meta: domain.Meta{ID: "ga", ProductID: "p"}, IntegrationIDs: []string{"ia"}, Blocking: true}, {Meta: domain.Meta{ID: "gb", ProductID: "p"}, IntegrationIDs: []string{"ib"}, Blocking: true}}
-	st.Checks = []domain.Check{{Meta: domain.Meta{ID: "ca", ProductID: "p"}, GateID: "ga"}, {Meta: domain.Meta{ID: "cb", ProductID: "p"}, GateID: "gb"}}
+	st.Gates = []domain.Gate{{Meta: domain.Meta{ID: "ga", ProductID: "p", FeatureID: "a"}, IntegrationIDs: []string{"ia"}, Blocking: true}, {Meta: domain.Meta{ID: "gb", ProductID: "p", FeatureID: "b"}, IntegrationIDs: []string{"ib"}, Blocking: true}}
+	st.Checks = []domain.Check{{Meta: domain.Meta{ID: "ca", ProductID: "p", FeatureID: "a"}, GateID: "ga"}, {Meta: domain.Meta{ID: "cb", ProductID: "p", FeatureID: "b"}, GateID: "gb"}}
 	st.Results = []domain.CheckResult{{Meta: domain.Meta{ID: "r1", ProductID: "p", FeatureID: "a"}, CheckID: "ca", Result: "passed", Commit: sha}, {Meta: domain.Meta{ID: "r2", ProductID: "p", FeatureID: "b"}, CheckID: "cb", Result: "passed", Commit: strings.Repeat("b", 40)}}
 	if err := run("verify_conflict_resolution", "tester", map[string]any{"result_ids": []string{"r1"}}); err == nil {
 		t.Fatal("missing side verified")
@@ -82,19 +83,18 @@ func TestCompositionFailurePersistsSemanticConflict(t *testing.T) {
 }
 
 func TestResolutionCanOnlyRebuildExactPinnedComposition(t *testing.T) {
-	st := domain.EmptyState()
-	source := domain.FlowSource{RepositoryID: "repo", Plan: delivery.SourcePlan{BaseSHA: shaBase, HeadSHAs: []string{shaHead}}}
-	st.CompositionConflicts = []domain.CompositionConflict{{Meta: domain.Meta{ID: "c", ProductID: "p"}, RepositoryID: "repo", CompositionID: "composition", Source: source, Status: "resolved", ResolutionCommit: strings.Repeat("c", 40)}}
-	sources := []domain.FlowSource{source}
-	comp := domain.Composition{Meta: domain.Meta{ID: "composition", ProductID: "p"}}
-	if e := attachConflictResolutions(&st, comp, sources, []string{"c"}); e != nil {
+	st, original := resolvedConflictEvidenceFixture(t, false)
+	c := st.CompositionConflicts[0]
+	sources := append([]domain.FlowSource{}, operationByID(&st, original).Sources...)
+	comp := *operationByID(&st, original).CompositionSnapshot
+	if e := attachConflictResolutions(&st, comp, sources, []string{c.ID}); e != nil {
 		t.Fatal(e)
 	}
-	if sources[0].Plan.ResolutionConflictID != "c" || sources[0].Plan.ResolutionSHA != strings.Repeat("c", 40) {
+	if sources[0].Plan.ResolutionConflictID != c.ID || sources[0].Plan.ResolutionSHA != c.ResolutionCommit {
 		t.Fatal("missing resolution provenance")
 	}
 	sources[0].Plan.HeadSHAs = []string{strings.Repeat("d", 40)}
-	if e := attachConflictResolutions(&st, comp, sources, []string{"c"}); e == nil {
+	if e := attachConflictResolutions(&st, comp, sources, []string{c.ID}); e == nil {
 		t.Fatal("resolution reused for different work")
 	}
 }

@@ -13,21 +13,29 @@ func CommandSchema() map[string]any {
 	for _, k := range strings.Fields("action actor id product_id feature_id integration_id gate_id check_id result_id") {
 		props[k] = str()
 	}
-	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Optional attribution; defaults to agent. This is not authentication."}
+	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution; defaults to agent for legacy commands. Restoration requires explicit attribution. This is not authentication."}
 	data := map[string]any{}
-	for _, k := range strings.Fields("conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit version checksum uri build_url") {
+	for _, k := range strings.Fields("idempotency_key request_key recipe_id recipe_revision recipe_hash config_revision deadline outcome conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit source_sha version checksum uri build_url") {
 		data[k] = str()
 	}
-	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids") {
+	data["digest"] = str()
+	data["reservation_operation_id"] = str()
+	data["activation_operation_id"] = str()
+	data["restoration_operation_id"] = str()
+	data["restoration_verification_operation_id"] = str()
+	data["expected_plan_hash"] = str()
+	data["expected_selection"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"composition_id", "operation_id", "generation"}, "properties": map[string]any{"composition_id": str(), "operation_id": str(), "generation": map[string]any{"type": "integer", "minimum": 0}}}
+	data["idempotency_key"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
+	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids revision_ids") {
 		data[k] = map[string]any{"type": "array", "items": str()}
 	}
-	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "keep_current", "approve", "approve_main_update"} {
+	for _, k := range []string{"blocking", "blocks_release", "allow_deploy", "rebuild_missing", "healthy", "keep_current", "approve", "approve_main_update", "auto_refresh"} {
 		data[k] = map[string]any{"type": "boolean"}
 	}
-	for _, k := range []string{"app_id", "installation_id", "keep_last", "keep_previous"} {
+	for _, k := range []string{"app_id", "installation_id", "max_attempts", "keep_last", "keep_previous"} {
 		data[k] = map[string]any{"type": "integer"}
 	}
-	data["parameters"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Nonsecret component or environment configuration; values are context only, never executed."}
+	data["parameters"] = map[string]any{"type": "object", "additionalProperties": map[string]any{"anyOf": []any{str(), map[string]any{"type": "integer"}, map[string]any{"type": "boolean"}}}, "description": "Nonsecret typed parameters; worker recipes validate their exact approved schema."}
 	for _, k := range []string{"source_commits", "artifact_digests", "gitops_commits"} {
 		data[k] = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 	}
@@ -65,6 +73,11 @@ func CommandSchema() map[string]any {
 	for _, key := range []string{"application_id", "operation_id", "source_sha", "artifact_digest", "deployment_evidence"} {
 		scenarioComponent[key] = str()
 	}
+	data["main_sources"] = map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"application_id", "main_sha", "native", "revisions"}, "properties": map[string]any{
+		"application_id": str(), "main_sha": map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"},
+		"native":    map[string]any{"type": "object", "additionalProperties": false, "required": []string{"build_recipe_id", "publication_recipe_id", "parameters"}, "properties": map[string]any{"build_recipe_id": str(), "publication_recipe_id": str(), "parameters": data["parameters"]}},
+		"revisions": map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"revision_id", "pull_request_number", "verification_result_ids"}, "properties": map[string]any{"revision_id": str(), "pull_request_number": map[string]any{"type": "integer", "minimum": 1, "maximum": 2147483647}, "verification_result_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 100, "items": str()}}}},
+	}}}
 	data["components"] = map[string]any{"anyOf": []any{compositionComponents, map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": scenarioComponent, "additionalProperties": false, "required": []string{"application_id", "operation_id", "source_sha", "artifact_digest"}}}}}
 	data["observations"] = map[string]any{"anyOf": []any{str(), map[string]any{"type": "array", "items": str()}}}
 	data["role"] = map[string]any{"type": "string", "enum": domain.RepositoryRoles()}
@@ -72,7 +85,25 @@ func CommandSchema() map[string]any {
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"refresh_registry_inventory", "product_id", "application_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
+		{"pin_artifact", "product_id", "application_id image_repository digest purpose request_key"},
+		{"release_artifact_pin", "product_id id", "application_id"},
+		{"queue_worker_publication", "product_id", "build_job_id component_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
+		{"reconcile_worker_publication", "product_id id", ""},
+		{"queue_worker_job", "product_id integration_id", "request_key recipe_id recipe_revision recipe_hash config_revision revision_id source_sha deadline max_attempts parameters"},
+		{"cancel_worker_job", "product_id id", ""},
+		{"reconcile_worker_job", "product_id id", "outcome"},
+		{"update_environment_feature", "feature_id", "environment_id revision_ids idempotency_key expected_selection"},
 		{"assemble_environment", "product_id", "environment_id"},
+		{"request_candidate_dev_restoration", "product_id actor", "reservation_operation_id request_key expected_selection"},
+		{"confirm_candidate_dev_restoration", "product_id actor", "restoration_operation_id expected_plan_hash request_key expected_selection"},
+		{"verify_candidate_dev_restoration", "product_id actor", "restoration_operation_id request_key expected_selection"},
+		{"release_candidate_dev_after_restoration", "product_id actor", "restoration_operation_id restoration_verification_operation_id request_key expected_selection"},
+		{"reserve_candidate_dev", "product_id", "candidate_operation_id environment_id request_key expected_selection"},
+		{"deploy_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
+		{"verify_candidate_dev_runtime", "product_id", "activation_operation_id request_key expected_selection"},
+		{"capture_candidate_dev_baseline", "product_id", "reservation_operation_id request_key expected_selection"},
+		{"release_candidate_dev", "product_id", "reservation_operation_id request_key expected_selection"},
 		{"claim_composition_conflict", "product_id", "conflict_id"},
 		{"record_conflict_resolution", "product_id", "conflict_id commit rationale"},
 		{"verify_conflict_resolution", "product_id", "conflict_id result_ids"},
@@ -80,7 +111,7 @@ func CommandSchema() map[string]any {
 		{"protect_integration_revision", "integration_id", "application_id revision_id approve"},
 		{"delete_product", "product_id", "name"},
 		{"reconcile_composition", "id", ""},
-		{"prepare_release_candidate", "product_id", "name environment_id components approve_main_update"},
+		{"prepare_release_candidate", "product_id", "name environment_id"},
 		{"promote_release_candidate", "id", "approve"},
 		{"create_hotfix", "feature_id", "title objective"},
 		{"record_runtime_observation", "id", "gitops_commit artifact_digest healthy environment_id details"},
@@ -95,11 +126,12 @@ func CommandSchema() map[string]any {
 		{"configure_publication", "product_id", "application_id format registry_url package_name"},
 		{"record_package_artifact", "product_id", "application_id publication_target_id source_commit version checksum uri"},
 		{"configure_artifact_retention", "product_id", "application_id keep_last keep_current keep_previous"},
-		{"configure_component", "product_id", "application_id connection_id workflow image_repository"},
+		{"configure_component", "product_id", "application_id connection_id image_repository"},
 		{"configure_environment", "product_id", "environment_id purpose connection_id repository_id ref path image_field application_id allow_deploy"},
 		{"refresh_environment_runtime", "product_id", "environment_id"},
 		{"refresh_integration_git", "integration_id", ""}, {"refresh_repository_git", "product_id", "repository_id"},
 		{"deploy_integration", "integration_id", "environment_id"},
+		{"cancel_native_delivery", "product_id id", ""},
 		{"deploy_existing_artifact", "integration_id", "environment_id application_id revision_id artifact_id"},
 		{"create_product", "", "name"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},
 		{"create_integration", "feature_id", "title objective"}, {"update_integration", "integration_id", ""},
@@ -143,11 +175,28 @@ func CommandSchema() map[string]any {
 			default:
 				dataRule["properties"] = map[string]any{"status": false}
 			}
+			if name == "pin_artifact" {
+				dataRule["properties"].(map[string]any)["purpose"] = map[string]any{"type": "string", "enum": []string{"manual", "rollback"}}
+			}
 			if name == "record_check_result" {
 				dataRule["properties"].(map[string]any)["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["check_result"]}
 			}
 			if name == "record_scenario_run" {
 				dataRule["properties"].(map[string]any)["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
+			}
+			if restorationAction(name) {
+				exact := map[string]any{}
+				for _, field := range strings.Fields(a.required) {
+					exact[field] = data[field]
+				}
+				exact["request_key"] = map[string]any{"type": "string", "minLength": 16, "maxLength": 128}
+				dataRule = map[string]any{"type": "object", "properties": exact, "required": strings.Fields(a.required), "additionalProperties": false}
+				bp := branch["properties"].(map[string]any)
+				bp["actor"] = map[string]any{"type": "string", "minLength": 1, "pattern": `\S`}
+				bp["product_id"] = map[string]any{"type": "string", "minLength": 1, "pattern": `\S`}
+				for _, field := range []string{"id", "feature_id", "integration_id", "gate_id", "check_id", "result_id"} {
+					bp[field] = false
+				}
 			}
 			branch["properties"].(map[string]any)["data"] = dataRule
 			variants = append(variants, branch)

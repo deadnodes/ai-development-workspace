@@ -36,8 +36,15 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 		tool, path, refName, ref string
 		data                     map[string]any
 	}{
+		{"capture_candidate_dev_baseline", "/api/products/product/candidate-dev/capture-baseline", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "candidate-baseline-0001", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
+		{"verify_candidate_dev_runtime", "/api/products/product/candidate-dev/verify-runtime", "product_id", "product", map[string]any{"activation_operation_id": "activation", "request_key": "candidate-dev-runtime-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
+		{"deploy_candidate_dev", "/api/products/product/candidate-dev/deploy", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "candidate-dev-deploy-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
+		{"reserve_candidate_dev", "/api/products/product/candidate-dev/reserve", "product_id", "product", map[string]any{"candidate_operation_id": "candidate", "environment_id": "dev", "request_key": "reservation-request-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
+		{"release_candidate_dev", "/api/products/product/candidate-dev/release", "product_id", "product", map[string]any{"reservation_operation_id": "reservation", "request_key": "reservation-release-1", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740994")}}},
+		{"update_environment_feature", "/api/features/feature/update-environment", "feature_id", "feature", map[string]any{"environment_id": "dev", "revision_ids": []string{"A2"}, "idempotency_key": "key", "expected_selection": map[string]any{"composition_id": "baseline", "operation_id": "old", "generation": json.Number("9007199254740993")}}},
 		{"reconcile_composition", "/api/compositions/composition/reconcile", "composition_id", "composition", map[string]any{}},
 		{"prepare_release_candidate", "/api/release-candidates", "product_id", "product", map[string]any{"name": "Release", "environment_id": "prod", "components": []any{component}, "approve_main_update": true}},
+		{"prepare_release_candidate", "/api/release-candidates", "product_id", "product", map[string]any{"name": "Main candidate", "environment_id": "prod", "idempotency_key": "main-key", "main_sources": []any{map[string]any{"application_id": "app", "main_sha": strings.Repeat("c", 40), "native": map[string]any{"build_recipe_id": "build", "publication_recipe_id": "publish", "parameters": map[string]any{}}, "revisions": []any{map[string]any{"revision_id": "revision", "pull_request_number": 17, "verification_result_ids": []string{"result"}}}}}}},
 		{"promote_release_candidate", "/api/release-candidates/candidate/promote", "candidate_operation_id", "candidate", map[string]any{"approve": true}},
 		{"create_hotfix", "/api/features/feature/hotfix", "feature_id", "feature", map[string]any{"title": "Fix double charge", "objective": "Keep callbacks idempotent", "finding_id": "finding", "repositories": []string{"repo"}, "remaining": []string{"Regression check"}}},
 		{"record_runtime_observation", "/api/operations/child/runtime", "operation_id", "child", map[string]any{"environment_id": "dev", "gitops_commit": strings.Repeat("b", 40), "artifact_digest": "sha256:" + strings.Repeat("d", 64), "healthy": false, "details": "Observed one unavailable replica"}},
@@ -74,8 +81,36 @@ func TestExecutionFlowHTTPMCPParity(t *testing.T) {
 			if !reflect.DeepEqual(viaHTTP, viaMCP) {
 				t.Fatalf("different shared domain commands HTTP=%+v MCP=%+v", viaHTTP, viaMCP)
 			}
+			if tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" || tc.tool == "capture_candidate_dev_baseline" {
+				generic, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: viaHTTP})
+				if err != nil || generic.IsError {
+					t.Fatalf("generic execute rejected candidate Dev request: %v %+v", err, generic)
+				}
+				viaExecute := <-service.commands
+				if !reflect.DeepEqual(viaHTTP, viaExecute) {
+					t.Fatalf("generic execute differs from named delivery: %+v != %+v", viaExecute, viaHTTP)
+				}
+			}
 			if viaHTTP.Action != tc.tool || viaHTTP.Actor != "human/flow" {
 				t.Fatal("command attribution/action lost")
+			}
+			if tc.tool == "update_environment_feature" {
+				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
+				var token domain.EnvironmentSelection
+				if err := json.Unmarshal(raw, &token); err != nil || token.Generation != 9007199254740993 || viaMCP.FeatureID != "feature" {
+					t.Fatalf("exact patch CAS/scope lost: %s", raw)
+				}
+			}
+			if tc.tool == "reserve_candidate_dev" || tc.tool == "release_candidate_dev" || tc.tool == "deploy_candidate_dev" || tc.tool == "verify_candidate_dev_runtime" || tc.tool == "capture_candidate_dev_baseline" {
+				raw, _ := json.Marshal(viaMCP.Data["expected_selection"])
+				var token domain.EnvironmentSelection
+				want := uint64(9007199254740993)
+				if tc.tool == "release_candidate_dev" {
+					want++
+				}
+				if err := json.Unmarshal(raw, &token); err != nil || token.Generation != want || viaMCP.ProductID != "product" {
+					t.Fatalf("exact reservation CAS/scope lost: %s", raw)
+				}
 			}
 			if tc.tool == "record_runtime_observation" && viaHTTP.Data["healthy"] != false {
 				t.Fatal("unhealthy observation altered")
@@ -102,5 +137,66 @@ func TestFlowRoutesRejectContradictoryReferencesAndUnknownFields(t *testing.T) {
 	}
 	if len(service.commands) != 0 {
 		t.Fatal("invalid flow request reached shared application")
+	}
+}
+
+func TestMainCandidateDuplicateJSONRejected(t *testing.T) {
+	service := &boundaryService{commands: make(chan domain.Command, 1), queries: make(chan [2]string, 1)}
+	server := httptest.NewServer(transport.New(service, transport.Options{}))
+	defer server.Close()
+	for _, raw := range []string{
+		`{"product_id":"p","name":"candidate","environment_id":"prod","idempotency_key":"key","main_sources":[],"main_sources":[]}`,
+		`{"product_id":"p","name":"candidate","environment_id":"prod","idempotency_key":"key","main_sources":[{"application_id":"a","application_id":"b"}]}`,
+	} {
+		response, err := http.Post(server.URL+"/api/release-candidates", "application/json", strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 400 {
+			t.Fatalf("duplicate candidate input accepted HTTP%d", response.StatusCode)
+		}
+	}
+	if len(service.commands) != 0 {
+		t.Fatal("ambiguous input reached command layer")
+	}
+}
+
+func TestCandidateDevReservationRejectsAmbiguousTransportInput(t *testing.T) {
+	service := &boundaryService{commands: make(chan domain.Command, 8), queries: make(chan [2]string, 1)}
+	server := httptest.NewServer(transport.New(service, transport.Options{}))
+	defer server.Close()
+	for _, tc := range []struct{ path, body string }{
+		{"verify-runtime", `{"product_id":"other","request_key":"candidate-runtime-1"}`},
+		{"verify-runtime", `{"activation_operation_id":"a","activation_operation_id":"b","request_key":"candidate-runtime-1"}`},
+		{"verify-runtime", `{"Activation_operation_id":"a","request_key":"candidate-runtime-1"}`},
+		{"verify-runtime", `{"activation_operation_id":"a","request_key":"candidate-runtime-1","healthy":true}`},
+		{"verify-runtime", `{"activation_operation_id":"a","request_key":"candidate-runtime-1","targets":[]}`},
+		{"verify-runtime", `{"activation_operation_id":"a","request_key":"candidate-runtime-1","expected_selection":{"composition_id":"c","operation_id":"o","generation":1,"generation":2}}`},
+		{"deploy", `{"product_id":"other","request_key":"candidate-dev-deploy-1"}`},
+		{"deploy", `{"reservation_operation_id":"a","reservation_operation_id":"b","request_key":"candidate-dev-deploy-1"}`},
+		{"deploy", `{"request_key":"candidate-dev-deploy-1","expected_selection":{"composition_id":"a","operation_id":"b","generation":1,"generation":2}}`},
+		{"deploy", `{"reservation_operation_id":"a","request_key":"candidate-dev-deploy-1","artifact_id":"injected"}`},
+		{"deploy", `{"reservation_operation_id":"a","request_key":"candidate-dev-deploy-1","approve":true}`},
+		{"deploy", `{"Reservation_operation_id":"a","request_key":"candidate-dev-deploy-1"}`},
+		{"reserve", `{"product_id":"other","request_key":"reservation-request-1"}`},
+		{"release", `{"product_id":"other","request_key":"reservation-release-1"}`},
+		{"reserve", `{"request_key":"reservation-request-1","request_key":"reservation-request-2"}`},
+		{"reserve", `{"request_key":"reservation-request-1","expected_selection":{"composition_id":"a","operation_id":"b","generation":1,"generation":2}}`},
+		{"release", `{"reservation_operation_id":"a","reservation_operation_id":"b","request_key":"reservation-release-1"}`},
+		{"reserve", `{"request_key":"reservation-request-1","reservation_epoch":99}`},
+		{"release", `{"request_key":"reservation-release-1","approve":true}`},
+	} {
+		response, err := http.Post(server.URL+"/api/products/product/candidate-dev/"+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != 400 {
+			t.Fatalf("ambiguous reservation input accepted: %s HTTP%d", tc.body, response.StatusCode)
+		}
+	}
+	if len(service.commands) != 0 {
+		t.Fatal("ambiguous reservation transport input reached command layer")
 	}
 }

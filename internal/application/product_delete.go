@@ -6,6 +6,13 @@ import (
 )
 
 func deleteProduct(st *domain.State, c domain.Command) error {
+	for _, e := range st.Environments {
+		if e.ProductID == c.ProductID {
+			if err := reservationFree(st, e.ID); err != nil {
+				return err
+			}
+		}
+	}
 	var input struct {
 		Name string `json:"name"`
 	}
@@ -23,6 +30,16 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 	}
 	if !found {
 		return missing("product", c.ProductID)
+	}
+	// Deletion would erase quarantine and let the same ID reuse old native
+	// worker authority without an ownership transfer.
+	if nativeQuarantined(st, c.ProductID) {
+		return invalid("native-quarantined product cannot be deleted; ownership transfer is not implemented")
+	}
+	for _, pin := range st.ArtifactPins {
+		if pin.ProductID == c.ProductID && pin.ReleasedAt == nil {
+			return invalid("product has active artifact pins; release each pin explicitly before deletion")
+		}
 	}
 	for _, op := range st.Operations {
 		if op.ProductID == c.ProductID && !terminalOperation(op.Status) {

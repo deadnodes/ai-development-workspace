@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"net/url"
 	"releasecontrol/internal/delivery"
+	"strings"
+	"time"
 )
 
 type gitOpsPR struct {
-	Number int    `json:"number"`
-	URL    string `json:"html_url"`
-	State  string `json:"state"`
-	Merged bool   `json:"merged"`
-	Head   struct {
+	Number   int        `json:"number"`
+	URL      string     `json:"html_url"`
+	State    string     `json:"state"`
+	Merged   bool       `json:"merged"`
+	MergedAt *time.Time `json:"merged_at"`
+	Head     struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -23,13 +26,26 @@ type gitOpsPR struct {
 }
 
 func prResult(pr gitOpsPR) delivery.GitOpsPullRequest {
-	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, State: pr.State, HeadSHA: pr.Head.SHA, Merged: pr.Merged}
+	return delivery.GitOpsPullRequest{Number: pr.Number, URL: pr.URL, State: pr.State, HeadSHA: pr.Head.SHA, Merged: pr.Merged, MergedAt: pr.MergedAt}
 }
 func (p *Provider) ProposeGitOps(ctx context.Context, c delivery.Connection, r delivery.GitOpsApply) (delivery.GitOpsPullRequest, error) {
 	var out delivery.GitOpsPullRequest
-	if !operationID.MatchString(r.OperationID) || !fullSHA.MatchString(r.ExpectedHeadSHA) {
-		return out, errors.New("pinned operation/base required")
+	if !operationID.MatchString(r.OperationID) || !fullSHA.MatchString(r.ExpectedHeadSHA) || !fullSHA.MatchString(r.ExpectedBlobSHA) || !digestPattern.MatchString(r.Digest) || !validSourceBranch(r.Request.Ref) || len(r.Message) > 4096 {
+		return out, errors.New("pinned operation/base/blob/digest and valid proposal inputs required")
 	}
+	if err := gitopsPath(r.Request); err != nil {
+		return out, err
+	}
+	if r.Request.ExpectedHeadSHA != "" && r.Request.ExpectedHeadSHA != r.ExpectedHeadSHA {
+		return out, ErrConflict
+	}
+	if r.Request.Ref == "rcp/gitops/"+r.OperationID {
+		return out, ErrConflict
+	}
+	if strings.TrimSpace(r.Request.Repository) != r.Request.Repository || r.Request.Repository == "" {
+		return out, errors.New("GitOps repository required")
+	}
+	desiredRepo, _ := gitopsImageRepository(r.Request.ImageRepository)
 	repo, err := p.repository(ctx, c, r.Request.Repository)
 	if err != nil {
 		return out, err
@@ -47,7 +63,7 @@ func (p *Provider) ProposeGitOps(ctx context.Context, c delivery.Connection, r d
 		return out, err
 	}
 	if head != r.ExpectedHeadSHA {
-		if current.Digest != r.Digest || current.ImageRepository != r.Request.ImageRepository {
+		if current.Digest != r.Digest || current.ImageRepository != desiredRepo {
 			return out, ErrConflict
 		}
 		var commit struct {
@@ -98,4 +114,11 @@ func (p *Provider) ObserveGitOpsPR(ctx context.Context, c delivery.Connection, r
 		return out, ErrConflict
 	}
 	return prResult(pr), nil
+}
+
+func samePRMergeTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }

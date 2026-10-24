@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "source_commit": "fdfcafb63a1f4433e8d62888553a50d46d951245",
+  "base": "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b",
+  "platform": "linux/arm64",
+  "node_url": "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-arm64.tar.xz",
+  "node_sha256": "08bfbf538bad0e8cbb0269f0173cca28d705874a67a22f60b57d99dc99e30050",
+  "versions": {
+    "go": "go version go1.26.4 linux/arm64",
+    "node": "v22.14.0",
+    "npm": "10.9.2",
+    "python": "Python 3.11.2",
+    "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+    "make": "GNU Make 4.3",
+    "git": "git version 2.39.5"
+  },
+  "source_hashes": {
+    "go.mod": "040b7140dbfe07c9c53136ed10d48d2b86c749c05e518f962b568b2c1be02e78",
+    "go.sum": "689eb1a66b789bde0833a20612cbe001aca338b154d4721e5b0de319457b653f",
+    "package.json": "df92ce1e30d734e3a6d900edb6d7fb96462719b93e24f91a455caf0e7ad59ea0",
+    "package-lock.json": "a782ae917bde3ff7a4c47df47776a3d6db89f0adc25295c4cbf89062598b92f2",
+    "Makefile": "adcc59dd631aada1e1e837801aad031afdbd4f3a23e466476ba6d4a4d5ae4ee1"
+  },
+  "public_dependency_origins": ["https://proxy.golang.org", "https://sum.golang.org", "https://registry.npmjs.org"],
+  "scope": {"product_id": "p", "repository_id": "source", "trust": "trusted_source", "platform": "linux/arm64"},
+  "max_dependency_bytes": 536870912,
+  "max_seed_bytes": 1073741824
+}

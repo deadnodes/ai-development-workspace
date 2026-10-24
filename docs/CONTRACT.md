@@ -29,20 +29,45 @@ Resume compactness: `events` contains only the latest 20 audit metadata summarie
 
 ## Application and environment composition planning
 
-Environments are arbitrary per-product records, not a fixed DEV/STAGE/PROD enumeration. `create_environment` / `update_environment` accept `cluster` and `namespace`; these are target metadata and never provision infrastructure. `desired_composition_id` is read-only except through `select_composition`. Legacy `composition` maps remain readable but typed compositions are authoritative for selected branch plans.
+Environments are arbitrary per-product records, not a fixed DEV/STAGE/PROD enumeration. `create_environment` / `update_environment` accept `cluster` and `namespace`; these are target metadata and never provision infrastructure. `desired_composition_id`, `desired_operation_id` and `selection_generation` are server-owned desired intent. Every selection/reconciliation or target reset advances the monotonic generation, including selecting the same plan again; observations do not. Read the token through `get_environment_state`. Target resets clear desired identity while preserving observed state. Overflow refuses atomically. Legacy `composition` maps remain readable but typed compositions are authoritative for selected branch plans.
 
 Additional commands:
 - `create_application`: top-level product_id; data `{name, repository_id, path?}`. Path is optional clean repository-relative monorepo path.
 - `record_integration_revision`: top-level integration_id; data `{repository_id, branch, base_commit, head_commit, commits: string[]}`. Immutable manually captured provenance. Full lowercase 40- or 64-hex hashes required; one hash format per revision, commits nonempty, unique and containing head_commit. Source branch and repository remain recorded after branch merges/deletion. These assertions are not Git-provider-verified.
-- `plan_composition`: top-level product_id; data `{environment_id, name, components: [{application_id, base_ref, base_commit, target_branch, revision_ids: string[]}]}`. At least one component; empty revision_ids means base-only app. Target branch must use `generated/` and differ from base_ref. Base commit is a full hash. Same-repository applications must select identical base_ref/base_commit/target_branch and ordered revision_ids lists because one repository produces one composed branch. Only one selected revision per integration/repository. Dependencies must also be selected or already released. Cross-product/repository references rejected.
-- `assemble_environment`: top-level product_id; data `{environment_id, name?, integration_ids?}`. Builds a fresh immutable composition from the latest captured revisions of the selected active integrations (an empty list selects all active captured work), groups same-repository revisions in the supplied order, and immediately queues an asynchronous `COMPOSE` operation. The operation creates disposable generated branches, builds artifacts and applies configured DEV/TEST GitOps targets. A conflict is persisted for agent resolution; poll the returned operation with `get_operation`.
+- `plan_composition`: top-level product_id; data `{environment_id, name, auto_refresh?, components: [{application_id, base_ref, base_commit, target_branch, revision_ids: string[]}]}`. At least one component; empty revision_ids means base-only app. Target branch must use `generated/` and differ from base_ref. Base commit is a full hash. Same-repository applications must select identical base_ref/base_commit/target_branch and ordered revision_ids lists because one repository produces one composed branch. Only one selected revision per integration/repository. Dependencies must also be selected or already released. Cross-product/repository references rejected.
+- `update_environment_feature`: top-level `feature_id` (optional matching `product_id`); data `{environment_id, revision_ids: string[], name?, idempotency_key, expected_selection: {composition_id, operation_id, generation}}`. The nonempty explicit patch replaces only supplied integration/repository pairs in their current positions and appends new pairs in caller order, preserving all untouched revisions, pinned base and existing application/repository cohort. Same-product target Feature/revisions and all ordinary composition dependency/monorepo validations apply. New repository/cohort, removal, base movement and released target work require explicit replan. Requires a current desired baseline, enabled DEV/TEST PR-only targets and current execution authority; active uncertain GitOps writes refuse. CAS is checked atomically before any plan, operation or audit. A conflicting selection returns an actionable validation conflict: reread/reapply explicitly, never silently retry. Key (1–128 bytes), actor, scope and exact typed payload bind a durable COMPOSE receipt: exact replay returns that historical operation even after supersession/restart/restore without selecting, auditing or executing again; conflicting reuse refuses. An unchanged patch with a fresh key refuses and directs the caller to the current operation or explicit reconcile. The new pinned composition always has `auto_refresh: false`. Generic HTTP/MCP `execute`, named MCP `update_environment_feature`, and `POST /api/features/{id}/update-environment` share this command. Runtime/reconciled evidence remains untouched. This capability does not authorize live delivery outside the governing main-first policy.
+- `assemble_environment`: top-level product_id; data `{environment_id, name?, integration_ids?, expected_selection?}`. Builds a fresh immutable composition from the latest captured revisions of the selected active integrations (an empty list selects all active captured work), groups same-repository revisions in the supplied order, and immediately queues an asynchronous `COMPOSE` operation. The operation creates disposable generated branches, builds artifacts and applies configured DEV/TEST GitOps targets. A conflict is persisted for agent resolution; poll the returned operation with `get_operation`. This is explicit full replacement, sets `auto_refresh: true`, and may refresh base and every selected revision. Automatic refresh requires that explicit boolean and carries the captured selection CAS into the transaction; stale snapshots safely skip without records or audit. Manual `plan_composition` defaults to safe `auto_refresh: false` and can explicitly opt in.
 - `select_composition`: top-level id is composition ID; data `{}`. Sets only the target environment's desired_composition_id and audit metadata. Does not alter reconciled/runtime state or claim deployment, merge success or readiness.
 
 After Git refresh observes a newer revision, the scheduler automatically queues
-the same assembly once for a selected DEV/TEST composition unless an assembly is
-already running. Production compositions are excluded.
+the same assembly once for a selected DEV/TEST composition only when its persisted
+`auto_refresh` is explicitly true and no assembly is running. Refresh checks its
+captured selection token atomically; production and pinned compositions are excluded.
 
-State adds `applications`, `integration_revisions`, `compositions` arrays. Application fields: id/product_id/meta, name, repository_id, path. IntegrationRevision fields: id/product_id/feature_id/meta, integration_id, repository_id, branch, base_commit, head_commit, commits. Composition fields: id/product_id/meta, environment_id, name, status=`planned`, components, application_snapshots (Application[]), revision_snapshots (IntegrationRevision[]), environment_snapshot (Environment). Snapshots and revisions have no update action. Recording a newer integration revision never rewrites prior compositions.
+New DEV/TEST COMPOSE execution requires enabled PR-only mappings for every
+component. Explicit assemble/reconcile/feature-patch requests freeze server-derived
+`source_retention_origin_id` and each source's typed `retention` intent (exact
+revision-ID refs, ordered SHAs and input hash). `sources[].retained` holds bounded
+timestamped readback observations; callers cannot inject these fields. The worker
+admits one create-only retained ref per bounded tick, validates complete declared
+history independently, and rereads admitted refs plus structural generated
+step/final identity before consuming saved results and before creating children.
+All provider I/O is outside transactions; the child/admission transaction requires
+an unexpired current lease, exact checked snapshots, current selection/configuration,
+connection grants and native authority. Lost responses/reopen can observe an
+existing exact ref; an admitted missing/moved ref blocks without healing. Legacy
+operations without intent require a new explicit request. Scheduler refresh has a
+private origin and may inherit only the selected parent's valid explicit intent,
+CAS and integration scope. Legacy, cancelled and pre-restore lineage cannot mint
+new automatic writes. Complete lineage must have unambiguous scoped creation
+events after the last restore in durable append order; host-clock ordering is not
+authority. Conflict context, audit and parent BLOCKED outcome use the same current
+unexpired lease/frozen-authority admission transaction. Ref observations are reachable-retention evidence, not
+permanent branch protection or cryptographic proof of merge contents. Existing
+`protect_integration_revision` still requires `approve: true`. Release-candidate
+and promotion semantics do not gain retention-write authority from this change.
+
+State adds `applications`, `integration_revisions`, `compositions` arrays. Application fields: id/product_id/meta, name, repository_id, path. IntegrationRevision fields: id/product_id/feature_id/meta, integration_id, repository_id, branch, base_commit, head_commit, commits. Composition fields: id/product_id/meta, environment_id, name, auto_refresh (default false), status=`planned`, components, application_snapshots (Application[]), revision_snapshots (IntegrationRevision[]), environment_snapshot (Environment). Snapshots and revisions have no update action. Recording a newer integration revision never rewrites prior compositions.
 
 Resume includes feature-linked integration_revisions, relevant applications, and compositions containing revision snapshots for that feature. Automatic branch construction, Git verification, Flux reconciliation and Kubernetes changes remain pending provider work.
 
@@ -50,7 +75,11 @@ Environment names are trimmed and unique case-insensitively within each product 
 
 ## Target architecture boundary
 
-The lifecycle/provider contracts in `internal/domain/lifecycle.go` and `providers.go` are not persisted State arrays or additional execute actions yet. See [architecture](ARCHITECTURE.md) and [rollout](ROADMAP.md). Current `Application` maps to the domain term Component without JSON/storage renames. Current `Release` remains an immutable planned selection; future final `ReleaseRecord` requires verified deployment evidence. Current global get_state is trusted-instance visibility, not per-user product authorization.
+The lifecycle/provider contracts in `internal/domain/lifecycle.go` and `providers.go` are not persisted State arrays or additional execute actions yet. See [architecture](ARCHITECTURE.md) and [rollout](ROADMAP.md). Current `Application` maps to the domain term Component without JSON/storage renames. Current `Release` remains an immutable planned selection; future final `ReleaseRecord` requires verified deployment evidence. Instance visibility remains trusted-local, not per-user product authorization.
+
+MCP `get_state` is a compact navigation projection, not a serialized `State`: no arguments lists Products, `product_id` lists Features, and `feature_id` lists Integrations with compact parent identities. A pair of IDs must match. Unknown, duplicate or case-variant arguments, invalid scopes, limits or cursors fail closed. `limit` defaults to 25 and accepts 1..100. Labels are UTF-8 prefixes of at most 256 bytes with an explicit `truncated` flag; IDs remain exact. JSON projection is bounded to 32 KiB and the full MCP result to 128 KiB. Follow `pagination.next_cursor` using the same scope; a byte-limited page may contain fewer cards than requested. Keyset pagination is live under concurrent writes, not a frozen snapshot or an authorization mechanism.
+
+Only identity, bounded labels and recorded statuses are included. History, Context, requirements, memories, results, logs, operations, reports and credentials are omitted. Recorded status does not prove current gates, runtime health or release acceptance. Use scoped context and specialized query tools for details; `resume` is not a bounded substitute. HTTP `GET /api/state`, its ETag, backups and exports retain the full snapshot contract. A missing bounded metadata-reader capability produces an error rather than falling back to the full State reader. PostgreSQL projects scoped metadata before transfer; local bbolt scans its existing JSON blob in O(blob) time while decoding selected metadata only. No storage-format migration is implied.
 
 ## GitHub execution and external impact context
 
@@ -63,6 +92,15 @@ The instance Repository Registry stores numeric GitHub identities; Product Repos
 `create_external_system` / `update_external_system` accept name, description, team, contact, interfaces[], contracts[], notes. `create_system_relationship` links a product (and optional component_id) to external_system_id using type DEPENDS_ON, CONSUMES, PROVIDES_TO or SHARES_DATA_WITH. `set_external_scope` records external_system_ids[] and relationship_ids[] against a Feature, Integration or Gate. Scopes are append-only; the latest target scope is effective. Changing a blocking Gate's external obligation requires fresh check evidence. Resume/context returns relevant systems, relationships and scopes. External systems have no deployment commands.
 
 Operation lifecycle status is separate from deployment state. `SUCCEEDED` for this milestone means the GitOps mutation was confirmed; deployment remains `GITOPS_APPLIED` / pending reconciliation, never inferred DEPLOYED. See [GitHub DEV setup and build contract](GITHUB_DEV.md) for credentials, workflow evidence and the exact live acceptance boundary.
+
+## Caller-agent conflict handoff
+
+`get_operation` additionally returns `agent_action` for a persisted textual
+composition conflict. Its bounded `RESOLVE_CONFLICT` context tells the requesting
+agent the exact original branches/SHAs and existing claim/report/verify/reconcile
+steps. RCP does not start a resolver agent. `UNAVAILABLE` omits all partial inputs;
+the 32 KiB limit covers only this new field. Branch/ref observations are historical
+and the instructions grant no new execution rights. See [conflict workflow](MANAGED_BRANCHES.md).
 
 ## Full instance backup
 
