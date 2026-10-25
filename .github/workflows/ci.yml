@@ -105,6 +105,8 @@ jobs:
             docker --context default pull --platform linux/amd64 "$image"
             test "$(docker --context default image inspect "$image" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
           done
+      - name: Allow only the RootlessKit executable to create user namespaces
+        run: bash .github/scripts/rcp-rootlesskit-apparmor.sh setup
       - name: Empty same-profile BuildKit startup and bounded diagnostics
         run: go test ./internal/workerrunner -run '^TestRealBuildKitStartupDiagnostics$' -count=1 -v -timeout=2m
       - name: Real native clean builds with bounded state diagnostics
@@ -115,6 +117,9 @@ jobs:
         run: go test ./internal/workerrunner -run '^(TestRealComposedGitSourceWorkerPublication|TestRealMainCandidateHistoricalGitProdProfile|TestRealDevGitOpsBatchNativePipeline)$' -count=1 -v -timeout=20m
       - name: Real native API, checks, publisher and registry fixture chains
         run: go test ./internal/transport -run '^(TestRealNativeAPIWorkerPublisherDistributionPR|TestRealNativeChecksWorkerPublisherPR|TestRegistryObservationDistributionProtectedAPI)$' -count=1 -v -timeout=15m
+      - name: Remove the temporary RootlessKit AppArmor profile
+        if: always()
+        run: bash .github/scripts/rcp-rootlesskit-apparmor.sh cleanup
 
   image:
     name: Publish container

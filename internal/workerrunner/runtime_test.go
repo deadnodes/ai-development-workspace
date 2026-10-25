@@ -344,6 +344,16 @@ func TestRealBuildKitStartupDiagnostics(t *testing.T) {
 	if err := d.waitBuildKit(stateCtx, id); err != nil {
 		t.Fatal("empty startup fixture process sandbox not ready", err)
 	}
+	// CI may install an executable attachment for this pinned RootlessKit.
+	// A working daemon alone must not hide a globally relaxed host policy or
+	// a profile applied to the whole container instead of the executable.
+	if expected := os.Getenv("RCP_TEST_APPARMOR_PROFILE"); expected != "" {
+		label, err := d.output(stateCtx, nil, 1024, "exec", id, "cat", "/proc/1/attr/current")
+		if err != nil || stringTrim(label) != expected+" (unconfined)" {
+			t.Fatalf("RootlessKit executable attachment not proven: profile=%q err=%v", label, err)
+		}
+		t.Logf("RootlessKit executable profile=%q; process sandbox ready", stringTrim(label))
+	}
 }
 
 type fixtureDockerState struct {
