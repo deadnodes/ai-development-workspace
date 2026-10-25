@@ -216,6 +216,12 @@ verifier checks image metadata/content binding and allows non-ELF images; it
 does not promise this Go-specific ELF check.
 An independently established fixed AMD64 golden remains a narrow verification
 limit, separate from those assertions and from real Linux job execution proof.
+`RCP_TEST_DOCKER_DIAGNOSTICS=1` enables at most 32 selected state snapshots from
+the clean-build fixture's exact journal IDs after owner-label verification;
+it emits only role, container ID, status, exit code and OOM flag. CI also reads
+relevant user-namespace sysctl values. Diagnostics change no host settings,
+security flags, deadlines or cleanup and expose no environment, arguments,
+source contents or daemon logs.
 
 The separate `native-docker` upstream CI job runs worker isolation/lifecycle,
 late CREATE/START and cleanup recovery, source fetching, composition, historical

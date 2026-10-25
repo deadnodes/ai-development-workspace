@@ -18,6 +18,7 @@ import (
 	"releasecontrol/internal/artifactspool"
 	"releasecontrol/internal/testdocker"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -139,6 +140,8 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 	}
 	var manifests []string
 	var binaryDigests []string
+	stopDiagnostics := startFixtureDockerDiagnostics(t, cfg)
+	defer stopDiagnostics()
 	for n := 0; n < 3; n++ {
 		revisionID := "rev"
 		if n == 2 {
@@ -214,6 +217,7 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 		}
 		assertOwnedResourcesGone(t, cfg)
 	}
+	stopDiagnostics()
 	if manifests[0] != manifests[1] {
 		t.Fatal("clean fixture builds not deterministic", manifests)
 	}
@@ -256,6 +260,127 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 	}
 	t.Logf("real worker: two clean manifests=%s; changed source manifest=%s; lost start/report responses recovered; no registry publication", manifests[0], manifests[2])
 	t.Logf("verified %s ELF64: clean binary=%s changed-source binary=%s; source literal markers present", fixtureDocker.Platform, binaryDigests[0], binaryDigests[2])
+}
+
+type fixtureDockerState struct {
+	ID        string `json:"id"`
+	Owner     string `json:"owner"`
+	Status    string `json:"status"`
+	ExitCode  int    `json:"exit_code"`
+	OOMKilled bool   `json:"oom_killed"`
+}
+
+func decodeFixtureDockerState(data []byte, id, owner string) (fixtureDockerState, error) {
+	var state fixtureDockerState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return state, err
+	}
+	if !containerIDPattern.MatchString(id) || !ownerPattern.MatchString(owner) || state.ID != id || state.Owner != owner {
+		return fixtureDockerState{}, fmt.Errorf("fixture diagnostics ownership mismatch")
+	}
+	return state, nil
+}
+
+// Observe only this temporary worker's durable exact IDs and selected container
+// state fields. Never emit full inspect output, environment, arguments, source,
+// journal contents or daemon logs. This does not change execution or cleanup.
+func startFixtureDockerDiagnostics(t *testing.T, cfg Config) func() {
+	t.Helper()
+	setting := os.Getenv("RCP_TEST_DOCKER_DIAGNOSTICS")
+	if setting == "" {
+		return func() {}
+	}
+	if setting != "1" {
+		t.Fatal("fixture Docker diagnostics accepts only explicit 1 or unset")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	d := docker{context: cfg.DockerContext, config: cfg.DockerConfig}
+	go func() {
+		defer close(done)
+		seen := map[fixtureDockerState]bool{}
+		capture := func() {
+			entries, err := os.ReadDir(cfg.StateDir)
+			if err != nil {
+				return
+			}
+			for _, entry := range entries {
+				if !entry.IsDir() || !ownerPattern.MatchString(entry.Name()) {
+					continue
+				}
+				j, err := readJournal(filepath.Join(cfg.StateDir, entry.Name(), "journal.json"))
+				if err != nil || j.Owner != entry.Name() {
+					continue
+				}
+				for _, resource := range j.Resources {
+					role := ""
+					switch resource.Name {
+					case "rcp-" + j.Owner + "-check":
+						role = "check"
+					case "rcp-" + j.Owner + "-buildkit":
+						role = "buildkit"
+					}
+					if role == "" || !containerIDPattern.MatchString(resource.ID) || len(seen) >= 32 {
+						continue
+					}
+					probe, finish := context.WithTimeout(ctx, 2*time.Second)
+					data, err := d.output(probe, nil, 2048, "inspect", "--format", `{"id":{{json .Id}},"owner":{{json (index .Config.Labels "rcp.worker.owner")}},"status":{{json .State.Status}},"exit_code":{{.State.ExitCode}},"oom_killed":{{.State.OOMKilled}}}`, resource.ID)
+					finish()
+					if err != nil {
+						continue
+					}
+					state, err := decodeFixtureDockerState(data, resource.ID, j.Owner)
+					if err != nil || seen[state] {
+						continue
+					}
+					seen[state] = true
+					t.Logf("fixture Docker diagnostic: role=%s id=%s status=%s exit_code=%d oom_killed=%t", role, state.ID, state.Status, state.ExitCode, state.OOMKilled)
+				}
+			}
+		}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				capture()
+			}
+		}
+	}()
+	var once sync.Once
+	stop := func() { once.Do(func() { cancel(); <-done }) }
+	t.Cleanup(stop)
+	return stop
+}
+
+func TestFixtureDockerDiagnosticsOwnership(t *testing.T) {
+	t.Setenv("RCP_TEST_DOCKER_DIAGNOSTICS", "1")
+	stop := startFixtureDockerDiagnostics(t, Config{StateDir: t.TempDir()})
+	stop()
+	stop() // Explicit and cleanup stops must both join safely, without Docker.
+	id, owner := strings.Repeat("a", 64), strings.Repeat("b", 32)
+	valid := fixtureDockerState{ID: id, Owner: owner, Status: "exited", ExitCode: 1}
+	data, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := decodeFixtureDockerState(data, id, owner)
+	if err != nil || state != valid {
+		t.Fatal("exact-owned selected state rejected", err)
+	}
+	for _, tc := range []struct {
+		data      []byte
+		id, owner string
+	}{
+		{data, strings.Repeat("c", 64), owner}, {data, id, strings.Repeat("d", 32)},
+		{data, "partial-id", owner}, {data, id, "unknown-owner"}, {[]byte("{"), id, owner},
+	} {
+		if _, err := decodeFixtureDockerState(tc.data, tc.id, tc.owner); err == nil {
+			t.Fatal("foreign or invalid diagnostic identity accepted")
+		}
+	}
 }
 
 // Inspect only bounded in-memory snapshots; never extract archive paths or run
