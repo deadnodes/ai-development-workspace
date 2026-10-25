@@ -6,7 +6,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"releasecontrol/internal/agentconnect"
 	"releasecontrol/internal/agentguide"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/persistence"
@@ -16,6 +18,7 @@ import (
 )
 
 func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
@@ -69,6 +72,51 @@ func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
 	if len(resource.Contents) != 1 || resource.Contents[0].Text != kit.Skill.Content {
 		t.Fatal("MCP resource differs")
 	}
+	for _, skill := range []agentguide.Skill{kit.Skill, kit.DeliverySkill} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_agent_skill", Arguments: map[string]any{"name": skill.Name}})
+		if err != nil || result.IsError {
+			t.Fatalf("skill fetch failed %s: %v", skill.Name, err)
+		}
+		raw, _ := json.Marshal(result.StructuredContent)
+		var got agentguide.Skill
+		if json.Unmarshal(raw, &got) != nil || got != skill {
+			t.Fatal("HTTP/MCP skill mismatch")
+		}
+		uri := "rcp://skills/" + skill.Name + "/SKILL.md"
+		resource, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
+		if err != nil || len(resource.Contents) != 1 || resource.Contents[0].Text != skill.Content || resource.Contents[0].Meta["sha256"] != skill.SHA256 {
+			t.Fatal("skill resource mismatch", err)
+		}
+	}
+	resources, err := session.ListResources(ctx, &mcp.ListResourcesParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, r := range resources.Resources {
+		if r.URI == agentguide.SkillURI || r.URI == agentguide.DeliverySkillURI {
+			skill, _ := agentguide.Lookup(r.Name)
+			if r.Meta["sha256"] != skill.SHA256 || r.Size != int64(len(skill.Content)) {
+				t.Fatal("resource checksum/size differs")
+			}
+			if found[r.URI] {
+				t.Fatal("duplicate skill resource")
+			}
+			found[r.URI] = true
+		}
+	}
+	if len(found) != 2 {
+		t.Fatal("fixed resources missing")
+	}
+	for _, name := range []string{"", "rcp-delivery/SKILL.md", "RCP-DELIVERY", "other"} {
+		bad, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_agent_skill", Arguments: map[string]any{"name": name}})
+		if err == nil && !bad.IsError {
+			t.Fatal("unknown skill accepted")
+		}
+	}
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "rcp://skills/../private"}); err == nil {
+		t.Fatal("unknown resource accepted")
+	}
 	for _, command := range []map[string]any{
 		{"action": "create_product", "id": "p", "data": map[string]any{"name": "Product"}},
 		{"action": "create_feature", "id": "f", "product_id": "p", "data": map[string]any{"title": "Feature", "problem": "Context is lost", "goal": "Handoff"}},
@@ -89,6 +137,19 @@ func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
 	saved, _ := json.Marshal(resumed.StructuredContent)
 	if !strings.Contains(string(saved), "Run acceptance") {
 		t.Fatal("handoff not in resumed context")
+	}
+	workspace := t.TempDir()
+	binding, err := agentconnect.Install(ctx, agentconnect.Options{URL: server.URL, Workspace: workspace})
+	if err != nil || binding.ProductID != "p" {
+		t.Fatal("real service bounded discovery/install failed", binding, err)
+	}
+	for _, directory := range []string{".agents", ".claude"} {
+		for _, skill := range []agentguide.Skill{kit.Skill, kit.DeliverySkill} {
+			data, err := os.ReadFile(filepath.Join(workspace, directory, "skills", skill.Name, "SKILL.md"))
+			if err != nil || !strings.HasPrefix(string(data), skill.Content) {
+				t.Fatal("real service canonical install differs", skill.Name, err)
+			}
+		}
 	}
 	bad, e := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_agent_skill", Arguments: map[string]any{"name": "../../private"}})
 	if e == nil && !bad.IsError {

@@ -125,3 +125,35 @@ The Web UI records actions as `human/local` without an author field. HTTP and MC
 commands default omitted/blank attribution to `agent`. Callers may still supply a
 specific agent identifier to preserve provenance. These labels are not authenticated
 identities and do not grant permissions. Historical attribution remains unchanged.
+
+
+## Workspace agent kit
+
+`GET /api/agent-kit` and MCP `get_agent_kit` share `instructions`, the existing
+`skill` (`rcp-handoff`) and the separate `delivery_skill` (`rcp-delivery`). Each
+skill has exact `name`, `content` and lowercase SHA-256. `get_agent_skill` accepts
+only these two names; each has a fixed `rcp://skills/<name>/SKILL.md` resource.
+Embedded public snapshots and their repository/commit/path/checksum provenance
+are tracked under `internal/agentguide/skills/`. Guidance does not grant adoption,
+external execution or a main-first/human-only Flux policy cutover.
+
+`connect` validates both skill identities/frontmatter/checksums before writes.
+Its seven fixed project paths are `.codex/config.toml`, `AGENTS.md`,
+`.release-control.json` and both skills under `.agents/skills/` and `.claude/skills/`.
+It preserves managed blocks, unrelated configuration, file modes and token-name/
+credential-profile semantics; no credential values or global/Claude configuration
+are installed. Identical raw canonical skill bytes may be adopted; differing
+unmanaged content or symlinks refuse the entire install. Staging and rollback
+retain the existing process-failure atomicity, not multi-file crash atomicity.
+
+Automatic Product selection uses MCP `get_state {"limit":2}` only, requiring
+`compact_navigation`, Product collection with no foreign parents, present integer
+`returned` equal to the bounded item count, a present boolean `has_more:false`,
+no continuation cursor, and exactly one valid ID of at most 128 bytes. Otherwise
+an explicit Product ID is required, without full-State fallback or file writes.
+The discovery-only client has a 15-second context/HTTP timeout, no reconnect
+retries/redirects/standalone SSE, same-origin credentials and a 128-KiB whole-body
+cap for every HTTP status/content type as well as the SSE event cap. Declared
+oversize is rejected before body reads; unknown/chunked/lying lengths are bounded
+and oversize is an error, never silent JSON truncation. Explicit Product selection
+keeps the scoped HTTP context path and 2-MiB response cap, with identity readback.

@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
+	"releasecontrol/internal/agentguide"
 )
 
 const configStart = "# BEGIN release-control managed MCP"
@@ -37,9 +39,10 @@ type Binding struct {
 	TokenEnv   string `json:"token_env,omitempty"`
 	Profile    string `json:"credential_profile,omitempty"`
 }
-type kit struct {
-	Skill        struct{ Name, Content, SHA256 string }
-	Instructions string
+type kit = agentguide.Kit
+
+func installPaths() []string {
+	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md"}
 }
 
 func Run(ctx context.Context, args []string, out io.Writer) error {
@@ -66,7 +69,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled project MCP configuration, rcp-handoff skill and AGENTS.md instructions.\nTrust this project in Codex, then start a new chat or reload MCP configuration.\n", binding.ProductID, binding.URL)
+	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled project MCP configuration, rcp-handoff and rcp-delivery skills for Codex/Claude and AGENTS.md instructions.\nTrust this project in Codex, then start a new chat or reload MCP configuration.\n", binding.ProductID, binding.URL)
 	return err
 }
 
@@ -159,45 +162,71 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		if err != nil || len(data) > 2<<20 {
 			return errors.New("server response unreadable or oversized")
 		}
-		if err = json.Unmarshal(data, out); err != nil {
+		if err = decodeUniqueJSON(data, out); err != nil {
 			return errors.New("server returned invalid JSON")
 		}
 		return nil
 	}
-	var agentKit kit
-	if err = get("/api/agent-kit", &agentKit); err != nil {
+	var kitJSON json.RawMessage
+	if err = get("/api/agent-kit", &kitJSON); err != nil {
 		return binding, err
 	}
-	digest := sha256.Sum256([]byte(agentKit.Skill.Content))
-	if agentKit.Skill.Name != "rcp-handoff" || agentKit.Skill.Content == "" || agentKit.Instructions == "" || agentKit.Skill.SHA256 != hex.EncodeToString(digest[:]) {
-		return binding, errors.New("agent kit identity or checksum is invalid")
+	var agentKit kit
+	if err = decodeUniqueJSON(kitJSON, &agentKit); err != nil {
+		return binding, errors.New("invalid agent kit JSON")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "instructions") {
+		return binding, errors.New("invalid agent kit fields")
+	}
+	for _, role := range []string{"skill", "delivery_skill"} {
+		var identity map[string]json.RawMessage
+		if json.Unmarshal(fields[role], &identity) != nil || !exactFields(identity, "name", "content", "sha256") {
+			return binding, errors.New("invalid agent skill fields")
+		}
+	}
+	for _, expected := range []struct {
+		skill agentguide.Skill
+		name  string
+	}{{agentKit.Skill, agentguide.SkillName}, {agentKit.DeliverySkill, agentguide.DeliverySkillName}} {
+		digest := sha256.Sum256([]byte(expected.skill.Content))
+		if expected.skill.Name != expected.name || expected.skill.Content == "" || expected.skill.SHA256 != hex.EncodeToString(digest[:]) {
+			return binding, errors.New("agent kit identity or checksum is invalid")
+		}
+		front, ok := strings.CutPrefix(expected.skill.Content, "---\n")
+		front, _, closed := strings.Cut(front, "\n---\n")
+		var identity struct {
+			Name string `yaml:"name"`
+		}
+		if !ok || !closed || yaml.Unmarshal([]byte(front), &identity) != nil || identity.Name != expected.name {
+			return binding, errors.New("agent skill frontmatter identity is invalid")
+		}
+	}
+	if agentKit.Instructions == "" {
+		return binding, errors.New("agent kit instructions missing")
 	}
 	if strings.Contains(agentKit.Instructions, agentsStart) || strings.Contains(agentKit.Instructions, agentsEnd) {
 		return binding, errors.New("agent kit contains reserved installation markers")
 	}
 	if o.ProductID == "" {
-		var state struct {
-			Products []struct {
-				ID string `json:"id"`
-			} `json:"products"`
-		}
-		if err = get("/api/state", &state); err != nil {
+		o.ProductID, err = discoverProduct(ctx, endpoint, token)
+		if err != nil {
 			return binding, err
 		}
-		if len(state.Products) != 1 || state.Products[0].ID == "" {
-			return binding, errors.New("provide --product-id: server must have exactly one Product for automatic selection")
-		}
-		o.ProductID = state.Products[0].ID
 	}
-	if strings.ContainsAny(o.ProductID, "\r\n\t") || strings.TrimSpace(o.ProductID) == "" {
+	if !validProductID(o.ProductID) {
 		return binding, errors.New("invalid Product ID")
 	}
 	var productContext map[string]any
 	if err = get("/api/products/"+url.PathEscape(o.ProductID)+"/context", &productContext); err != nil {
 		return binding, err
 	}
+	productIdentity, ok := productContext["product"].(map[string]any)
+	if !ok || productIdentity["id"] != o.ProductID {
+		return binding, errors.New("Product context identity mismatch; provide --product-id")
+	}
 	binding = Binding{URL: endpoint, ProductID: o.ProductID, ServerName: o.Name, TokenEnv: o.TokenEnv, Profile: o.Profile}
-	paths := []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json"}
+	paths := installPaths()
 	plans := make([]filePlan, 0, len(paths))
 	for _, path := range paths {
 		plan, err := readPlan(rootFS, path)
@@ -234,15 +263,21 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if err = toml.Unmarshal(plans[0].after, &parsed); err != nil {
 		return Binding{}, errors.New("managed MCP entry conflicts with existing TOML")
 	}
-	if plans[1].exists && !bytes.HasSuffix(plans[1].before, []byte(skillMarker)) {
-		return Binding{}, errors.New("unmanaged rcp-handoff skill exists; no files changed")
+	for _, target := range []struct {
+		index int
+		skill agentguide.Skill
+	}{{1, agentKit.Skill}, {4, agentKit.DeliverySkill}, {5, agentKit.Skill}, {6, agentKit.DeliverySkill}} {
+		plan := &plans[target.index]
+		if plan.exists && !bytes.HasSuffix(plan.before, []byte(skillMarker)) && !bytes.Equal(plan.before, []byte(target.skill.Content)) {
+			return Binding{}, fmt.Errorf("unmanaged %s skill exists; no files changed", target.skill.Name)
+		}
+		plan.after = []byte(strings.TrimRight(target.skill.Content, "\n") + "\n\n" + skillMarker)
 	}
-	plans[1].after = []byte(strings.TrimRight(agentKit.Skill.Content, "\n") + "\n\n" + skillMarker)
 	outside, err = stripBlock(string(plans[2].before), agentsStart, agentsEnd)
 	if err != nil {
 		return Binding{}, err
 	}
-	instructions := fmt.Sprintf("Control Plane: %s\nProduct ID: %s\nMCP server: %s\nBinding: `.release-control.json`.\n\n%s\n\nUse the installed `rcp-handoff` skill when pausing, finishing, or transferring context. Record work checkpoints in the Control Plane through MCP; resume the Product/Feature before changing code.\n", endpoint, o.ProductID, o.Name, agentKit.Instructions)
+	instructions := fmt.Sprintf("Control Plane: %s\nProduct ID: %s\nMCP server: %s\nBinding: `.release-control.json`.\n\n%s\n\nUse the installed `rcp-handoff` skill for checkpoints, pause and context transfer, and `rcp-delivery` for Feature delivery within existing policy and authority. Record work checkpoints in the Control Plane through MCP; resume the Product/Feature before changing code.\n", endpoint, o.ProductID, o.Name, agentKit.Instructions)
 	plans[2].after = []byte(appendBlock(outside, agentsStart, agentsEnd, instructions))
 	if plans[3].exists {
 		var prior Binding
@@ -264,6 +299,18 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return Binding{}, err
 	}
 	return binding, nil
+}
+
+func exactFields(fields map[string]json.RawMessage, names ...string) bool {
+	if len(fields) != len(names) {
+		return false
+	}
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func stripBlock(content, start, end string) (string, error) {

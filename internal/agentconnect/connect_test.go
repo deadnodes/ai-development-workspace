@@ -3,21 +3,39 @@ package agentconnect
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"releasecontrol/internal/agentguide"
 	"strings"
 	"testing"
 )
 
 func kitServer(t *testing.T, products int, token string) *httptest.Server {
 	t.Helper()
-	content := "---\nname: rcp-handoff\ndescription: Record persistent context\n---\nResume, work, record evidence, hand off.\n"
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
+	t.Setenv("HOME", t.TempDir())
+	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "fixture", Version: "1"}, nil)
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: "get_state"}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		Limit int `json:"limit"`
+	}) (*mcp.CallToolResult, any, error) {
+		if in.Limit != 2 {
+			t.Errorf("discovery must request limit2, got%d", in.Limit)
+		}
+		rows := []map[string]string{}
+		for i := 0; i < products && i < 2; i++ {
+			rows = append(rows, map[string]string{"id": fmt.Sprintf("p%d", i)})
+		}
+		page := map[string]any{"projection": "compact_navigation", "scope": map[string]any{"collection": "products"}, "items": rows, "pagination": map[string]any{"returned": len(rows), "has_more": products > 2}}
+		if products > 2 {
+			page["pagination"].(map[string]any)["next_cursor"] = "fixture-cursor"
+		}
+		return &mcp.CallToolResult{StructuredContent: page}, nil, nil
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token != "" && r.Header.Get("Authorization") != "Bearer "+token {
 			w.WriteHeader(401)
@@ -25,13 +43,15 @@ func kitServer(t *testing.T, products int, token string) *httptest.Server {
 		}
 		switch r.URL.Path {
 		case "/api/agent-kit":
-			json.NewEncoder(w).Encode(map[string]any{"skill": map[string]string{"name": "rcp-handoff", "content": content, "sha256": checksum}, "instructions": "Use MCP to resume before work and record decisions/progress during work."})
-		case "/api/state":
-			rows := []map[string]string{}
-			for i := range products {
-				rows = append(rows, map[string]string{"id": fmt.Sprintf("p%d", i)})
+			json.NewEncoder(w).Encode(agentguide.Get())
+		case "/mcp":
+			if r.Method == http.MethodGet {
+				t.Error("discovery opened standalone SSE")
 			}
-			json.NewEncoder(w).Encode(map[string]any{"products": rows})
+			mcpHandler.ServeHTTP(w, r)
+		case "/api/state":
+			t.Error("connect fetched full State")
+			w.WriteHeader(500)
 		case "/api/products/p0/context":
 			json.NewEncoder(w).Encode(map[string]any{"product": map[string]string{"id": "p0"}})
 		default:
@@ -63,6 +83,8 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ".codex/config.toml", "# My settings\nmodel = \"example\"\n[mcp_servers.other]\nurl = \"https://other.test/mcp\"\n")
 	writeFile(t, root, "AGENTS.md", "# Existing project instructions\nKeep these exactly.\n")
+	writeFile(t, root, ".claude/settings.json", "{\"existing\":true}\n")
+	writeFile(t, root, ".mcp.json", "{\"existing\":true}\n")
 	t.Setenv("RCP_CONNECT_TEST_TOKEN", "secret-not-written")
 	server := kitServer(t, 1, "secret-not-written")
 	options := Options{URL: server.URL, Workspace: root, TokenEnv: "RCP_CONNECT_TEST_TOKEN"}
@@ -73,7 +95,7 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 	if binding.ProductID != "p0" {
 		t.Fatal("single Product not selected")
 	}
-	files := []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json"}
+	files := installPaths()
 	snapshots := map[string][]byte{}
 	for _, path := range files {
 		snapshots[path] = readFile(t, root, path)
@@ -101,6 +123,11 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 	info, _ := os.Stat(filepath.Join(root, "AGENTS.md"))
 	if info.Mode().Perm() != 0640 {
 		t.Fatal("existing file mode changed")
+	}
+	for _, path := range []string{".claude/settings.json", ".mcp.json"} {
+		if string(readFile(t, root, path)) != "{\"existing\":true}\n" {
+			t.Fatal("unrelated Claude/MCP config changed", path)
+		}
 	}
 }
 func TestConnectRejectsConflictsWithoutWriting(t *testing.T) {
@@ -132,7 +159,7 @@ func TestConnectRejectsConflictsWithoutWriting(t *testing.T) {
 }
 func TestConnectRejectsSymlinkEscapes(t *testing.T) {
 	server := kitServer(t, 1, "")
-	for _, relative := range []string{".codex", ".agents", "AGENTS.md"} {
+	for _, relative := range []string{".codex", ".agents", ".claude", "AGENTS.md"} {
 		t.Run(relative, func(t *testing.T) {
 			root, outside := t.TempDir(), t.TempDir()
 			target := outside
@@ -187,7 +214,7 @@ type cancellingContext struct {
 
 func (c *cancellingContext) Err() error {
 	c.calls++
-	if c.calls >= 6 {
+	if c.calls >= 10 {
 		return context.Canceled
 	}
 	return nil
@@ -200,7 +227,7 @@ func TestConnectRollsBackAlreadyReplacedFiles(t *testing.T) {
 	}
 	defer root.Close()
 	plans := []filePlan{}
-	for i := range 4 {
+	for i := range 7 {
 		path := fmt.Sprintf("file%d", i)
 		writeFile(t, directory, path, "original")
 		plan, err := readPlan(root, path)
@@ -220,7 +247,7 @@ func TestConnectRollsBackAlreadyReplacedFiles(t *testing.T) {
 		}
 	}
 	entries, _ := os.ReadDir(directory)
-	if len(entries) != 4 {
+	if len(entries) != 7 {
 		t.Fatal("temporary files remained")
 	}
 }

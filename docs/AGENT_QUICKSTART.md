@@ -33,7 +33,7 @@ docker compose --profile app down
 
 Данные находятся в PostgreSQL named volume. Не используй `down -v`: это удалит состояние.
 
-## Подключить MCP и handoff-скилл одной командой
+## Подключить MCP и два workflow-скилла одной командой
 
 После запуска сервера:
 
@@ -41,7 +41,7 @@ docker compose --profile app down
 ./bin/release-control connect --url http://127.0.0.1:8090 --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID
 ```
 
-Команда устанавливает проектное подключение Codex, `.agents/skills/rcp-handoff/SKILL.md`, binding `.release-control.json` и управляемый блок в `AGENTS.md`. Для защищённого сервера сначала выполни `release-control login --url https://CONTROL_HOST --profile default`, открой выданную ссылку и явно одобри код агента через человеческий вход. Затем выполни `connect` с тем же URL и `--profile default`. Независимый токен агента хранится зашифрованным вне проекта; MCP-процесс читает его при каждом запуске, поэтому перезапуск Codex не требует повторного входа человека. `--token-env RC_TOKEN` остаётся явной альтернативой для окружения с готовым токеном. Скилл доступен также через MCP `get_agent_skill {"name":"rcp-handoff"}` и ресурс `rcp://skills/rcp-handoff/SKILL.md`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
+Команда устанавливает проектное подключение Codex, оба скилла `rcp-handoff` и `rcp-delivery` в `.agents/skills/` и `.claude/skills/`, binding `.release-control.json` и управляемый блок в `AGENTS.md`. Конфигурация Claude и глобальные настройки не меняются. Все семь файлов проверяются и устанавливаются с откатом при ошибке. Идентичный входящему snapshot канонический SKILL.md можно принять под управление; отличающийся пользовательский файл требует ручного решения. Для защищённого сервера сначала выполни `release-control login --url https://CONTROL_HOST --profile default`, открой выданную ссылку и явно одобри код агента через человеческий вход. Затем выполни `connect` с тем же URL и `--profile default`. Независимый токен агента хранится зашифрованным вне проекта; MCP-процесс читает его при каждом запуске, поэтому перезапуск Codex не требует повторного входа человека. `--token-env RC_TOKEN` остаётся явной альтернативой для окружения с готовым токеном. Скиллы доступны через MCP `get_agent_skill` с точным именем `rcp-handoff` или `rcp-delivery` и отдельные ресурсы `rcp://skills/rcp-handoff/SKILL.md` / `rcp://skills/rcp-delivery/SKILL.md`; server kit публикует checksum каждого. Provenance snapshots закреплён в `internal/agentguide/skills/provenance.json`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
 
 В защищённом режиме автор действия определяется проверенной сервером identity: переданный клиентом `actor` не позволяет выдать себя за другого пользователя. В локальном режиме без OIDC UI использует `human/local`, API/MCP — `agent`; там actor остаётся только атрибуцией. UI входит через браузерную сессию; токен агента в форму браузера вводить не нужно.
 
@@ -61,7 +61,7 @@ URL должен быть доступен из процесса агента: �
 
 По умолчанию возвращается до 25 карточек; `limit` принимает целое число от 1 до 100. Для продолжения передай `pagination.next_cursor` как `cursor`, сохранив тот же Product/Feature scope. Ответ может содержать меньше `limit` из-за ограничения размера: JSON проекции ≤32 КиБ, полный MCP-результат ≤128 КиБ. Названия ограничены 256 байтами UTF-8; `truncated: true` отмечает сокращение. ID не сокращаются. Cursor задаёт живой порядок по ID, а не фиксирует снимок; это не токен авторизации.
 
-`get_state` не возвращает историю, контекст, логи, результаты проверок, операции или credentials и не подтверждает готовность/деплой. Для деталей используй `get_project_context`, `resume` выбранной Feature и специализированные queries, например `get_operation`; `resume` содержит историю и также может быть большим. Полный экспорт выполняется через operator backup. При подключении к большому экземпляру указывай `--product-id` явно: автоматический выбор Product при connect пока читает полный HTTP snapshot.
+`get_state` не возвращает историю, контекст, логи, результаты проверок, операции или credentials и не подтверждает готовность/деплой. Для деталей используй `get_project_context`, `resume` выбранной Feature и специализированные queries, например `get_operation`; `resume` содержит историю и также может быть большим. Полный экспорт выполняется через operator backup. Автоматический выбор Product использует только MCP `get_state {"limit":2}` и принимает ровно один Product при явно указанном `has_more:false`, корректном scope и pagination. Весь discovery HTTP body (JSON, SSE или ошибка) ограничен 128 КиБ, отдельное SSE-событие также ограничено 128 КиБ; redirects и standalone SSE выключены. При неоднозначности или недоступности bounded metadata укажи `--product-id` явно: fallback к `/api/state` отсутствует. Явный Product сразу проверяется через scoped context (предел 2 МиБ), без запроса списка.
 
 Основные MCP-вызовы:
 
