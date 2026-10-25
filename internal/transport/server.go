@@ -76,6 +76,7 @@ func New(service Service, options Options) http.Handler {
 	})
 	workerMux := http.NewServeMux()
 	registerWorkerRoutes(workerMux, service, options)
+	registerWorkerHistoryRoutes(mux, service)
 	registerQueryRoutes(mux, service)
 	registerBackupRoutes(mux, service)
 	registerReviewRoutes(mux, service)
@@ -85,6 +86,7 @@ func New(service Service, options Options) http.Handler {
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
 	registerStateNavigationTool(server, service)
+	registerWorkerHistoryTool(server, service)
 	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Deterministic feature context for a fresh coding agent: intent, ordered plan, progress, decisions, discoveries, blockers, handoffs, verification evidence and other active work."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		FeatureID string `json:"feature_id" jsonschema:"Feature ID to resume"`
 	}) (*mcp.CallToolResult, any, error) {

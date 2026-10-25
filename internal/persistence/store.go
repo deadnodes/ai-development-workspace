@@ -132,11 +132,8 @@ func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
 	if e != nil {
 		return st, e
 	}
-	b, e := json.Marshal(groups)
+	st, e = decodeStoredDocuments(groups)
 	if e != nil {
-		return st, e
-	}
-	if e = json.Unmarshal(b, &st); e != nil {
 		return st, e
 	}
 	rows, e = tx.Query(ctx, "SELECT document FROM events ORDER BY sequence")
@@ -253,16 +250,7 @@ func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error 
 	}
 	return tx.Commit(ctx)
 }
-func documents(st domain.State) (map[string][]json.RawMessage, error) {
-	b, e := json.Marshal(st)
-	if e != nil {
-		return nil, e
-	}
-	var m map[string][]json.RawMessage
-	e = json.Unmarshal(b, &m)
-	delete(m, "events")
-	return m, e
-}
+func documents(st domain.State) (map[string][]json.RawMessage, error) { return codecDocuments(st) }
 
 // Only a deleted product permits deletion of its owned records.
 func productRecordRemoved(before, after map[string][]json.RawMessage, kind string, raw json.RawMessage) bool {
