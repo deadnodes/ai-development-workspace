@@ -1,5 +1,18 @@
 # Shared application contract
 
+## Native worker recorded history
+
+`get_worker_history` / `GET /api/worker-history` require `product_id` and expose
+separately paginated `jobs`, per-job `attempts` and complete frozen `links`.
+Optional `feature_id` selects jobs by immutable recorded revision membership,
+including multi-Feature native COMPOSE/main-candidate jobs. Default limit 25,
+maximum 100; scope/collection/job-bound cursors; 32 KiB pages and 128 KiB MCP
+results. Read authorization precedes lookup. Recorded statuses and
+`recorded_snapshot_unverified` grant no verification or execution authority.
+Unknown chains retain Product history without guessed Feature links. See
+[native worker history](WORKER_HISTORY.md) for trust and storage boundaries.
+Existing execution and `get_worker_job` contracts remain unchanged.
+
 `domain.Command` is `{action, actor, id?, product_id?, feature_id?, integration_id?, gate_id?, check_id?, result_id?, data: {...}}`. Actor is mandatory. IDs supplied for creates are optional; generated when absent. Execute returns created/updated entity. State uses arrays (always non-null): products, features, integrations, gates, checks, results, findings, memories, environments, repositories, releases, events. All entities have snake_case JSON keys. Entity IDs globally unique.
 
 Actions and data:
