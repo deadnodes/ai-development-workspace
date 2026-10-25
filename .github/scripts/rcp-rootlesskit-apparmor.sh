@@ -22,11 +22,14 @@ restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 unconfined=/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined
 negative_control() {
   local output status=0
-  output=$(timeout 10 unshare -U true 2>&1) || status=$?
-  printf "[rcp-apparmor] unrelated userns probe exit=%s\n" "$status"
+  # Ubuntu allows a bare user namespace but denies capabilities inside it.
+  # Exercise CAP_SYS_ADMIN in a mapped-root user namespace, as rootless mount
+  # setup requires; a bare unshare -U true is not a valid negative control.
+  output=$(timeout 10 unshare -Ur -m true 2>&1) || status=$?
+  printf "[rcp-apparmor] unrelated mapped-root/mount probe exit=%s\n" "$status"
   [[ $status != 0 && $status != 124 ]] || fail
   [[ "$output" = *'Operation not permitted'* || "$output" = *'Permission denied'* ]] || fail
-  printf 'Unrelated host userns denied: %s\n' "$output"
+  printf 'Unrelated host mapped-root/mount namespace denied: %s\n' "$output"
 }
 assert_restrictions() {
   [[ $(cat "$restriction") = 1 ]] || fail
