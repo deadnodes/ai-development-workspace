@@ -221,7 +221,11 @@ the clean-build fixture's exact journal IDs after owner-label verification;
 it emits only role, container ID, status, exit code and OOM flag. CI also reads
 relevant user-namespace sysctl values. Diagnostics change no host settings,
 security flags, deadlines or cleanup and expose no environment, arguments,
-source contents or daemon logs.
+source contents or daemon logs. A separate opt-in empty startup test uses the
+same pinned BuildKit image and container profile, with no application source,
+credentials or host mounts. It attaches for at most 20 seconds and quotes at
+most 8 KiB of each startup output stream; a durable exact-owner journal governs
+cleanup. Uncertain cleanup retains that temporary journal for inspection.
 
 The separate `native-docker` upstream CI job runs worker isolation/lifecycle,
 late CREATE/START and cleanup recovery, source fetching, composition, historical

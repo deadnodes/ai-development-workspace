@@ -105,6 +105,8 @@ jobs:
             docker --context default pull --platform linux/amd64 "$image"
             test "$(docker --context default image inspect "$image" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
           done
+      - name: Empty same-profile BuildKit startup and bounded diagnostics
+        run: go test ./internal/workerrunner -run '^TestRealBuildKitStartupDiagnostics$' -count=1 -v -timeout=2m
       - name: Real native clean builds with bounded state diagnostics
         run: go test ./internal/workerrunner -run '^TestRealWorkerTwoCleanBuilds$' -count=1 -v -timeout=20m
       - name: Real native worker boundaries, recovery and source provenance

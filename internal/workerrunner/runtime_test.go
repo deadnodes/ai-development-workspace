@@ -262,6 +262,90 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 	t.Logf("verified %s ELF64: clean binary=%s changed-source binary=%s; source literal markers present", fixtureDocker.Platform, binaryDigests[0], binaryDigests[2])
 }
 
+// A separate empty fixture captures only pinned BuildKit startup output. It
+// receives no application snapshot, credentials, host mounts or worker request.
+func TestRealBuildKitStartupDiagnostics(t *testing.T) {
+	if os.Getenv("RCP_TEST_DOCKER") != "1" {
+		t.Skip("real isolated Docker execution requires explicit opt-in")
+	}
+	profile := testdocker.Load(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerConfig := filepath.Join(home, ".docker")
+	root, err := os.MkdirTemp("", "rcp-buildkit-startup-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := nonce()
+	dir := filepath.Join(root, owner)
+	file := filepath.Join(dir, "journal.json")
+	journalReady := false
+	t.Cleanup(func() {
+		if journalReady {
+			if err := cleanup(file); err != nil {
+				t.Errorf("startup fixture cleanup uncertain; journal retained at %s: %v", file, err)
+				return
+			}
+			assertOwnedResourcesGone(t, Config{StateDir: root, DockerContext: profile.Context, DockerConfig: dockerConfig})
+		}
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	name := "rcp-" + owner + "-buildkit"
+	now := time.Now()
+	j := journal{Owner: owner, ParentPID: os.Getpid(), DockerContext: profile.Context, DockerConfig: dockerConfig, Deadline: now.Add(time.Minute), LeaseUntil: now.Add(time.Minute), Resources: []ownedResource{{Name: name, CreateState: "CREATING"}}}
+	if err := saveJournal(file, j); err != nil {
+		t.Fatal(err)
+	}
+	journalReady = true
+	d := docker{context: profile.Context, config: dockerConfig}
+	e := &domain.WorkerExecution{BuildKitImage: profile.BuildKitImage, Platform: profile.Platform, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128}
+	createCtx, finishCreate := context.WithTimeout(context.Background(), 20*time.Second)
+	id, err := d.createBuildKit(createCtx, name, owner, e)
+	finishCreate()
+	if err != nil {
+		t.Fatal("empty startup fixture create failed", err)
+	}
+	j.Resources[0].ID, j.Resources[0].CreateState = id, "CREATED"
+	if err := saveJournal(file, j); err != nil {
+		t.Fatal(err)
+	}
+	probe, finishProbe := context.WithTimeout(context.Background(), 20*time.Second)
+	defer finishProbe()
+	identity, err := d.output(probe, nil, 256, "inspect", "--format", `{{.Id}} {{ index .Config.Labels "rcp.worker.owner" }}`, id)
+	if err != nil || stringTrim(identity) != id+" "+owner {
+		t.Fatal("empty startup fixture ownership not proven")
+	}
+	stdout, stderr := &boundedBuffer{remaining: 8192}, &boundedBuffer{remaining: 8192}
+	cmd := d.command(probe, "start", "--attach", id)
+	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = stdout, stderr, 2*time.Second
+	runErr := cmd.Run()
+	// Quoting prevents startup text from inserting terminal control sequences.
+	t.Logf("empty BuildKit startup stdout=%q stderr=%q", stdout.String(), stderr.String())
+	stateCtx, finishState := context.WithTimeout(context.Background(), 5*time.Second)
+	defer finishState()
+	data, err := d.output(stateCtx, nil, 2048, "inspect", "--format", `{"id":{{json .Id}},"owner":{{json (index .Config.Labels "rcp.worker.owner")}},"status":{{json .State.Status}},"exit_code":{{.State.ExitCode}},"oom_killed":{{.State.OOMKilled}}}`, id)
+	if err != nil {
+		t.Fatal("empty startup fixture state not observable")
+	}
+	state, err := decodeFixtureDockerState(data, id, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "running" || runErr != nil && probe.Err() == nil {
+		t.Fatalf("empty BuildKit startup failed: status=%s exit=%d oom=%t attach=%v", state.Status, state.ExitCode, state.OOMKilled, runErr)
+	}
+	if err := d.waitBuildKit(stateCtx, id); err != nil {
+		t.Fatal("empty startup fixture process sandbox not ready", err)
+	}
+}
+
 type fixtureDockerState struct {
 	ID        string `json:"id"`
 	Owner     string `json:"owner"`
