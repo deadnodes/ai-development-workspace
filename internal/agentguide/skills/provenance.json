@@ -1,0 +1,16 @@
+[
+  {
+    "name": "rcp-handoff",
+    "repository": "https://github.com/deadnodes/ai-tools",
+    "commit": "cd8bd058ce49fb96e96b6777725b03f9c8255bd5",
+    "path": ".workspace/skills/rcp-handoff/SKILL.md",
+    "sha256": "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179"
+  },
+  {
+    "name": "rcp-delivery",
+    "repository": "https://github.com/deadnodes/ai-tools",
+    "commit": "cd8bd058ce49fb96e96b6777725b03f9c8255bd5",
+    "path": ".workspace/skills/rcp-delivery/SKILL.md",
+    "sha256": "e21f283dcdd217f6b1e3ca37cebc26f5931723634f8287cbb70b06cc4e5c1feb"
+  }
+]

@@ -11,7 +11,7 @@ Run once in the project that agents will edit:
   --product-id PRODUCT_ID
 ```
 
-The `connect` command does not start a server or open a database. The server must already be running. Omit `--product-id` only when the server contains exactly one Product. The installer checks `/api/agent-kit`, verifies the skill checksum, and checks the selected Product's context before changing files.
+The `connect` command does not start a server or open a database. The server must already be running. Without `--product-id`, automatic selection uses only the existing bounded MCP `get_state {"limit":2}` query. It requires exactly one valid Product, Product scope with no foreign parents, a present `has_more:false` and consistent count/cursor metadata. Unavailable, ambiguous or malformed discovery requires an explicit Product ID; there is no `/api/state` fallback. The installer checks `/api/agent-kit`, validates both fixed skill names, frontmatter and content checksums, then checks the selected Product's scoped context identity before any file writes. Explicit Product selection skips listing and retains the 2-MiB scoped context response limit. Duplicate JSON fields and invalid encoding in discovery or context are refused before installation.
 
 ## Sign in an independent agent
 
@@ -75,18 +75,33 @@ when present and otherwise connects to a local server without a credential.
 | File | Purpose |
 | --- | --- |
 | `.codex/config.toml` | Project-scoped MCP entry: credential-loading stdio subprocess for a saved profile, or direct HTTP for local/environment-token mode. |
-| `.agents/skills/rcp-handoff/SKILL.md` | Server-provided handoff skill with context checkpoint instructions. |
+| `.agents/skills/rcp-handoff/SKILL.md` | Canonical handoff/checkpoint skill for project agents. |
+| `.agents/skills/rcp-delivery/SKILL.md` | Distinct Feature-delivery skill preserving repository adoption and existing execution policy. |
+| `.claude/skills/rcp-handoff/SKILL.md` | The same canonical handoff skill for the project skill directory. |
+| `.claude/skills/rcp-delivery/SKILL.md` | The same canonical delivery skill for the project skill directory. |
 | `AGENTS.md` | Managed block binding this project to the Product and instructing agents to resume, record progress, and hand off. |
 | `.release-control.json` | Binding: base URL, Product ID, MCP server name and optional credential profile or token environment reference. |
 
-The default MCP server name is `release-control`; change it with `--name` if needed. Existing unrelated TOML settings and AGENTS.md content are preserved. Re-running the command updates only its marked blocks and owned skill/binding. It refuses conflicting unmanaged MCP entries, unmanaged skills, malformed configuration and symlinked installation paths. All output is staged before replacement; ordinary write failures roll back prior replacements. This is not a multi-file crash transaction: an interrupted process can leave temporary staging/backup files.
+The default MCP server name is `release-control`; change it with `--name` if needed. Existing unrelated TOML settings and AGENTS.md content are preserved. Re-running the command updates only its marked blocks and owned skills/binding. All seven target paths are fixed by the installer, never supplied by the server. An unmanaged raw skill may be adopted only when its bytes exactly match the incoming canonical snapshot; differing user content refuses the entire installation. It also refuses conflicting unmanaged MCP entries, malformed configuration and symlinked installation paths, while preserving existing file modes. All output is staged before replacement; ordinary write failures roll back prior replacements. This is not a multi-file crash transaction: an interrupted process can leave temporary staging/backup files.
 
-The installer changes no global Codex configuration, trust settings or global skills. Review the project-local changes with Git before committing them. Binding files contain no token value but may contain a private server URL or Product ID; decide whether they belong in that repository.
+The `.claude/skills` copies do not configure Claude MCP. The installer changes no Claude settings/MCP configuration, global Codex configuration, trust settings or global skills. Review the project-local changes with Git before committing them. Binding files contain no token value but may contain a private server URL or Product ID; decide whether they belong in that repository.
 
 ## Activate in Codex
 
 Trust the project through Codex's normal trust flow, then **start a new chat or reload MCP configuration**. This command does not retroactively attach tools to an already-running chat.
 
-Each independent Git repository is a project scope. If a workspace contains nested independent repositories, run `connect` for each repository where Codex should load the MCP entry and handoff instructions; a connection at the parent directory may not be inherited across repository boundaries.
+Each independent Git repository is a project scope. If a workspace contains nested independent repositories, run `connect` for each repository where Codex should load the MCP entry and both workflow skills; a connection at the parent directory may not be inherited across repository boundaries.
 
-Once connected, agents should discover the Product, resume the relevant Feature/Integration before editing, record decisions and verification as they work, and invoke `rcp-handoff` before pausing, finishing or transferring context. The metastore remains authoritative; the installed files are connection instructions, not a replacement state file.
+Once connected, agents should discover the Product, resume the relevant Feature/Integration before editing, record decisions and verification as they work, use `rcp-handoff` for checkpoints/pause/transfer, and use `rcp-delivery` to inspect or deliver a Feature within its existing repository adoption, human approval and execution boundaries. The metastore remains authoritative; the installed files are connection instructions, not a replacement state file.
+
+
+Automatic discovery uses a separate same-origin HTTP client with no redirects,
+reconnect retries or standalone SSE and a 15-second context/HTTP timeout. Its
+complete response body is capped at 128 KiB for every status/content type,
+including errors and unknown/chunked lengths; an individual SSE event has the
+same cap. Oversize is an error, not silent truncation. Raw SSE message JSON is
+validated before SDK decoding can overwrite duplicate fields; supported framing
+includes multiline data, LF/CRLF/bare CR, an initial BOM, comments and EOF.
+The service exposes both fixed skills via `get_agent_skill` and fixed MCP
+resources with SHA-256 metadata. Public snapshot repository/commit/path/checksum
+provenance is tracked in `internal/agentguide/skills/provenance.json`.
