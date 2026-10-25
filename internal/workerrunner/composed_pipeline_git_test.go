@@ -22,6 +22,7 @@ import (
 	"releasecontrol/internal/ocipublisher"
 	githubprovider "releasecontrol/internal/providers/github"
 	"releasecontrol/internal/publishrunner"
+	"releasecontrol/internal/testdocker"
 	"releasecontrol/internal/transport"
 	"releasecontrol/internal/workerconfig"
 	"strings"
@@ -33,10 +34,11 @@ func TestRealComposedGitSourceWorkerPublication(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("owned Docker fixture requires opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	ctx := context.Background()
 	docker := func(args ...string) string {
 		t.Helper()
-		cmd := exec.Command("docker", append([]string{"--context", "orbstack"}, args...)...)
+		cmd := exec.Command("docker", append([]string{"--context", fixtureDocker.Context}, args...)...)
 		b, e := cmd.CombinedOutput()
 		if e != nil {
 			t.Fatalf("owned Docker %v: %s", e, b)
@@ -104,9 +106,10 @@ func TestRealComposedGitSourceWorkerPublication(t *testing.T) {
 			cfg.RepositoryID = "source"
 			x := cfg.Recipe.Execution
 			x.Kind = "local_oci_build"
+			x.Platform = fixtureDocker.Platform
 			cfg.Recipe.Capability = x.Kind
 			x.ToolchainImage = "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b"
-			x.BuildKitImage = "moby/buildkit@sha256:04cf92d6e86fcfdc7f37b7b5098978081952c11e6ac16769ab1aad95035c2441"
+			x.BuildKitImage = fixtureDocker.BuildKitImage
 			x.CheckArgv = []string{"go", "test", "/source/main.go", "/source/a.go", "/source/b.go", "/source/main_test.go"}
 			x.BuildArgv = []string{"go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go", "/source/a.go", "/source/b.go"}
 			x.OutputFile = "app"
@@ -185,7 +188,7 @@ func TestRealComposedGitSourceWorkerPublication(t *testing.T) {
 				t.Fatal(e)
 			}
 			cfg.ArtifactSpool = &artifactspool.Config{Root: spool, MaxArchiveBytes: 16 << 20, MaxTotalBytes: 64 << 20, MaxEntries: 8}
-			cfg.DockerContext = "orbstack"
+			cfg.DockerContext = fixtureDocker.Context
 			home, _ := os.UserHomeDir()
 			cfg.DockerConfig = filepath.Join(home, ".docker")
 			cfg.AllowRootlessUnconfined = true

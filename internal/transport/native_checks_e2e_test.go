@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"releasecontrol/internal/testdocker"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +197,7 @@ func TestRealNativeChecksWorkerPublisherPR(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("explicit owned Docker fixture opt-in required")
 	}
+	fixtureDocker := testdocker.Load(t)
 	ctx := context.Background()
 	root := t.TempDir()
 	binaries := map[string]string{}
@@ -208,7 +210,7 @@ func TestRealNativeChecksWorkerPublisherPR(t *testing.T) {
 	}
 	docker := func(args ...string) string {
 		t.Helper()
-		out, e := exec.Command("docker", append([]string{"--context", "orbstack"}, args...)...).CombinedOutput()
+		out, e := exec.Command("docker", append([]string{"--context", fixtureDocker.Context}, args...)...).CombinedOutput()
 		if e != nil {
 			t.Fatalf("owned checks Docker:%v %s", e, out)
 		}
@@ -273,7 +275,7 @@ func TestRealNativeChecksWorkerPublisherPR(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			execution := &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", BuildKitImage: "moby/buildkit@sha256:04cf92d6e86fcfdc7f37b7b5098978081952c11e6ac16769ab1aad95035c2441", Platform: "linux/arm64", CheckArgv: []string{"go", "test", "/source/main.go"}, BuildArgv: []string{"go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go"}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 300, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128, SourceBytes: 1 << 20, OutputBytes: 16 << 20, LogBytes: 1 << 20}
+			execution := &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", BuildKitImage: fixtureDocker.BuildKitImage, Platform: fixtureDocker.Platform, CheckArgv: []string{"go", "test", "/source/main.go"}, BuildArgv: []string{"go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go"}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 300, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128, SourceBytes: 1 << 20, OutputBytes: 16 << 20, LogBytes: 1 << 20}
 			recipe := workerconfig.Recipe{ID: "build", Revision: "v1", ProductID: "p", RepositoryID: "source", RepositoryURL: "https://github.com/team/source", Capability: "local_oci_build", Trust: "trusted_source", Parameters: map[string]workerconfig.Parameter{}, Execution: execution, Check: &domain.WorkerCheckBinding{Name: "RCP / checks and build", ExpectedAppID: 1, FinalizeSeconds: 300}}
 			recipe.Hash = workerconfig.RecipeHash(recipe)
 			publication := workerconfig.PublicationRecipe{ID: "publish", Revision: "v1", ProductID: "p", RepositoryID: "source", ComponentID: "component", Profile: "checks-fixture", BuildRecipeHash: recipe.Hash, Origin: origin, Repository: "fixture/checks", MaxBytes: 16 << 20, TimeoutSeconds: 30, Pull: workerconfig.RegistryRead{FixtureLoopbackHTTP: true}}
@@ -369,7 +371,7 @@ func TestRealNativeChecksWorkerPublisherPR(t *testing.T) {
 			publisherFile := filepath.Join(dir, "publisher.json")
 			pubDir := filepath.Join(dir, "publisher")
 			os.Mkdir(pubDir, 0700)
-			for file, v := range map[string]any{workerFile: workerrunner.Config{Endpoint: server.URL, TokenEnv: "CHECKS_BUILD_TOKEN", ProductID: "p", RepositoryID: "source", ConfigRevision: "checks1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "worker"), DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true, ArtifactSpool: spool}, publisherFile: publishrunner.Config{Endpoint: server.URL, TokenEnv: "CHECKS_PUBLISH_TOKEN", ConfigRevision: "checks1", Recipe: publication, ArtifactSpool: spool, Publisher: ocipublisher.Config{AllowedOrigin: origin, AllowedRepository: publication.Repository, StateDir: pubDir, MaxArchiveBytes: publication.MaxBytes, TimeoutSeconds: publication.TimeoutSeconds, FixtureLoopbackHTTP: true}}} {
+			for file, v := range map[string]any{workerFile: workerrunner.Config{Endpoint: server.URL, TokenEnv: "CHECKS_BUILD_TOKEN", ProductID: "p", RepositoryID: "source", ConfigRevision: "checks1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "worker"), DockerContext: fixtureDocker.Context, DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true, ArtifactSpool: spool}, publisherFile: publishrunner.Config{Endpoint: server.URL, TokenEnv: "CHECKS_PUBLISH_TOKEN", ConfigRevision: "checks1", Recipe: publication, ArtifactSpool: spool, Publisher: ocipublisher.Config{AllowedOrigin: origin, AllowedRepository: publication.Repository, StateDir: pubDir, MaxArchiveBytes: publication.MaxBytes, TimeoutSeconds: publication.TimeoutSeconds, FixtureLoopbackHTTP: true}}} {
 				b, _ := json.Marshal(v)
 				os.WriteFile(file, b, 0600)
 			}

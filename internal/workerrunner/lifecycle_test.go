@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"releasecontrol/internal/testdocker"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ func TestRealWorkerFailureCancellationExpiryKillAndRestart(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("real Docker lifecycle tests require explicit opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	root := t.TempDir()
 	binary := filepath.Join(root, "worker")
 	build := exec.Command("go", "build", "-o", binary, "../../cmd/worker")
@@ -62,7 +64,7 @@ func TestRealWorkerFailureCancellationExpiryKillAndRestart(t *testing.T) {
 			if scenario == "timeout" {
 				seconds = 2
 			}
-			e := &domain.WorkerExecution{Kind: "source_check", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", Platform: "linux/arm64", CheckArgv: check, Network: "none", TimeoutSeconds: seconds, MemoryMB: 256, StorageMB: 32, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 1 << 20, LogBytes: 4096}
+			e := &domain.WorkerExecution{Kind: "source_check", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", Platform: fixtureDocker.Platform, CheckArgv: check, Network: "none", TimeoutSeconds: seconds, MemoryMB: 256, StorageMB: 32, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 1 << 20, LogBytes: 4096}
 			recipe := workerconfig.Recipe{ID: "fixture", Revision: "v1", ProductID: "p", RepositoryID: "r", RepositoryURL: "https://github.com/fixture/source", Capability: "source_check", Trust: "trusted_source", Parameters: map[string]workerconfig.Parameter{}, Execution: e}
 			recipe.Hash = workerconfig.RecipeHash(recipe)
 			token := "fixture-worker-token-000000000000000001"
@@ -98,7 +100,7 @@ func TestRealWorkerFailureCancellationExpiryKillAndRestart(t *testing.T) {
 			defer server.Close()
 			defer close(releaseBlockedHeartbeat)
 			home, _ := os.UserHomeDir()
-			cfg := Config{Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_WORKER_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "state"), DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker")}
+			cfg := Config{Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_WORKER_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "state"), DockerContext: fixtureDocker.Context, DockerConfig: filepath.Join(home, ".docker")}
 			configFile := filepath.Join(dir, "worker.json")
 			b, _ := json.Marshal(cfg)
 			if err = os.WriteFile(configFile, b, 0600); err != nil {

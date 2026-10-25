@@ -19,6 +19,7 @@ import (
 	"releasecontrol/internal/ocipublisher"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/publishrunner"
+	"releasecontrol/internal/testdocker"
 	"releasecontrol/internal/transport"
 	"releasecontrol/internal/workerconfig"
 	"releasecontrol/internal/workerrunner"
@@ -89,6 +90,7 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("explicit Docker fixture opt-in required")
 	}
+	fixtureDocker := testdocker.Load(t)
 	ctx := context.Background()
 	root := t.TempDir()
 	root, _ = filepath.EvalSymlinks(root)
@@ -103,7 +105,7 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 	}
 	docker := func(args ...string) string {
 		t.Helper()
-		cmd := exec.Command("docker", append([]string{"--context", "orbstack"}, args...)...)
+		cmd := exec.Command("docker", append([]string{"--context", fixtureDocker.Context}, args...)...)
 		b, e := cmd.CombinedOutput()
 		if e != nil {
 			t.Fatalf("owned Docker fixture: %v %s", e, b)
@@ -168,7 +170,7 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			e := &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", BuildKitImage: "moby/buildkit@sha256:04cf92d6e86fcfdc7f37b7b5098978081952c11e6ac16769ab1aad95035c2441", Platform: "linux/arm64", CheckArgv: []string{"go", "test", "/source/main.go"}, BuildArgv: []string{"go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go"}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 300, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128, SourceBytes: 1 << 20, OutputBytes: 16 << 20, LogBytes: 1 << 20}
+			e := &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", BuildKitImage: fixtureDocker.BuildKitImage, Platform: fixtureDocker.Platform, CheckArgv: []string{"go", "test", "/source/main.go"}, BuildArgv: []string{"go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go"}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 300, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128, SourceBytes: 1 << 20, OutputBytes: 16 << 20, LogBytes: 1 << 20}
 			recipe := workerconfig.Recipe{ID: "build", Revision: "v1", ProductID: "p", RepositoryID: "source", RepositoryURL: "https://github.com/team/source", Capability: "local_oci_build", Trust: "trusted_source", Parameters: map[string]workerconfig.Parameter{}, Execution: e}
 			recipe.Hash = workerconfig.RecipeHash(recipe)
 			publication := workerconfig.PublicationRecipe{ID: "publish", Revision: "v1", ProductID: "p", RepositoryID: "source", ComponentID: "component", Profile: "native-test", BuildRecipeHash: recipe.Hash, Origin: origin, Repository: "fixture/image", MaxBytes: 16 << 20, TimeoutSeconds: 30, Pull: workerconfig.RegistryRead{FixtureLoopbackHTTP: true}}
@@ -253,7 +255,7 @@ func TestRealNativeAPIWorkerPublisherDistributionPR(t *testing.T) {
 				t.Fatal(err)
 			}
 			spool := &artifactspool.Config{Root: spoolRoot, MaxArchiveBytes: publication.MaxBytes, MaxTotalBytes: 64 << 20, MaxEntries: 8}
-			workerCfg := workerrunner.Config{ArtifactSpool: spool, Endpoint: server.URL, TokenEnv: "NATIVE_E2E_BUILD", ProductID: "p", RepositoryID: "source", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "worker-state"), DockerContext: "orbstack", DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true}
+			workerCfg := workerrunner.Config{ArtifactSpool: spool, Endpoint: server.URL, TokenEnv: "NATIVE_E2E_BUILD", ProductID: "p", RepositoryID: "source", ConfigRevision: "cfg1", Recipe: recipe, SourceMirror: filepath.Join(repo, ".git"), StateDir: filepath.Join(dir, "worker-state"), DockerContext: fixtureDocker.Context, DockerConfig: filepath.Join(home, ".docker"), AllowRootlessUnconfined: true}
 			workerFile := filepath.Join(dir, "worker.json")
 			b, _ := json.Marshal(workerCfg)
 			os.WriteFile(workerFile, b, 0600)

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"releasecontrol/internal/testdocker"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,11 +36,12 @@ func TestRegistryObservationDistributionProtectedAPI(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("requires explicit isolated Docker fixture opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	docker := func(args ...string) string {
 		t.Helper()
-		b, e := exec.Command("docker", append([]string{"--context", "orbstack"}, args...)...).CombinedOutput()
+		b, e := exec.Command("docker", append([]string{"--context", fixtureDocker.Context}, args...)...).CombinedOutput()
 		if e != nil {
 			t.Fatalf("Docker fixture: %v %s", e, b)
 		}
