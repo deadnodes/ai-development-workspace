@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -136,42 +137,109 @@ func TestExistingArtifactHTTPAndMCPDelegateSameCommand(t *testing.T) {
 	svc := &boundaryService{commands: make(chan domain.Command, 3), queries: make(chan [2]string, 1)}
 	server := httptest.NewServer(transport.New(svc, transport.Options{}))
 	defer server.Close()
-	command := domain.Command{Action: "deploy_existing_artifact", Actor: "agent/test", IntegrationID: "integration", Data: map[string]any{"environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact"}}
-	raw, _ := json.Marshal(command)
-	response, err := http.Post(server.URL+"/api/commands", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != 200 {
-		t.Fatal(response.StatusCode)
-	}
-	got := <-svc.commands
-	if !reflect.DeepEqual(command, got) {
-		t.Fatalf("HTTP differs: %+v", got)
-	}
 	ctx := context.Background()
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "artifact-test", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: command})
-	if err != nil || result.IsError {
-		t.Fatalf("execute: %v %+v", err, result)
+	for _, tc := range []struct{ name, key, digest string }{
+		{name: "omitted"},
+		{name: "request key only", key: "reuse_ARTIFACT-42"},
+		{name: "digest only", digest: "sha256:" + strings.Repeat("a", 64)},
+		{name: "both exact bytes", key: " Reuse_Key-42 ", digest: " sha256:" + strings.Repeat("b", 64) + " "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := map[string]any{"environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact"}
+			args := map[string]any{"actor": "agent/test", "integration_id": "integration", "environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact"}
+			if tc.key != "" {
+				data["request_key"] = tc.key
+				args["request_key"] = tc.key
+			}
+			if tc.digest != "" {
+				data["expected_digest"] = tc.digest
+				args["expected_digest"] = tc.digest
+			}
+			// Whitespace in the final case must remain exact at this transport boundary;
+			// application validation retains authority to reject invalid semantic inputs.
+			command := domain.Command{Action: "deploy_existing_artifact", Actor: "agent/test", IntegrationID: "integration", Data: data}
+			raw, _ := json.Marshal(command)
+			response, err := http.Post(server.URL+"/api/commands", "application/json", bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != 200 {
+				t.Fatal(response.StatusCode)
+			}
+			if got := <-svc.commands; !reflect.DeepEqual(command, got) {
+				t.Fatalf("HTTP differs: %+v", got)
+			}
+			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "execute", Arguments: command})
+			if err != nil || result.IsError {
+				t.Fatalf("execute: %v %+v", err, result)
+			}
+			if got := <-svc.commands; !reflect.DeepEqual(command, got) {
+				t.Fatalf("generic MCP differs: %+v", got)
+			}
+			result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_existing_artifact", Arguments: args})
+			if err != nil || result.IsError {
+				t.Fatalf("named tool: %v %+v", err, result)
+			}
+			if got := <-svc.commands; !reflect.DeepEqual(command, got) {
+				t.Fatalf("dedicated MCP differs: %+v", got)
+			}
+		})
 	}
-	got = <-svc.commands
-	if !reflect.DeepEqual(command, got) {
-		t.Fatalf("MCP execute differs: %+v", got)
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	args := map[string]any{"actor": "agent/test", "integration_id": "integration", "environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact"}
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_existing_artifact", Arguments: args})
-	if err != nil || result.IsError {
-		t.Fatalf("named tool: %v %+v", err, result)
+	found := false
+	for _, tool := range listed.Tools {
+		if tool.Name == "deploy_existing_artifact" {
+			found = true
+			raw, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var schema struct {
+				Properties map[string]struct {
+					Type string `json:"type"`
+				} `json:"properties"`
+				Required []string `json:"required"`
+			}
+			if err := json.Unmarshal(raw, &schema); err != nil {
+				t.Fatal(err)
+			}
+			required := map[string]bool{}
+			for _, name := range schema.Required {
+				required[name] = true
+			}
+			for _, name := range []string{"request_key", "expected_digest"} {
+				if schema.Properties[name].Type != "string" || required[name] {
+					t.Fatal("new field missing or required", name)
+				}
+			}
+			for _, name := range []string{"integration_id", "environment_id", "application_id", "revision_id", "artifact_id"} {
+				if !required[name] {
+					t.Fatal("existing required field changed", name)
+				}
+			}
+			if len(required) != 5 {
+				t.Fatal("required inputs changed", schema.Required)
+			}
+		}
 	}
-	got = <-svc.commands
-	if !reflect.DeepEqual(command, got) {
-		t.Fatalf("MCP named differs: %+v", got)
+	if !found {
+		t.Fatal("dedicated tool missing from tools/list")
+	}
+	invalid, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_existing_artifact", Arguments: map[string]any{"integration_id": "integration", "environment_id": "dev", "application_id": "app", "revision_id": "revision", "artifact_id": "artifact", "force": true}})
+	if err == nil && (invalid == nil || !invalid.IsError) {
+		t.Fatal("unknown input accepted")
+	}
+	if len(svc.commands) != 0 {
+		t.Fatal("invalid tool input reached application")
 	}
 }
 
