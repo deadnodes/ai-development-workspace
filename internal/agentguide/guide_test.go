@@ -8,6 +8,25 @@ import (
 	"testing"
 )
 
+func TestInstructionsSeparateGeneralDevPolicyFromRestoration(t *testing.T) {
+	general, restoration, ok := strings.Cut(Instructions, "For candidate Dev restoration ")
+	if !ok {
+		t.Fatal("missing restoration protocol")
+	}
+	for _, guard := range []string{"conditional Dev Flux exception", "actual owner instruction", "complete allowed Dev scope", "independent tests and fresh critic review of the current full head", "explicit squash with a server-side SHA lock", "retrieve rcp-delivery for the complete conditions", "Production, mixed, shared and unknown-scope Flux merges remain human-only", "no additional configuration, CI security, native-path adoption, authentication or permission rights"} {
+		if !strings.Contains(general, guard) {
+			t.Fatalf("missing current Dev policy guard %q", guard)
+		}
+	}
+	if strings.Contains(general, "human-only reviewed Flux") || strings.Contains(general, "including Dev") || strings.Contains(general, "until an explicit scoped cutover") {
+		t.Fatal("obsolete blanket Dev merge restriction")
+	}
+	const originalRestoration = "use request_candidate_dev_restoration, inspect the complete dev_restoration_plan.hash and PR heads, then separate confirm_candidate_dev_restoration. ATTRIBUTED_CONTROL_CONFIRMATION is attribution only, not authenticated human text/voice approval. External human-only reviewed Flux merge precedes verify_candidate_dev_restoration for all original components and roles, then explicit release_candidate_dev_after_restoration. Use the current recovery selection after request advances epoch/generation; never infer TTL unlock, renewed candidate rights, functional acceptance or Prod permission. See docs/DEV_RESTORATION.md; source changes are not a live installation or stage08 trust cutover. Re-run the host connect command after an instruction-kit update."
+	if restoration != originalRestoration {
+		t.Fatal("source-specific Dev restoration protocol changed")
+	}
+}
+
 func TestCanonicalSkillProvenance(t *testing.T) {
 	raw, err := files.ReadFile("skills/provenance.json")
 	if err != nil {
@@ -17,14 +36,14 @@ func TestCanonicalSkillProvenance(t *testing.T) {
 	if json.Unmarshal(raw, &sources) != nil || len(sources) != 2 {
 		t.Fatal("invalid skill provenance")
 	}
-	expected := map[string]string{SkillName: "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179", DeliverySkillName: "e21f283dcdd217f6b1e3ca37cebc26f5931723634f8287cbb70b06cc4e5c1feb"}
+	expected := map[string]string{SkillName: "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179", DeliverySkillName: "6ea608ca7c3d1503537a65610557ca07b6e36b569a9a2445a904ffcba062961e"}
 	for _, source := range sources {
 		sha, ok := expected[source.Name]
 		if !ok {
 			t.Fatal("unknown/duplicate skill provenance")
 		}
 		delete(expected, source.Name)
-		if source.Repository != "https://github.com/deadnodes/ai-tools" || source.Commit != "cd8bd058ce49fb96e96b6777725b03f9c8255bd5" || source.Path != ".workspace/skills/"+source.Name+"/SKILL.md" || source.SHA256 != sha {
+		if source.Repository != "https://github.com/deadnodes/ai-tools" || source.Commit != "4a25d7edcdda49aa550d73967f156a9e572cd284" || source.Path != ".workspace/skills/"+source.Name+"/SKILL.md" || source.SHA256 != sha {
 			t.Fatal("canonical source changed without deliberate snapshot update")
 		}
 		skill, ok := Lookup(source.Name)
