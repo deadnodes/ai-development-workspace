@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/testdocker"
 	"releasecontrol/internal/workerconfig"
 	"strings"
 	"sync/atomic"
@@ -255,11 +256,12 @@ func TestRealLocalCleanupRecovery(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("real Docker requires explicit opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	state, file, j := recoveryFixture(t)
 	j.Resources[0].ID = ""
 	j.Resources[0].Presence = nil
 	home, _ := os.UserHomeDir()
-	d := docker{context: "orbstack", config: filepath.Join(home, ".docker")}
+	d := docker{context: fixtureDocker.Context, config: filepath.Join(home, ".docker")}
 	j.DockerContext = d.context
 	j.DockerConfig = d.config
 	if e := saveJournal(file, j); e != nil {
@@ -331,7 +333,7 @@ func TestRealLocalCleanupRecovery(t *testing.T) {
 		_, _ = io.WriteString(w, "null")
 	}))
 	defer server.Close()
-	execution := &domain.WorkerExecution{Kind: "source_check", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", Platform: "linux/arm64", CheckArgv: []string{"/bin/true"}, Network: "none", TimeoutSeconds: 30, MemoryMB: 128, StorageMB: 16, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 1 << 20, LogBytes: 4096}
+	execution := &domain.WorkerExecution{Kind: "source_check", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", Platform: fixtureDocker.Platform, CheckArgv: []string{"/bin/true"}, Network: "none", TimeoutSeconds: 30, MemoryMB: 128, StorageMB: 16, CPUs: 1, PIDs: 64, SourceBytes: 1 << 20, OutputBytes: 1 << 20, LogBytes: 4096}
 	recipe := workerconfig.Recipe{ID: "unrelated", Revision: "v1", ProductID: "p", RepositoryID: "r", RepositoryURL: "https://github.com/fixture/unrelated", Capability: "source_check", Trust: "trusted_source", Parameters: map[string]workerconfig.Parameter{}, Execution: execution}
 	recipe.Hash = workerconfig.RecipeHash(recipe)
 	cfg := Config{Endpoint: server.URL, TokenEnv: "RCP_FIXTURE_CLEANUP_TOKEN", ProductID: "p", RepositoryID: "r", ConfigRevision: "fixture", Recipe: recipe, SourceMirror: filepath.Join(t.TempDir(), "mirror"), StateDir: state, DockerContext: d.context, DockerConfig: d.config}
@@ -563,9 +565,10 @@ func TestRealCleanupContinuesWhenPresenceExceedsJournalBound(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("real Docker requires explicit opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	state, file, j := recoveryFixture(t)
 	home, _ := os.UserHomeDir()
-	d := docker{context: "orbstack", config: filepath.Join(home, ".docker")}
+	d := docker{context: fixtureDocker.Context, config: filepath.Join(home, ".docker")}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	id, e := d.output(ctx, nil, 1024, "create", "--pull", "never", "--name", j.Resources[0].Name, "--label", "rcp.worker.owner="+j.Owner, "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", "/bin/true")

@@ -23,6 +23,7 @@ import (
 	githubprovider "releasecontrol/internal/providers/github"
 	"releasecontrol/internal/publishrunner"
 	"releasecontrol/internal/registryobserver"
+	"releasecontrol/internal/testdocker"
 	"releasecontrol/internal/transport"
 	"releasecontrol/internal/workerconfig"
 	"strings"
@@ -42,10 +43,11 @@ func testRealMainCandidateHistoricalGitProdProfile(t *testing.T, grouped bool) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("owned Docker fixture requires opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	ctx := context.Background()
 	docker := func(args ...string) string {
 		t.Helper()
-		b, e := exec.Command("docker", append([]string{"--context", "orbstack"}, args...)...).CombinedOutput()
+		b, e := exec.Command("docker", append([]string{"--context", fixtureDocker.Context}, args...)...).CombinedOutput()
 		if e != nil {
 			t.Fatalf("owned Docker: %v %s", e, b)
 		}
@@ -104,7 +106,7 @@ func testRealMainCandidateHistoricalGitProdProfile(t *testing.T, grouped bool) {
 			cfg.ProductID = "p"
 			cfg.RepositoryID = "source"
 			cfg.ConfigRevision = "main-v1"
-			x := &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", BuildKitImage: "moby/buildkit@sha256:04cf92d6e86fcfdc7f37b7b5098978081952c11e6ac16769ab1aad95035c2441", Platform: "linux/arm64", CheckArgv: []string{"go", "-C", "/source", "test", "./..."}, BuildArgv: []string{"go", "-C", "/source", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "."}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 300, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128, SourceBytes: 1 << 20, OutputBytes: 16 << 20, LogBytes: 1 << 20, SourceFetch: cfg.Recipe.Execution.SourceFetch}
+			x := &domain.WorkerExecution{Kind: "local_oci_build", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", BuildKitImage: fixtureDocker.BuildKitImage, Platform: fixtureDocker.Platform, CheckArgv: []string{"go", "-C", "/source", "test", "./..."}, BuildArgv: []string{"go", "-C", "/source", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "."}, OutputFile: "app", ImagePath: "app", Entrypoint: []string{"/app"}, Network: "none", TimeoutSeconds: 300, MemoryMB: 1536, StorageMB: 512, CPUs: 2, PIDs: 128, SourceBytes: 1 << 20, OutputBytes: 16 << 20, LogBytes: 1 << 20, SourceFetch: cfg.Recipe.Execution.SourceFetch}
 			dev := workerconfig.Recipe{ID: "dev-build", Revision: "v1", ProductID: "p", RepositoryID: "source", RepositoryURL: "https://github.com/fixture/source", Capability: "local_oci_build", Trust: "trusted_source", Execution: x, Parameters: map[string]workerconfig.Parameter{}}
 			dev.Hash = workerconfig.RecipeHash(dev)
 			prod := dev
@@ -275,7 +277,7 @@ func testRealMainCandidateHistoricalGitProdProfile(t *testing.T, grouped bool) {
 			}
 			cfg.Endpoint = server.URL
 			cfg.ArtifactSpool = &artifactspool.Config{Root: spool, MaxArchiveBytes: 16 << 20, MaxTotalBytes: 64 << 20, MaxEntries: 8}
-			cfg.DockerContext = "orbstack"
+			cfg.DockerContext = fixtureDocker.Context
 			home, _ := os.UserHomeDir()
 			cfg.DockerConfig = filepath.Join(home, ".docker")
 			cfg.AllowRootlessUnconfined = true

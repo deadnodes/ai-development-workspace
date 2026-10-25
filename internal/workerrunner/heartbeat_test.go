@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"releasecontrol/internal/domain"
@@ -120,13 +121,24 @@ func TestWorkerHeartbeatFinalizationPreservesParentCancellationAndDeadline(t *te
 					t.Fatal(e)
 				}
 			}
+			leaseUntil := js.snapshot().LeaseUntil
 			stop := superviseWorkerHeartbeat(ctx, cancel, client, domain.WorkerAttemptRequest{}, js)
+			phase := "in-flight"
 			select {
 			case <-entered:
+			case <-ctx.Done():
+				// Journal fsync or scheduling may consume the short lease/context
+				// before HTTP is admitted. An expired request need not reach a handler.
+				select {
+				case <-entered:
+				default:
+					phase = "pre-entry expiry"
+				}
 			case <-time.After(time.Second):
-				t.Fatal("no heartbeat")
+				t.Fatal("neither heartbeat entry nor context termination observed")
 			}
-			if mode == "cancel" {
+			manualParentCancel := mode == "cancel" && phase == "in-flight"
+			if manualParentCancel {
 				parentCancel()
 			}
 			joined := make(chan struct{})
@@ -139,12 +151,90 @@ func TestWorkerHeartbeatFinalizationPreservesParentCancellationAndDeadline(t *te
 			if ctx.Err() == nil {
 				t.Fatal("finalization erased parent cancellation/deadline")
 			}
-			if mode == "lease-expiry" && ctx.Err() != context.Canceled {
-				t.Fatal("heartbeat outlived its current lease", ctx.Err())
+			if ctx.Err() != context.Canceled && ctx.Err() != context.DeadlineExceeded {
+				t.Fatal("unexpected terminal execution context", ctx.Err())
 			}
-			report, e := prepareReport(ctx, Config{}, "", domain.WorkerAttemptRequest{}, &domain.WorkerLocalOCI{}, nil)
-			if e == nil || report.Result == "PASSED" {
-				t.Fatal("cancelled finalization became PASSED")
+			// Setup can make the default lease expire before the later-started
+			// execution deadline. Check the observed cause against its actual bound
+			// of assuming the table mode determines which bound wins.
+			if ctx.Err() == context.DeadlineExceeded {
+				deadline, _ := ctx.Deadline()
+				if time.Now().Before(deadline) {
+					t.Fatal("execution deadline terminated prematurely")
+				}
+			}
+			if !manualParentCancel && ctx.Err() == context.Canceled && time.Now().Before(leaseUntil) {
+				t.Fatal("lease cancellation occurred before lease expiry")
+			}
+			assertCancelledHeartbeatReport(t, ctx)
+			t.Logf("mode=%s phase=%s terminal=%v; stop joined and local PASSED refused", mode, phase, ctx.Err())
+		})
+	}
+}
+
+func assertCancelledHeartbeatReport(t *testing.T, ctx context.Context) {
+	t.Helper()
+	report, err := prepareReport(ctx, Config{}, "", domain.WorkerAttemptRequest{}, &domain.WorkerLocalOCI{}, nil)
+	if err == nil || report == nil || report.Result == "PASSED" || report.LocalOCI != nil {
+		t.Fatal("cancelled finalization admitted a local successful result", err)
+	}
+}
+
+func TestWorkerHeartbeatAlreadyExpiredBeforeEntry(t *testing.T) {
+	for _, mode := range []string{"parent-cancel", "parent-deadline", "lease-expiry"} {
+		t.Run(mode, func(t *testing.T) {
+			var requests atomic.Int32
+			// The server is outside the fake-clock bubble. Fake time tests only
+			// already-expired contexts; any admitted HTTP request is a failure.
+			client, js := heartbeatFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusUnprocessableEntity)
+			})
+			synctest.Test(t, func(t *testing.T) {
+				parent, parentCancel := context.WithCancel(context.Background())
+				defer parentCancel()
+				if mode == "parent-deadline" {
+					var cancelDeadline context.CancelFunc
+					parent, cancelDeadline = context.WithDeadline(parent, time.Now().Add(-time.Nanosecond))
+					defer cancelDeadline()
+				}
+				ctx, cancel := context.WithTimeout(parent, 150*time.Millisecond)
+				defer cancel()
+				leaseUntil := time.Now().Add(80 * time.Millisecond)
+				if mode == "lease-expiry" {
+					leaseUntil = time.Now().Add(-80 * time.Millisecond)
+				}
+				if err := js.update(func(j *journal) { j.LeaseUntil = leaseUntil }); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "parent-cancel" {
+					parentCancel()
+				}
+				stop := superviseWorkerHeartbeat(ctx, cancel, client, domain.WorkerAttemptRequest{}, js)
+				select {
+				case <-ctx.Done():
+				case <-time.After(time.Second):
+					t.Fatal("expired context or lease did not terminate execution")
+				}
+				joined := make(chan struct{})
+				go func() { stop(); close(joined) }()
+				select {
+				case <-joined:
+				case <-time.After(time.Second):
+					t.Fatal("expired heartbeat did not join")
+				}
+				want := context.Canceled
+				if mode == "parent-deadline" {
+					want = context.DeadlineExceeded
+				}
+				if ctx.Err() != want {
+					t.Fatalf("expired %s: got %v, want %v", mode, ctx.Err(), want)
+				}
+				assertCancelledHeartbeatReport(t, ctx)
+				stop()
+			})
+			if requests.Load() != 0 {
+				t.Fatal("already-expired heartbeat reached HTTP handler", requests.Load())
 			}
 		})
 	}

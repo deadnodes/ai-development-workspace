@@ -193,6 +193,52 @@ Linux Docker engine with the two pinned images cached:
 RCP_TEST_DOCKER=1 go test ./internal/workerrunner -run 'TestRealWorker|TestRealCreateStart' -count=1 -v -timeout=12m
 ```
 
+Fixture defaults remain `orbstack` and `linux/arm64`. To run the same small-source
+fixtures on a native Linux AMD64 engine, explicitly set
+`RCP_TEST_DOCKER_CONTEXT=default RCP_TEST_DOCKER_PLATFORM=linux/amd64` alongside
+`RCP_TEST_DOCKER=1`. Only `orbstack`/`default` contexts and `linux/arm64`/
+`linux/amd64` platforms are accepted. Preflight requires the expected local Unix
+socket and a matching native daemon architecture; remote contexts, conflicting
+Docker environment overrides and emulation are rejected. Cache the pinned Go,
+BuildKit and Distribution images before running; the upstream workflow lists
+exact AMD64 pull commands. The ARM64 BuildKit digest is unchanged. Its AMD64
+sibling is from the same `v0.29.0-rootless` index
+`sha256:93efd7f1c17f16cea080c34f68e19863b9fe541db550bf607221ce425c0ab9ef`;
+this changes no worker production defaults or operator execution profile.
+The existing ARM64 clean-build golden remains asserted byte for byte. AMD64
+retains OCI platform/content and source checks, equal repeated clean manifests,
+and different output after changed source; its observed manifest is logged.
+This Go fixture separately reads the compiled app from the verified OCI archive
+with bounded in-memory reads, checks ELF64 and the selected architecture's
+machine plus the expected source literal, and requires equal clean binary
+digests and a different changed-source binary digest. The generic production OCI
+verifier checks image metadata/content binding and allows non-ELF images; it
+does not promise this Go-specific ELF check.
+An independently established fixed AMD64 golden remains a narrow verification
+limit, separate from those assertions and from real Linux job execution proof.
+`RCP_TEST_DOCKER_DIAGNOSTICS=1` enables at most 32 selected state snapshots from
+the clean-build fixture's exact journal IDs after owner-label verification;
+it emits only role, container ID, status, exit code and OOM flag. CI also reads
+relevant user-namespace sysctl values. Diagnostics change no host settings,
+security flags, deadlines or cleanup and expose no environment, arguments,
+source contents or daemon logs. A separate opt-in empty startup test uses the
+same pinned BuildKit image and container profile, with no application source,
+credentials or host mounts. It attaches for at most 20 seconds and quotes at
+most 8 KiB of each startup output stream; a durable exact-owner journal governs
+cleanup. Uncertain cleanup retains that temporary journal for inspection.
+
+The separate `native-docker` upstream CI job runs worker isolation/lifecycle,
+late CREATE/START and cleanup recovery, source fetching, composition, historical
+main candidate, grouped Dev GitOps, protected API/checks/publication and registry
+observation fixtures on `ubuntu-24.04` with isolated bbolt/PostgreSQL stores.
+It runs only trusted upstream push/manual events, with read-only repository
+permissions and without provider/registry credentials or QEMU. Image publication
+waits for both ordinary checks and this native acceptance job. Registries are
+temporary loopback fixtures and GitHub/PR adapters use isolated in-process
+stubs; no installation is deployed. Application operator-profile/runtime tests require separately approved
+images/configuration and are excluded. Passing these fixtures does not establish
+fleet, Dev installation or production acceptance.
+
 They use temporary repositories/databases and exact owned containers. The Go
 fixture checks isolation, builds twice from clean state with equal manifest
 digest, then changes source and verifies different output/provenance. HTTP drops

@@ -45,9 +45,85 @@ jobs:
         run: go test -race ./internal/persistence -run '^(TestPostgresUpdateRetainsLargeOperationHistory|TestPostgresHistoricalUpdatePreservesRecordsAndTransactions)$' -count=1 -v
       - run: make check
 
+  native-docker:
+    name: Native Linux worker and publisher acceptance
+    # Own upstream only: never execute fork/PR/bot source with Docker access.
+    if: github.repository == 'deadnodes/ai-development-workspace' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.event.sender.type != 'Bot' && !endsWith(github.actor, '[bot]') && github.actor != 'renovate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: releasecontrol
+          POSTGRES_PASSWORD: releasecontrol
+          POSTGRES_DB: releasecontrol_native_tests
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U releasecontrol"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GOFLAGS: -p=1
+      RCP_TEST_DOCKER: '1'
+      RCP_TEST_DOCKER_CONTEXT: default
+      RCP_TEST_DOCKER_PLATFORM: linux/amd64
+      RCP_TEST_DOCKER_DIAGNOSTICS: '1'
+      TEST_DATABASE_URL: postgres://releasecontrol:releasecontrol@localhost:5432/releasecontrol_native_tests?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Require native Linux AMD64 and cache immutable fixture images
+        # No QEMU, registry login, installations, cluster or deployment access.
+        run: |
+          test "$(uname -s)/$(uname -m)" = Linux/x86_64
+          # Read only: unsupported rootless profiles must still fail closed.
+          for setting in /proc/sys/user/max_user_namespaces /proc/sys/kernel/unprivileged_userns_clone /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined
+          do
+            if test -r "$setting"; then
+              printf '%s=' "$setting"
+              cat "$setting"
+            fi
+          done
+          test "$(docker --context default context inspect default --format '{{.Endpoints.docker.Host}}')" = unix:///var/run/docker.sock
+          case "$(docker --context default info --format '{{.OSType}}/{{.Architecture}}')" in
+            linux/amd64|linux/x86_64) ;;
+            *) exit 1 ;;
+          esac
+          for image in \
+            golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b \
+            moby/buildkit@sha256:78b3b861a6c4d6f2235d1e0ca61d183ff371aa5bd4398051b24815a235b4cf45 \
+            registry@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+          do
+            docker --context default pull --platform linux/amd64 "$image"
+            test "$(docker --context default image inspect "$image" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          done
+      - name: Allow only the RootlessKit executable to create user namespaces
+        run: bash .github/scripts/rcp-rootlesskit-apparmor.sh setup
+      - name: Empty same-profile BuildKit startup and bounded diagnostics
+        run: go test ./internal/workerrunner -run '^TestRealBuildKitStartupDiagnostics$' -count=1 -v -timeout=2m
+      - name: Real native clean builds with bounded state diagnostics
+        run: go test ./internal/workerrunner -run '^TestRealWorkerTwoCleanBuilds$' -count=1 -v -timeout=20m
+      - name: Real native worker boundaries, recovery and source provenance
+        run: go test ./internal/workerrunner -run '^(TestRealWorkerFailureCancellationExpiryKillAndRestart|TestRealCreateStartSupervisionWindows|TestRealLocalCleanupRecovery|TestRealCleanupContinuesWhenPresenceExceedsJournalBound|TestSourceFetchRealGitRunOneOCI)$' -count=1 -v -timeout=20m
+      - name: Real native composition, candidate and selective GitOps fixture chains
+        run: go test ./internal/workerrunner -run '^(TestRealComposedGitSourceWorkerPublication|TestRealMainCandidateHistoricalGitProdProfile|TestRealDevGitOpsBatchNativePipeline)$' -count=1 -v -timeout=20m
+      - name: Real native API, checks, publisher and registry fixture chains
+        run: go test ./internal/transport -run '^(TestRealNativeAPIWorkerPublisherDistributionPR|TestRealNativeChecksWorkerPublisherPR|TestRegistryObservationDistributionProtectedAPI)$' -count=1 -v -timeout=15m
+      - name: Remove the temporary RootlessKit AppArmor profile
+        if: always()
+        run: bash .github/scripts/rcp-rootlesskit-apparmor.sh cleanup
+
   image:
     name: Publish container
-    needs: check
+    needs: [check, native-docker]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
     # Publishing an upstream image does not deploy any installation.
     runs-on: ubuntu-24.04

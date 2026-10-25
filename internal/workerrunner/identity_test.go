@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"releasecontrol/internal/testdocker"
 	"strings"
 	"syscall"
 	"testing"
@@ -104,6 +105,7 @@ func TestRealCreateStartSupervisionWindows(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("real boundary tests require explicit opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	root := t.TempDir()
 	binary := filepath.Join(root, "worker")
 	build := exec.Command("go", "build", "-o", binary, "../../cmd/worker")
@@ -129,7 +131,7 @@ func TestRealCreateStartSupervisionWindows(t *testing.T) {
 			}
 			defer func() { _ = parent.Process.Kill(); _ = parent.Wait() }()
 			home, _ := os.UserHomeDir()
-			d := docker{context: "orbstack", config: filepath.Join(home, ".docker")}
+			d := docker{context: fixtureDocker.Context, config: filepath.Join(home, ".docker")}
 			name := "rcp-" + owner + "-check"
 			lease := time.Now().Add(30 * time.Second)
 			if scenario == "timeout-during-create" {
@@ -146,7 +148,7 @@ func TestRealCreateStartSupervisionWindows(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = watchdog.Process.Kill(); _ = watchdog.Wait() }()
-			e := &domain.WorkerExecution{Platform: "linux/arm64", ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", MemoryMB: 128, StorageMB: 16, CPUs: 1, PIDs: 64}
+			e := &domain.WorkerExecution{Platform: fixtureDocker.Platform, ToolchainImage: "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b", MemoryMB: 128, StorageMB: 16, CPUs: 1, PIDs: 64}
 			if scenario == "kill-during-create" {
 				_ = parent.Process.Kill()
 			}

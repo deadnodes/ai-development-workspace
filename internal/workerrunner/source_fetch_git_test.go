@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"releasecontrol/internal/testdocker"
 	"strconv"
 	"strings"
 	"testing"
@@ -267,6 +268,7 @@ func TestSourceFetchRealGitRunOneOCI(t *testing.T) {
 	if os.Getenv("RCP_TEST_DOCKER") != "1" {
 		t.Skip("owned real Docker execution requires explicit opt-in")
 	}
+	fixtureDocker := testdocker.Load(t)
 	f := newSourceGitFixture(t)
 	for _, pg := range []bool{false, true} {
 		t.Run(fmt.Sprintf("postgres=%t", pg), func(t *testing.T) {
@@ -277,9 +279,10 @@ func TestSourceFetchRealGitRunOneOCI(t *testing.T) {
 			cfg := sourceFetchConfig(t)
 			e := cfg.Recipe.Execution
 			e.Kind = "local_oci_build"
+			e.Platform = fixtureDocker.Platform
 			cfg.Recipe.Capability = e.Kind
 			e.ToolchainImage = "golang@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b"
-			e.BuildKitImage = "moby/buildkit@sha256:04cf92d6e86fcfdc7f37b7b5098978081952c11e6ac16769ab1aad95035c2441"
+			e.BuildKitImage = fixtureDocker.BuildKitImage
 			e.CheckArgv = []string{"go", "test", "/source/main.go", "/source/a.go", "/source/b.go", "/source/main_test.go"}
 			e.BuildArgv = []string{"go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid=", "-o", "/output/app", "/source/main.go", "/source/a.go", "/source/b.go"}
 			e.OutputFile = "app"
@@ -293,7 +296,7 @@ func TestSourceFetchRealGitRunOneOCI(t *testing.T) {
 			e.OutputBytes = 16 << 20
 			e.LogBytes = 1 << 20
 			cfg.Recipe.Hash = workerconfig.RecipeHash(cfg.Recipe)
-			cfg.DockerContext = "orbstack"
+			cfg.DockerContext = fixtureDocker.Context
 			home, _ := os.UserHomeDir()
 			cfg.DockerConfig = filepath.Join(home, ".docker")
 			cfg.AllowRootlessUnconfined = true
