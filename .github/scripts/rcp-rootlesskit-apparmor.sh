@@ -46,7 +46,21 @@ if [[ "$mode" = setup ]]; then
   # Unique state/profile; refuse any existing RootlessKit attachment rather than replace it.
   [[ ! -e "$state" && ! -L "$state" ]] || fail
   profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
-  if [[ "${profiles,,}" = *rootlesskit* ]]; then
+  rootless_profiles=$(printf '%s\n' "$profiles" | grep -i rootlesskit || true)
+  if [[ "$rootless_profiles" = 'rootlesskit (unconfined)' ]]; then
+    # Reuse the distribution executable attachment, never select it for a container.
+    [[ -f /etc/apparmor.d/rootlesskit && ! -L /etc/apparmor.d/rootlesskit ]] || fail
+    grep -Eq '^profile[[:space:]]+rootlesskit[[:space:]]+/usr/bin/rootlesskit[[:space:]]+flags=\(unconfined\)[[:space:]]*\{' /etc/apparmor.d/rootlesskit || fail
+    [[ $(apparmor_parser -N /etc/apparmor.d/rootlesskit) = rootlesskit ]] || fail
+    mkdir -m 700 "$state"
+    cat "$unconfined" > "$state/unconfined"
+    printf '%s\n' rootlesskit > "$state/reused"
+    assert_restrictions
+    negative_control
+    printf 'RCP_TEST_APPARMOR_PROFILE=rootlesskit\n' >> "${GITHUB_ENV:?}"
+    exit 0
+  fi
+  if [[ -n "$rootless_profiles" ]]; then
     echo 'Existing RootlessKit profile requires explicit inspection; refusing overlap.' >&2
     exit 1
   fi
@@ -62,14 +76,23 @@ if [[ "$mode" = setup ]]; then
 else
   # Setup may have failed before creating state. Nothing was loaded in that case.
   if [[ -e "$state" || -L "$state" ]]; then
-    [[ -d "$state" && ! -L "$state" && ! -L "$state/profile" && -f "$state/profile" ]] || fail
-    cmp -s "$state/profile" <(policy) || fail
-    profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
-    if [[ "$profiles" = *"$profile ("* ]]; then
-      sudo apparmor_parser -R "$state/profile"
+    [[ -d "$state" && ! -L "$state" ]] || fail
+    if [[ -e "$state/reused" || -L "$state/reused" ]]; then
+      [[ -f "$state/reused" && ! -L "$state/reused" && ! -e "$state/profile" && ! -L "$state/profile" ]] || fail
+      [[ $(cat "$state/reused") = rootlesskit ]] || fail
+      profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
+      printf '%s\n' "$profiles" | grep -Fxq 'rootlesskit (unconfined)' || fail
+      # Existing profile is not ours to unload.
+    else
+      [[ ! -L "$state/profile" && -f "$state/profile" ]] || fail
+      cmp -s "$state/profile" <(policy) || fail
+      profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
+      if [[ "$profiles" = *"$profile ("* ]]; then
+        sudo apparmor_parser -R "$state/profile"
+      fi
+      profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
+      [[ "$profiles" != *"$profile ("* ]] || fail
     fi
-    profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
-    [[ "$profiles" != *"$profile ("* ]] || fail
     # Policy drift must not prevent removal of our exact temporary profile.
     [[ -f "$state/unconfined" && ! -L "$state/unconfined" ]] || fail
     [[ $(cat "$state/unconfined") =~ ^[01]$ ]] || fail
