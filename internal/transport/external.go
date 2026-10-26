@@ -86,16 +86,25 @@ func (in deployInput) command() domain.Command {
 }
 
 type deployExistingInput struct {
-	Actor         string `json:"actor,omitempty"`
-	IntegrationID string `json:"integration_id"`
-	EnvironmentID string `json:"environment_id"`
-	ApplicationID string `json:"application_id"`
-	RevisionID    string `json:"revision_id"`
-	ArtifactID    string `json:"artifact_id"`
+	Actor          string `json:"actor,omitempty"`
+	IntegrationID  string `json:"integration_id"`
+	EnvironmentID  string `json:"environment_id"`
+	ApplicationID  string `json:"application_id"`
+	RevisionID     string `json:"revision_id"`
+	ArtifactID     string `json:"artifact_id"`
+	RequestKey     string `json:"request_key,omitempty" jsonschema:"Optional stable request key for exact scoped replay"`
+	ExpectedDigest string `json:"expected_digest,omitempty" jsonschema:"Optional expected immutable artifact digest"`
 }
 
 func (in deployExistingInput) command() domain.Command {
-	return domain.Command{Action: "deploy_existing_artifact", Actor: defaultActor(in.Actor), IntegrationID: in.IntegrationID, Data: map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID, "revision_id": in.RevisionID, "artifact_id": in.ArtifactID}}
+	data := map[string]any{"environment_id": in.EnvironmentID, "application_id": in.ApplicationID, "revision_id": in.RevisionID, "artifact_id": in.ArtifactID}
+	if in.RequestKey != "" {
+		data["request_key"] = in.RequestKey
+	}
+	if in.ExpectedDigest != "" {
+		data["expected_digest"] = in.ExpectedDigest
+	}
+	return domain.Command{Action: "deploy_existing_artifact", Actor: defaultActor(in.Actor), IntegrationID: in.IntegrationID, Data: data}
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
