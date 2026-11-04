@@ -33,6 +33,12 @@ Example with a placeholder endpoint and model:
 The encryption-key reference must resolve to a base64-encoded 32-byte key. Keep
 both keys outside Git, ordinary RCP records and reports. Product grants and
 conflict file paths are explicit; neither grants merge or deployment authority.
+Normal principal and production-reference restrictions still apply: a
+production-scoped draft request can require an administrator even though it
+does not deploy anything. Model enrollment grants no additional user role.
+Task dispatch also requires the existing scheduler: `RCP_WORKER_ENABLED=false`
+leaves tasks queued. Enabling that scheduler can resume other pending operations,
+so check them during the operator's normal idle-operation preflight.
 Invalid configuration fails closed. Configuration or key changes can invalidate
 pending tasks and old drafts. Retain the correct encryption key for history that
 must remain readable. Enrollment and shared-service changes are separate

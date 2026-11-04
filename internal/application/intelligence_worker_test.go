@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/intelligencepatch"
@@ -19,6 +20,7 @@ func patchTaskFixture(t *testing.T) (*Service, *memoryStore, *intelligenceFixtur
 	exec(t, s, domain.Command{Action: "create_repository", ID: "repo", ProductID: "p", Data: map[string]any{"name": "repo", "url": "https://github.com/test/repo"}})
 	exec(t, s, domain.Command{Action: "record_integration_revision", ID: "patch-revision", IntegrationID: "i", Data: map[string]any{"repository_id": "repo", "branch": "feature", "base_commit": strings.Repeat("a", 40), "head_commit": strings.Repeat("b", 40), "commits": []string{strings.Repeat("b", 40)}}})
 	m.state.CompositionConflicts = append(m.state.CompositionConflicts, domain.CompositionConflict{Meta: domain.Meta{ID: "conflict", ProductID: "p"}, Status: "requires_resolution", RepositoryID: "repo", OperationID: "conflicting-operation", Source: domain.FlowSource{RepositoryID: "repo", Plan: delivery.SourcePlan{BaseSHA: strings.Repeat("a", 40), HeadSHAs: []string{strings.Repeat("b", 40), strings.Repeat("c", 40)}}}, Integrations: []domain.Integration{m.state.Integrations[0]}})
+	m.state.Operations = append(m.state.Operations, domain.ExternalOperation{Meta: domain.Meta{ID: "conflicting-operation", ProductID: "p"}, Kind: "COMPOSE", Status: "FAILED"})
 	p := intelligencepatch.Proposal{BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Edits: []intelligencepatch.Edit{{Path: "src/value.go", BeforeHash: intelligencepatchContentHash("package value\nconst A=1\n"), Content: "package value\nconst A=1\nconst B=2\n"}}}
 	b, _ := json.Marshal(intelligenceResult{Decision: "patch_proposed", Summary: "Preserve both additions", Patch: &p})
 	f.result = string(b)
@@ -108,4 +110,36 @@ func TestIntelligencePatchStaleScopeAndRecipeGuards(t *testing.T) {
 			t.Fatal("cannot cancel task after provider removal", e)
 		}
 	})
+}
+
+func TestIntelligenceConflictFallbackWithoutModelAuthority(t *testing.T) {
+	for _, state := range []string{"revoked", "stale", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			s, m, _, task, _ := patchTaskFixture(t)
+			switch state {
+			case "revoked":
+				s.ConfigureIntelligence(nil)
+			case "stale":
+				m.state.CompositionConflicts[0].Source.Plan.HeadSHAs = []string{strings.Repeat("d", 40)}
+			case "failed":
+				operationByID(&m.state, task.ID).Status = "FAILED"
+			}
+			before := len(m.state.Events)
+			q, e := s.Query(context.Background(), "get_intelligence_task", task.ID)
+			if e != nil {
+				t.Fatal(e)
+			}
+			out := q.(map[string]any)
+			if out["agent_action"] == nil || out["conflict_id"] != "conflict" || out["source_operation_id"] != "conflicting-operation" {
+				t.Fatal("requesting-agent fallback unavailable without model", out)
+			}
+			if len(m.state.Events) != before {
+				t.Fatal("fallback query mutated state")
+			}
+			foreign := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/foreign", Kind: "agent", Permissions: []string{"read"}, Products: []string{"q"}})
+			if _, e = s.Query(foreign, "get_intelligence_task", task.ID); e == nil {
+				t.Fatal("fallback leaked across Products")
+			}
+		})
+	}
 }

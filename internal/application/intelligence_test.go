@@ -216,9 +216,62 @@ func releaseNotesFixture(t *testing.T) (*Service, *memoryStore, *intelligenceFix
 	m.state.Operations = append(m.state.Operations, domain.ExternalOperation{Meta: domain.Meta{ID: "old-deploy", ProductID: "p"}, Kind: "DEPLOY", ApplicationID: "app", EnvironmentID: "env", Snapshot: &oldSnapshot}, domain.ExternalOperation{Meta: domain.Meta{ID: "candidate", ProductID: "p"}, Kind: "RELEASE_CANDIDATE", EnvironmentID: "env", Status: "SUCCEEDED", CompositionSnapshot: &comp, ChildIDs: []string{"new-build"}, ReleaseNotesIntentHash: releaseNotesIntentHash(&m.state, comp)}, domain.ExternalOperation{Meta: domain.Meta{ID: "new-build", ProductID: "p"}, ParentID: "candidate", Kind: "DEPLOY", ApplicationID: "app", EnvironmentID: "env", Status: "SUCCEEDED", Snapshot: &newSnapshot, Artifact: &delivery.ArtifactResult{Digest: newDigest}})
 	m.state.RuntimeObservations = append(m.state.RuntimeObservations, domain.RuntimeObservation{Meta: domain.Meta{ID: "runtime", ProductID: "p", CreatedAt: time.Now().Add(-time.Minute)}, OperationID: "old-deploy", EnvironmentID: "env", ArtifactDigest: oldDigest, GitOpsCommit: oldSHA, Healthy: true})
 	m.state.Releases = append(m.state.Releases, domain.Release{Meta: domain.Meta{ID: "previous", ProductID: "p", CreatedAt: time.Now().Add(-time.Hour)}, EnvironmentID: "env", Status: "released", IntegrationIDs: []string{"i"}, SourceCommits: map[string]string{"app": oldSHA}, ArtifactDigests: map[string]string{"app": oldDigest}, GitOpsCommits: map[string]string{"app": oldSHA}, Snapshots: []domain.Integration{m.state.Integrations[0]}})
+	enrollNotesFixtureBindings(m)
 	f.result = `{"decision":"draft","summary":"Release summary","changes":[{"integration_ids":["i"],"text":"A useful improvement.","evidence_refs":["candidate","revision-new"]}],"warnings":[],"patch":null}`
 	c := domain.Command{Actor: "agent", Action: "queue_intelligence_task", ProductID: "p", Data: map[string]any{"task_kind": "release_notes", "request_key": "release-notes-001", "candidate_operation_id": "candidate", "previous_release_id": "previous"}}
 	return s, m, f, c
+}
+
+// Build a complete persisted configuration for the synthetic candidate. The
+// production guard is exercised unchanged; fixtures do not bypass enrollment.
+func enrollNotesFixtureBindings(m *memoryStore) {
+	st := &m.state
+	c := operationByID(st, "candidate")
+	c.PreparedDeployments = nil
+	c.CompositionSnapshot.Components = nil
+	conn := domain.GitHubConnection{Meta: domain.Meta{ID: "notes-connection", ProductID: "p"}, Config: delivery.Connection{ID: "notes-connection", AppID: 1, InstallationID: 1, Owner: "fixture", PrivateKeyRef: "env:UNUSED_NOTES_FIXTURE"}}
+	st.GitHubConnections = []domain.GitHubConnection{conn}
+	st.RepositoryBindings = nil
+	st.ComponentBuilds = nil
+	st.EnvironmentBindings = nil
+	st.Applications = nil
+	seen := map[string]bool{}
+	for _, childID := range c.ChildIDs {
+		child := operationByID(st, childID)
+		snap := child.Snapshot
+		app := snap.Application
+		repo := snap.Revision.RepositoryID
+		app.RepositoryID = repo
+		snap.Application = app
+		source := domain.RepositoryBinding{Meta: domain.Meta{ID: "notes-source-" + repo, ProductID: "p"}, RepositoryID: repo, ConnectionID: conn.ID, Role: "APPLICATION", DefaultBranch: "main"}
+		gitops := domain.RepositoryBinding{Meta: domain.Meta{ID: "notes-gitops-binding", ProductID: "p"}, RepositoryID: "notes-gitops", ConnectionID: conn.ID, Role: "GITOPS"}
+		if !seen[repo] {
+			st.RepositoryBindings = append(st.RepositoryBindings, source)
+			seen[repo] = true
+		}
+		if !seen["notes-gitops"] {
+			st.RepositoryBindings = append(st.RepositoryBindings, gitops)
+			seen["notes-gitops"] = true
+		}
+		build := domain.ComponentBuild{Meta: domain.Meta{ID: "notes-build-" + app.ID, ProductID: "p"}, ApplicationID: app.ID, ConnectionID: conn.ID, Workflow: "build.yml", WorkflowRef: "main", ImageRepository: "registry.example/" + app.ID, Profile: "prod"}
+		target := domain.EnvironmentBinding{Meta: domain.Meta{ID: "notes-target-" + app.ID, ProductID: "p"}, EnvironmentID: c.EnvironmentID, ApplicationID: app.ID, Purpose: "PROD", ConnectionID: conn.ID, RepositoryID: gitops.RepositoryID, Ref: "main", Path: "apps/" + app.ID + ".yaml", ImageField: "image", AllowDeploy: true}
+		snap.Source = source
+		snap.GitOps = gitops
+		snap.Build = build
+		snap.Target = target
+		snap.Environment = *environmentByID(st, c.EnvironmentID)
+		snap.SourceConnection = conn.Config
+		snap.GitOpsConnection = conn.Config
+		st.Applications = append(st.Applications, app)
+		st.ComponentBuilds = append(st.ComponentBuilds, build)
+		st.EnvironmentBindings = append(st.EnvironmentBindings, target)
+		c.PreparedDeployments = append(c.PreparedDeployments, *snap)
+		c.CompositionSnapshot.Components = append(c.CompositionSnapshot.Components, domain.CompositionComponent{ApplicationID: app.ID})
+	}
+	for i := range st.Integrations {
+		st.Integrations[i].Status = "ready"
+	}
+	c.ReleaseNotesIntentHash = releaseNotesIntentHash(st, *c.CompositionSnapshot)
 }
 
 func TestReleaseNotesActualDeltaAndStaleCandidate(t *testing.T) {
@@ -312,6 +365,7 @@ func TestReleaseNotesDifferentComponentBaselinesAndHistoricalRecord(t *testing.T
 	candidate.ChildIDs = append(candidate.ChildIDs, "other-build")
 	candidate.CompositionSnapshot.RevisionSnapshots = append(candidate.CompositionSnapshot.RevisionSnapshots, domain.IntegrationRevision{Meta: domain.Meta{ID: "other-revision", ProductID: "p", FeatureID: "f"}, IntegrationID: "other-integration", RepositoryID: "other-repo", HeadCommit: newSHA})
 	candidate.ReleaseNotesIntentHash = releaseNotesIntentHash(&m.state, *candidate.CompositionSnapshot)
+	enrollNotesFixtureBindings(m)
 	delete(c.Data, "previous_release_id")
 	c.Data["previous_release_ids"] = map[string]string{"app": "previous", "other-app": "other-previous"}
 	// A late historical release does not replace the actual per-component baseline.
@@ -432,5 +486,93 @@ func TestIntelligenceFailureStatusesPersistBackupAndRestore(t *testing.T) {
 				t.Fatal("failure task backup cannot restore", e)
 			}
 		})
+	}
+}
+
+func TestReleaseNotesCurrentConfigurationGuard(t *testing.T) {
+	for name, mutate := range map[string]func(*memoryStore){
+		"build workflow":          func(m *memoryStore) { m.state.ComponentBuilds[0].Workflow = "different.yml" },
+		"build profile":           func(m *memoryStore) { m.state.ComponentBuilds[0].Profile = "different-profile" },
+		"target mapping":          func(m *memoryStore) { m.state.EnvironmentBindings[0].Path = "different.yaml" },
+		"provider authority":      func(m *memoryStore) { m.state.GitHubConnections[0].Config.InstallationID++ },
+		"provider grant":          func(m *memoryStore) { m.state.GitHubConnections[0].ProductID = "other" },
+		"empty prepared bindings": func(m *memoryStore) { operationByID(&m.state, "candidate").PreparedDeployments = nil },
+	} {
+		for _, phase := range []string{"before dispatch", "late result", "query"} {
+			t.Run(name+"/"+phase, func(t *testing.T) {
+				s, m, f, c := releaseNotesFixture(t)
+				op := exec(t, s, c).(domain.ExternalOperation)
+				switch phase {
+				case "before dispatch":
+					mutate(m)
+					runIntelligenceTick(t, s)
+					if f.calls != 0 {
+						t.Fatal("stale configuration contacted model")
+					}
+				case "late result":
+					f.onCall = func() { mutate(m) }
+					runIntelligenceTick(t, s)
+					if operationByID(&m.state, op.ID).Intelligence.ResultCiphertext != "" {
+						t.Fatal("late result admitted after config drift")
+					}
+				case "query":
+					runIntelligenceTick(t, s)
+					mutate(m)
+				}
+				q, e := s.Query(context.Background(), "get_intelligence_task", op.ID)
+				if e != nil || q.(map[string]any)["stale"] != true || q.(map[string]any)["result"] != nil {
+					t.Fatal("configuration drift left draft current", e)
+				}
+			})
+		}
+	}
+}
+
+func TestReleaseNotesNativeLoadedAuthorityGuard(t *testing.T) {
+	f, _, command := mainCandidateFixture(t, "local")
+	defer f.store.Close()
+	ctx := context.Background()
+	v, e := f.s.Execute(ctx, command)
+	if e != nil {
+		t.Fatal(e)
+	}
+	op := v.(domain.ExternalOperation)
+	_, _, model := intelligenceFixture(t, 10)
+	f.s.ConfigureIntelligence(model)
+	st, e := f.store.Read(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	candidate := operationByID(&st, op.ID)
+	candidate.Status = "SUCCEEDED"
+	candidate.ChildIDs = []string{"model-native-built"}
+	snap := candidate.PreparedDeployments[0]
+	snap.Revision.HeadCommit = shaHead
+	st.Operations = append(st.Operations, domain.ExternalOperation{Meta: domain.Meta{ID: "model-native-built", ProductID: "p"}, ParentID: op.ID, ApplicationID: snap.Application.ID, EnvironmentID: op.EnvironmentID, Snapshot: &snap, Artifact: &delivery.ArtifactResult{Digest: "sha256:" + strings.Repeat("a", 64)}})
+	request := intelligenceRequest{TaskKind: "release_notes", CandidateOperationID: op.ID, PreviousReleaseID: "missing-baseline"}
+	// The unchanged real main-candidate authority passes; only the deliberately
+	// missing runtime baseline stops this fixture from producing a draft.
+	if _, e = f.s.releaseNotesContext(&st, "p", request); e == nil || strings.Contains(e.Error(), "configuration or authority") {
+		t.Fatal("unchanged native authority did not pass candidate guard", e)
+	}
+	f.s.ConfigureWorkers(nil)
+	if _, e = f.s.releaseNotesContext(&st, "p", request); e == nil || !strings.Contains(e.Error(), "configuration or authority") {
+		t.Fatal("revoked loaded native authority was not enforced before notes", e)
+	}
+}
+
+func TestReleaseNotesPreservesProductionRoleRestriction(t *testing.T) {
+	s, m, _, c := releaseNotesFixture(t)
+	before := m.state.Environments[0]
+	member := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/member", Kind: "agent", Permissions: []string{"write", "read"}, Products: []string{"p"}})
+	if _, e := s.Execute(member, c); e == nil {
+		t.Fatal("model enrollment bypassed existing production-reference restriction")
+	}
+	admin := auth.WithPrincipal(context.Background(), auth.Principal{ID: "human/admin", Kind: "human", Role: "admin", Permissions: []string{"admin"}, Products: []string{"*"}})
+	if _, e := s.Execute(admin, c); e != nil {
+		t.Fatal("existing instance admin cannot prepare model draft", e)
+	}
+	if m.state.Environments[0].DesiredOperationID != before.DesiredOperationID || m.state.Environments[0].DesiredCompositionID != before.DesiredCompositionID {
+		t.Fatal("draft generation changed environment intent")
 	}
 }

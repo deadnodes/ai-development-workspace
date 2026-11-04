@@ -79,6 +79,7 @@ type intelligenceIntent struct {
 	EvidenceRefs  []string `json:"evidence_refs"`
 }
 type notesContext struct {
+	ChildFingerprints    map[string]string    `json:"child_fingerprints"`
 	EnvironmentID        string               `json:"environment_id"`
 	PreviousReleaseID    string               `json:"previous_release_id"`
 	PreviousReleaseIDs   map[string]string    `json:"previous_release_ids"`
@@ -181,6 +182,15 @@ func (s *Service) executeIntelligence(ctx context.Context, c domain.Command) (an
 		m.FeatureID = c.FeatureID
 
 		op := domain.ExternalOperation{Meta: m, Kind: domain.IntelligenceOperationKind, IntegrationID: c.IntegrationID, RequestedBy: c.Actor, Status: "PENDING", Phase: "QUEUED", RequestKey: request.RequestKey, RequestHash: hash, NextAttemptAt: now, Intelligence: &domain.IntelligenceTask{Kind: request.TaskKind, ConfigRevision: a.Revision(), PromptVersion: intelligence.PromptVersion, Model: a.Model(), InputFingerprint: a.Fingerprint(input), InputCiphertext: ""}}
+		if request.TaskKind == "conflict_patch" {
+			for _, conflict := range st.CompositionConflicts {
+				if conflict.ID == request.ConflictID && conflict.ProductID == c.ProductID {
+					op.Intelligence.ConflictID = conflict.ID
+					op.Intelligence.SourceOperationID = conflict.OperationID
+					op.RepositoryID = conflict.RepositoryID
+				}
+			}
+		}
 		sealed, e := a.Seal(intelligenceAAD(op, "input"), input)
 		if e != nil {
 			return errors.New("cannot encrypt task input")
@@ -293,6 +303,12 @@ func (s *Service) releaseNotesContext(st *domain.State, product string, in intel
 	if candidate == nil || candidate.ProductID != product || candidate.Kind != "RELEASE_CANDIDATE" || candidate.CompositionSnapshot == nil || candidate.Status != "SUCCEEDED" {
 		return v, invalid("a successfully built exact release candidate is required")
 	}
+	if len(candidate.PreparedDeployments) == 0 || len(candidate.PreparedDeployments) != len(candidate.ChildIDs) || len(candidate.PreparedDeployments) != len(candidate.CompositionSnapshot.Components) {
+		return v, invalid("complete frozen candidate component configuration is required")
+	}
+	if e := s.flowGuard(st, *candidate); e != nil {
+		return v, invalid("candidate configuration or authority changed; prepare a new candidate")
+	}
 	baselines, previousSources, e := notesBaselines(st, product, candidate.EnvironmentID, in)
 	if e != nil {
 		return v, e
@@ -309,12 +325,32 @@ func (s *Service) releaseNotesContext(st *domain.State, product string, in intel
 	if environmentByID(st, candidate.EnvironmentID) == nil {
 		return v, invalid("candidate environment unavailable")
 	}
-	v = notesContext{EnvironmentID: candidate.EnvironmentID, PreviousReleaseID: in.PreviousReleaseID, PreviousReleaseIDs: previousIDs, CandidateOperationID: candidate.ID, PreviousSources: previousSources, PreviousArtifacts: previousArtifacts, Sources: map[string]string{}, Artifacts: map[string]string{}, CandidateFingerprint: s.intelligence.Fingerprint(candidate), Changes: []intelligenceIntent{}}
+	v = notesContext{EnvironmentID: candidate.EnvironmentID, PreviousReleaseID: in.PreviousReleaseID, PreviousReleaseIDs: previousIDs, CandidateOperationID: candidate.ID, PreviousSources: previousSources, PreviousArtifacts: previousArtifacts, Sources: map[string]string{}, Artifacts: map[string]string{}, CandidateFingerprint: s.intelligence.Fingerprint(candidate), ChildFingerprints: map[string]string{}, Changes: []intelligenceIntent{}}
+	preparedApps := map[string]bool{}
+	for _, snap := range candidate.PreparedDeployments {
+		if snap.Application.ID == "" || preparedApps[snap.Application.ID] {
+			return v, invalid("duplicate prepared component")
+		}
+		preparedApps[snap.Application.ID] = true
+	}
+	components := map[string]bool{}
+	for _, component := range candidate.CompositionSnapshot.Components {
+		if !preparedApps[component.ApplicationID] || components[component.ApplicationID] {
+			return v, invalid("candidate component configuration coverage mismatch")
+		}
+		components[component.ApplicationID] = true
+	}
+	seenChildren := map[string]bool{}
 	for _, childID := range candidate.ChildIDs {
 		child := operationByID(st, childID)
 		if child == nil || child.ProductID != product || child.ParentID != candidate.ID || child.Snapshot == nil || child.Artifact == nil || !fullSHA.MatchString(child.Snapshot.Revision.HeadCommit) || !artifactPinDigest.MatchString(child.Artifact.Digest) {
 			return v, invalid("candidate lacks complete immutable child source/artifact evidence")
 		}
+		if !preparedApps[child.ApplicationID] || seenChildren[child.ApplicationID] || child.EnvironmentID != candidate.EnvironmentID || child.Snapshot.Application.ID != child.ApplicationID {
+			return v, invalid("candidate child component coverage mismatch")
+		}
+		seenChildren[child.ApplicationID] = true
+		v.ChildFingerprints[child.ApplicationID] = s.intelligence.Fingerprint(child.Snapshot)
 		repo := child.Snapshot.Revision.RepositoryID
 		if old := v.Sources[repo]; old != "" && old != child.Snapshot.Revision.HeadCommit {
 			return v, invalid("ambiguous candidate repository source")
@@ -577,6 +613,7 @@ func (s *Service) intelligenceQuery(st *domain.State, id string) (any, error) {
 		return nil, missing("intelligence task", id)
 	}
 	out := map[string]any{"task": op, "review_required": true, "published": false, "usage_cost": "unknown"}
+	attachIntelligenceFallback(st, *op, out)
 	input, e := s.taskInput(st, *op)
 	if e != nil {
 		out["stale"] = true
@@ -584,7 +621,7 @@ func (s *Service) intelligenceQuery(st *domain.State, id string) (any, error) {
 		return out, nil
 	}
 	out["stale"] = false
-	if op.Intelligence.ResultCiphertext != "" {
+	if op.Status == "SUCCEEDED" && op.Intelligence.ResultCiphertext != "" {
 		var result intelligenceResult
 		if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || s.intelligence.Fingerprint(result) != op.Intelligence.ResultFingerprint || s.intelligence.ValidateOutput(result) != nil {
 			return nil, invalid("task result unavailable")
@@ -620,6 +657,23 @@ func (s *Service) intelligenceQuery(st *domain.State, id string) (any, error) {
 		}
 	}
 	return out, nil
+}
+
+// Minimal immutable references keep the existing caller-owned resolution route
+// usable even when the model enrollment is absent or its result is stale.
+func attachIntelligenceFallback(st *domain.State, op domain.ExternalOperation, out map[string]any) {
+	if op.Intelligence == nil || op.Intelligence.Kind != "conflict_patch" || op.Intelligence.ConflictID == "" || op.Intelligence.SourceOperationID == "" {
+		return
+	}
+	for _, c := range st.CompositionConflicts {
+		if c.ID == op.Intelligence.ConflictID && c.ProductID == op.ProductID && c.OperationID == op.Intelligence.SourceOperationID {
+			if parent := operationByID(st, c.OperationID); parent != nil && parent.ProductID == op.ProductID {
+				out["agent_action"] = operationConflictAction(st, *parent, time.Now().UTC())
+				out["conflict_id"] = c.ID
+				out["source_operation_id"] = parent.ID
+			}
+		}
+	}
 }
 
 func intelligencepatchContentHash(v string) string {

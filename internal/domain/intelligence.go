@@ -7,6 +7,8 @@ const IntelligenceOperationKind = "INTELLIGENCE"
 // IntelligenceTask stores authenticated ciphertext, never prompts, excerpts,
 // generated prose or model patches in ordinary state/history/backup records.
 type IntelligenceTask struct {
+	ConflictID        string             `json:"conflict_id,omitempty"`
+	SourceOperationID string             `json:"source_operation_id,omitempty"`
 	Kind              string             `json:"kind"`
 	ConfigRevision    string             `json:"config_revision"`
 	PromptVersion     string             `json:"prompt_version"`
