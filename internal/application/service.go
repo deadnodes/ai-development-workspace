@@ -25,6 +25,7 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
+	intelligence IntelligenceProvider
 	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
 	nativeAuthorityNow func() time.Time
 	// Restoration proposal deadline decisions only; read/proof/unlock clocks stay real.
@@ -94,6 +95,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "queue_intelligence_task" || c.Action == "cancel_intelligence_task" {
+		return s.executeIntelligence(ctx, c)
+	}
 	if restorationAction(c.Action) {
 		return s.executeDevRestoration(ctx, c)
 	}

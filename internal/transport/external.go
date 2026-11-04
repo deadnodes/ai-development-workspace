@@ -21,6 +21,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 		"GET /api/integrations/{id}/git":              "get_integration_git",
 		"GET /api/products/{id}/unlinked-git-commits": "get_unlinked_git_commits",
 		"GET /api/environments/{id}/state":            "get_environment_state",
+		"GET /api/intelligence-tasks/{id}":            "get_intelligence_task",
 		"GET /api/worker-jobs/{id}":                   "get_worker_job",
 		"GET /api/operations/{id}":                    "get_operation",
 		"GET /api/connections/{id}/repositories":      "discover_repositories",
@@ -108,6 +109,12 @@ func (in deployExistingInput) command() domain.Command {
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
+	mcp.AddTool(server, &mcp.Tool{Name: "get_intelligence_task", Description: "Read a scoped generated draft or bounded conflict patch with provenance, stale-input state and mandatory review. Does not publish, merge or deploy."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		TaskID string `json:"task_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_intelligence_task", in.TaskID)
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_feature_graph", Description: "Read a feature delivery graph: repository-scoped PR source/target branches, merge evidence, source revisions, compositions, artifacts and deployment observations. Historical reports are distinct from observed runtime; missing runtime is unknown."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		FeatureID string `json:"feature_id"`
 	}) (*mcp.CallToolResult, any, error) {

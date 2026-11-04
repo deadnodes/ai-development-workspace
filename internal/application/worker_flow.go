@@ -447,7 +447,7 @@ func (s *Service) finishFlowRelease(ctx context.Context, op domain.ExternalOpera
 			return err
 		}
 		now := time.Now().UTC()
-		record := domain.Release{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: op.RequestedBy, CreatedAt: now, UpdatedAt: now}, Name: op.CompositionSnapshot.Name, Status: "released", ExecutionOperationID: op.ID, CandidateOperationID: op.ReleaseCandidateID, IntegrationIDs: append([]string{}, op.IntegrationIDs...), SourceCommits: map[string]string{}, ArtifactDigests: map[string]string{}, GitOpsCommits: map[string]string{}, Snapshots: []domain.Integration{}}
+		record := domain.Release{Meta: domain.Meta{ID: id(), ProductID: op.ProductID, Actor: op.RequestedBy, CreatedAt: now, UpdatedAt: now}, Name: op.CompositionSnapshot.Name, EnvironmentID: op.EnvironmentID, Status: "released", ExecutionOperationID: op.ID, CandidateOperationID: op.ReleaseCandidateID, IntegrationIDs: append([]string{}, op.IntegrationIDs...), SourceCommits: map[string]string{}, ArtifactDigests: map[string]string{}, GitOpsCommits: map[string]string{}, Snapshots: []domain.Integration{}}
 		for _, childID := range parent.ChildIDs {
 			child := operationByID(st, childID)
 			if child == nil || child.Snapshot == nil || child.Artifact == nil || child.GitOpsResult == nil {

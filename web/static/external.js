@@ -10,9 +10,105 @@ function isBackgroundOperation(op){return backgroundOperationKinds.has(op.kind);
 function operationTerminal(status){return ['SUCCEEDED','FAILED','BLOCKED','CANCELLED','ARTIFACT_READY','GITOPS_APPLIED','DEPLOYED'].includes(status);}
 function operationCard(op){
  const title=operationTitle(op);
- return `<article data-live-key="operation-${esc(op.id)}" class="panel"><div class="row-heading"><div><h2>${esc(title)}</h2><p class="meta">${esc(op.id)} · ${esc(op.actor)} · ${esc(date(op.updated_at||op.created_at))}</p></div><div>${badge(op.status||'unknown')} ${op.deployment_state?badge(op.deployment_state):''}</div></div><dl>${detail('Requested by',op.requested_by||op.actor)}${detail('Current step',op.current_step||op.phase)}${detail('Integration',op.integration_id)}${detail('Repository',op.repository_id)}${detail('Environment',op.environment_id)}${detail('Error / attention',op.detail||op.error||op.message)}${detail('Desired GitOps commit',op.gitops_result?.commit_sha||op.gitops_commit||op.desired_commit)}</dl>${(list(op.steps).length?op.steps:list(state.operation_steps).filter(s=>s.operation_id===op.id)).map(step=>`<div class="row"><div class="row-heading"><strong>${esc(step.name||step.phase||step.kind)}</strong>${badge(step.status||'pending')}</div><p>${esc(step.detail||step.message||step.error||'')}</p><details><summary>Step evidence</summary><pre>${esc(JSON.stringify(step,null,2))}</pre></details></div>`).join('')}<details><summary>Full persisted operation</summary><pre>${esc(JSON.stringify(op,null,2))}</pre></details></article>`;
+ return `<article data-live-key="operation-${esc(op.id)}" class="panel"><div class="row-heading"><div><h2>${esc(title)}</h2><p class="meta">${esc(op.id)} · ${esc(op.actor)} · ${esc(date(op.updated_at||op.created_at))}</p></div><div>${badge(op.status||'unknown')} ${op.deployment_state?badge(op.deployment_state):''}</div></div><dl>${detail('Requested by',op.requested_by||op.actor)}${detail('Current step',op.current_step||op.phase)}${detail('Integration',op.integration_id)}${detail('Repository',op.repository_id)}${detail('Environment',op.environment_id)}${detail('Error / attention',op.detail||op.error||op.message)}${detail('Desired GitOps commit',op.gitops_result?.commit_sha||op.gitops_commit||op.desired_commit)}</dl>${(list(op.steps).length?op.steps:list(state.operation_steps).filter(s=>s.operation_id===op.id)).map(step=>`<div class="row"><div class="row-heading"><strong>${esc(step.name||step.phase||step.kind)}</strong>${badge(step.status||'pending')}</div><p>${esc(step.detail||step.message||step.error||'')}</p><details><summary>Step evidence</summary><pre>${esc(JSON.stringify(step,null,2))}</pre></details></div>`).join('')}${intelligenceOperationPreview(op)}<details><summary>${op.kind==='INTELLIGENCE'?'Persisted operation metadata':'Full persisted operation'}</summary><pre>${esc(JSON.stringify(operationDisplayMetadata(op),null,2))}</pre></details></article>`;
 }
 function operationTitle(op){return op.kind||op.action||'Operation';}
+
+// Drafts are fetched only on explicit request. Decoded customer text lives in
+// this view's DOM, not state, browser storage or a cross-product result cache.
+const intelligencePreviewReads=new Map();
+const intelligencePreviewLimit=512*1024;
+function operationDisplayMetadata(op){
+ if(!op.intelligence)return op;
+ const {input_ciphertext,result_ciphertext,...metadata}=op.intelligence;
+ return {...op,intelligence:metadata};
+}
+function intelligenceOperationPreview(op){
+ if(op.product_id!==productID||op.kind!=='INTELLIGENCE'||op.intelligence?.kind!=='release_notes')return '';
+ const target=`intelligence-preview-${encodeURIComponent(op.id)}`;
+ return `<div class="actions"><button type="button" data-intelligence-preview="${esc(op.id)}" aria-controls="${esc(target)}" aria-expanded="false">Preview customer release notes</button></div><section id="${esc(target)}" class="row" data-intelligence-result hidden aria-label="Customer release notes preview"></section>`;
+}
+function intelligencePreviewCredential(){return JSON.stringify([authMode,browserToken(),authPrincipal?.id||'',authCSRF,authExpired]);}
+function intelligencePreviewStamp(op){return JSON.stringify([op.updated_at,op.status,op.intelligence?.input_fingerprint,op.intelligence?.result_fingerprint]);}
+function clearIntelligencePreview(record){
+ record.controller.abort();clearTimeout(record.timeout);
+ record.target.replaceChildren();record.target.hidden=true;record.button.setAttribute('aria-expanded','false');
+ if(intelligencePreviewReads.get(record.id)===record)intelligencePreviewReads.delete(record.id);
+}
+function clearIntelligencePreviews(){for(const record of intelligencePreviewReads.values())clearIntelligencePreview(record);}
+function intelligencePreviewNode(tag,text,className){
+ const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;
+}
+function intelligencePreviewStatus(record,text,error=false){
+ const node=intelligencePreviewNode('p',text,error?'error':'muted');node.setAttribute('role',error?'alert':'status');record.target.replaceChildren(node);record.target.hidden=false;
+}
+async function readIntelligencePreview(response){
+ let content='';
+ if(response.body?.getReader){
+  const reader=response.body.getReader(),decoder=new TextDecoder();let size=0;
+  try{for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;if(size>intelligencePreviewLimit)throw new Error('Release notes response exceeds the preview limit.');content+=decoder.decode(part.value,{stream:true});}content+=decoder.decode();}
+  finally{await reader.cancel().catch(()=>{});}
+ }else{content=await response.text();if(new TextEncoder().encode(content).byteLength>intelligencePreviewLimit)throw new Error('Release notes response exceeds the preview limit.');}
+ try{return JSON.parse(content);}catch{throw new Error('Release notes returned an invalid response.');}
+}
+function validIntelligencePreview(data,record){
+ const task=data?.task;
+ if(!task||task.id!==record.id||task.product_id!==record.product||task.kind!=='INTELLIGENCE'||task.intelligence?.kind!=='release_notes'||data.review_required!==true||data.published!==false||typeof data.stale!=='boolean')throw new Error('Release notes returned an invalid or mismatched task scope.');
+ if(data.result!==undefined&&!data.stale){
+  const result=data.result;
+  if(task.status!=='SUCCEEDED'||data.stale||result.decision!=='draft'||typeof result.summary!=='string'||!Array.isArray(result.changes)||result.changes.length>100||!Array.isArray(result.warnings)||result.warnings.length>100||result.changes.some(change=>typeof change.text!=='string'||!Array.isArray(change.integration_ids)||!Array.isArray(change.evidence_refs)||[...change.integration_ids,...change.evidence_refs].some(ref=>typeof ref!=='string'))||result.warnings.some(warning=>typeof warning!=='string'))throw new Error('Release notes returned an invalid draft.');
+  if(!data.provenance||typeof data.provenance!=='object'||typeof data.provenance.environment_id!=='string'||typeof data.provenance.previous_release_id!=='string'||typeof data.provenance.candidate_operation_id!=='string'||typeof data.provenance.candidate_fingerprint!=='string')throw new Error('Release notes are missing release provenance.');
+ }
+ return data;
+}
+function paintIntelligencePreview(record,data){
+ const target=record.target;target.replaceChildren();
+ target.append(intelligencePreviewNode('h3','Customer release notes — draft'));
+ target.append(intelligencePreviewNode('p','Review required. This preview has not been published and does not approve a merge or deployment.','hint'));
+ const close=intelligencePreviewNode('button','Close preview');close.type='button';close.onclick=()=>clearIntelligencePreview(record);target.append(close);
+ if(data.stale){target.append(intelligencePreviewNode('p','This draft is stale: the release inputs or provider configuration changed. Prepare a new task against the current candidate.','error'));return;}
+ const task=data.task;
+ if(task.status!=='SUCCEEDED'||!data.result){
+  const message={PENDING:'Release notes are queued. Open the preview again after the task finishes.',RUNNING:'Release notes are being prepared. Open the preview again after the task finishes.',CANCELLED:'Release notes preparation was cancelled. No draft is available.',FAILED:'Release notes preparation failed. Review the operation details before preparing a new task.',BLOCKED:'Release notes need attention. Review the operation details before preparing a new task.'}[task.status]||'No customer draft is available for this task yet.';
+  target.append(intelligencePreviewNode('p',message,'muted'));return;
+ }
+ const customer=document.createElement('section');customer.setAttribute('aria-label','Customer-facing draft');
+ customer.append(intelligencePreviewNode('p',data.result.summary,'body-copy'));
+ const changes=document.createElement('ul');for(const change of data.result.changes)changes.append(intelligencePreviewNode('li',change.text));customer.append(changes);target.append(customer);
+ if(data.result.warnings.length){target.append(intelligencePreviewNode('h3','Review warnings'));const warnings=document.createElement('ul');for(const warning of data.result.warnings)warnings.append(intelligencePreviewNode('li',warning));target.append(warnings);}
+ const evidence=document.createElement('details');evidence.append(intelligencePreviewNode('summary','Internal release provenance'));
+ const p=data.provenance,provenance={environment_id:p.environment_id,previous_release_id:p.previous_release_id,candidate_operation_id:p.candidate_operation_id,candidate_fingerprint:p.candidate_fingerprint,previous_sources:p.previous_sources,sources:p.sources,previous_artifacts:p.previous_artifacts,artifacts:p.artifacts,changes:data.result.changes.map(change=>({integration_ids:change.integration_ids,evidence_refs:change.evidence_refs})),model:task.intelligence.model,prompt_version:task.intelligence.prompt_version,input_fingerprint:task.intelligence.input_fingerprint};
+ evidence.append(intelligencePreviewNode('pre',JSON.stringify(provenance,null,2)));target.append(evidence);
+}
+async function showIntelligencePreview(button){
+ const id=button.dataset.intelligencePreview,op=productItems('operations').find(task=>task.id===id&&task.kind==='INTELLIGENCE'&&task.intelligence?.kind==='release_notes');
+ const target=button.closest('article')?.querySelector('[data-intelligence-result]');if(!op||!target)return;
+ const previous=intelligencePreviewReads.get(id);if(previous)clearIntelligencePreview(previous);
+ const record={id,product:productID,route:featureID(),credential:intelligencePreviewCredential(),stamp:intelligencePreviewStamp(op),target,button,controller:new AbortController(),timedOut:false};
+ intelligencePreviewReads.set(id,record);button.setAttribute('aria-expanded','true');intelligencePreviewStatus(record,'Loading customer release notes…');
+ record.timeout=setTimeout(()=>{record.timedOut=true;record.controller.abort();},15000);
+ try{
+  const token=browserToken(),response=await fetch(`/api/intelligence-tasks/${encodeURIComponent(id)}`,{method:'GET',credentials:'same-origin',cache:'no-store',redirect:'error',signal:record.controller.signal,headers:token?{Authorization:`Bearer ${token}`}:{}});
+  if(intelligencePreviewReads.get(id)!==record)return;
+  if(productID!==record.product||featureID()!==record.route||intelligencePreviewCredential()!==record.credential||!target.isConnected){clearIntelligencePreview(record);return;}
+  if(response.status===401&&authMode==='oidc'){requireSignIn();return;}
+  if(!response.ok){const message={401:'Your access has expired. Sign in or update your access settings.',403:'You do not have access to these release notes.',404:'This release notes task is unavailable. Refresh the operations list.',429:'Too many preview requests. Wait and open the preview again.'}[response.status]||`Could not load release notes (${response.status}). Open the preview again to retry.`;throw new Error(message);}
+  const data=await readIntelligencePreview(response);
+  if(intelligencePreviewReads.get(id)!==record)return;
+  if(productID!==record.product||featureID()!==record.route||intelligencePreviewCredential()!==record.credential||!target.isConnected){clearIntelligencePreview(record);return;}
+  const current=productItems('operations').find(task=>task.id===id);
+  if(!current||intelligencePreviewStamp(current)!==record.stamp){intelligencePreviewStatus(record,'This task changed while loading. Open the preview again for current release notes.',true);return;}
+  paintIntelligencePreview(record,validIntelligencePreview(data,record));
+ }catch(error){
+  if(intelligencePreviewReads.get(id)!==record)return;
+  if(productID!==record.product||featureID()!==record.route||intelligencePreviewCredential()!==record.credential||!target.isConnected){clearIntelligencePreview(record);return;}
+  if(error.name==='AbortError'&&!record.timedOut)return;
+  intelligencePreviewStatus(record,record.timedOut?'Release notes preview timed out. Open the preview again to retry.':error.message,true);
+ }finally{clearTimeout(record.timeout);}
+}
+document.addEventListener('click',event=>{const button=event.target.closest('[data-intelligence-preview]');if(button)showIntelligencePreview(button);if(event.target.closest('#save-identity'))clearIntelligencePreviews();});
+document.addEventListener('change',event=>{if(event.target.id==='product')clearIntelligencePreviews();});
+window.addEventListener('hashchange',clearIntelligencePreviews);window.addEventListener('popstate',clearIntelligencePreviews);window.addEventListener('pagehide',clearIntelligencePreviews);
 async function showProviderQuery(path,title){
  try{const result=await request(path);currentForm=null;$('#dialog-title').textContent=title;$('#form-help').textContent='Live application query. Unknown or pending observations are not proof of a completed deployment.';$('#fields').innerHTML=`<pre>${esc(JSON.stringify(result,null,2))}</pre>`;$('#form-error').textContent='';$('#save').hidden=true;$('#dialog').showModal();}catch(error){notice(error.message,true);}
 }

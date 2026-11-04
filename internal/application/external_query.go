@@ -24,6 +24,8 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return nil, e
 	}
 	switch name {
+	case "get_intelligence_task":
+		return s.intelligenceQuery(&st, id)
 	case "get_feature_graph":
 		return featureGraph(st, id)
 	case "get_artifact_retention":

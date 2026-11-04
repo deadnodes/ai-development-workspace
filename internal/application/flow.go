@@ -307,7 +307,7 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 			env.DesiredOperationID = m.ID
 			env.UpdatedAt = m.UpdatedAt
 		}
-		op := domain.ExternalOperation{Meta: m, Kind: kind, EnvironmentID: comp.EnvironmentID, Status: "PENDING", Phase: "COMPOSE_SOURCE", RequestedBy: c.Actor, CompositionSnapshot: comp, Sources: sources, PreparedDeployments: prepared, IntegrationIDs: selectedIntegrations(*comp), ChildIDs: []string{}, NextAttemptAt: time.Now().UTC()}
+		op := domain.ExternalOperation{Meta: m, ReleaseNotesIntentHash: releaseNotesIntentHash(st, *comp), Kind: kind, EnvironmentID: comp.EnvironmentID, Status: "PENDING", Phase: "COMPOSE_SOURCE", RequestedBy: c.Actor, CompositionSnapshot: comp, Sources: sources, PreparedDeployments: prepared, IntegrationIDs: selectedIntegrations(*comp), ChildIDs: []string{}, NextAttemptAt: time.Now().UTC()}
 		if c.Action == "update_environment_feature" {
 			input, hash, err := featureUpdateInput(c)
 			if err != nil {

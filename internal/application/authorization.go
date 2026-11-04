@@ -90,6 +90,7 @@ func scopedState(ctx context.Context, st domain.State) (domain.State, error) {
 
 // This allowlist deliberately fails closed for newly introduced commands.
 var memberWriteActions = []string{
+	"queue_intelligence_task", "cancel_intelligence_task",
 	"create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution",
 	"record_package_artifact", "create_hotfix", "create_test_scenario", "revise_test_scenario", "record_scenario_run",
 	"refresh_integration_git", "refresh_repository_git", "refresh_environment_runtime", "record_runtime_observation",

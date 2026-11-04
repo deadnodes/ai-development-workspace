@@ -18,6 +18,8 @@ import (
 
 	"releasecontrol/internal/artifactspool"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/intelligence"
+	"releasecontrol/internal/intelligencepatch"
 	"releasecontrol/internal/ociverify"
 	"releasecontrol/internal/workerclient"
 	"releasecontrol/internal/workerconfig"
@@ -206,6 +208,19 @@ func runOne(parent context.Context, c Config, sourceClient *http.Client) (*domai
 	if lease.Job.ProductID != c.ProductID || lease.Job.Inputs.RepositoryID != c.RepositoryID || lease.Job.Capability != c.Recipe.Capability || lease.Job.InputHash != workerconfig.Fingerprint(lease.Job.Inputs) || lease.Attempt.InputHash != lease.Job.InputHash || lease.Attempt.JobID != lease.Job.ID || lease.Attempt.Fence != lease.Job.Fence {
 		return nil, errors.New("claimed job immutable identity mismatch")
 	}
+	var patch *intelligencepatch.Proposal
+	if binding := lease.Job.Inputs.IntelligencePatch; binding != nil {
+		if c.Recipe.Capability != "source_check" || c.Recipe.Check != nil || workerconfig.Fingerprint(binding.AllowedPaths) != workerconfig.Fingerprint(c.Recipe.IntelligencePaths) || binding.HeadSHA != lease.Job.Inputs.SourceSHA || len(lease.IntelligencePatch) == 0 {
+			return nil, errors.New("patch lease differs from source-check authority")
+		}
+		var proposal intelligencepatch.Proposal
+		if intelligence.Decode(lease.IntelligencePatch, &proposal) != nil || intelligencepatch.Validate(proposal, binding.BaseSHA, binding.HeadSHA, c.Recipe.IntelligencePaths) != nil {
+			return nil, errors.New("invalid bounded patch lease")
+		}
+		patch = &proposal
+	} else if len(lease.IntelligencePatch) > 0 {
+		return nil, errors.New("unexpected patch payload")
+	}
 	request := domain.WorkerAttemptRequest{JobID: lease.Job.ID, AttemptID: lease.Attempt.ID, Fence: lease.Attempt.Fence, InputHash: lease.Job.InputHash}
 	spec := c.Recipe.Execution
 	deadline := time.Now().Add(time.Duration(spec.TimeoutSeconds) * time.Second)
@@ -242,7 +257,7 @@ func runOne(parent context.Context, c Config, sourceClient *http.Client) (*domai
 	}
 	stopHeartbeat := superviseWorkerHeartbeat(ctx, cancel, client, request, js)
 	defer stopHeartbeat()
-	result, runErr := execute(ctx, c, root, js, sourceClient, sourceCredential)
+	result, runErr := execute(ctx, c, root, js, sourceClient, sourceCredential, patch)
 	report, runErr := prepareReport(ctx, c, root, request, result, runErr)
 	// The terminal report must not race a heartbeat rejected after its own
 	// acceptance. Join supervision first, then honor any lease failure observed
@@ -250,6 +265,9 @@ func runOne(parent context.Context, c Config, sourceClient *http.Client) (*domai
 	stopHeartbeat()
 	if ctx.Err() != nil {
 		report, runErr = prepareReport(ctx, c, root, request, nil, ctx.Err())
+	}
+	if lease.Job.Inputs.IntelligencePatch != nil {
+		report.EvidenceHash = lease.Job.Inputs.IntelligencePatch.ResultFingerprint
 	}
 	if report.LocalOCI != nil {
 		result.JobID = lease.Job.ID
@@ -336,11 +354,17 @@ func prepareReport(ctx context.Context, c Config, root string, request domain.Wo
 	}
 	return report, runErr
 }
-func execute(ctx context.Context, c Config, root string, js *journalState, sourceClient *http.Client, sourceCredential func() (string, error)) (*domain.WorkerLocalOCI, error) {
+func execute(ctx context.Context, c Config, root string, js *journalState, sourceClient *http.Client, sourceCredential func() (string, error), proposals ...*intelligencepatch.Proposal) (*domain.WorkerLocalOCI, error) {
 	e := c.Recipe.Execution
 	source, err := materializeSource(ctx, c, root, jsSource(js), sourceClient, sourceCredential)
 	if err != nil {
 		return nil, err
+	}
+	if len(proposals) > 0 && proposals[0] != nil {
+		p := proposals[0]
+		if c.Recipe.Capability != "source_check" || e.Kind != "source_check" || c.Recipe.Check != nil || p.HeadSHA != jsSource(js) || intelligencepatch.Apply(source, *p, p.BaseSHA, jsSource(js), c.Recipe.IntelligencePaths) != nil {
+			return nil, errors.New("bounded patch application failed")
+		}
 	}
 	d := docker{context: c.DockerContext, config: c.DockerConfig}
 	info, err := d.output(ctx, nil, 128, "info", "--format", "{{.OSType}}/{{.Architecture}}")

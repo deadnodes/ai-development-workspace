@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"regexp"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/intelligencepatch"
 	"slices"
 	"strings"
 	"time"
@@ -28,17 +29,18 @@ type Parameter struct {
 	Max  int      `json:"max,omitempty"`
 }
 type Recipe struct {
-	Check         *domain.WorkerCheckBinding `json:"check,omitempty"`
-	ID            string                     `json:"id"`
-	Revision      string                     `json:"revision"`
-	Hash          string                     `json:"hash"`
-	ProductID     string                     `json:"product_id"`
-	RepositoryID  string                     `json:"repository_id"`
-	RepositoryURL string                     `json:"repository_url"`
-	Capability    string                     `json:"capability"`
-	Trust         string                     `json:"trust"`
-	Parameters    map[string]Parameter       `json:"parameters"`
-	Execution     *domain.WorkerExecution    `json:"execution"`
+	IntelligencePaths []string                   `json:"intelligence_paths,omitempty"`
+	Check             *domain.WorkerCheckBinding `json:"check,omitempty"`
+	ID                string                     `json:"id"`
+	Revision          string                     `json:"revision"`
+	Hash              string                     `json:"hash"`
+	ProductID         string                     `json:"product_id"`
+	RepositoryID      string                     `json:"repository_id"`
+	RepositoryURL     string                     `json:"repository_url"`
+	Capability        string                     `json:"capability"`
+	Trust             string                     `json:"trust"`
+	Parameters        map[string]Parameter       `json:"parameters"`
+	Execution         *domain.WorkerExecution    `json:"execution"`
 }
 type Credential struct {
 	ID            string    `json:"id"`
@@ -133,6 +135,15 @@ func New(c Config, controlToken string, lookup func(string) string) (*Authority,
 	}
 	seen = map[string]bool{}
 	for _, r := range c.Recipes {
+		if len(r.IntelligencePaths) > 0 {
+			p := intelligencepatch.Proposal{BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
+			for _, path := range r.IntelligencePaths {
+				p.Edits = append(p.Edits, intelligencepatch.Edit{Path: path, BeforeHash: "sha256:" + strings.Repeat("c", 64), Content: "bounded"})
+			}
+			if r.Capability != "source_check" || r.Trust != "trusted_source" || r.Check != nil || intelligencepatch.Validate(p, p.BaseSHA, p.HeadSHA, r.IntelligencePaths) != nil {
+				return nil, errors.New("invalid intelligence source-check paths")
+			}
+		}
 		if r.Check != nil {
 			if r.Capability != "local_oci_build" || r.Trust != "trusted_source" || len(r.Parameters) != 0 || !regexp.MustCompile(`^RCP /[A-Za-z0-9 ._/-]{1,96}$`).MatchString(r.Check.Name) || r.Check.ExpectedAppID < 1 || r.Check.FinalizeSeconds < 60 || r.Check.FinalizeSeconds > 600 {
 				return nil, errors.New("invalid operator check binding")

@@ -18,6 +18,13 @@ func CommandSchema() map[string]any {
 	for _, k := range strings.Fields("idempotency_key request_key recipe_id recipe_revision recipe_hash config_revision deadline outcome conflict_id name description title problem goal context owner objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit source_sha version checksum uri build_url") {
 		data[k] = str()
 	}
+	data["task_kind"] = map[string]any{"type": "string", "enum": []string{"annotation", "summary", "log_summary", "release_notes", "conflict_patch"}}
+	data["previous_release_id"] = str()
+	data["previous_release_ids"] = map[string]any{"type": "object", "maxProperties": 20, "additionalProperties": str()}
+	data["head_sha"] = str()
+	data["intelligence_task_id"] = str()
+	data["excerpts"] = map[string]any{"type": "array", "maxItems": 10, "items": map[string]any{"type": "string", "maxLength": 16384}}
+	data["files"] = map[string]any{"type": "array", "minItems": 1, "maxItems": 3, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"path", "base", "ours", "theirs"}, "properties": map[string]any{"path": str(), "base": str(), "ours": str(), "theirs": str()}}}
 	data["digest"] = str()
 	data["reservation_operation_id"] = str()
 	data["activation_operation_id"] = str()
@@ -85,6 +92,8 @@ func CommandSchema() map[string]any {
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
+		{"queue_intelligence_task", "product_id", "task_kind request_key"},
+		{"cancel_intelligence_task", "product_id id", ""},
 		{"refresh_registry_inventory", "product_id", "application_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
 		{"pin_artifact", "product_id", "application_id image_repository digest purpose request_key"},
 		{"release_artifact_pin", "product_id id", "application_id"},

@@ -18,6 +18,7 @@ import (
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/intelligence"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/providers/github"
 	"releasecontrol/internal/providers/runtimeobserver"
@@ -87,6 +88,13 @@ func run() error {
 	service := application.NewWithProvider(store, github.New())
 	workspaceRoot := os.Getenv("RCP_WORKSPACE_ROOT")
 	service.SetWorkspaceRoot(workspaceRoot)
+	if path := os.Getenv("RCP_INTELLIGENCE_FILE"); path != "" {
+		authority, e := intelligence.Load(path)
+		if e != nil {
+			return fmt.Errorf("load intelligence authority: %w", e)
+		}
+		service.ConfigureIntelligence(authority)
+	}
 	var workers *workerconfig.Authority
 	if path := os.Getenv("RCP_WORKERS_FILE"); path != "" {
 		workers, err = workerconfig.Load(path, os.Getenv("RC_TOKEN"))
