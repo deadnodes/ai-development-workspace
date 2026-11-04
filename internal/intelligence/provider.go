@@ -84,7 +84,7 @@ func Load(path string) (*Authority, error) {
 
 func New(c Config, lookup func(string) string) (*Authority, error) {
 	u, e := url.Parse(c.BaseURL)
-	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || strings.Contains(u.Path, "..") || c.Model == "" || len(c.Model) > 128 || strings.ContainsAny(c.Model, "\r\n") || !envName.MatchString(c.APIKeyEnv) || !envName.MatchString(c.EncryptionKeyEnv) || c.APIKeyEnv == c.EncryptionKeyEnv || lookup == nil {
+	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || strings.Contains(u.Path, "..") || c.Model == "" || len(c.Model) > 128 || strings.ContainsAny(c.Model, "\r\n") || !envName.MatchString(c.APIKeyEnv) || !envName.MatchString(c.EncryptionKeyEnv) || c.APIKeyEnv == c.EncryptionKeyEnv || c.APIKeyEnv == "RC_TOKEN" || c.EncryptionKeyEnv == "RC_TOKEN" || c.APIKeyEnv == "DATABASE_URL" || c.EncryptionKeyEnv == "DATABASE_URL" || lookup == nil {
 		return nil, errors.New("invalid intelligence endpoint or credential references")
 	}
 	if len(c.ProductIDs) < 1 || len(c.ProductIDs) > 100 || c.MaxInputBytes < 1024 || c.MaxInputBytes > 64<<10 || c.MaxOutputBytes < 1024 || c.MaxOutputBytes > 64<<10 || c.MaxCompletionTokens < 1 || c.MaxCompletionTokens > 8192 || c.MaxRequestsPerDay < 1 || c.MaxRequestsPerDay > 10000 || c.TimeoutSeconds < 1 || c.TimeoutSeconds > 120 {
@@ -99,6 +99,9 @@ func New(c Config, lookup func(string) string) (*Authority, error) {
 	raw, e := base64.StdEncoding.DecodeString(lookup(c.EncryptionKeyEnv))
 	if e != nil || len(raw) != 32 || len(key) < 16 || strings.ContainsAny(key, "\r\n") {
 		return nil, errors.New("intelligence credentials unavailable")
+	}
+	if key == string(raw) || key == base64.StdEncoding.EncodeToString(raw) || lookup("RC_TOKEN") != "" && key == lookup("RC_TOKEN") || !SafeText(c.Model) || strings.Contains(c.Model, key) || strings.Contains(c.Model, base64.StdEncoding.EncodeToString(raw)) {
+		return nil, errors.New("intelligence provider credential must be separate")
 	}
 	block, e := aes.NewCipher(raw)
 	if e != nil {
@@ -208,8 +211,49 @@ func SafeText(v string) bool {
 	return utf8.ValidString(v) && !strings.ContainsRune(v, 0) && !sensitive.MatchString(v)
 }
 func (a *Authority) ValidateInput(v any) error {
+	return a.validateValue(v, a.c.MaxInputBytes)
+}
+func (a *Authority) ValidateOutput(v any) error {
+	return a.validateValue(v, a.c.MaxOutputBytes)
+}
+func (a *Authority) validateValue(v any, limit int) error {
 	b, e := json.Marshal(v)
-	if e != nil || len(b) > a.c.MaxInputBytes || !SafeText(string(b)) {
+	if e != nil || len(b) > limit {
+		return errors.New("intelligence context rejected by bounds or privacy filter")
+	}
+	// Scan decoded strings, not JSON spelling: escaped @, credential bytes and
+	// NUL must not evade filtering and later appear in a query or worker lease.
+	var decoded any
+	if uniqueJSON(b) != nil {
+		return errors.New("invalid intelligence value")
+	}
+	if json.Unmarshal(b, &decoded) != nil {
+		return errors.New("invalid intelligence value")
+	}
+	safeString := func(v string) bool {
+		return SafeText(v) && !strings.Contains(v, a.key) && !strings.Contains(v, string(a.macKey)) && !strings.Contains(v, base64.StdEncoding.EncodeToString(a.macKey))
+	}
+	var safe func(any) bool
+	safe = func(v any) bool {
+		switch v := v.(type) {
+		case string:
+			return safeString(v)
+		case []any:
+			for _, x := range v {
+				if !safe(x) {
+					return false
+				}
+			}
+		case map[string]any:
+			for k, x := range v {
+				if !safeString(k) || !safe(x) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !safe(decoded) {
 		return errors.New("intelligence context rejected by bounds or privacy filter")
 	}
 	return nil
@@ -274,7 +318,7 @@ func uniqueJSON(b []byte) error {
 func (a *Authority) Complete(ctx context.Context, kind string, input any) (json.RawMessage, Usage, error) {
 	var usage Usage
 	b, e := json.Marshal(input)
-	if e != nil || len(b) > a.c.MaxInputBytes || !SafeText(string(b)) {
+	if e != nil || a.ValidateInput(input) != nil {
 		return nil, usage, errors.New("intelligence context rejected by bounds or privacy filter")
 	}
 	request := map[string]any{"model": a.c.Model, "stream": false, "max_completion_tokens": a.c.MaxCompletionTokens, "response_format": map[string]string{"type": "json_object"}, "messages": []map[string]string{{"role": "system", "content": systemPrompt(kind)}, {"role": "user", "content": string(b)}}}
@@ -324,6 +368,9 @@ func (a *Authority) Complete(ctx context.Context, kind string, input any) (json.
 	}
 	c := out.Choices[0]
 	if c.FinishReason != "stop" || c.Message.Content == nil || c.Message.Refusal != nil && *c.Message.Refusal != "" || len(c.Message.ToolCalls) != 0 || len(*c.Message.Content) > a.c.MaxOutputBytes || !SafeText(*c.Message.Content) || strings.Contains(*c.Message.Content, a.key) || strings.Contains(*c.Message.Content, base64.StdEncoding.EncodeToString(a.macKey)) {
+		return nil, usage, errors.New("provider result rejected")
+	}
+	if a.ValidateOutput(json.RawMessage(*c.Message.Content)) != nil {
 		return nil, usage, errors.New("provider result rejected")
 	}
 	if out.Usage != nil {

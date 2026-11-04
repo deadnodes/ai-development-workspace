@@ -23,7 +23,7 @@ func (s *Service) intelligencePatch(st *domain.State, j *domain.WorkerJob) (json
 		return nil, e
 	}
 	var result intelligenceResult
-	if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || s.intelligence.Fingerprint(result) != b.ResultFingerprint || result.Decision != "patch_proposed" || result.Patch == nil {
+	if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || s.intelligence.Fingerprint(result) != b.ResultFingerprint || s.intelligence.ValidateOutput(result) != nil || result.Decision != "patch_proposed" || result.Patch == nil {
 		return nil, invalid("patch result unavailable")
 	}
 	if intelligencepatch.Validate(*result.Patch, b.BaseSHA, b.HeadSHA, b.AllowedPaths) != nil {
@@ -58,7 +58,7 @@ func (s *Service) bindIntelligencePatch(st *domain.State, recipe workerconfig.Re
 		return nil, e
 	}
 	var result intelligenceResult
-	if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || result.Patch == nil || result.Decision != "patch_proposed" || result.Patch.HeadSHA != sourceSHA {
+	if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || s.intelligence.ValidateOutput(result) != nil || result.Patch == nil || result.Decision != "patch_proposed" || result.Patch.HeadSHA != sourceSHA {
 		return nil, invalid("model patch source mismatch")
 	}
 	matched := false

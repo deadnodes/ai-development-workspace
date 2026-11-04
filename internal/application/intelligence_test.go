@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"releasecontrol/internal/persistence"
 	"strings"
 	"testing"
 	"time"
@@ -112,7 +114,7 @@ func TestIntelligenceStaleCancelBudgetAndUncertainRecovery(t *testing.T) {
 		op := exec(t, s, intelligenceCommand("annotation", "request-stale-001")).(domain.ExternalOperation)
 		m.state.Features[0].Goal = "new intent"
 		runIntelligenceTick(t, s)
-		if f.calls != 0 || operationByID(&m.state, op.ID).Status != "BLOCKED" {
+		if f.calls != 0 || operationByID(&m.state, op.ID).Status != "FAILED" {
 			t.Fatal("stale context called provider")
 		}
 	})
@@ -329,5 +331,106 @@ func TestReleaseNotesDifferentComponentBaselinesAndHistoricalRecord(t *testing.T
 	request.PreviousReleaseIDs["app"] = "late-history"
 	if _, e = s.releaseNotesContext(&m.state, "p", request); e == nil {
 		t.Fatal("late historical record substituted for current runtime")
+	}
+}
+
+func TestIntelligenceDecodedProviderPrivacy(t *testing.T) {
+	for _, raw := range []string{`{"decision":"draft","summary":"person\u0040example.com","changes":[],"warnings":[],"patch":null}`, `{"decision":"draft","summary":"\u0078xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","changes":[],"warnings":[],"patch":null}`} {
+		s, m, f := intelligenceFixture(t, 10)
+		f.result = raw
+		op := exec(t, s, intelligenceCommand("annotation", "request-escaped-1")).(domain.ExternalOperation)
+		runIntelligenceTick(t, s)
+		current := operationByID(&m.state, op.ID)
+		if current.Status != "FAILED" || current.Intelligence.ResultCiphertext != "" {
+			t.Fatal("escaped provider output reached persistence")
+		}
+	}
+	// Even historical authenticated ciphertext is revalidated before display.
+	s, m, f := intelligenceFixture(t, 10)
+	op := exec(t, s, intelligenceCommand("annotation", "request-query-01")).(domain.ExternalOperation)
+	runIntelligenceTick(t, s)
+	bad := intelligenceResult{Decision: "draft", Summary: "person@example.com"}
+	current := operationByID(&m.state, op.ID)
+	sealed, e := f.Seal(intelligenceAAD(*current, "result"), bad)
+	if e != nil {
+		t.Fatal(e)
+	}
+	current.Intelligence.ResultCiphertext = sealed
+	current.Intelligence.ResultFingerprint = f.Fingerprint(bad)
+	if _, e = s.Query(context.Background(), "get_intelligence_task", op.ID); e == nil {
+		t.Fatal("historical decoded PII displayed")
+	}
+}
+
+func TestIntelligenceFailureStatusesPersistBackupAndRestore(t *testing.T) {
+	for _, reason := range []string{"stale", "uncertain", "budget"} {
+		t.Run(reason, func(t *testing.T) {
+			_, seed, f := intelligenceFixture(t, map[string]int{"budget": 1, "stale": 10, "uncertain": 10}[reason])
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "state.db")
+			store, e := persistence.OpenLocal(ctx, path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = store.Update(ctx, func(st *domain.State) error { *st = seed.state; return nil }); e != nil {
+				t.Fatal(e)
+			}
+			s := New(store)
+			s.ConfigureIntelligence(f)
+			task := exec(t, s, intelligenceCommand("annotation", "request-status-01")).(domain.ExternalOperation)
+			switch reason {
+			case "stale":
+				exec(t, s, domain.Command{Action: "update_feature", FeatureID: "f", Data: map[string]any{"goal": "Changed intent"}})
+			case "uncertain":
+				if e = store.Update(ctx, func(st *domain.State) error {
+					op := operationByID(st, task.ID)
+					op.Status = "RUNNING"
+					op.Phase = "DISPATCH_INTENT"
+					op.LeaseUntil = time.Now().Add(-time.Minute)
+					return nil
+				}); e != nil {
+					t.Fatal(e)
+				}
+			case "budget":
+				exec(t, s, intelligenceCommand("annotation", "request-status-02"))
+				runIntelligenceTick(t, s)
+			}
+			runIntelligenceTick(t, s)
+			state, e := store.Read(ctx)
+			if e != nil || domain.ValidateStateStatuses(state) != nil {
+				t.Fatal("failure state violates controlled statuses", e)
+			}
+			failed := false
+			for _, op := range state.Operations {
+				if op.Status == "FAILED" {
+					failed = true
+				}
+			}
+			if !failed {
+				t.Fatal("expected actionable terminal failure")
+			}
+			backup, e := s.CreateBackup(ctx, "operator")
+			if e != nil {
+				t.Fatal(e)
+			}
+			store.Close()
+			store, e = persistence.OpenLocal(ctx, path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer store.Close()
+			state, e = store.Read(ctx)
+			if e != nil || domain.ValidateStateStatuses(state) != nil {
+				t.Fatal("persisted failure state cannot reopen", e)
+			}
+			destination, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "restored.db"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer destination.Close()
+			if _, e = New(destination).RestoreBackup(ctx, "operator", backup.ArchiveBase64, backup.SHA256); e != nil {
+				t.Fatal("failure task backup cannot restore", e)
+			}
+		})
 	}
 }

@@ -29,6 +29,7 @@ type IntelligenceProvider interface {
 	Seal(string, any) (string, error)
 	Open(string, string, any) error
 	ValidateInput(any) error
+	ValidateOutput(any) error
 	Complete(context.Context, string, any) (json.RawMessage, intelligence.Usage, error)
 }
 
@@ -471,6 +472,9 @@ func (s *Service) tickIntelligence(ctx context.Context, op domain.ExternalOperat
 
 func finishIntelligence(st *domain.State, op *domain.ExternalOperation, status, detail string, _ any) error {
 	now := time.Now().UTC()
+	if status == "BLOCKED" {
+		status = "FAILED"
+	}
 	op.Status = status
 	op.Phase = detail
 	op.Error = ""
@@ -487,6 +491,9 @@ func finishIntelligence(st *domain.State, op *domain.ExternalOperation, status, 
 }
 
 func (s *Service) validateIntelligenceResult(in intelligenceInput, out intelligenceResult) error {
+	if s.intelligence.ValidateOutput(out) != nil {
+		return invalid("generated output rejected by privacy or bounds filter")
+	}
 	if len(out.Summary) > 8192 || strings.TrimSpace(out.Summary) == "" || len(out.Changes) > 50 || len(out.Warnings) > 10 {
 		return invalid("invalid result shape")
 	}
@@ -579,7 +586,7 @@ func (s *Service) intelligenceQuery(st *domain.State, id string) (any, error) {
 	out["stale"] = false
 	if op.Intelligence.ResultCiphertext != "" {
 		var result intelligenceResult
-		if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || s.intelligence.Fingerprint(result) != op.Intelligence.ResultFingerprint {
+		if s.intelligence.Open(intelligenceAAD(*op, "result"), op.Intelligence.ResultCiphertext, &result) != nil || s.intelligence.Fingerprint(result) != op.Intelligence.ResultFingerprint || s.intelligence.ValidateOutput(result) != nil {
 			return nil, invalid("task result unavailable")
 		}
 		out["result"] = result

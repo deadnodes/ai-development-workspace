@@ -144,3 +144,41 @@ func TestConfigurationAndEndpointGuards(t *testing.T) {
 		t.Fatal("credential redirect admitted")
 	}
 }
+
+func TestDecodedPrivacyAndCredentialSeparation(t *testing.T) {
+	a := testAuthority(t)
+	for _, raw := range []string{`{"summary":"person\u0040example.com"}`, `{"summary":"\u0000"}`, `{"summary":"\u0078xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`} {
+		if a.ValidateOutput(json.RawMessage(raw)) == nil {
+			t.Fatalf("decoded sensitive value admitted: %s", raw)
+		}
+	}
+	if a.ValidateInput(json.RawMessage(`{"excerpt":"person\u0040example.com"}`)) == nil {
+		t.Fatal("escaped input PII bypassed privacy filter")
+	}
+	for _, value := range []any{map[string]any{"warnings": []string{`password="abcdefghijklmnop"`}}, map[string]any{"changes": []any{map[string]string{"text": "person@example.com"}}}, map[string]any{"patch": map[string]string{"content": "password=abcdefghijklmnop"}}, map[string]string{strings.Repeat("x", 32): "safe value"}} {
+		if a.ValidateOutput(value) == nil {
+			t.Fatal("nested sensitive value/key admitted")
+		}
+	}
+	c := testConfig()
+	c.APIKeyEnv = "RC_TOKEN"
+	if _, e := New(c, testLookup); e == nil {
+		t.Fatal("control credential reference admitted")
+	}
+	if _, e := New(testConfig(), func(k string) string {
+		if k == "RC_TOKEN" || k == "MODEL_KEY" {
+			return strings.Repeat("x", 32)
+		}
+		return testLookup(k)
+	}); e == nil {
+		t.Fatal("control credential value reused for model")
+	}
+	if _, e := New(testConfig(), func(k string) string {
+		if k == "MODEL_KEY" {
+			return base64.StdEncoding.EncodeToString([]byte(strings.Repeat("y", 32)))
+		}
+		return testLookup(k)
+	}); e == nil {
+		t.Fatal("encryption key reused for provider")
+	}
+}
