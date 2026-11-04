@@ -10,19 +10,19 @@ Its database contains project configuration, intent, plans, commit references, o
 | --- | --- | --- |
 | Understand and continue work | Generate context, record decisions and handoff | Agent or developer implements the change |
 | Source changes | Record repository/branch/SHA/PR relationships and observations | Developer/agent edits files; Git stores source and commits |
-| Branch/release composition | Select immutable inputs, plan actions, apply policy, track conflicts | Git provider performs permitted ref/merge operations; agent resolves semantic conflicts |
+| Branch/release composition | Select immutable inputs, plan actions, apply policy, track conflicts and bounded model proposals | Git provider performs permitted ref/merge operations; isolated workers check proposals and agents/developers admit reviewed resolutions |
 | Builds and checks | Request execution, associate inputs/results/evidence | CI or agent executes build/test code |
 | Artifacts | Retain digest, source provenance and availability | Registry stores image bytes |
 | Deployment | Select versions, produce desired state, track operations | GitOps/Flux/Kubernetes perform rollout |
 | Application business data | No ownership or direct access | Managed application and its data stores |
 
-The service must not edit application source files, implement features, resolve code conflicts, execute arbitrary shell/SQL, run application migrations, modify business records, or become a proxy for accessing application databases. Its own PostgreSQL migrations and backup/restore affect only the Control Plane metastore.
+The service must not edit application source files, implement features, execute arbitrary shell/SQL, run application migrations, modify business records, or become a proxy for accessing application databases. It may request a bounded model conflict proposal; actual source application and trusted checks belong to an isolated external worker. A proposal or successful check does not resolve a conflict or authorize a source merge. Its own PostgreSQL migrations and backup/restore affect only the Control Plane metastore.
 
-Commit management means relationships, provenance, branch/ref operations and explicit composition intent. It does not mean creating an alternate source history database or rewriting meaningful developer history silently. Agents produce code changes using their own development environment and credentials, then report commits and evidence through MCP. Future conflict assistance supplies both semantic contexts and required checks; resolution remains an agent/developer task.
+Commit management means relationships, provenance, branch/ref operations and explicit composition intent. It does not mean creating an alternate source history database or rewriting meaningful developer history silently. Agents produce code changes using their own development environment and credentials, then report commits and evidence through MCP. Direct model assistance supplies a constrained proposal plus semantic context and required checks; reviewed resolution-commit admission remains separate. See [direct model tasks](INTELLIGENCE.md) for bounds, encrypted payloads and requesting-agent fallback.
 
 ## Existing external mutations
 
-Current code can dispatch a configured GitHub Actions workflow and update the configured DEV GitOps image fields after an explicit deployment request and policy checks. This is orchestration of build/deployment configuration; it is not application-source editing. No background source-editing or business-data mutation capability exists.
+Current code can dispatch a configured GitHub Actions workflow and update the configured DEV GitOps image fields after an explicit deployment request and policy checks. This is orchestration of build/deployment configuration; it is not application-source editing. An enrolled model provider can receive bounded task context for annotations, summaries, customer release-note drafts or conflict proposals through durable Operations. Model output grants no tools or external mutation authority. The control-plane process has no background application-source editing or business-data mutation capability.
 
 The GitOps adapter's bounded image mapping is the current write boundary. Do not turn it into a generic repository file editor. Automatic build and DEV mutation permissions remain opt-in. GitOps writes are still real external changes and must be represented by the requested operation and audit; do not describe the whole service as read-only.
 

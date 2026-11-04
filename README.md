@@ -92,6 +92,7 @@ A successful GitOps operation records desired state and remains pending reconcil
 - [GitHub build and GitOps contract](docs/GITHUB_DEV.md) — workflow, GHCR and evidence details.
 - [External worker protocol](docs/WORKER_EXECUTION.md) and [local execution](docs/LOCAL_WORKER.md).
 - [Application commands](docs/CONTRACT.md) — shared HTTP/MCP/domain contract.
+- [Direct model tasks and customer release notes](docs/INTELLIGENCE.md) — scoped provider configuration, encrypted drafts and isolated conflict-patch checks.
 - [Architecture](docs/ARCHITECTURE.md) and [roadmap](docs/ROADMAP.md).
 - [Validation](docs/VALIDATION.md) — tested behavior and live acceptance limits.
 

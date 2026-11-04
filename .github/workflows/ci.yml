@@ -112,7 +112,7 @@ jobs:
       - name: Real native clean builds with bounded state diagnostics
         run: go test ./internal/workerrunner -run '^TestRealWorkerTwoCleanBuilds$' -count=1 -v -timeout=20m
       - name: Real native worker boundaries, recovery and source provenance
-        run: go test ./internal/workerrunner -run '^(TestRealWorkerFailureCancellationExpiryKillAndRestart|TestRealCreateStartSupervisionWindows|TestRealLocalCleanupRecovery|TestRealCleanupContinuesWhenPresenceExceedsJournalBound|TestSourceFetchRealGitRunOneOCI)$' -count=1 -v -timeout=20m
+        run: go test ./internal/workerrunner -run '^(TestRealWorkerFailureCancellationExpiryKillAndRestart|TestRealCreateStartSupervisionWindows|TestRealLocalCleanupRecovery|TestRealCleanupContinuesWhenPresenceExceedsJournalBound|TestSourceFetchRealGitRunOneOCI|TestIntelligencePatchRealIsolatedCheck)$' -count=1 -v -timeout=20m
       - name: Real native composition, candidate and selective GitOps fixture chains
         run: go test ./internal/workerrunner -run '^(TestRealComposedGitSourceWorkerPublication|TestRealMainCandidateHistoricalGitProdProfile|TestRealDevGitOpsBatchNativePipeline)$' -count=1 -v -timeout=20m
       - name: Real native API, checks, publisher and registry fixture chains

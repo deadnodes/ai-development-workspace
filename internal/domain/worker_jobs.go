@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const WorkerOperationKind = "WORKER_EXECUTION"
 
@@ -81,21 +84,22 @@ type WorkerSourceProof struct {
 	SnapshotHash string `json:"snapshot_hash"`
 }
 type WorkerInputs struct {
-	Registry       *WorkerRegistryInputs `json:"registry,omitempty"`
-	Check          *WorkerCheckBinding   `json:"check,omitempty"`
-	SourceProof    *WorkerSourceProof    `json:"source_proof,omitempty"`
-	RecipeID       string                `json:"recipe_id"`
-	RecipeRevision string                `json:"recipe_revision"`
-	RecipeHash     string                `json:"recipe_hash"`
-	ConfigRevision string                `json:"config_revision"`
-	RepositoryID   string                `json:"repository_id"`
-	RepositoryURL  string                `json:"repository_url"`
-	RevisionID     string                `json:"revision_id"`
-	SourceSHA      string                `json:"source_sha"`
-	Trust          string                `json:"trust"`
-	Parameters     map[string]any        `json:"parameters"`
-	Execution      *WorkerExecution      `json:"execution"`
-	Publication    *WorkerPublication    `json:"publication,omitempty"`
+	IntelligencePatch *IntelligencePatchBinding `json:"intelligence_patch,omitempty"`
+	Registry          *WorkerRegistryInputs     `json:"registry,omitempty"`
+	Check             *WorkerCheckBinding       `json:"check,omitempty"`
+	SourceProof       *WorkerSourceProof        `json:"source_proof,omitempty"`
+	RecipeID          string                    `json:"recipe_id"`
+	RecipeRevision    string                    `json:"recipe_revision"`
+	RecipeHash        string                    `json:"recipe_hash"`
+	ConfigRevision    string                    `json:"config_revision"`
+	RepositoryID      string                    `json:"repository_id"`
+	RepositoryURL     string                    `json:"repository_url"`
+	RevisionID        string                    `json:"revision_id"`
+	SourceSHA         string                    `json:"source_sha"`
+	Trust             string                    `json:"trust"`
+	Parameters        map[string]any            `json:"parameters"`
+	Execution         *WorkerExecution          `json:"execution"`
+	Publication       *WorkerPublication        `json:"publication,omitempty"`
 }
 type WorkerJob struct {
 	CheckOperationID string `json:"check_operation_id,omitempty"`
@@ -130,8 +134,9 @@ type WorkerAttempt struct {
 	Report     *WorkerReport `json:"report,omitempty"`
 }
 type WorkerLease struct {
-	Job     WorkerJob     `json:"job"`
-	Attempt WorkerAttempt `json:"attempt"`
+	IntelligencePatch json.RawMessage `json:"intelligence_patch,omitempty"`
+	Job               WorkerJob       `json:"job"`
+	Attempt           WorkerAttempt   `json:"attempt"`
 }
 type WorkerClaim struct {
 	RecipeID     string `json:"recipe_id,omitempty"`

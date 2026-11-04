@@ -148,16 +148,17 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 			return invalid("unexpected queue metadata")
 		}
 		var in struct {
-			RequestKey     string         `json:"request_key"`
-			RecipeID       string         `json:"recipe_id"`
-			RecipeRevision string         `json:"recipe_revision"`
-			RecipeHash     string         `json:"recipe_hash"`
-			ConfigRevision string         `json:"config_revision"`
-			RevisionID     string         `json:"revision_id"`
-			SourceSHA      string         `json:"source_sha"`
-			Parameters     map[string]any `json:"parameters"`
-			Deadline       time.Time      `json:"deadline"`
-			MaxAttempts    int            `json:"max_attempts"`
+			IntelligenceTaskID string         `json:"intelligence_task_id,omitempty"`
+			RequestKey         string         `json:"request_key"`
+			RecipeID           string         `json:"recipe_id"`
+			RecipeRevision     string         `json:"recipe_revision"`
+			RecipeHash         string         `json:"recipe_hash"`
+			ConfigRevision     string         `json:"config_revision"`
+			RevisionID         string         `json:"revision_id"`
+			SourceSHA          string         `json:"source_sha"`
+			Parameters         map[string]any `json:"parameters"`
+			Deadline           time.Time      `json:"deadline"`
+			MaxAttempts        int            `json:"max_attempts"`
 		}
 		if err := decode(c.Data, &in); err != nil {
 			return err
@@ -213,7 +214,11 @@ func (s *Service) executeWorkerCommand(ctx context.Context, c domain.Command) (a
 			return invalid("configured repository identity mismatch")
 		}
 		m := domain.Meta{ID: id(), ProductID: c.ProductID, FeatureID: integration.FeatureID, Actor: c.Actor, CreatedAt: now, UpdatedAt: now}
-		inputs := domain.WorkerInputs{Check: recipe.Check, RecipeID: recipe.ID, RecipeRevision: recipe.Revision, RecipeHash: recipe.Hash, ConfigRevision: in.ConfigRevision, RepositoryID: recipe.RepositoryID, RepositoryURL: recipe.RepositoryURL, RevisionID: rev.ID, SourceSHA: rev.HeadCommit, Trust: recipe.Trust, Parameters: in.Parameters, Execution: recipe.Execution}
+		patch, e := s.bindIntelligencePatch(st, recipe, in.IntelligenceTaskID, c.ProductID, in.SourceSHA, c.IntegrationID)
+		if e != nil {
+			return e
+		}
+		inputs := domain.WorkerInputs{IntelligencePatch: patch, Check: recipe.Check, RecipeID: recipe.ID, RecipeRevision: recipe.Revision, RecipeHash: recipe.Hash, ConfigRevision: in.ConfigRevision, RepositoryID: recipe.RepositoryID, RepositoryURL: recipe.RepositoryURL, RevisionID: rev.ID, SourceSHA: rev.HeadCommit, Trust: recipe.Trust, Parameters: in.Parameters, Execution: recipe.Execution}
 		op := domain.ExternalOperation{Meta: m, Kind: domain.WorkerOperationKind, IntegrationID: integration.ID, RepositoryID: recipe.RepositoryID, RequestedBy: c.Actor, Status: "PENDING", Phase: "EXTERNAL_QUEUED"}
 		m.ID = id()
 		j := domain.WorkerJob{Meta: m, OperationID: op.ID, RequestKey: in.RequestKey, RequestHash: requestHash, IntegrationID: integration.ID, Capability: recipe.Capability, Inputs: inputs, InputHash: workerconfig.Fingerprint(inputs), Status: "QUEUED", Deadline: in.Deadline, MaxAttempts: in.MaxAttempts}
@@ -320,6 +325,11 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 			if j.Status != "QUEUED" || out != nil {
 				continue
 			}
+			if _, err := s.intelligencePatch(st, j); err != nil {
+				j.Status = "RECONCILIATION_REQUIRED"
+				workerAudit(st, j, "system/worker-recovery", "worker_patch_stale", now)
+				continue
+			}
 			if !s.workerConfigMatches(j) || j.Capability == "registry_observe" && s.registryWorkerAllowed(st, j) != nil || s.managedWorkerAllowed(st, j) != nil || j.Inputs.Check != nil && s.checkAuthority(st, operationByID(st, j.CheckOperationID), false) != nil {
 				j.Status = "RECONCILIATION_REQUIRED"
 				workerAudit(st, j, "system/worker-recovery", "worker_configuration_changed", now)
@@ -343,6 +353,9 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 			st.WorkerAttempts = append(st.WorkerAttempts, a)
 			workerAudit(st, j, p.ID(), "worker_claimed", now)
 			out = &domain.WorkerLease{Job: *j, Attempt: a}
+			if e := s.attachIntelligencePatch(st, out); e != nil {
+				return e
+			}
 		}
 		return nil
 	})
@@ -384,6 +397,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 				return err
 			}
 		}
+		if _, e := s.intelligencePatch(st, j); e != nil {
+			return e
+		}
 		if err := s.managedWorkerAllowed(st, j); err != nil {
 			return err
 		}
@@ -416,6 +432,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 			if j.Status != "RUNNING" {
 				return invalid("report requires RUNNING")
 			}
+			if j.Inputs.IntelligencePatch != nil && (report.EvidenceHash != j.Inputs.IntelligencePatch.ResultFingerprint || report.LocalOCI != nil) {
+				return invalid("patch report must bind exact checked proposal and cannot publish an image")
+			}
 			if report.Result != "PASSED" && report.Result != "CHECK_FAILED" && report.Result != "EXECUTOR_FAILED" || report.EvidenceHash != "" && !workerconfig.ValidFingerprint(report.EvidenceHash) {
 				return invalid("invalid bounded worker result")
 			}
@@ -442,6 +461,9 @@ func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in
 		a.UpdatedAt = now
 		workerAudit(st, j, p.ID(), "worker_"+action, now)
 		out = domain.WorkerLease{Job: *j, Attempt: *a}
+		if e := s.attachIntelligencePatch(st, &out); e != nil {
+			return e
+		}
 		return nil
 	})
 	if err == nil {

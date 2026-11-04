@@ -293,7 +293,7 @@ func (s *Service) prepareMainCandidate(st *domain.State, c domain.Command, in do
 		}
 		proof.Sources = append(proof.Sources, rp)
 	}
-	op := domain.ExternalOperation{ReservationEpoch: comp.EnvironmentSnapshot.ReservationEpoch, Meta: m, MainCandidate: proof, Kind: "RELEASE_CANDIDATE", EnvironmentID: in.EnvironmentID, Status: "PENDING", Phase: "QUEUE_BUILDS", RequestedBy: c.Actor, RequestKey: in.IdempotencyKey, RequestHash: hash, CompositionSnapshot: &comp, PreparedDeployments: snaps, IntegrationIDs: selectedIntegrations(comp), ChildIDs: []string{}, NextAttemptAt: m.CreatedAt}
+	op := domain.ExternalOperation{ReservationEpoch: comp.EnvironmentSnapshot.ReservationEpoch, Meta: m, MainCandidate: proof, ReleaseNotesIntentHash: releaseNotesIntentHash(st, comp), Kind: "RELEASE_CANDIDATE", EnvironmentID: in.EnvironmentID, Status: "PENDING", Phase: "QUEUE_BUILDS", RequestedBy: c.Actor, RequestKey: in.IdempotencyKey, RequestHash: hash, CompositionSnapshot: &comp, PreparedDeployments: snaps, IntegrationIDs: selectedIntegrations(comp), ChildIDs: []string{}, NextAttemptAt: m.CreatedAt}
 	return op, nil
 }
 

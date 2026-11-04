@@ -113,6 +113,8 @@ type FeatureUpdateRequest struct {
 	ExpectedSelection *EnvironmentSelection `json:"expected_selection"`
 }
 type ExternalOperation struct {
+	ReleaseNotesIntentHash     string                       `json:"release_notes_intent_hash,omitempty"`
+	Intelligence               *IntelligenceTask            `json:"intelligence,omitempty"`
 	DevRestorationUnapproved   bool                         `json:"dev_restoration_unapproved,omitempty"`
 	DevRestoration             *DevRestorationProof         `json:"dev_restoration,omitempty"`
 	DevRestorationPlan         *DevRestorationPlan          `json:"dev_restoration_plan,omitempty"`

@@ -51,7 +51,7 @@ func operationPriority(kind string) int {
 // Tick claims one durable operation step. Network I/O happens outside the store
 // transaction. A persisted dispatch intent is never blindly dispatched again.
 func (s *Service) Tick(ctx context.Context) (bool, error) {
-	if s.provider == nil && len(s.runtimeObservers) == 0 {
+	if s.provider == nil && len(s.runtimeObservers) == 0 && s.intelligence == nil {
 		return false, nil
 	}
 	now := time.Now().UTC()
@@ -64,7 +64,10 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			if v.Kind == domain.WorkerOperationKind || v.Kind == domain.RegistryObserveOperationKind {
 				continue
 			}
-			if s.provider == nil && v.Kind != "REFRESH_RUNTIME" {
+			if v.Kind == domain.IntelligenceOperationKind && s.intelligence == nil {
+				continue
+			}
+			if s.provider == nil && v.Kind != "REFRESH_RUNTIME" && v.Kind != domain.IntelligenceOperationKind {
 				continue
 			}
 			if terminalOperation(v.Status) || v.NextAttemptAt.After(now) || v.LeaseUntil.After(now) {
@@ -79,6 +82,9 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 			v := candidate
 			v.LeaseOwner = token
 			v.LeaseUntil = now.Add(45 * time.Second)
+			if v.Kind == domain.IntelligenceOperationKind && s.intelligence != nil {
+				v.LeaseUntil = now.Add(s.intelligence.Timeout() + 10*time.Second)
+			}
 			if v.Kind == "REFRESH_RUNTIME" {
 				v.LeaseUntil = now.Add(10 * time.Minute)
 			}
@@ -98,11 +104,17 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	timeout := 25 * time.Second
+	if op.Kind == domain.IntelligenceOperationKind && s.intelligence != nil {
+		timeout = s.intelligence.Timeout()
+	}
 	if op.Kind == "REFRESH_RUNTIME" {
 		timeout = 8 * time.Minute
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if op.Kind == domain.IntelligenceOperationKind {
+		return true, s.tickIntelligence(callCtx, *op, token)
+	}
 	if op.Kind == "CHECK_PUBLICATION" {
 		return true, s.tickCheck(callCtx, *op, token)
 	}
