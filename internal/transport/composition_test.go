@@ -188,13 +188,22 @@ func TestPostgresEnvironmentComposition(t *testing.T) {
 	if err = json.Unmarshal(b, &resumedContext); err != nil {
 		t.Fatal(err)
 	}
+	if len(b) > 32<<10 || resumedContext["projection"] != "bounded_feature_summary" {
+		t.Fatal("MCP resume is not a bounded summary")
+	}
+	fullContext, e := svc.Resume(ctx, "feature-a")
+	if e != nil {
+		t.Fatal(e)
+	}
+	full := fullContext.(map[string]any)
 	for _, key := range []string{"applications", "integration_revisions", "compositions"} {
-		if _, ok := resumedContext[key]; !ok {
-			t.Errorf("resume missing %s", key)
+		if _, ok := full[key]; !ok {
+			t.Errorf("full operator context missing %s", key)
 		}
 	}
-	if !strings.Contains(string(b), "composition") || !strings.Contains(string(b), "revision-a") {
-		t.Fatal("resume omitted selected composition/revision")
+	fullBytes, _ := json.Marshal(full)
+	if !strings.Contains(string(fullBytes), "composition") || !strings.Contains(string(fullBytes), "revision-a") {
+		t.Fatal("full context omitted selected composition/revision")
 	}
 	// Retargeting an environment invalidates the desire and cannot select a stale target snapshot.
 	post(domain.Command{Action: "update_environment", ID: "p1-env-0", Data: map[string]any{"namespace": "retargeted"}}, 200)

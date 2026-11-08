@@ -51,7 +51,7 @@ async function pollLive(){
  if(liveInFlight||!canPollLive())return;
  liveInFlight=true;const controller=new AbortController(),timeout=window.setTimeout(()=>controller.abort(),10000);const epoch=liveEpoch,route=location.hash,product=productID,token=browserToken();
  try{
-  const response=await fetch('/api/state',{credentials:'same-origin',headers:{...(liveETag?{'If-None-Match':liveETag}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},cache:'no-store',signal:controller.signal});
+  const response=await fetch(uiStateURL(),{credentials:'same-origin',headers:{...(liveETag?{'If-None-Match':liveETag}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},cache:'no-store',signal:controller.signal});
   if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==browserToken()||!canPollLive())return;
   if(response.status===401&&authMode==='oidc'){requireSignIn();return;}
   if(response.status===304){if(liveFailed)notice('Connection restored. Shared state is current.');liveFailed=false;return;}
@@ -68,5 +68,5 @@ async function pollLive(){
  finally{window.clearTimeout(timeout);liveInFlight=false;}
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollLive();});
-window.addEventListener('hashchange',()=>invalidateLive());
+// Route rendering/refresh in app.js owns the epoch; a second listener would invalidate its new request.
 if(typeof window.setInterval==='function')window.setInterval(pollLive,3000);

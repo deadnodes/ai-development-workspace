@@ -176,8 +176,14 @@ func TestPostgresHTTPMCPWorkflow(t *testing.T) {
 	if err = json.Unmarshal(mcpBytes, &mcpContext); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(httpContext, mcpContext) {
-		t.Fatalf("HTTP and MCP context differ: HTTP=%v MCP=%v", httpContext, mcpContext)
+	if reflect.DeepEqual(httpContext, mcpContext) {
+		t.Fatal("MCP unexpectedly returned the full operator context")
+	}
+	if len(mcpBytes) > 32<<10 || mcpContext.(map[string]any)["projection"] != "bounded_feature_summary" {
+		t.Fatal("MCP context is not explicitly bounded")
+	}
+	if _, ok := httpContext.(map[string]any)["project_context"]; !ok {
+		t.Fatal("HTTP full operator context lost project details")
 	}
 	if !strings.Contains(string(mcpBytes), "Do not remove v1 callback") {
 		t.Fatal("resume omitted structured handoff warning")

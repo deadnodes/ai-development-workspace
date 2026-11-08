@@ -41,5 +41,15 @@ const pendingDraft=run('pollLive()');document.querySelector('#dialog').setAttrib
 // Errors retain the view. Timeout abort releases the polling slot.
 window.fetch=async()=>{throw new Error('offline');};const before=main.innerHTML;await run('pollLive()');assert.equal(main.innerHTML,before);assert.ok(document.querySelector('#notice').textContent.includes('retained'));
 const nativeTimeout=window.setTimeout;window.setTimeout=(fn,ms)=>nativeTimeout(fn,ms===10000?1:ms);window.fetch=(_path,{signal})=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('timeout'))));await run('pollLive()');assert.equal(run('liveInFlight'),false);
+// Dispatch the actual registered hashchange listeners: the route refresh must not
+// be invalidated by a later listener in live.js.
+let routeResponse,routePath='';
+const routeState={...next,projection:{kind:'bounded_browser',product_id:'p'},features:[{id:'f2',product_id:'p',title:'Navigated feature',goal:'Loaded through hashchange',status:'active'}],integrations:[]};
+window.fetch=path=>path==='/api/statuses'?Promise.resolve({ok:true,status:200,json:async()=>({catalog:{},transitions:{}})}):new Promise(resolve=>{routePath=path;routeResponse=resolve;});
+window.history.replaceState(null,'','http://localhost/?product=p#f2');
+window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+assert.equal(new URLSearchParams(routePath.split('?')[1]).get('feature_id'),'f2');
+routeResponse({ok:true,status:200,json:async()=>routeState});await new Promise(resolve=>setTimeout(resolve,0));
+assert.equal(run('state.features[0].id'),'f2');assert.match(main.textContent,/Loaded through hashchange/);
 observer.disconnect();dom.window.close();
 console.log('Live DOM tests passed: conditional/no-overlap polling, stable keyed nodes, focus/scroll/details/drafts, stale reads, errors and timeout recovery.');

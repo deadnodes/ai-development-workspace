@@ -54,6 +54,7 @@ try{
  // An obsolete 401 must not sign out a different, newer credential/session.
  request=open();run(`authMode='oidc';authExpired=false`);reply(request,{},401);await tick();assert.equal(run('authExpired'),false);assert.equal(preview().hidden,true);
  request=open();reply(request,{},401);await tick();assert.equal(run('authExpired'),true);assert.ok(w.document.querySelector('#main a[href="/auth/login"]'));
- assert.ok(requests.every(r=>r.path.startsWith('/api/intelligence-tasks/')&&r.options.method==='GET'&&!r.options.body),'preview never generates tasks, mutates state or falls back to broad context');
+ assert.ok(requests.every(r=>(r.path.startsWith('/api/intelligence-tasks/')||r.path==='/api/ui-state?product_id=q'||r.path==='/api/statuses')&&(!r.options.method||r.options.method==='GET')&&!r.options.body),'preview and product navigation only use bounded read endpoints; never generate tasks or fall back to full state');
+ assert.ok(requests.some(r=>r.path==='/api/ui-state?product_id=q'),'product navigation refreshes only its selected scope');
 }finally{run('clearIntelligencePreviews()');dom.window.close();}
 console.log('Release notes UI: explicit bounded GET, scoped draft/provenance separation, safe text, stale/pending/error states, latest-read/product/credential races and no generation/publication passed.');

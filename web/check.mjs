@@ -72,7 +72,8 @@ sandbox.fetch=async(path,options)=>{
 await evaluate('refreshEverything()');
 const queued=refreshRequests.filter(r=>r.path==='/api/commands').map(r=>r.body.action);
 assert.deepEqual(queued.sort(),['refresh_environment_runtime','refresh_integration_git','refresh_repository_git']);
-assert.ok(refreshRequests.some(r=>r.path==='/api/state'));
+assert.ok(refreshRequests.some(r=>r.path.startsWith('/api/ui-state?')&&new URLSearchParams(r.path.split('?')[1]).get('product_id')===stateForRefresh.products[0].id));
+assert.ok(!refreshRequests.some(r=>r.path==='/api/state'),'browser refresh must never request full operator history');
 assert.equal(elements.get('#refresh').textContent,'Refresh all');
 console.log('Header Refresh all queues Git, integration and runtime observations asynchronously.');
 

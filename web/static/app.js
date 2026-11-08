@@ -19,7 +19,7 @@ function persistProductRoute(push=false,hash=location.hash){
 function restoreProductRoute(){
  productID=urlProduct() || localStorage.getItem('rc-product') || '';
  const f=selectedFeature();if(f)productID=f.product_id;
- render();
+ render();refresh();
 }
 const featureID = () => decodeURIComponent(location.hash.slice(1));
 const selectedFeature = () => list(state.features).find(f=>f.id===featureID());
@@ -67,14 +67,15 @@ function notice(message,error=false){$('#notice').textContent=message;$('#notice
 let statusMetadata={catalog:{},transitions:{}};
 let refreshInFlight=0;
 let refreshAllInFlight=false;
+function uiStateURL(){const q=new URLSearchParams();if(productID)q.set("product_id",productID);const f=featureID();if(f&&!["configuration","delivery","operations","main"].includes(f))q.set("feature_id",f);return "/api/ui-state?"+q.toString();}
 async function refresh(){
  if(authExpired){await loadIdentity();if(authExpired)return;}
  if(typeof invalidateLive==='function')invalidateLive();
  const ticket=typeof liveEpoch==='number'?liveEpoch:null;refreshInFlight++;
  try{
-  const [next,metadata]=await Promise.all([request('/api/state'),request('/api/statuses')]);
+  const [next,metadata]=await Promise.all([request(uiStateURL()),request('/api/statuses')]);
   if(ticket!==null&&ticket!==liveEpoch)return;
-  state=next;statusMetadata=metadata;
+  state=next;statusMetadata=metadata;if(next.projection?.product_id)productID=next.projection.product_id;
   if(!list(state.products).some(p=>p.id===productID))productID=state.products?.[0]?.id||'';
   const f=selectedFeature();if(f)productID=f.product_id;render(typeof patchLiveHTML==='function');
  }catch(e){if(authExpired)return;notice(e.message,true);if(!list(state.products).length){$('#main').innerHTML='<div class="empty"><h2>Workspace unavailable</h2><p>Check the server connection and your access settings.</p><button id="retry">Try again</button></div>';$('#retry').onclick=refresh;}}
@@ -124,8 +125,9 @@ function render(preserve=false){
  const f=selectedFeature(), route=featureID();$('#breadcrumb').textContent=route==='configuration'?'Product configuration':route==='operations'?'Operations':route==='delivery'?'Environments & delivery':f?.title||'Overview';$('.nav-overview').classList.toggle('active',!f&&!['operations','delivery','configuration'].includes(route));$('.nav-delivery').classList.toggle('active',route==='delivery');$('.nav-operations').classList.toggle('active',route==='operations');
  $('.nav-configuration')?.classList.toggle('active',route==='configuration');
  paint($('#main'),route==='configuration'?productConfiguration():route==='delivery'&&typeof deliveryView==='function'?deliveryView():featureID()==='operations'&&typeof operationsView==='function'?operationsView():f?featureView(f):overview());
+ if(state.projection){const hint=document.createElement('p');hint.className='muted projection-note';hint.textContent='Recent browser view and history excerpts · full history is retained in storage. '+(list(state.projection.truncated).length?'Some lists are limited; use scoped search/context for older records.':'');$('#main').prepend(hint);}
  if(typeof syncWorkerHistory==='function')syncWorkerHistory();
- if(route==='operations'&&typeof loadAttention==='function'&&!attentionResults.has(productID)) queueMicrotask(loadAttention);
+ if(route==='operations'&&!state.projection&&typeof loadAttention==='function'&&!attentionResults.has(productID)&&!attentionAttempts.has(productID)) queueMicrotask(loadAttention);
 }
 function featureUpdated(f){return f.updated_at||f.created_at||'';}
 function sortedFeatures(){return productItems('features').slice().sort((a,b)=>(Date.parse(featureUpdated(b))||0)-(Date.parse(featureUpdated(a))||0)||a.id.localeCompare(b.id));}
@@ -223,7 +225,7 @@ $('#command-form').onsubmit=async e=>{e.preventDefault();if(!currentForm)return;
  $('#save').disabled=true;$('#save').textContent='Saving…';const result=await request('/api/commands',command);closeDialog();if(action==='create_product'){productID=result.id;persistProductRoute(true,'');}if(action==='delete_product'){productID='';persistProductRoute(true,'');}
  if(action==='create_feature')location.hash=encodeURIComponent(result.id);await refresh();notice('Saved. Shared context and activity history are up to date.');
  }catch(error){$('#form-error').textContent=error.message;}finally{$('#save').disabled=false;$('#save').textContent=forms[action].label;}};
-$('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['configuration','delivery','operations'].includes(featureID())?location.hash:'');render();};
+$('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['configuration','delivery','operations'].includes(featureID())?location.hash:'');render();refresh();};
 $('#refresh').onclick=refreshEverything;
 $('.skip').onclick=e=>{e.preventDefault();$('#main').focus();};
 async function showAccount(){

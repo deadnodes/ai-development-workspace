@@ -41,6 +41,7 @@ func New(service Service, options Options) http.Handler {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/state", stateSnapshot(service))
+	mux.HandleFunc("GET /api/ui-state", uiStateSnapshot(service))
 	mux.HandleFunc("GET /api/statuses", func(w http.ResponseWriter, r *http.Request) { write(w, http.StatusOK, StatusSchema()) })
 	mux.HandleFunc("GET /api/schema", func(w http.ResponseWriter, r *http.Request) { write(w, http.StatusOK, CommandSchema()) })
 	mux.HandleFunc("GET /api/features/{id}/context", func(w http.ResponseWriter, r *http.Request) {
@@ -86,12 +87,18 @@ func New(service Service, options Options) http.Handler {
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
 	registerStateNavigationTool(server, service)
+	registerRetrieval(mux, server, service)
 	registerWorkerHistoryTool(server, service)
-	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Deterministic feature context for a fresh coding agent: intent, ordered plan, progress, decisions, discoveries, blockers, handoffs, verification evidence and other active work."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Bounded feature summary and recent memory excerpts (32 KiB maximum). Use graph/text search for relevant evidence; full operator history stays at the HTTP feature context endpoint."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		FeatureID string `json:"feature_id" jsonschema:"Feature ID to resume"`
 	}) (*mcp.CallToolResult, any, error) {
-		v, e := service.Resume(ctx, in.FeatureID)
-		return nil, v, e
+		if compact, ok := service.(interface {
+			ResumeSummary(context.Context, string) (any, error)
+		}); ok {
+			v, e := compact.ResumeSummary(ctx, in.FeatureID)
+			return nil, v, e
+		}
+		return nil, nil, errors.New("bounded feature summary reader required; full context is available through the operator HTTP endpoint")
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "execute", Description: "Record one attributed engineering action atomically. Inspect the action-specific input schema. Completion means ready, not released. Check results and handoffs are historical; resolving findings requires a passing rerun for blocking gates. Use create_application, record_integration_revision, plan_composition and select_composition for environment planning. Use assemble_environment to build all selected active revisions into a disposable DEV/TEST composition and queue its asynchronous Git/build/GitOps operation; poll get_operation and resolve persisted conflicts when required. Selecting a composition sets desired intent only; it never merges, builds or deploys. Revision commits are full SHAs supplied by the caller, not yet verified by Git. Use create_github_connection/import_repository/configure_component/configure_environment to configure explicit DEV delivery. refresh_integration_git queues observation; deploy_integration queues a real build/artifact/GitOps operation. Poll get_operation; GitOps application does not imply runtime health. IDs are optional on creates; reuse returned IDs.", InputSchema: CommandSchema()}, func(ctx context.Context, request *mcp.CallToolRequest, in domain.Command) (*mcp.CallToolResult, any, error) {
 		// SDK schema normalization traverses generic maps via float64. Preserve

@@ -82,3 +82,15 @@ try{
  assert.doesNotMatch(runtimeBrowser.text(),/Digest provenance/);
 }finally{runtimeBrowser.dom.window.close();}
 console.log('Runtime graph matches distinguish tag hints from provenance and escape remote labels.');
+
+const bounded=browser();
+try{
+ bounded.run("state.projection={kind:'bounded_browser'};render()");await tick();assert.equal(bounded.pending.length,0,'bounded route must not automatically read a full graph');assert.match(bounded.text(),/loaded on request/);
+ bounded.click('[data-graph-refresh]');assert.equal(bounded.pending.length,1);bounded.run('state={...state};render()');await tick();assert.equal(bounded.pending.length,1,'poll rendering must not start another graph read');
+ bounded.pending.shift().reject(new Error('Explicit graph unavailable'));await tick();bounded.run('state={...state};render()');await tick();assert.equal(bounded.pending.length,0,'failed graph reads require explicit retry');
+ let attentionReads=0,rejectAttention;
+ bounded.w.fetch=()=>{attentionReads++;return new Promise((_resolve,reject)=>{rejectAttention=reject;});};
+ bounded.w.history.replaceState(null,'','/?product=p#operations');bounded.run('render()');await tick();assert.equal(attentionReads,0,'bounded operations view must not automatically query all attention history');
+ bounded.run('loadAttention();loadAttention()');assert.equal(attentionReads,1,'attention calls must deduplicate in flight');rejectAttention(new Error('Attention offline'));await tick();bounded.run('state={...state};render()');await tick();assert.equal(attentionReads,1,'failed attention reads must not retry on every poll');bounded.run('loadAttention()');assert.equal(attentionReads,2,'explicit retry remains available');rejectAttention(new Error('Still offline'));await tick();
+}finally{bounded.dom.window.close();}
+console.log('Bounded views defer full graph/attention queries, deduplicate in-flight attention and require explicit retries.');

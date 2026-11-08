@@ -11,6 +11,7 @@ function graphLink(url,text){const safe=graphURL(url);return safe?`<a href="${sa
 const graphSHA=s=>s?String(s).slice(0,8):'Unknown';
 function graphStatus(s){return String(s||'unknown').toLowerCase();}
 function graphFetch(f,force=false){
+ if(state.projection&&!force)return;
  const existing=featureGraphs.get(f.id);
  if(existing?.loading||(!force&&existing?.state===state))return;
  const entry={...existing,loading:true,state};featureGraphs.set(f.id,entry);
@@ -26,11 +27,11 @@ function graphHeading(f){return `<div class="page-heading graph-heading"><div><s
 function featureGraphView(f){
  const choice=graphChoice(f.id),entry=featureGraphs.get(f.id);
  // Queue outside render so an asynchronous response cannot replace another feature's page.
- if(!entry||entry.state!==state)queueMicrotask(()=>graphFetch(f));
+ if(!state.projection&&(!entry||entry.state!==state))queueMicrotask(()=>graphFetch(f));
  const tabs=`<nav class="graph-tabs" aria-label="Feature views">${[['map','Delivery graph'],['slices','Source slices'],['deployments','Environments'],['work','Work & history']].map(([k,t])=>`<button data-graph-tab="${k}" aria-pressed="${choice.tab===k}">${t}</button>`).join('')}</nav>`;
  if(choice.tab==='work')return tabs+featureRecordView(f);
  const g=entry?.data;
- return graphHeading(f)+tabs+(entry?.error?`<div class="graph-alert" role="alert">${esc(entry.error)} ${g?'Showing the last successful snapshot.':''}<button data-graph-refresh>Retry</button></div>`:'')+(!g?`<section class="panel" aria-busy="${!entry?.error}"><p>${entry?.error?'Graph unavailable. Retry to load it.':'Loading repositories, pull requests and deployment evidence…'}</p></section>`:graphContent(g,choice,entry));
+ return graphHeading(f)+tabs+(entry?.error?`<div class="graph-alert" role="alert">${esc(entry.error)} ${g?'Showing the last successful snapshot.':''}<button data-graph-refresh>Retry</button></div>`:'')+(!g?`<section class="panel" aria-busy="${!!entry?.loading}"><p>${entry?.error?'Graph unavailable. Retry to load it.':state.projection?'Delivery graph is loaded on request. It can inspect extensive feature history; the recent browser view does not load it automatically.':'Loading repositories, pull requests and deployment evidence…'}${state.projection&&!entry?.loading?'<button data-graph-refresh>Load delivery graph</button>':''}</p></section>`:graphContent(g,choice,entry));
 }
 function graphContent(g,c,entry){
  const repos=list(g.repositories),prs=repos.flatMap(r=>list(r.pull_requests));

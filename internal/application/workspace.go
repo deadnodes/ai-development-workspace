@@ -219,7 +219,7 @@ func (s *Service) SearchKnowledge(ctx context.Context, product, query string, li
 	if err := authorize(ctx, "read", product); err != nil {
 		return nil, err
 	}
-	st, err := s.State(ctx)
+	st, err := s.contextState(ctx, product, "")
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (s *Service) ProjectContext(ctx context.Context, product string) (any, erro
 	if err := authorize(ctx, "read", product); err != nil {
 		return nil, err
 	}
-	st, err := s.State(ctx)
+	st, err := s.contextState(ctx, product, "")
 	if err != nil {
 		return nil, err
 	}

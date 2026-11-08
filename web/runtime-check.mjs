@@ -36,6 +36,9 @@ try {
  w.sessionStorage.setItem('rc-actor','agent/runtime-test');w.document.querySelector('[data-runtime-sync]').click();await tick();
  assert.deepEqual(JSON.parse(JSON.stringify(requests.find(x=>x.body))),{path:'/api/commands',body:{action:'refresh_environment_runtime',actor:'human/local',product_id:'p',data:{environment_id:'dev'}}});
  assert.ok(requests.some(x=>x.path==='/api/environments/dev/state'));
+ const oldCount=requests.length;w.state.projection={kind:'bounded_browser'};w.state.runtime_snapshots=[];
+ run('runtimeViews.clear()');w.document.querySelector('main').innerHTML=run('runtimePanel(state.environments[0])');await tick();
+ await run('runtimeLoad("dev")');assert.equal(requests.length,oldCount,'bounded browser snapshots must not auto-load full environment history');assert.match(text(),/No runtime observations in this recent browser view/);assert.doesNotMatch(text(),/No runtime targets configured/);
  assert.doesNotMatch(source,/kubectl/);
 }finally{dom.window.close();}
 console.log('Runtime UI: latest workload/context snapshots, scope isolation, safe image/provenance rendering, honest comparison labels and read-only sync command passed.');

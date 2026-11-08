@@ -201,15 +201,15 @@ function externalScopePanel(target){
  return `<details><summary>Affected external systems (${ids.size})</summary>${list(state.external_systems).filter(s=>ids.has(s.id)).map(s=>`<h3>${esc(s.name)}</h3><p>${esc(s.description)}</p><dl>${detail('Interfaces',s.interfaces)}${detail('Contracts',s.contracts)}${detail('Contact',s.contact)}</dl>`).join('')||'<p class="muted">No external systems scoped to this work yet.</p>'}${relationships.map(r=>`<p>${badge(r.type)} ${esc(r.notes)}</p>`).join('')}${button('set_external_scope','Set external scope',target)}</details>`;
 }
 
-const attentionResults=new Map();
+const attentionResults=new Map(),attentionInFlight=new Set(),attentionAttempts=new Set();
 function attentionView(items){
  if(!Array.isArray(items))return '<section class="panel"><h2>Attention required</h2><p class="muted">Update the attention list to review branch drift, unlinked commits, blocked operations, and pending reconciliation.</p></section>';
  return `<section class="panel"><h2>Attention required (${items.length})</h2>${items.map(item=>{const integration=list(state.integrations).find(i=>i.id===item.integration_id),environment=list(state.environments).find(e=>e.id===item.environment_id),operation=list(state.operations).find(op=>op.id===item.id);const detailText=item.detail||item.message||[item.repository,item.commit,item.branches?.length?`branches: ${item.branches.join(', ')}`:item.branch,item.behind!==undefined?`${item.behind} commits behind`:null,item.ahead!==undefined?`${item.ahead} commits ahead`:null].filter(Boolean).join(' · ');return `<article class="row"><div class="row-heading"><h3>${esc(String(item.reason||'Review required').replaceAll('_',' '))}</h3><span class="meta">${esc(item.id)}</span></div><p>${esc(detailText)}</p><p class="meta">${esc(integration?.title||item.integration_id||item.repository||'')}${environment?' · '+esc(environment.name):''}</p><div class="actions">${integration?`<a href="#${encodeURIComponent(integration.feature_id)}">Open feature & integration →</a>`:''}${environment?`<button data-provider-query="/api/environments/${encodeURIComponent(environment.id)}/state" data-query-title="Environment state">Environment evidence</button>`:''}${operation?`<button data-provider-query="/api/operations/${encodeURIComponent(operation.id)}" data-query-title="Operation evidence">Operation evidence</button>`:''}</div><details><summary>Raw attention record</summary><pre>${esc(JSON.stringify(item,null,2))}</pre></details></article>`;}).join('')||'<p class="muted">No attention items reported for this product.</p>'}</section>`;
 }
 async function loadAttention(){
- const targetProduct=productID,control=typeof document!=='undefined'?document.querySelector('[data-load-attention]'):null;if(control)control.disabled=true;
+ const targetProduct=productID;if(attentionInFlight.has(targetProduct))return;attentionInFlight.add(targetProduct);attentionAttempts.add(targetProduct);const control=typeof document!=='undefined'?document.querySelector('[data-load-attention]'):null;if(control)control.disabled=true;
  try{const items=await request(`/api/attention?product_id=${encodeURIComponent(targetProduct)}`);attentionResults.set(targetProduct,items);if(featureID()==='operations'&&productID===targetProduct)$('#attention-summary').innerHTML=attentionView(items);}
- catch(error){if(typeof document!=='undefined')notice(`Could not refresh attention: ${error.message}`,true);}finally{if(control)control.disabled=false;}
+ catch(error){if(typeof document!=='undefined')notice(`Could not refresh attention: ${error.message}`,true);}finally{attentionInFlight.delete(targetProduct);if(control)control.disabled=false;}
 }
 
 // Product-level delivery entrypoint: settings are visible even before the first operation.
