@@ -354,3 +354,29 @@ func TestFeaturePatchDelayedOldBuildCannotPublish(t *testing.T) {
 	}
 	featurePatchState(t, m.state, "a2", "b1")
 }
+
+func TestFeaturePatchExplicitIdentityReplayPostgres(t *testing.T) {
+	_, seed, provider := featurePatchFixture(t)
+	store, _ := openWorkerTestStore(t, "postgres")
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Update(ctx, func(st *domain.State) error { *st = seed.state; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	service := NewWithProvider(store, provider)
+	command := featurePatchCommand(seed.state, "f", "a2", "explicit-identity-replay")
+	command.ID = "explicit-feature-patch"
+	first := exec(t, service, command).(domain.ExternalOperation)
+	before, err := store.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := exec(t, service, command).(domain.ExternalOperation)
+	after, err := store.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.ID != first.ID || replay.RequestHash != first.RequestHash || len(after.Events) != len(before.Events) {
+		t.Fatal("explicit identity replay changed receipt or appended audit")
+	}
+}

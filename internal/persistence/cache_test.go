@@ -153,6 +153,12 @@ func TestPostgresWriteProjectionDoesNotLoadOrdinaryJournal(t *testing.T) {
 	if err != nil || len(full.Events) != 10 {
 		t.Fatal("full journal lost", err)
 	}
+	// Record fixture resets must preserve the write-side index, not transplant
+	// the complete reader journal into an append-only callback.
+	if err = s.Update(ctx, func(st *domain.State) error { events := st.Events; *st = full; st.Events = events; return nil }); err != nil {
+		t.Fatal("record reset with preserved index", err)
+	}
+
 	// An invalid JSON event document outside the projection proves writes do not
 	// decode the journal. Full history reads must still report the corruption.
 	if _, err = s.pool.Exec(ctx, `INSERT INTO events(id,document) VALUES('opaque','{"action":"record_progress","at":"invalid-time"}')`); err != nil {
@@ -319,5 +325,26 @@ func TestPostgresCacheDeletionPredicateMatchesLocalReference(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPostgresReplayIdentityStillRejectsOrphanJournalIDs(t *testing.T) {
+	s := retrievalPostgres(t)
+	ctx := context.Background()
+	if err := s.Update(ctx, func(st *domain.State) error {
+		st.Products = []domain.Product{{Meta: domain.Meta{ID: "replay"}, Name: "Existing record"}}
+		st.Events = []domain.Event{{ID: "replay", Action: "record_progress"}, {ID: "orphan", Action: "record_progress"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"orphan", "replay"} {
+		err := s.UpdateScoped(ctx, domain.StateMutationScope{RequireAbsentIDs: []string{id}, AllowExistingRecords: true}, func(st *domain.State) error { return nil })
+		if id == "orphan" && !errors.Is(err, domain.ErrIdentityExists) {
+			t.Fatal("orphan journal identity admitted", err)
+		}
+		if id == "replay" && err != nil {
+			t.Fatal("application-approved record reuse rejected", err)
+		}
 	}
 }

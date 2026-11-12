@@ -89,6 +89,9 @@ func cloneValue(v reflect.Value) reflect.Value {
 	}
 }
 
+// Update supplies committed records and a narrow write-provenance event index.
+// Callbacks append new events; full history is available through Read outside
+// the write lock. A record reset must preserve the supplied Events slice.
 func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error {
 	return s.updateCollections(ctx, nil, fn)
 }
@@ -177,7 +180,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 
 	if scope != nil && len(scope.RequireAbsentIDs) > 0 {
 		var exists bool
-		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=ANY($1::text[]) UNION ALL SELECT 1 FROM events WHERE id=ANY($1::text[]))", scope.RequireAbsentIDs).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=ANY($1::text[]) AND NOT $2 UNION ALL SELECT 1 FROM events e WHERE id=ANY($1::text[]) AND (NOT $2 OR NOT EXISTS(SELECT 1 FROM records r WHERE r.id=e.id)))", scope.RequireAbsentIDs, scope.AllowExistingRecords).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {

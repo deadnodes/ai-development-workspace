@@ -49,11 +49,12 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 
 	// Creation identity checks include journal IDs outside the write projection.
 	// Delivery retries have their own exact replay admission and keep that path.
-	if s.checkCreationIdentity && commandNeedsNewID(s.command) && s.command.Action != "deploy_integration" && s.command.Action != "deploy_existing_artifact" {
+	if s.checkCreationIdentity && commandNeedsNewID(s.command) {
 		if scope == nil {
 			scope = &domain.StateMutationScope{AllCollections: true}
 		}
 		scope.RequireAbsentIDs = []string{s.command.ID}
+		scope.AllowExistingRecords = s.command.Action == "deploy_integration" || s.command.Action == "deploy_existing_artifact" || s.command.Action == "update_environment_feature"
 	}
 
 	if _, authenticated := auth.FromContext(ctx); authenticated {
