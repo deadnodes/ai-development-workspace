@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
@@ -22,6 +23,7 @@ type fakeForgejo struct {
 	dispatches  int
 	uncertain   bool
 	branchCalls int
+	branchError error
 	runCalls    int
 	listError   string
 	filters     []forgejo.Filter
@@ -29,7 +31,7 @@ type fakeForgejo struct {
 
 func (f *fakeForgejo) BranchHead(context.Context, buildconfig.Connection, string, string) (string, error) {
 	f.branchCalls++
-	return f.head, nil
+	return f.head, f.branchError
 }
 func (f *fakeForgejo) CommitExists(_ context.Context, _ buildconfig.Connection, _, sha string) error {
 	if sha == strings.Repeat("f", 40) {
@@ -133,7 +135,7 @@ func TestBuildIdempotencyAndKeys(t *testing.T) {
 		t.Fatal("duplicate build/audit")
 	}
 	f.head = strings.Repeat("b", 40)
-	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", RequestKey: "two"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
+	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", RequestKey: "two", Branch: "other"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
 		t.Fatal(e)
 	}
 	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", SHA: b.SourceSHA}); e != nil {
@@ -143,6 +145,41 @@ func TestBuildIdempotencyAndKeys(t *testing.T) {
 		t.Fatal("SHA alias created duplicate")
 	}
 }
+func TestBuildBranchRequestReplay(t *testing.T) {
+	for _, scenario := range []string{"branch advanced", "provider unavailable", "branch deleted"} {
+		for _, branch := range []string{"", "main"} {
+			t.Run(scenario+"/branch="+branch, func(t *testing.T) {
+				s, m, f, _ := buildFixture(t)
+				original := queue(t, s, "original")
+				before, err := json.Marshal(m.state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch scenario {
+				case "branch advanced":
+					f.head = strings.Repeat("b", 40)
+				case "provider unavailable":
+					f.branchError = errors.New("provider unavailable")
+				case "branch deleted":
+					f.head = ""
+					f.branchError = errors.New("branch not found")
+				}
+				got, err := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", RequestKey: "original", Branch: branch})
+				if err != nil || !reflect.DeepEqual(got, original) {
+					t.Fatalf("replay = %+v, %v; want %+v", got, err, original)
+				}
+				after, err := json.Marshal(m.state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if f.branchCalls != 1 || string(before) != string(after) {
+					t.Fatal("replay observed branch or changed durable state")
+				}
+			})
+		}
+	}
+}
+
 func TestBuildPoolLimitAndDigest(t *testing.T) {
 	s, _, f, r := buildFixture(t)
 	b := queue(t, s, "one")

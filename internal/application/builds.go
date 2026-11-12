@@ -89,14 +89,9 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 	if len(in.RequestKey) > 128 {
 		return out, invalid("invalid request_key")
 	}
-	head := in.SHA
-	var e error
-	if head != "" {
-		if !buildconfig.SHA.MatchString(head) {
+	if in.SHA != "" {
+		if !buildconfig.SHA.MatchString(in.SHA) {
 			return out, invalid("invalid sha")
-		}
-		if e = a.provider.CommitExists(ctx, a.config.Connection(p.ConnectionID), p.Repository, head); e != nil {
-			return out, invalid("commit observation failed")
 		}
 	} else {
 		if in.Branch == "" {
@@ -105,6 +100,42 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		if !buildconfig.Branch(in.Branch) {
 			return out, invalid("invalid branch")
 		}
+	}
+	// Receipts bind normalized selectors; a branch's resolved SHA is historical
+	// evidence, not a selector to resolve again on replay.
+	replay := func(st *domain.State) (bool, error) {
+		for _, receipt := range st.BuildReceipts {
+			if in.RequestKey != "" && receipt.ProductID == in.ProductID && receipt.RequestKey == in.RequestKey {
+				if receipt.Workflow != p.Workflow || receipt.ProfileID != p.ID || receipt.Branch != in.Branch || in.SHA != "" && receipt.SourceSHA != in.SHA {
+					return true, invalid("REQUEST_KEY_CONFLICT")
+				}
+				for _, b := range st.Builds {
+					if b.ID == receipt.BuildID {
+						out = b
+						return true, nil
+					}
+				}
+				return true, invalid("build receipt missing handle")
+			}
+		}
+		return false, nil
+	}
+	if in.RequestKey != "" {
+		st, err := s.store.Read(ctx)
+		if err != nil {
+			return out, err
+		}
+		if found, err := replay(&st); found {
+			return out, err
+		}
+	}
+	head := in.SHA
+	var e error
+	if head != "" {
+		if e = a.provider.CommitExists(ctx, a.config.Connection(p.ConnectionID), p.Repository, head); e != nil {
+			return out, invalid("commit observation failed")
+		}
+	} else {
 		head, e = a.provider.BranchHead(ctx, a.config.Connection(p.ConnectionID), p.Repository, in.Branch)
 		if e != nil {
 			return out, errors.New("build branch observation failed")
@@ -117,19 +148,9 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		if !productExists(st, in.ProductID) {
 			return missing("product", in.ProductID)
 		}
-		for _, receipt := range st.BuildReceipts {
-			if in.RequestKey != "" && receipt.ProductID == in.ProductID && receipt.RequestKey == in.RequestKey {
-				if receipt.Workflow != p.Workflow || receipt.ProfileID != p.ID || receipt.SourceSHA != head || receipt.Branch != in.Branch {
-					return invalid("REQUEST_KEY_CONFLICT")
-				}
-				for _, b := range st.Builds {
-					if b.ID == receipt.BuildID {
-						out = b
-						return nil
-					}
-				}
-				return invalid("build receipt missing handle")
-			}
+		// Recheck atomically in case another request bound the key during I/O.
+		if found, err := replay(st); found {
+			return err
 		}
 		bind := func(b domain.Build) {
 			if in.RequestKey != "" {
