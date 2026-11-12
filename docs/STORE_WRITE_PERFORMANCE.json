@@ -1,0 +1,393 @@
+{
+  "date": "2026-11-13",
+  "fixture": {
+    "database": "rcp_snapshot",
+    "host": "127.0.0.1:55438",
+    "record_count": 284658,
+    "event_count": 177794,
+    "mutated": false
+  },
+  "method": "20 sequential Service.Execute calls per independently templated disposable copy; nearest-rank percentiles include the cold write; host shared with other workloads",
+  "runs": [
+    {
+      "name": "main_progress",
+      "commit": "ec34d6edb943cf0399bea0aa9d1c8b4f2274624b",
+      "database_copy": "rcp_perf_6",
+      "authenticated_non_admin": false,
+      "note": "Exact main baseline; shared host.",
+      "samples": [
+        {
+          "action": "record_progress",
+          "duration_ns": 104049462959
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 101223930125
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 88010475750
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 66237400291
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 60972758792
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 58843159417
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 81157997042
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 60775504000
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 60103360417
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 70917036708
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 84956530917
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 87923798292
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 126494377125
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 103099739208
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 82137987917
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 45312269833
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 55328017583
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 38030742417
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 37895033542
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 42859906833
+        }
+      ],
+      "cold_ns": 104049462959,
+      "p50_ns": 66237400291,
+      "p95_ns": 104049462959,
+      "max_ns": 126494377125,
+      "warm_max_ns": 126494377125,
+      "copy_dropped": true
+    },
+    {
+      "name": "after_progress",
+      "commit": "65e85c547e04d5498b8d0739a25bddfa9a2b3562",
+      "database_copy": "rcp_perf_13",
+      "authenticated_non_admin": false,
+      "note": "Final tip; no simultaneous checks started by this task.",
+      "samples": [
+        {
+          "action": "record_progress",
+          "duration_ns": 18139980625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 129929708
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 49077583
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 76789833
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 118709958
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 116717083
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 51388292
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 66572667
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 78266750
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 222354834
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 197417167
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 371403875
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 86622000
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 162991083
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 112170666
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 84035917
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 103340500
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 227576916
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 132982709
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 79673542
+        }
+      ],
+      "cold_ns": 18139980625,
+      "p50_ns": 112170666,
+      "p95_ns": 371403875,
+      "max_ns": 18139980625,
+      "warm_max_ns": 371403875,
+      "copy_dropped": true
+    },
+    {
+      "name": "after_authenticated_mixed",
+      "commit": "65e85c547e04d5498b8d0739a25bddfa9a2b3562",
+      "database_copy": "rcp_perf_14",
+      "authenticated_non_admin": true,
+      "note": "Final tip; no simultaneous checks started by this task.",
+      "samples": [
+        {
+          "action": "record_progress",
+          "duration_ns": 14427451625
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 330417709
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 399491750
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 433812917
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 463239500
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 406639250
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 414899583
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 380006708
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 347634000
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 419260875
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 327091750
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 391502708
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 543890541
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 501589416
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 298817500
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 428388834
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 371906666
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 386711042
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 280212917
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 216956459
+        }
+      ],
+      "cold_ns": 14427451625,
+      "p50_ns": 391502708,
+      "p95_ns": 543890541,
+      "max_ns": 14427451625,
+      "warm_max_ns": 543890541,
+      "copy_dropped": true
+    },
+    {
+      "name": "after_authenticated_mixed_compile_overlap",
+      "commit": "65e85c547e04d5498b8d0739a25bddfa9a2b3562",
+      "database_copy": "rcp_perf_12",
+      "authenticated_non_admin": true,
+      "note": "Contended trial: overlapping go vet/build; retained to expose variance.",
+      "samples": [
+        {
+          "action": "record_progress",
+          "duration_ns": 19376662291
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 436750041
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 439635750
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 661655917
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 446216500
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 387662000
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 492310709
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 493836792
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 496328250
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 487255000
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 1031406042
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 790731625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 519265333
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 370501250
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 404795625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 456565667
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 425496292
+        },
+        {
+          "action": "update_feature",
+          "duration_ns": 251432584
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 519225042
+        },
+        {
+          "action": "create_integration",
+          "duration_ns": 631316417
+        }
+      ],
+      "cold_ns": 19376662291,
+      "p50_ns": 487255000,
+      "p95_ns": 1031406042,
+      "max_ns": 19376662291,
+      "warm_max_ns": 1031406042,
+      "copy_dropped": true
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+{
+  "implementation_commits": [
+    "041f951",
+    "2e03fb3"
+  ],
+  "race_enabled": true,
+  "test_database": "127.0.0.1:55437/rcp_store_write_perf_tests",
+  "application": {
+    "top_level_tests": 307,
+    "verified_passes": 307,
+    "pending": [],
+    "retention_scenarios_verified": [
+      "local/admitted_no_plan",
+      "local/closed_confirmed",
+      "local/merged_verified",
+      "local/prepared_unsent",
+      "postgres/admitted_no_plan",
+      "postgres/closed_confirmed",
+      "postgres/merged_verified",
+      "postgres/prepared_unsent"
+    ],
+    "retention_scenarios_expected": [
+      "local/admitted_no_plan",
+      "local/closed_confirmed",
+      "local/merged_verified",
+      "local/prepared_unsent",
+      "postgres/admitted_no_plan",
+      "postgres/closed_confirmed",
+      "postgres/merged_verified",
+      "postgres/prepared_unsent"
+    ],
+    "partitions": "STORE_WRITE_TEST_PARTITIONS.json",
+    "verification_method": "All 307 top-level tests covered: 91 completed serial tests, four disjoint remaining-test partitions, and targeted reruns after fixture and identity fixes. All eight renewed-retention modes passed across the original run and race-enabled reruns.",
+    "fixture_timing": "The 25-second production deadline case passed in an isolated rerun. Three long bbolt retention setup modes use a test-only 30-second worker lease and passed with race instrumentation; the default expiry/fence fixtures retain 5 seconds."
+  },
+  "non_application_packages": {
+    "releasecontrol/cmd/publisher": "skip",
+    "releasecontrol/cmd/registry-observer": "skip",
+    "releasecontrol/cmd/server": "skip",
+    "releasecontrol/cmd/worker": "skip",
+    "releasecontrol/internal/agentguide": "pass",
+    "releasecontrol/internal/agentconnect": "pass",
+    "releasecontrol/internal/auth": "pass",
+    "releasecontrol/internal/delivery": "skip",
+    "releasecontrol/internal/artifactspool": "pass",
+    "releasecontrol/internal/intelligence": "pass",
+    "releasecontrol/internal/domain": "pass",
+    "releasecontrol/internal/intelligencepatch": "pass",
+    "releasecontrol/internal/ociverify": "pass",
+    "releasecontrol/internal/ocipublisher": "pass",
+    "releasecontrol/internal/providers/github": "pass",
+    "releasecontrol/internal/providers/runtimeobserver": "pass",
+    "releasecontrol/internal/publishrunner": "pass",
+    "releasecontrol/internal/registryobserver": "pass",
+    "releasecontrol/internal/registryobserver/fixture": "skip",
+    "releasecontrol/internal/sourcefetch": "pass",
+    "releasecontrol/internal/testdocker": "pass",
+    "releasecontrol/internal/transport": "pass",
+    "releasecontrol/internal/persistence": "pass",
+    "releasecontrol/internal/workerclient": "pass",
+    "releasecontrol/internal/workerconfig": "pass",
+    "releasecontrol/internal/workspace": "pass",
+    "releasecontrol/web": "skip",
+    "releasecontrol/internal/workerrunner": "pass"
+  },
+  "optional_tests_skipped": [
+    {
+      "package": "releasecontrol/internal/ocipublisher",
+      "test": "TestRealDistribution",
+      "reason": "publisher_test.go:283: explicit real registry and real worker export required"
+    },
+    {
+      "package": "releasecontrol/internal/ocipublisher",
+      "test": "TestRealDistributionTLSAuth",
+      "reason": "publisher_test.go:373: explicit owned TLS/auth Distribution fixture required"
+    },
+    {
+      "package": "releasecontrol/internal/providers/github",
+      "test": "TestLiveAppReadOnly",
+      "reason": "github_test.go:356: set RCP_GITHUB_LIVE_TEST=1 and App secret reference for live reads"
+    },
+    {
+      "package": "releasecontrol/internal/providers/github",
+      "test": "TestLocalGitOpsSamples",
+      "reason": "yaml_documents_test.go:77: set RCP_TEST_GITOPS_SAMPLES to opt into local read-only manifest validation"
+    },
+    {
+      "package": "releasecontrol/internal/providers/runtimeobserver",
+      "test": "TestLiveReadOnly",
+      "reason": "live_test.go:13: set RCP_TEST_OBSERVERS_FILE for live read-only observation"
+    },
+    {
+      "package": "releasecontrol/internal/transport",
+      "test": "TestRealNativeChecksWorkerPublisherPR",
+      "reason": "native_checks_e2e_test.go:198: explicit owned Docker fixture opt-in required"
+    },
+    {
+      "package": "releasecontrol/internal/transport",
+      "test": "TestRealNativeAPIWorkerPublisherDistributionPR",
+      "reason": "native_publication_e2e_test.go:91: explicit Docker fixture opt-in required"
+    },
+    {
+      "package": "releasecontrol/internal/transport",
+      "test": "TestRealApplicationPreparedProfileRejects",
+      "reason": "real_application_e2e_test.go:55: explicit prepared real-application toolchain and Docker fixture opt-in required"
+    },
+    {
+      "package": "releasecontrol/internal/transport",
+      "test": "TestRealApplicationOfflineNativeDelivery",
+      "reason": "real_application_e2e_test.go:204: explicit prepared real-application toolchain and Docker fixture opt-in required"
+    },
+    {
+      "package": "releasecontrol/internal/transport",
+      "test": "TestRealApplicationAdmittedRuntime",
+      "reason": "real_application_runtime_test.go:32: explicit previously admitted cached image and profile required"
+    },
+    {
+      "package": "releasecontrol/internal/transport",
+      "test": "TestRegistryObservationDistributionProtectedAPI",
+      "reason": "registry_observation_e2e_test.go:37: requires explicit isolated Docker fixture opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/persistence",
+      "test": "TestUIStateLargeInstallationReadOnly",
+      "reason": "ui_state_test.go:22: RCP_UI_READONLY_DATABASE_URL not supplied"
+    },
+    {
+      "package": "releasecontrol/internal/persistence",
+      "test": "TestSnapshotWritePerformance",
+      "reason": "performance_test.go:23: RCP_PERF_DATABASE_URL not configured"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealComposedGitSourceWorkerPublication",
+      "reason": "composed_pipeline_git_test.go:35: owned Docker fixture requires opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealCreateStartSupervisionWindows",
+      "reason": "identity_test.go:106: real boundary tests require explicit opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestIntelligencePatchRealIsolatedCheck",
+      "reason": "intelligence_test.go:77: explicit owned Docker fixture opt-in required"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealWorkerFailureCancellationExpiryKillAndRestart",
+      "reason": "lifecycle_test.go:25: real Docker lifecycle tests require explicit opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealLocalCleanupRecovery",
+      "reason": "local_recovery_test.go:257: real Docker requires explicit opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealCleanupContinuesWhenPresenceExceedsJournalBound",
+      "reason": "local_recovery_test.go:566: real Docker requires explicit opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealMainCandidateHistoricalGitProdProfile",
+      "reason": "main_candidate_pipeline_git_test.go:44: owned Docker fixture requires opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealDevGitOpsBatchNativePipeline",
+      "reason": "main_candidate_pipeline_git_test.go:44: owned Docker fixture requires opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealProbeOCIClosureWhenProvided",
+      "reason": "runner_test.go:142: optional real BuildKit compatibility archive not supplied"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealWorkerTwoCleanBuilds",
+      "reason": "runtime_test.go:37: real isolated Docker execution requires explicit opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestRealBuildKitStartupDiagnostics",
+      "reason": "runtime_test.go:269: real isolated Docker execution requires explicit opt-in"
+    },
+    {
+      "package": "releasecontrol/internal/workerrunner",
+      "test": "TestSourceFetchRealGitRunOneOCI",
+      "reason": "source_fetch_git_test.go:269: owned real Docker execution requires explicit opt-in"
+    }
+  ],
+  "fixture_budget": "Only TestDevRestorationRenewedRetentionSettlement opts into a 30-second native worker lease; default 5-second fixture leases and production deadlines are unchanged.",
+  "fixture_commit": "65e85c5",
+  "checks": {
+    "gofmt": "passed",
+    "node_check": "passed",
+    "go_vet": "passed",
+    "go_build": "passed"
+  },
+  "optional_performance_test": "Skipped in default race sweep; executed separately against disposable copies as documented in STORE_WRITE_PERFORMANCE.json."
+}
