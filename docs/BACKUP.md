@@ -68,3 +68,12 @@ Local OCI build/publication execution, native configuration and native GitOps PR
 preparation remain blocked after reopen and subsequent backups. No quarantine
 clear/ownership transfer route exists in this slice. Source installation execution
 is unaffected. See [native publication recovery](NATIVE_PUBLICATION.md).
+
+Forgejo Builds restored in QUEUED, DISPATCHED, RUNNING or
+RECONCILIATION_REQUIRED state are persistently quarantined as
+RECONCILIATION_REQUIRED with BUILD_RESTORED. The restore response lists
+quarantined_build_ids and its audit preserves their original records.
+They are neither dispatched nor observed automatically and do not occupy build
+pool capacity. Inspect source CI effects before submitting a fresh queue_build
+with a new request_key; old request keys continue to return historical handles.
+Quarantine survives restart and subsequent backup/restore.

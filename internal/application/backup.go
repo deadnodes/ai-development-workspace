@@ -115,6 +115,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 	restoreID := id()
 	cancelled := []string{}
 	reconciliationRequired := []string{}
+	quarantinedBuilds := []string{}
 	err = s.store.Update(ctx, func(current *domain.State) error {
 		b, _ := json.Marshal(current)
 		var groups map[string][]json.RawMessage
@@ -210,16 +211,29 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 				}
 			}
 		}
+		originalBuilds := []domain.Build{}
+		for i := range restored.Builds {
+			b := &restored.Builds[i]
+			if b.Status == "QUEUED" || buildActive(*b) || b.RestoreQuarantined {
+				originalBuilds = append(originalBuilds, *b)
+				quarantinedBuilds = append(quarantinedBuilds, b.ID)
+				b.RestoreQuarantined = true
+				b.Status = "RECONCILIATION_REQUIRED"
+				b.FailureCode = "BUILD_RESTORED"
+				b.FailureMessage = "Quarantined during restore; inspect external systems and submit a new request_key"
+				b.UpdatedAt = now
+			}
+		}
 		// Preserve pre-restore operation state as audit evidence; destination workers
 		// must not race the source instance or repeat CI/GitOps mutations.
-		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "interrupted_operations": originalOperations}}})
+		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "interrupted_operations": originalOperations, "quarantined_builds": originalBuilds}}})
 		*current = restored
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"restored": true, "sha256": expected, "restore_event_id": restoreID, "cancelled_operation_ids": cancelled, "reconciliation_required_operation_ids": reconciliationRequired}, nil
+	return map[string]any{"restored": true, "sha256": expected, "restore_event_id": restoreID, "quarantined_build_ids": quarantinedBuilds, "cancelled_operation_ids": cancelled, "reconciliation_required_operation_ids": reconciliationRequired}, nil
 }
 func validateBackupState(st domain.State) error {
 	if err := domain.ValidateStateStatuses(st); err != nil {

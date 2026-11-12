@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/url"
 	"reflect"
 	"slices"
 
@@ -16,7 +17,6 @@ import (
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/providers/forgejo"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -60,7 +60,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	return nil
 }
 func buildActive(b domain.Build) bool {
-	return b.Status == "DISPATCHED" || b.Status == "RUNNING" || b.Status == "RECONCILIATION_REQUIRED"
+	return !b.RestoreQuarantined && (b.Status == "DISPATCHED" || b.Status == "RUNNING" || b.Status == "RECONCILIATION_REQUIRED")
 }
 func buildStatus(s string) bool { return domain.ValidStatus("build", s) }
 
@@ -141,7 +141,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		for i := range st.Builds {
 			b := &st.Builds[i]
 			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow {
-				if b.Status != "FAILED" && b.Status != "CANCELLED" {
+				if !b.RestoreQuarantined && b.Status != "FAILED" && b.Status != "CANCELLED" {
 					out = *b
 					bind(out)
 					return nil
@@ -150,7 +150,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 			}
 		}
 		if previous != nil && in.RequestKey == "" {
-			return invalid("new request_key required to retry failed/cancelled build")
+			return invalid("new request_key required to retry failed/cancelled or restored build")
 		}
 		now := time.Now().UTC()
 		actor := attributedActor(ctx, "agent")
@@ -335,6 +335,10 @@ var errRevision = errors.New("artifact revision mismatch")
 
 func dispatchRequestID(r forgejo.Run) string { _, requestID := r.DispatchInputs(); return requestID }
 func (a *buildRuntime) artifact(ctx context.Context, p buildconfig.Profile, sha string) ([]domain.BuildImage, error) {
+	origin, err := url.Parse(a.config.Registry(p.RegistryID).Origin)
+	if err != nil || origin.Host == "" {
+		return nil, errors.New("invalid registry origin")
+	}
 	for _, template := range p.TagCandidates {
 		tag := buildconfig.ExpandTag(template, sha)
 		images := []domain.BuildImage{}
@@ -351,7 +355,7 @@ func (a *buildRuntime) artifact(ctx context.Context, p buildconfig.Profile, sha 
 			if v.Revision != sha {
 				return nil, errRevision
 			}
-			images = append(images, domain.BuildImage{ID: image.ID, ImageRef: strings.TrimRight(a.config.Registry(p.RegistryID).Origin, "/") + "/" + image.Repository + ":" + tag + "@" + v.Digest, Digest: v.Digest})
+			images = append(images, domain.BuildImage{ID: image.ID, ImageRef: origin.Host + "/" + image.Repository + ":" + tag + "@" + v.Digest, Digest: v.Digest})
 		}
 		if !missing {
 			return images, nil
@@ -447,6 +451,9 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if b.RestoreQuarantined {
+			continue
+		}
 		p, ok := a.config.Profile(b.ProfileID)
 		if !ok || p.ProductID != b.ProductID || p.Repository != b.Repository || p.Workflow != b.Workflow || p.PoolID != b.PoolID || b.AuthorityHash != a.hash {
 			if b.Status == "QUEUED" {
@@ -498,14 +505,8 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				continue
 			}
 			for _, r := range runs {
-				if matching(r, b) && usable(r) && dispatchRequestID(r) == b.ID {
-					n := b
-					n.ProviderRunID = r.ID
-					n.RunURL = r.URL
-					n.RunStatus = r.Status
-					n.Status = "DISPATCHED"
-					n.FailureCode = ""
-					if e = s.advanceBuild(ctx, b, n, false); e != nil {
+				if matching(r, b) && dispatchRequestID(r) == b.ID {
+					if e = s.observeBuild(ctx, b, p, r); e != nil {
 						return e
 					}
 					break

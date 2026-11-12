@@ -4,7 +4,8 @@ import "time"
 
 // Build is its own durable asynchronous handle, independent of delivery Operations.
 type Build struct {
-	AuthorityHash string `json:"authority_hash"`
+	RestoreQuarantined bool   `json:"restore_quarantined,omitempty"`
+	AuthorityHash      string `json:"authority_hash"`
 	Meta
 	ProfileID      string       `json:"profile_id"`
 	PoolID         string       `json:"pool_id"`

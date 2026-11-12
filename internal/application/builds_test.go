@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"releasecontrol/internal/auth"
@@ -20,6 +21,7 @@ type fakeForgejo struct {
 	dispatches  int
 	uncertain   bool
 	branchCalls int
+	runCalls    int
 }
 
 func (f *fakeForgejo) BranchHead(context.Context, buildconfig.Connection, string, string) (string, error) {
@@ -42,6 +44,7 @@ func (f *fakeForgejo) Dispatch(_ context.Context, _ buildconfig.Connection, _ st
 	return r, nil
 }
 func (f *fakeForgejo) GetRun(_ context.Context, _ buildconfig.Connection, _ string, id int64) (forgejo.Run, error) {
+	f.runCalls++
 	for _, r := range f.runs {
 		if r.ID == id {
 			return r, nil
@@ -51,6 +54,7 @@ func (f *fakeForgejo) GetRun(_ context.Context, _ buildconfig.Connection, _ stri
 }
 func (f *fakeForgejo) ListRuns(_ context.Context, _ buildconfig.Connection, _, _ string, filter forgejo.Filter) (forgejo.Page, error) {
 	out := forgejo.Page{}
+	f.runCalls++
 	for _, r := range f.runs {
 		if (filter.SHA == "" || filter.SHA == r.SHA) && (filter.Status == "" || filter.Status == r.Status) {
 			out.Runs = append(out.Runs, r)
@@ -691,6 +695,138 @@ func TestBuildMultipleImages(t *testing.T) {
 				if f.dispatches != 1 || v.Status != "DISPATCHED" || len(v.Images) != 0 {
 					t.Fatal(v)
 				}
+			}
+		})
+	}
+}
+
+func TestBuildUncertainDispatchTerminalReconciliation(t *testing.T) {
+	for _, status := range []string{"failure", "cancelled", "skipped", "blocked"} {
+		t.Run(status, func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			f.uncertain = true
+			b := queue(t, s, "first")
+			tick(t, s)
+			f.head = strings.Repeat("b", 40)
+			second := queue(t, s, "second")
+			// A terminal run with the same source but a different request is not ours.
+			f.runs[0].Status = status
+			other := f.runs[0]
+			other.ID = 99
+			other.EventPayload = dispatchPayload(b.SourceSHA, "different-request")
+			f.runs = append([]forgejo.Run{other}, f.runs...)
+			f.uncertain = false
+			tick(t, s)
+			got := getBuild(t, s, b)
+			want := "FAILED"
+			if status == "cancelled" {
+				want = "CANCELLED"
+			}
+			if got.Status != want || got.ProviderRunID != 1 || got.RunStatus != status || got.FinishedAt == nil {
+				t.Fatalf("terminal evidence lost: %+v", got)
+			}
+			if f.dispatches != 2 || getBuild(t, s, second).Status != "DISPATCHED" {
+				t.Fatal("terminal reconciliation did not free capacity")
+			}
+		})
+	}
+}
+
+func TestBuildImageReferenceRegistryHost(t *testing.T) {
+	for _, origin := range []string{"http://registry.example", "https://registry.example:5443"} {
+		t.Run(origin, func(t *testing.T) {
+			s, _, f, r := buildFixture(t)
+			c := buildConfig()
+			c.Registries[0].Origin = origin
+			if err := s.ConfigureBuilds(c, f, r); err != nil {
+				t.Fatal(err)
+			}
+			b := queue(t, s, "image")
+			r.err = nil
+			r.artifact = buildregistry.Artifact{Revision: b.SourceSHA, Digest: "sha256:" + strings.Repeat("d", 64)}
+			tick(t, s)
+			host := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://")
+			want := host + "/o/r:main-aaaaaaaa@" + r.artifact.Digest
+			if got := getBuild(t, s, b); got.Status != "SUCCEEDED" || got.Images[0].ImageRef != want {
+				t.Fatalf("invalid image reference: %+v", got)
+			}
+		})
+	}
+}
+
+func TestRestoreBuildQuarantine(t *testing.T) {
+	for _, status := range []string{"QUEUED", "DISPATCHED", "RUNNING", "RECONCILIATION_REQUIRED"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			source, m, f, r := buildFixture(t)
+			b := queue(t, source, "original")
+			m.state.Builds[0].Status = status
+			m.state.Builds[0].ProviderRunID = 17
+			before := m.state.Builds[0]
+			backup, err := source.CreateBackup(ctx, "agent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dest := New(&memoryStore{domain.EmptyState()})
+			if err = dest.ConfigureBuilds(buildConfig(), f, r); err != nil {
+				t.Fatal(err)
+			}
+			result, err := dest.RestoreBackup(ctx, "agent", backup.ArchiveBase64, backup.SHA256)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := dest.store.Read(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			audit := state.Events[len(state.Events)-1].Data.Data["quarantined_builds"]
+			raw, err := json.Marshal(audit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var originals []domain.Build
+			if err = json.Unmarshal(raw, &originals); err != nil || len(originals) != 1 || originals[0].Status != before.Status || originals[0].RestoreQuarantined {
+				t.Fatalf("original build audit lost: %s", raw)
+			}
+			ids := result.(map[string]any)["quarantined_build_ids"].([]string)
+			if len(ids) != 1 || ids[0] != b.ID {
+				t.Fatal(result)
+			}
+			for i := 0; i < 2; i++ {
+				tick(t, dest)
+			}
+			got := getBuild(t, dest, b)
+			if !got.RestoreQuarantined || got.Status != "RECONCILIATION_REQUIRED" || got.FailureCode != "BUILD_RESTORED" || got.ProviderRunID != 17 || f.dispatches != 0 || f.runCalls != 0 {
+				t.Fatalf("restored build continued: %+v", got)
+			}
+			if m.state.Builds[0].Status != before.Status {
+				t.Fatal("source changed")
+			}
+			if same := queue(t, dest, "original"); same.ID != b.ID {
+				t.Fatal("receipt lost")
+			}
+			if _, err := dest.QueueBuild(ctx, domain.QueueBuildRequest{ProductID: "p", ProfileID: "app"}); err == nil {
+				t.Fatal("retry without new key")
+			}
+			fresh := queue(t, dest, "fresh")
+			if fresh.ID == b.ID {
+				t.Fatal("fresh request reused quarantine")
+			}
+			tick(t, dest)
+			if f.dispatches != 1 {
+				t.Fatal("quarantine blocked fresh request")
+			}
+			// Quarantine survives a subsequent backup/restore.
+			backup, err = dest.CreateBackup(ctx, "agent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			again := New(&memoryStore{domain.EmptyState()})
+			if _, err = again.RestoreBackup(ctx, "agent", backup.ArchiveBase64, backup.SHA256); err != nil {
+				t.Fatal(err)
+			}
+			if !getBuild(t, again, b).RestoreQuarantined {
+				t.Fatal("quarantine lost")
 			}
 		})
 	}
