@@ -2,6 +2,8 @@ package domain
 
 import "errors"
 
+var ErrJournalNotEmpty = errors.New("instance journal is not empty")
+
 var ErrIdentityExists = errors.New("entity identity already exists")
 
 // StateMutationScope is a trusted application-to-store contract, never client
@@ -9,8 +11,10 @@ var ErrIdentityExists = errors.New("entity identity already exists")
 // forbid changes to existing elements, including their nested values.
 // Unknown callbacks use the fully isolated Store.Update contract instead.
 type StateMutationScope struct {
-	AllCollections   bool
-	RequireAbsentIDs []string
+	// RequireEmptyJournal checks all persisted events under the writer lock.
+	RequireEmptyJournal bool
+	AllCollections      bool
+	RequireAbsentIDs    []string
 	// Record reuse is admitted by application replay policy; orphan journal IDs
 	// still cannot become new record identities.
 	AllowExistingRecords bool

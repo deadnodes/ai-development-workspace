@@ -116,6 +116,15 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 	if err = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR UPDATE").Scan(&revision); err != nil {
 		return err
 	}
+	if scope != nil && scope.RequireEmptyJournal {
+		var exists bool
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM events)").Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return domain.ErrJournalNotEmpty
+		}
+	}
 	if s.cached == nil || s.cached.revision != revision {
 		positions := map[string]int{}
 		st, e := loadRecords(ctx, tx, positions)
