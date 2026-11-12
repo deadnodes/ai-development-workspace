@@ -78,6 +78,9 @@ func ArtifactPinRequestHash(product, app, repository, digest, purpose, key strin
 }
 func ValidArtifactPinRequestKey(key string) bool { return artifactPinKey.MatchString(key) }
 func ValidateArtifactPins(st State) error {
+	if len(st.ArtifactPins) == 0 {
+		return nil
+	}
 	fail := func() error { return fmt.Errorf("invalid artifact pin identity, references or fingerprint") }
 	ids := map[string]int{}
 	v := reflect.ValueOf(st)

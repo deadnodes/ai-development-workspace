@@ -8,16 +8,22 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"reflect"
 	"releasecontrol/internal/domain"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool   *pgxpool.Pool
+	mu     sync.Mutex
+	cached *stateCache
+}
 
 func Open(ctx context.Context, url string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, url)
@@ -47,7 +53,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, err
 	}
 	committed = true
-	return &Store{pool}, nil
+	return &Store{pool: pool}, nil
 }
 
 func migrate(ctx context.Context, tx pgx.Tx) error {
@@ -105,25 +111,76 @@ func (s *Store) Read(ctx context.Context) (domain.State, error) {
 		return domain.State{}, e
 	}
 	defer tx.Rollback(ctx)
-	st, e := read(ctx, tx)
+	var revision int64
+	if e = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1").Scan(&revision); e != nil {
+		return domain.State{}, e
+	}
+	var st domain.State
+	s.mu.Lock()
+	hit := s.cached != nil && s.cached.revision == revision
+	var base domain.State
+	if hit {
+		base = s.cached.state
+		base.Events = nil
+	}
+	s.mu.Unlock()
+	if hit {
+		st = cloneValue(reflect.ValueOf(base)).Interface().(domain.State)
+	}
+	positions := map[string]int{}
+	if !hit {
+		st, e = loadRecords(ctx, tx, positions)
+	}
+	if e == nil {
+		st.Events = []domain.Event{}
+		e = readJournal(ctx, tx, &st)
+	}
 	if e != nil {
 		return st, e
 	}
-	return st, tx.Commit(ctx)
+	if e = tx.Commit(ctx); e != nil {
+		return st, e
+	}
+	// Read-only processes also warm their record cache. Publish only a fully
+	// validated, detached snapshot, and never replace a newer local commit.
+	if !hit && domain.ValidateStateStatuses(st) == nil {
+		base := st
+		base.Events = nil
+		owned := cloneValue(reflect.ValueOf(base)).Interface().(domain.State)
+		for _, event := range st.Events {
+			if domain.IsWriteProvenanceEvent(event) {
+				owned.Events = append(owned.Events, cloneValue(reflect.ValueOf(event)).Interface().(domain.Event))
+			}
+		}
+		s.mu.Lock()
+		if s.cached == nil || s.cached.revision < revision {
+			s.cached = &stateCache{revision: revision, state: owned, positions: positions}
+		}
+		s.mu.Unlock()
+	}
+	return st, nil
 }
-func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
+func readRecords(ctx context.Context, tx pgx.Tx) (domain.State, error) {
+	return loadRecords(ctx, tx, nil)
+}
+func loadRecords(ctx context.Context, tx pgx.Tx, positions map[string]int) (domain.State, error) {
 	st := domain.EmptyState()
 	groups := map[string][]json.RawMessage{}
-	rows, e := tx.Query(ctx, "SELECT kind, document FROM records ORDER BY kind,position,id")
+	rows, e := tx.Query(ctx, "SELECT kind, document, id, position FROM records ORDER BY kind,position,id")
 	if e != nil {
 		return st, e
 	}
 	for rows.Next() {
 		var kind string
 		var doc []byte
-		if e = rows.Scan(&kind, &doc); e != nil {
+		var id string
+		var position int
+		if e = rows.Scan(&kind, &doc, &id, &position); e != nil {
 			rows.Close()
 			return st, e
+		}
+		if positions != nil {
+			positions[id] = position
 		}
 		groups[kind] = append(groups[kind], json.RawMessage(doc))
 	}
@@ -136,119 +193,45 @@ func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
 	if e != nil {
 		return st, e
 	}
-	rows, e = tx.Query(ctx, "SELECT document FROM events ORDER BY sequence")
+	return st, nil
+}
+func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
+	st, e := readRecords(ctx, tx)
 	if e != nil {
 		return st, e
+	}
+	if e = readJournal(ctx, tx, &st); e != nil {
+		return st, e
+	}
+	return st, nil
+}
+func readJournal(ctx context.Context, tx pgx.Tx, st *domain.State) error {
+	rows, e := tx.Query(ctx, "SELECT document FROM events ORDER BY sequence")
+	if e != nil {
+		return e
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var b []byte
 		if e = rows.Scan(&b); e != nil {
-			return st, e
+			return e
 		}
 		var event domain.Event
 		if e = json.Unmarshal(b, &event); e != nil {
-			return st, e
+			return e
 		}
 		st.Events = append(st.Events, event)
 	}
 	if e = rows.Err(); e != nil {
-		return st, e
-	}
-	if e = domain.ValidateRegistryInventories(st); e != nil {
-		return st, e
-	}
-	if e = domain.ValidateArtifactPins(st); e != nil {
-		return st, e
-	}
-	return st, nil
-}
-func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error {
-	tx, e := s.pool.Begin(ctx)
-	if e != nil {
 		return e
 	}
-	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR UPDATE"); e != nil {
+	if e = domain.ValidateRegistryInventories(*st); e != nil {
 		return e
 	}
-	st, e := read(ctx, tx)
-	if e != nil {
+	if e = domain.ValidateArtifactPins(*st); e != nil {
 		return e
 	}
-	oldEvents := len(st.Events)
-	before, e := documents(st)
-	if e != nil {
-		return e
-	}
-	if e = fn(&st); e != nil {
-		return e
-	}
-	if e = domain.ValidateStateStatuses(st); e != nil {
-		return e
-	}
-	after, e := documents(st)
-	if e != nil {
-		return e
-	}
-	beforeIndex, e := indexDocuments(before)
-	if e != nil {
-		return e
-	}
-	afterIndex, e := indexDocuments(after)
-	if e != nil {
-		return e
-	}
-	for kind, records := range before {
-		var deletedIDs []string
-		for _, raw := range records {
-			if beforeIndex.productRecordRemoved(afterIndex, kind, raw) {
-				var meta struct {
-					ID string `json:"id"`
-				}
-				if e = json.Unmarshal(raw, &meta); e != nil {
-					return e
-				}
-				deletedIDs = append(deletedIDs, meta.ID)
-			}
-		}
-		// Preserve the exact product-deletion predicate while avoiding one SQL
-		// round trip per retained historical record. The transaction still owns
-		// the revision lock and rolls back every deletion on any later error.
-		if len(deletedIDs) > 0 {
-			if _, e = tx.Exec(ctx, "DELETE FROM records WHERE id=ANY($1::text[]) AND kind=$2", deletedIDs, kind); e != nil {
-				return e
-			}
-		}
-	}
-	for kind, records := range after {
-		for position, r := range records {
-			var obj struct {
-				ID        string `json:"id"`
-				ProductID string `json:"product_id"`
-				FeatureID string `json:"feature_id"`
-			}
-			if e = json.Unmarshal(r, &obj); e != nil {
-				return e
-			}
-			if beforeIndex.unchanged(kind, obj.ID, r) {
-				continue
-			}
-			if _, e = tx.Exec(ctx, "INSERT INTO records(id,kind,product_id,feature_id,document,position) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET document=EXCLUDED.document,product_id=EXCLUDED.product_id,feature_id=EXCLUDED.feature_id,position=EXCLUDED.position", obj.ID, kind, obj.ProductID, obj.FeatureID, []byte(r), position); e != nil {
-				return e
-			}
-		}
-	}
-	for _, v := range st.Events[oldEvents:] {
-		b, _ := json.Marshal(v)
-		if _, e = tx.Exec(ctx, "INSERT INTO events(id,product_id,feature_id,document) VALUES($1,$2,$3,$4)", v.ID, v.ProductID, v.FeatureID, b); e != nil {
-			return e
-		}
-	}
-	if _, e = tx.Exec(ctx, "UPDATE control_revision SET revision=revision+1 WHERE id=1"); e != nil {
-		return e
-	}
-	return tx.Commit(ctx)
+	return nil
 }
 func documents(st domain.State) (map[string][]json.RawMessage, error) { return codecDocuments(st) }
 

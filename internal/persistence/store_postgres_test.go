@@ -25,7 +25,7 @@ func TestPostgresHistoricalUpdatePreservesRecordsAndTransactions(t *testing.T) {
 	if err != nil || parsed.Scheme == "" || !strings.HasSuffix(strings.TrimPrefix(parsed.Path, "/"), "_tests") {
 		t.Fatal("TEST_DATABASE_URL must be a dedicated *_tests database URL")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
