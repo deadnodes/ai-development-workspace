@@ -2,12 +2,13 @@ package buildconfig
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
 
 func valid() Config {
-	return Config{Connections: []Connection{{ID: "f", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "bot"}}, Registries: []Registry{{ID: "r", Origin: "http://localhost:5000", InsecureHTTP: true}}, Pools: []Pool{{ID: "pool"}}, Profiles: []Profile{{ID: "app", ProductID: "p", ConnectionID: "f", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "r", ImageRepository: "o/r", DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
+	return Config{Connections: []Connection{{ID: "f", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "bot"}}, Registries: []Registry{{ID: "r", Origin: "http://localhost:5000", InsecureHTTP: true}}, Pools: []Pool{{ID: "pool"}}, Profiles: []Profile{{ID: "app", ProductID: "p", ConnectionID: "f", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "r", Images: []Image{{ID: "app", Repository: "o/r"}}, DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
 }
 func TestStrictAuthority(t *testing.T) {
 	c := valid()
@@ -51,6 +52,33 @@ func TestTagCandidatesContract(t *testing.T) {
 		raw := strings.Replace(string(b), `"dispatch_ref":"main"`, `"dispatch_ref":"main"`+field, 1)
 		if _, e := Decode(strings.NewReader(raw)); e == nil {
 			t.Fatal("obsolete field accepted")
+		}
+	}
+}
+
+func TestImagesAuthority(t *testing.T) {
+	for _, images := range [][]Image{nil, {{ID: "api", Repository: "o/api"}, {ID: "api", Repository: "o/web"}}, {{ID: "api", Repository: "o/api"}, {ID: "web", Repository: "o/api"}}, {{ID: "bad id", Repository: "o/api"}}, {{ID: "api", Repository: "o/../api"}}} {
+		c := valid()
+		c.Profiles[0].Images = images
+		if c.Validate() == nil {
+			t.Fatal("invalid images accepted")
+		}
+	}
+}
+
+func TestExampleProfiles(t *testing.T) {
+	raw, e := os.ReadFile("../../examples/forgejo-builds.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, e := Decode(strings.NewReader(string(raw)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for id, count := range map[string]int{"pp-front": 1, "pp-back": 1, "meteroid": 3} {
+		p, ok := c.Profile(id)
+		if !ok || len(p.Images) != count {
+			t.Fatal("missing example profile images", id)
 		}
 	}
 }

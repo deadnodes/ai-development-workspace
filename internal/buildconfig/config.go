@@ -29,17 +29,21 @@ type Pool struct {
 	MaxInFlight int    `json:"max_in_flight"`
 }
 type Profile struct {
-	ID              string   `json:"id"`
-	ProductID       string   `json:"product_id"`
-	ConnectionID    string   `json:"connection_id"`
-	Repository      string   `json:"repository"`
-	Workflow        string   `json:"workflow"`
-	DefaultBranch   string   `json:"default_branch"`
-	PoolID          string   `json:"pool_id"`
-	RegistryID      string   `json:"registry_id"`
-	ImageRepository string   `json:"image_repository"`
-	DispatchRef     string   `json:"dispatch_ref"`
-	TagCandidates   []string `json:"tag_candidates"`
+	ID            string   `json:"id"`
+	ProductID     string   `json:"product_id"`
+	ConnectionID  string   `json:"connection_id"`
+	Repository    string   `json:"repository"`
+	Workflow      string   `json:"workflow"`
+	DefaultBranch string   `json:"default_branch"`
+	PoolID        string   `json:"pool_id"`
+	RegistryID    string   `json:"registry_id"`
+	Images        []Image  `json:"images"`
+	DispatchRef   string   `json:"dispatch_ref"`
+	TagCandidates []string `json:"tag_candidates"`
+}
+type Image struct {
+	ID         string `json:"id"`
+	Repository string `json:"repository"`
 }
 type Config struct {
 	Connections    []Connection `json:"connections"`
@@ -143,7 +147,19 @@ func (c *Config) Validate() error {
 	for _, v := range c.Profiles {
 		ids = append(ids, v.ID)
 		cn, ok := con[v.ConnectionID]
-		if !ok || !ident.MatchString(v.ProductID) || !repo.MatchString(v.Repository) || strings.Split(v.Repository, "/")[0] != cn.Owner || strings.Count(v.Repository, "/") != 1 || v.Workflow != "build.yml" || !Branch(v.DispatchRef) || !Branch(v.DefaultBranch) || !pools[v.PoolID] || !regs[v.RegistryID] || !repo.MatchString(v.ImageRepository) || strings.Contains(v.ImageRepository, "..") || len(v.TagCandidates) == 0 || len(v.TagCandidates) > 16 {
+		if !ok || !ident.MatchString(v.ProductID) || !repo.MatchString(v.Repository) || strings.Split(v.Repository, "/")[0] != cn.Owner || strings.Count(v.Repository, "/") != 1 || v.Workflow != "build.yml" || !Branch(v.DispatchRef) || !Branch(v.DefaultBranch) || !pools[v.PoolID] || !regs[v.RegistryID] || len(v.Images) == 0 || len(v.Images) > 64 || len(v.TagCandidates) == 0 || len(v.TagCandidates) > 16 {
+			return bad
+		}
+		imageIDs := []string{}
+		repositories := map[string]bool{}
+		for _, image := range v.Images {
+			imageIDs = append(imageIDs, image.ID)
+			if !repo.MatchString(image.Repository) || strings.Contains(image.Repository, "..") || repositories[image.Repository] {
+				return bad
+			}
+			repositories[image.Repository] = true
+		}
+		if !unique(imageIDs) {
 			return bad
 		}
 		for _, template := range v.TagCandidates {

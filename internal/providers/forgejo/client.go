@@ -19,17 +19,17 @@ import (
 )
 
 type Run struct {
-	Title    string    `json:"title"`
-	ID       int64     `json:"id"`
-	Status   string    `json:"status"`
-	SHA      string    `json:"commit_sha"`
-	URL      string    `json:"html_url"`
-	Event    string    `json:"event"`
-	Branch   string    `json:"prettyref"`
-	Workflow string    `json:"workflow_id"`
-	Created  time.Time `json:"created"`
-	Started  time.Time `json:"started"`
-	Stopped  time.Time `json:"stopped"`
+	EventPayload string    `json:"event_payload"`
+	ID           int64     `json:"id"`
+	Status       string    `json:"status"`
+	SHA          string    `json:"commit_sha"`
+	URL          string    `json:"html_url"`
+	Event        string    `json:"event"`
+	Branch       string    `json:"prettyref"`
+	Workflow     string    `json:"workflow_id"`
+	Created      time.Time `json:"created"`
+	Started      time.Time `json:"started"`
+	Stopped      time.Time `json:"stopped"`
 }
 type Filter struct {
 	SHA, Status, Event string
@@ -210,5 +210,22 @@ func (c *Client) ListRuns(ctx context.Context, cn buildconfig.Connection, repo, 
 }
 
 func validRun(r Run) bool {
-	return len(r.Title) <= 128 && len(r.URL) <= 2048 && len(r.Branch) <= 270 && len(r.Status) <= 64 && len(r.Event) <= 64 && len(r.Workflow) <= 255 && (r.SHA == "" || buildconfig.SHA.MatchString(r.SHA))
+	return len(r.URL) <= 2048 && len(r.Branch) <= 270 && len(r.Status) <= 64 && len(r.Event) <= 64 && len(r.Workflow) <= 255 && (r.SHA == "" || buildconfig.SHA.MatchString(r.SHA))
+}
+
+// DispatchInputs parses only bounded event metadata. Payloads must never be logged.
+func (r Run) DispatchInputs() (sha, requestID string) {
+	if len(r.EventPayload) > 256<<10 {
+		return "", ""
+	}
+	var event struct {
+		Inputs struct {
+			SHA       string `json:"sha"`
+			RequestID string `json:"request_id"`
+		} `json:"inputs"`
+	}
+	if json.Unmarshal([]byte(r.EventPayload), &event) != nil {
+		return "", ""
+	}
+	return event.Inputs.SHA, event.Inputs.RequestID
 }

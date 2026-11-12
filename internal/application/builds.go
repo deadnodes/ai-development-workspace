@@ -223,6 +223,7 @@ func (s *Service) ListBuildProfiles(ctx context.Context, productID string) ([]bu
 		for _, p := range s.builds.config.Profiles {
 			if p.ProductID == productID {
 				p.TagCandidates = slices.Clone(p.TagCandidates)
+				p.Images = slices.Clone(p.Images)
 				out = append(out, p)
 			}
 		}
@@ -308,11 +309,9 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 		return missing("build", old.ID)
 	})
 }
-func runTitle(b domain.Build) string { return "build " + b.SourceSHA + " " + b.ID }
 func matching(r forgejo.Run, b domain.Build) bool {
-	prefix := "build " + b.SourceSHA + " "
-	requestID := strings.TrimPrefix(r.Title, prefix)
-	return r.ID > 0 && r.Workflow == b.Workflow && r.Event == "workflow_dispatch" && strings.HasPrefix(r.Title, prefix) && buildconfig.RequestID.MatchString(requestID)
+	sha, _ := r.DispatchInputs()
+	return r.ID > 0 && r.Workflow == b.Workflow && r.Event == "workflow_dispatch" && sha == b.SourceSHA
 }
 func usable(r forgejo.Run) bool {
 	return r.Status == "waiting" || r.Status == "running" || r.Status == "success"
@@ -334,28 +333,36 @@ func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, status s
 
 var errRevision = errors.New("artifact revision mismatch")
 
-func (a *buildRuntime) artifact(ctx context.Context, p buildconfig.Profile, sha string) (buildregistry.Artifact, string, error) {
+func dispatchRequestID(r forgejo.Run) string { _, requestID := r.DispatchInputs(); return requestID }
+func (a *buildRuntime) artifact(ctx context.Context, p buildconfig.Profile, sha string) ([]domain.BuildImage, error) {
 	for _, template := range p.TagCandidates {
 		tag := buildconfig.ExpandTag(template, sha)
-		v, e := a.registry.Resolve(ctx, a.config.Registry(p.RegistryID), p.ImageRepository, tag)
-		if errors.Is(e, buildregistry.ErrMissing) {
-			continue
+		images := []domain.BuildImage{}
+		missing := false
+		for _, image := range p.Images {
+			v, e := a.registry.Resolve(ctx, a.config.Registry(p.RegistryID), image.Repository, tag)
+			if errors.Is(e, buildregistry.ErrMissing) {
+				missing = true
+				continue
+			}
+			if e != nil {
+				return nil, e
+			}
+			if v.Revision != sha {
+				return nil, errRevision
+			}
+			images = append(images, domain.BuildImage{ID: image.ID, ImageRef: strings.TrimRight(a.config.Registry(p.RegistryID).Origin, "/") + "/" + image.Repository + ":" + tag + "@" + v.Digest, Digest: v.Digest})
 		}
-		if e != nil {
-			return v, tag, e
+		if !missing {
+			return images, nil
 		}
-		if v.Revision != sha {
-			return v, tag, errRevision
-		}
-		return v, tag, nil
 	}
-	return buildregistry.Artifact{}, "", buildregistry.ErrMissing
+	return nil, buildregistry.ErrMissing
 }
-func artifactBuild(b domain.Build, p buildconfig.Profile, c buildconfig.Registry, v buildregistry.Artifact, tag string) domain.Build {
+func artifactBuild(b domain.Build, images []domain.BuildImage) domain.Build {
 	now := time.Now().UTC()
 	b.FinishedAt = &now
-	b.Digest = v.Digest
-	b.ImageRef = strings.TrimRight(c.Origin, "/") + "/" + p.ImageRepository + ":" + tag + "@" + v.Digest
+	b.Images = images
 	b.Status = "SUCCEEDED"
 	b.FailureCode = ""
 	b.FailureMessage = ""
@@ -390,7 +397,7 @@ func (s *Service) observeBuild(ctx context.Context, b domain.Build, p buildconfi
 	case "running":
 		next.Status = "RUNNING"
 	case "success":
-		v, tag, e := s.builds.artifact(ctx, p, b.SourceSHA)
+		v, e := s.builds.artifact(ctx, p, b.SourceSHA)
 		if errors.Is(e, buildregistry.ErrMissing) {
 			next = failedBuild(next, "ARTIFACT_MISSING")
 		} else if errors.Is(e, errRevision) {
@@ -398,7 +405,7 @@ func (s *Service) observeBuild(ctx context.Context, b domain.Build, p buildconfi
 		} else if e != nil {
 			return nil
 		} else {
-			next = artifactBuild(next, p, s.builds.config.Registry(p.RegistryID), v, tag)
+			next = artifactBuild(next, v)
 		}
 
 	case "cancelled":
@@ -491,7 +498,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				continue
 			}
 			for _, r := range runs {
-				if matching(r, b) && r.Title == runTitle(b) {
+				if matching(r, b) && usable(r) && dispatchRequestID(r) == b.ID {
 					n := b
 					n.ProviderRunID = r.ID
 					n.RunURL = r.URL
@@ -516,9 +523,9 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		blockedPools[b.PoolID] = true
-		v, tag, re := a.artifact(ctx, p, b.SourceSHA)
+		v, re := a.artifact(ctx, p, b.SourceSHA)
 		if re == nil {
-			n := artifactBuild(b, p, a.config.Registry(p.RegistryID), v, tag)
+			n := artifactBuild(b, v)
 			n.Reused = "registry"
 			if e = s.advanceBuild(ctx, b, n, false); e != nil {
 				return e

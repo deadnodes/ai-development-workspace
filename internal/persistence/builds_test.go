@@ -73,7 +73,7 @@ func TestBuildPersistenceBothStores(t *testing.T) {
 			now := time.Now().UTC()
 			e = s.Update(ctx, func(st *domain.State) error {
 				st.Products = append(st.Products, domain.Product{Meta: domain.Meta{ID: "p"}})
-				st.Builds = append(st.Builds, domain.Build{Meta: domain.Meta{ID: "build", ProductID: "p", Actor: "agent", CreatedAt: now, UpdatedAt: now}, ProfileID: "app", Status: "RECONCILIATION_REQUIRED", ProviderRunID: 42, SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workflow: "build.yml", ImageRef: "http://registry/o/r:br-aaaaaaaa@sha256:abc", Digest: "sha256:abc", Reused: "run", QueuedAt: now, DispatchedAt: &now})
+				st.Builds = append(st.Builds, domain.Build{Meta: domain.Meta{ID: "build", ProductID: "p", Actor: "agent", CreatedAt: now, UpdatedAt: now}, ProfileID: "app", Status: "RECONCILIATION_REQUIRED", ProviderRunID: 42, SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workflow: "build.yml", Images: []domain.BuildImage{{ID: "app", ImageRef: "http://registry/o/r:br-aaaaaaaa@sha256:abc", Digest: "sha256:abc"}, {ID: "web", ImageRef: "http://registry/o/web:br-aaaaaaaa@sha256:def", Digest: "sha256:def"}}, Reused: "run", QueuedAt: now, DispatchedAt: &now})
 				st.BuildReceipts = append(st.BuildReceipts, domain.BuildReceipt{Meta: domain.Meta{ID: "receipt", ProductID: "p"}, BuildID: "build", RequestKey: "key", ProfileID: "app", Workflow: "build.yml", SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
 				return nil
 			})
@@ -87,7 +87,7 @@ func TestBuildPersistenceBothStores(t *testing.T) {
 			}
 			defer s.Close()
 			st, e := s.Read(ctx)
-			if e != nil || len(st.Builds) != 1 || st.Builds[0].ProviderRunID != 42 || st.Builds[0].Status != "RECONCILIATION_REQUIRED" || len(st.BuildReceipts) != 1 || st.Builds[0].Workflow != "build.yml" || st.Builds[0].Reused != "run" || st.Builds[0].Digest != "sha256:abc" || st.BuildReceipts[0].Workflow != "build.yml" || st.BuildReceipts[0].SourceSHA != st.Builds[0].SourceSHA {
+			if e != nil || len(st.Builds) != 1 || st.Builds[0].ProviderRunID != 42 || st.Builds[0].Status != "RECONCILIATION_REQUIRED" || len(st.BuildReceipts) != 1 || st.Builds[0].Workflow != "build.yml" || st.Builds[0].Reused != "run" || len(st.Builds[0].Images) != 2 || st.Builds[0].Images[1].ID != "web" || st.Builds[0].Images[1].Digest != "sha256:def" || st.Builds[0].Images[0].Digest != "sha256:abc" || st.BuildReceipts[0].Workflow != "build.yml" || st.BuildReceipts[0].SourceSHA != st.Builds[0].SourceSHA {
 				t.Fatal(st.Builds, e)
 			}
 			rollback := errors.New("rollback")

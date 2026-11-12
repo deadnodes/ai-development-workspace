@@ -1,0 +1,98 @@
+{
+  "connections": [
+    {
+      "id": "forgejo-dev",
+      "kind": "forgejo",
+      "api_url": "https://dn-dev-git.tail9c31db.ts.net",
+      "owner": "deadnodes",
+      "token_ref": "forgejo-rcp-bot-token"
+    }
+  ],
+  "registries": [
+    {
+      "id": "dev-zot",
+      "origin": "http://192.168.32.242:5000",
+      "insecure_http": true
+    }
+  ],
+  "pools": [
+    {
+      "id": "build01",
+      "max_in_flight": 1
+    }
+  ],
+  "profiles": [
+    {
+      "id": "pp-front",
+      "product_id": "deadnodes",
+      "connection_id": "forgejo-dev",
+      "repository": "deadnodes/pp-front",
+      "workflow": "build.yml",
+      "dispatch_ref": "main",
+      "default_branch": "main",
+      "pool_id": "build01",
+      "registry_id": "dev-zot",
+      "tag_candidates": [
+        "main-{sha8}",
+        "br-{sha8}"
+      ],
+      "images": [
+        {
+          "id": "web",
+          "repository": "deadnodes/pp-front"
+        }
+      ]
+    },
+    {
+      "id": "pp-back",
+      "product_id": "deadnodes",
+      "connection_id": "forgejo-dev",
+      "repository": "deadnodes/pp-back",
+      "workflow": "build.yml",
+      "dispatch_ref": "main",
+      "default_branch": "main",
+      "pool_id": "build01",
+      "registry_id": "dev-zot",
+      "tag_candidates": [
+        "main-{sha8}",
+        "br-{sha8}"
+      ],
+      "images": [
+        {
+          "id": "runtime",
+          "repository": "deadnodes/pp-back/runtime"
+        }
+      ]
+    },
+    {
+      "id": "meteroid",
+      "product_id": "deadnodes",
+      "connection_id": "forgejo-dev",
+      "repository": "deadnodes/meteroid",
+      "workflow": "build.yml",
+      "dispatch_ref": "main",
+      "default_branch": "main",
+      "pool_id": "build01",
+      "registry_id": "dev-zot",
+      "tag_candidates": [
+        "main-{sha8}",
+        "br-{sha8}"
+      ],
+      "images": [
+        {
+          "id": "api",
+          "repository": "deadnodes/meteroid-api"
+        },
+        {
+          "id": "scheduler",
+          "repository": "deadnodes/meteroid-scheduler"
+        },
+        {
+          "id": "web",
+          "repository": "deadnodes/meteroid-web"
+        }
+      ]
+    }
+  ],
+  "timeout_seconds": 7200
+}

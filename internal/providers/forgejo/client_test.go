@@ -27,6 +27,7 @@ func fixture(t *testing.T, h http.HandlerFunc) (*Client, buildconfig.Connection)
 }
 func TestActionsContract(t *testing.T) {
 	sha := strings.Repeat("a", 40)
+	payload := `{"ref":"main","inputs":{"sha":"` + sha + `","request_id":"build-id"},"repository":{"full_name":"o/r"},"sender":{"login":"bot"}}`
 	c, cn := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "token secret-forgejo-token" {
 			t.Error("authorization")
@@ -44,16 +45,16 @@ func TestActionsContract(t *testing.T) {
 				t.Error(r.URL.Path)
 			}
 			w.WriteHeader(201)
-			fmt.Fprint(w, `{"id":42,"run_number":2}`)
+			fmt.Fprint(w, `{"id":42,"run_number":2,"jobs":["build"]}`)
 		case strings.Contains(r.URL.Path, "branches"):
 			fmt.Fprintf(w, `{"commit":{"id":%q}}`, sha)
 		case strings.HasSuffix(r.URL.Path, "/42"):
-			fmt.Fprintf(w, `{"id":42,"status":"success","commit_sha":%q,"html_url":"https://git/run/42","created":"2026-11-12T10:00:00Z"}`, sha)
+			fmt.Fprintf(w, `{"id":42,"status":"success","commit_sha":%q,"html_url":"https://git/run/42","created":"2026-11-12T10:00:00Z","event_payload":%q}`, sha, payload)
 		default:
 			if r.URL.Query().Get("head_sha") != sha || r.URL.Query().Get("workflow_id") != "build.yml" || r.URL.Query().Get("event") != "workflow_dispatch" {
 				t.Error("filters")
 			}
-			fmt.Fprint(w, `{"workflow_runs":[{"id":42}],"total_count":1}`)
+			fmt.Fprintf(w, `{"workflow_runs":[{"id":42,"event_payload":%q}],"total_count":1}`, payload)
 		}
 	})
 	ctx := context.Background()
@@ -63,10 +64,10 @@ func TestActionsContract(t *testing.T) {
 	if r, e := c.Dispatch(ctx, cn, "o/r", "build.yml", "topic", sha, "build-id"); e != nil || r.ID != 42 {
 		t.Fatal(r, e)
 	}
-	if r, e := c.GetRun(ctx, cn, "o/r", 42); e != nil || r.Status != "success" || r.Created.IsZero() {
+	if r, e := c.GetRun(ctx, cn, "o/r", 42); e != nil || r.Status != "success" || r.Created.IsZero() || r.EventPayload != payload {
 		t.Fatal(r, e)
 	}
-	if p, e := c.ListRuns(ctx, cn, "o/r", "build.yml", Filter{SHA: sha, Event: "workflow_dispatch"}); e != nil || len(p.Runs) != 1 {
+	if p, e := c.ListRuns(ctx, cn, "o/r", "build.yml", Filter{SHA: sha, Event: "workflow_dispatch"}); e != nil || len(p.Runs) != 1 || p.Runs[0].EventPayload != payload {
 		t.Fatal(p, e)
 	}
 }
@@ -160,5 +161,20 @@ func TestCommitExistenceBoundedContract(t *testing.T) {
 				t.Fatal(e)
 			}
 		})
+	}
+}
+
+func TestDispatchInputsBounded(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	payload := `{"ref":"refs/heads/main","inputs":{"sha":"` + sha + `","request_id":"request-1"},"repository":{"full_name":"o/r"},"sender":{"login":"bot"}}`
+	for _, raw := range []string{"", `{`, `{}`, `{"inputs":null}`, `{"inputs":{"sha":42}}`, payload + strings.Repeat(" ", 256<<10)} {
+		a, b := (Run{EventPayload: raw}).DispatchInputs()
+		if a != "" || b != "" {
+			t.Fatal("invalid payload matched")
+		}
+	}
+	a, b := (Run{EventPayload: payload}).DispatchInputs()
+	if a != sha || b != "request-1" {
+		t.Fatal("dispatch inputs lost")
 	}
 }

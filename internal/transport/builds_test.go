@@ -56,7 +56,7 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	s := application.New(store)
-	c := &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "f", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "secret-ref"}}, Registries: []buildconfig.Registry{{ID: "r", Origin: "https://registry.example"}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "f", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "r", ImageRepository: "o/r", DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
+	c := &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "f", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "secret-ref"}}, Registries: []buildconfig.Registry{{ID: "r", Origin: "https://registry.example"}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "f", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "r", Images: []buildconfig.Image{{ID: "app", Repository: "o/r"}}, DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
 	if e = s.ConfigureBuilds(c, transportForgejo{}, transportRegistry{}); e != nil {
 		t.Fatal(e)
 	}

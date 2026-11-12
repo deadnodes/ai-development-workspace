@@ -15,16 +15,102 @@ origins, identifiers and tag templates. No API can enroll build authority.
 
 ```json
 {
-  "connections": [{"id":"forgejo-dev","kind":"forgejo","api_url":"https://dn-dev-git.tail9c31db.ts.net","owner":"deadnodes","token_ref":"forgejo-rcp-bot-token"}],
-  "registries": [{"id":"dev-zot","origin":"http://192.168.32.242:5000","insecure_http":true}],
-  "pools": [{"id":"build01","max_in_flight":1}],
-  "profiles": [{
-    "id":"pp-front","product_id":"deadnodes","connection_id":"forgejo-dev",
-    "repository":"deadnodes/pp-front","workflow":"build.yml","dispatch_ref":"main","default_branch":"main",
-    "pool_id":"build01","registry_id":"dev-zot","image_repository":"deadnodes/pp-front",
-    "tag_candidates":["main-{sha8}","br-{sha8}"]
-  }],
-  "timeout_seconds":7200
+  "connections": [
+    {
+      "id": "forgejo-dev",
+      "kind": "forgejo",
+      "api_url": "https://dn-dev-git.tail9c31db.ts.net",
+      "owner": "deadnodes",
+      "token_ref": "forgejo-rcp-bot-token"
+    }
+  ],
+  "registries": [
+    {
+      "id": "dev-zot",
+      "origin": "http://192.168.32.242:5000",
+      "insecure_http": true
+    }
+  ],
+  "pools": [
+    {
+      "id": "build01",
+      "max_in_flight": 1
+    }
+  ],
+  "profiles": [
+    {
+      "id": "pp-front",
+      "product_id": "deadnodes",
+      "connection_id": "forgejo-dev",
+      "repository": "deadnodes/pp-front",
+      "workflow": "build.yml",
+      "dispatch_ref": "main",
+      "default_branch": "main",
+      "pool_id": "build01",
+      "registry_id": "dev-zot",
+      "tag_candidates": [
+        "main-{sha8}",
+        "br-{sha8}"
+      ],
+      "images": [
+        {
+          "id": "web",
+          "repository": "deadnodes/pp-front"
+        }
+      ]
+    },
+    {
+      "id": "pp-back",
+      "product_id": "deadnodes",
+      "connection_id": "forgejo-dev",
+      "repository": "deadnodes/pp-back",
+      "workflow": "build.yml",
+      "dispatch_ref": "main",
+      "default_branch": "main",
+      "pool_id": "build01",
+      "registry_id": "dev-zot",
+      "tag_candidates": [
+        "main-{sha8}",
+        "br-{sha8}"
+      ],
+      "images": [
+        {
+          "id": "runtime",
+          "repository": "deadnodes/pp-back/runtime"
+        }
+      ]
+    },
+    {
+      "id": "meteroid",
+      "product_id": "deadnodes",
+      "connection_id": "forgejo-dev",
+      "repository": "deadnodes/meteroid",
+      "workflow": "build.yml",
+      "dispatch_ref": "main",
+      "default_branch": "main",
+      "pool_id": "build01",
+      "registry_id": "dev-zot",
+      "tag_candidates": [
+        "main-{sha8}",
+        "br-{sha8}"
+      ],
+      "images": [
+        {
+          "id": "api",
+          "repository": "deadnodes/meteroid-api"
+        },
+        {
+          "id": "scheduler",
+          "repository": "deadnodes/meteroid-scheduler"
+        },
+        {
+          "id": "web",
+          "repository": "deadnodes/meteroid-web"
+        }
+      ]
+    }
+  ],
+  "timeout_seconds": 7200
 }
 ```
 
@@ -47,7 +133,7 @@ profiles, then:
 {"product_id":"deadnodes","profile_id":"pp-front","request_key":"operator-request-001"}
 ```
 
-Pass this to MCP `queue_build` or `POST /api/builds`. A Build produces an image
+Pass this to MCP `queue_build` or `POST /api/builds`. A Build produces its configured images
 only; it does not deploy or write Flux. Deployment is a separate future capability.
 Supply exactly one of `branch` or `sha`, or neither to use the profile default
 branch. Branch requests resolve HEAD once. A SHA must be lowercase 40-hex and is
@@ -63,8 +149,11 @@ push/PR workflows run checks only. Dispatch sends:
 
 `dispatch_ref` selects only the workflow version. The workflow builds exactly
 `inputs.sha`, independent of branch movement, and returns `{id,run_number,jobs}`.
-Its `run-name: build <sha> <request_id>` is exposed as ActionRun `title` (task
-listings use `display_title`). The request ID is the Build ID, at most 64 characters
+Forgejo 15.0.11 ignores `run-name`; ActionRun `title` is the workflow name.
+Run identity comes from `event_payload`, a JSON string in run list/detail responses,
+whose `inputs.sha` is the built SHA and `inputs.request_id` is the Build ID.
+RCP parses at most 256 KiB per run, skips larger or malformed payloads and tolerates
+absent fields. It never logs event payloads. The request ID is at most 64 characters
 from `[A-Za-z0-9._-]`. RCP never parses logs, including human-only `RCP_RESULT` lines.
 
 A Build is its own async handle (not an Operation):
@@ -94,8 +183,8 @@ and workflow inputs. Rebinding a key rejects `REQUEST_KEY_CONFLICT`.
 The context-cancellable server loop runs immediately and every 15 seconds, with
 single-flight processing. FIFO admission atomically counts DISPATCHED, RUNNING and
 RECONCILIATION_REQUIRED records per configured pool. Before dispatch it checks the
-repository's `build.yml` runs. A `workflow_dispatch` run with title
-`build <sha> <request_id>` in waiting/running/success attaches with `reused:"run"`.
+repository's `build.yml` runs. A `workflow_dispatch` run with `event_payload.inputs.sha == source_sha`
+(any request ID) in waiting/running/success attaches with `reused:"run"`.
 Push/PR runs never attach. Waiting/running runs block dispatch unless owned by an
 active RCP Build already counted in the same pool. Per-pool capacity still applies.
 Listings use `workflow_id=build.yml`, without a head SHA filter (the workflow ref
@@ -103,8 +192,10 @@ SHA is not the built SHA), and paginate up to 1000 entries. Incomplete observati
 defer work rather than treating occupancy as empty.
 
 Before listing runs or dispatching, RCP probes ordered `tag_candidates`. Missing
-tags continue to the next candidate; the first tag with matching revision finishes
-with `reused:"registry"`. An existing tag with a different revision fails
+tags continue to the next candidate; the first tag with ALL configured images present
+and matching revision finishes
+with `reused:"registry"`. Partial presence dispatches normally; the workflow skips
+existing images. Images cannot be combined across different tags. An existing tag with a different revision fails
 `ARTIFACT_REVISION_MISMATCH`. Templates allow only `{sha8}` and `{sha}` and must
 include a SHA placeholder. The service chooses `main-<sha8>` when the SHA is in
 main's history, otherwise `br-<sha8>`, and labels it with the full revision. Existing
@@ -113,7 +204,8 @@ without overwriting. The image is `192.168.32.242:5000/deadnodes/<image>:<tag>`.
 
 RCP stores dispatch intent as RECONCILIATION_REQUIRED before network I/O. A lost
 response or restart in that window never automatically dispatches again. It
-reconciles by workflow + workflow_dispatch event + exact title `build <sha> <our Build id>`. Until evidence appears, uncertainty retains the pool slot.
+reconciles by workflow + workflow_dispatch event + `event_payload.inputs.sha == source_sha` and
+`event_payload.inputs.request_id == our Build ID`. Until evidence appears, uncertainty retains the pool slot.
 No automated reset or retry of uncertainty is provided. Operator investigation is
 required if Forgejo never accepted the original request. In-flight deadline expiry
 also requires reconciliation; terminal run evidence can still close that handle.
@@ -127,7 +219,9 @@ fails ARTIFACT_REVISION_MISMATCH. Temporary registry read failures defer observa
 Top-level manifest/index digest is hashed and checked against Docker-Content-Digest
 when supplied; linux/amd64 manifest and config descriptors are hash/size verified,
 and config label `org.opencontainers.image.revision` must equal the full source SHA.
-The returned image reference is `origin/repository:tag@sha256:…`, with the index
+Success requires every configured image at the same chosen tag. Build `images`
+is a list of `{id,image_ref,digest}`, preserving each image identity.
+Each returned image reference is `origin/repository:tag@sha256:…`, with the index
 digest retained when the image includes attestations. This is provenance identity,
 not a claim that all layer bytes were downloaded or a signature was verified.
 
@@ -137,3 +231,21 @@ explicitly configured installation queue pp-front through MCP, observe its run,
 compare returned SHA/digest/revision with zot and confirm duplicate queueing returns
 the same handle. Installing this source or dispatching that workflow requires
 an explicit operator request; a local test result does not perform either action.
+
+## Live observations and stage 2
+
+Verified by the operator on Forgejo 15.0.11: pp-front source `a72f4b92…`
+produced `main-a72f4b92` with the revision label equal to the full source SHA.
+Repeating dispatch with the same SHA skipped the build and returned the same digest.
+`return_run_info:true` returned `{"id":…, "run_number":…, "jobs":["build"]}`.
+Meteroid builds api, scheduler and web in one dispatch, each using the same
+`main-<sha8>` or `br-<sha8>` tag and full revision label.
+These are supplied live facts; this change's validation performs no live requests.
+
+The configuration schema has no `required_status_contexts` field. Stage-2 inputs:
+
+| Profile | Required status context |
+| --- | --- |
+| pp-front | `pp-front dev / verify (push)` |
+| pp-back | `pp-back baseline / gate (push)` |
+| meteroid | `meteroid ci / gate (push)` |

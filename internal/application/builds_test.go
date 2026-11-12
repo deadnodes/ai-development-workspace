@@ -34,7 +34,7 @@ func (f *fakeForgejo) CommitExists(_ context.Context, _ buildconfig.Connection, 
 }
 func (f *fakeForgejo) Dispatch(_ context.Context, _ buildconfig.Connection, _ string, _ string, ref, sha, requestID string) (forgejo.Run, error) {
 	f.dispatches++
-	r := forgejo.Run{ID: int64(f.dispatches), Status: "waiting", SHA: f.head, Branch: ref, Workflow: "build.yml", Title: "build " + sha + " " + requestID, Event: "workflow_dispatch", Created: time.Now().UTC(), URL: "https://git/run"}
+	r := forgejo.Run{ID: int64(f.dispatches), Status: "waiting", SHA: f.head, Branch: ref, Workflow: "build.yml", EventPayload: dispatchPayload(sha, requestID), Event: "workflow_dispatch", Created: time.Now().UTC(), URL: "https://git/run"}
 	f.runs = append(f.runs, r)
 	if f.uncertain {
 		return forgejo.Run{}, &forgejo.Uncertain{}
@@ -69,7 +69,7 @@ func (f *fakeBuildRegistry) Resolve(context.Context, buildconfig.Registry, strin
 	return f.artifact, f.err
 }
 func buildConfig() *buildconfig.Config {
-	return &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "forgejo", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "token"}}, Registries: []buildconfig.Registry{{ID: "zot", Origin: "http://registry.example", InsecureHTTP: true}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "forgejo", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "zot", ImageRepository: "o/r", DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
+	return &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "forgejo", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "token"}}, Registries: []buildconfig.Registry{{ID: "zot", Origin: "http://registry.example", InsecureHTTP: true}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "forgejo", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "zot", Images: []buildconfig.Image{{ID: "app", Repository: "o/r"}}, DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
 }
 func buildFixture(t *testing.T) (*Service, *memoryStore, *fakeForgejo, *fakeBuildRegistry) {
 	t.Helper()
@@ -145,7 +145,7 @@ func TestBuildPoolLimitAndDigest(t *testing.T) {
 	r.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
 	tick(t, s)
 	done := getBuild(t, s, b)
-	if done.Status != "SUCCEEDED" || done.Digest != r.artifact.Digest || !strings.HasSuffix(done.ImageRef, "@"+done.Digest) || done.RunURL == "" {
+	if done.Status != "SUCCEEDED" || done.Images[0].Digest != r.artifact.Digest || !strings.HasSuffix(done.Images[0].ImageRef, "@"+done.Images[0].Digest) || done.RunURL == "" {
 		t.Fatal(done)
 	}
 }
@@ -174,7 +174,7 @@ func TestBuildRegistryReuseAndRunAttachment(t *testing.T) {
 	}
 	s, _, f, _ := buildFixture(t)
 	b := queue(t, s, "")
-	f.runs = []forgejo.Run{{ID: 99, SHA: b.SourceSHA, Branch: "main", Workflow: "build.yml", Title: "build " + b.SourceSHA + " external", Status: "waiting", Event: "workflow_dispatch"}}
+	f.runs = []forgejo.Run{{ID: 99, SHA: b.SourceSHA, Branch: "main", Workflow: "build.yml", EventPayload: dispatchPayload(b.SourceSHA, "external"), Status: "waiting", Event: "workflow_dispatch"}}
 	tick(t, s)
 	v := getBuild(t, s, b)
 	if v.Reused != "run" || v.ProviderRunID != 99 || f.dispatches != 0 {
@@ -204,7 +204,7 @@ func TestBuildUncertainDispatchAndRestart(t *testing.T) {
 	if f.dispatches != 1 {
 		t.Fatal("uncertain redispatched")
 	}
-	f.runs = []forgejo.Run{{ID: 1, SHA: b.SourceSHA, Branch: "main", Workflow: "build.yml", Title: runTitle(b), Event: "workflow_dispatch", Created: time.Now().UTC(), Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 1, SHA: b.SourceSHA, Branch: "main", Workflow: "build.yml", EventPayload: dispatchPayload(b.SourceSHA, b.ID), Event: "workflow_dispatch", Created: time.Now().UTC(), Status: "running"}}
 	resumed := New(m)
 	if e := resumed.ConfigureBuilds(buildConfig(), f, r); e != nil {
 		t.Fatal(e)
@@ -368,7 +368,7 @@ func TestBuildPoolAdmissionIndependentOfWorkflowOccupancy(t *testing.T) {
 			p := c.Profiles[0]
 			p.ID = "second"
 			p.Repository = "o/second"
-			p.ImageRepository = "o/second"
+			p.Images = []buildconfig.Image{{ID: "app", Repository: "o/second"}}
 			c.Profiles = append(c.Profiles, p)
 			if e := s.ConfigureBuilds(c, emptyBuildListing{f}, r); e != nil {
 				t.Fatal(e)
@@ -483,7 +483,7 @@ func TestBuildCandidateTags(t *testing.T) {
 				}
 				return
 			}
-			if v.Status != "SUCCEEDED" || !strings.Contains(v.ImageRef, ":br-aaaaaaaa@sha256:") {
+			if v.Status != "SUCCEEDED" || !strings.Contains(v.Images[0].ImageRef, ":br-aaaaaaaa@sha256:") {
 				t.Fatal(v)
 			}
 			if phase == "reuse" && (v.Reused != "registry" || f.dispatches != 0) {
@@ -523,19 +523,25 @@ func TestBuildSHASourceValidation(t *testing.T) {
 		t.Fatal("workflow ref SHA confused with built SHA")
 	}
 }
-func TestBuildAttachOnlyDispatchTitle(t *testing.T) {
-	for _, mode := range []string{"push", "pull_request", "wrong-workflow", "wrong-title", "success", "running"} {
+func TestBuildAttachOnlyDispatchInputs(t *testing.T) {
+	for _, mode := range []string{"push", "pull_request", "wrong-workflow", "other-sha", "malformed", "missing", "oversize", "success", "running"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _, f, _ := buildFixture(t)
 			b := queue(t, s, "")
-			run := forgejo.Run{ID: 99, Workflow: "build.yml", Title: "build " + b.SourceSHA + " external", Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("b", 40)}
+			run := forgejo.Run{ID: 99, Workflow: "build.yml", EventPayload: dispatchPayload(b.SourceSHA, "external"), Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("b", 40)}
 			switch mode {
 			case "push", "pull_request":
 				run.Event = mode
 			case "wrong-workflow":
 				run.Workflow = "checks.yml"
-			case "wrong-title":
-				run.Title = "build " + b.SourceSHA + " invalid request"
+			case "other-sha":
+				run.EventPayload = dispatchPayload(strings.Repeat("c", 40), "external")
+			case "malformed":
+				run.EventPayload = `{`
+			case "missing":
+				run.EventPayload = `{}`
+			case "oversize":
+				run.EventPayload += strings.Repeat(" ", 256<<10)
 			case "running":
 				run.Status = "running"
 			}
@@ -552,17 +558,17 @@ func TestBuildAttachOnlyDispatchTitle(t *testing.T) {
 		})
 	}
 }
-func TestBuildUncertainRequiresExactRequestTitle(t *testing.T) {
+func TestBuildUncertainRequiresExactRequestInput(t *testing.T) {
 	s, _, f, _ := buildFixture(t)
 	f.uncertain = true
 	b := queue(t, s, "")
 	tick(t, s)
-	f.runs[0].Title = "build " + b.SourceSHA + " other"
+	f.runs[0].EventPayload = dispatchPayload(b.SourceSHA, "other")
 	tick(t, s)
 	if v := getBuild(t, s, b); v.ProviderRunID != 0 || v.Status != "RECONCILIATION_REQUIRED" {
 		t.Fatal(v)
 	}
-	f.runs[0].Title = runTitle(b)
+	f.runs[0].EventPayload = dispatchPayload(b.SourceSHA, b.ID)
 	tick(t, s)
 	if v := getBuild(t, s, b); v.ProviderRunID != 1 || f.dispatches != 1 {
 		t.Fatal(v)
@@ -601,12 +607,91 @@ func TestBuildPoolOwnershipRejectsDriftedAuthority(t *testing.T) {
 	// An old provider's ID is not proof of ownership in the current provider.
 	owner := domain.Build{Meta: domain.Meta{ID: "old-owner", ProductID: "p", UpdatedAt: time.Now().UTC()}, ProfileID: "app", PoolID: "pool", Repository: "o/r", Workflow: "build.yml", AuthorityHash: "previous-authority", SourceSHA: strings.Repeat("b", 40), Status: "RUNNING", ProviderRunID: 99, QueuedAt: b.QueuedAt.Add(time.Second)}
 	m.state.Builds = append(m.state.Builds, owner)
-	f.runs = []forgejo.Run{{ID: 99, Workflow: "build.yml", Title: runTitle(owner), Event: "workflow_dispatch", Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 99, Workflow: "build.yml", EventPayload: dispatchPayload(owner.SourceSHA, owner.ID), Event: "workflow_dispatch", Status: "running"}}
 	tick(t, s)
 	if getBuild(t, s, b).Status != "QUEUED" || f.dispatches != 0 {
 		t.Fatal("stale authority masked foreign run occupancy")
 	}
 	if v := getBuild(t, s, owner); v.Status != "RECONCILIATION_REQUIRED" || v.FailureCode != "BUILD_AUTHORITY_CHANGED" {
 		t.Fatal(v)
+	}
+}
+
+func dispatchPayload(sha, requestID string) string {
+	return `{"ref":"main","inputs":{"sha":"` + sha + `","request_id":"` + requestID + `"},"repository":{"full_name":"o/r"},"sender":{"login":"builder"}}`
+}
+
+type multiImageRegistry map[string]buildregistry.Artifact
+
+func (r multiImageRegistry) Resolve(_ context.Context, _ buildconfig.Registry, repository, tag string) (buildregistry.Artifact, error) {
+	if v, ok := r[repository+":"+tag]; ok {
+		return v, nil
+	}
+	return buildregistry.Artifact{}, buildregistry.ErrMissing
+}
+func TestBuildMultipleImages(t *testing.T) {
+	for _, mode := range []string{"all", "partial", "split-tags", "wrong-revision", "success", "success-partial"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			c := buildConfig()
+			c.Profiles[0].Images = []buildconfig.Image{{ID: "api", Repository: "o/api"}, {ID: "scheduler", Repository: "o/scheduler"}, {ID: "web", Repository: "o/web"}}
+			r := multiImageRegistry{}
+			sha := f.head
+			for i, image := range c.Profiles[0].Images {
+				tag := "main-" + sha[:8]
+				if mode == "split-tags" && i == 2 {
+					tag = "br-" + sha[:8]
+				}
+				if (mode == "partial" || mode == "success-partial") && i == 2 {
+					continue
+				}
+				revision := sha
+				if mode == "wrong-revision" && i == 2 {
+					revision = strings.Repeat("b", 40)
+				}
+				r[image.Repository+":"+tag] = buildregistry.Artifact{Revision: revision, Digest: "sha256:" + strings.Repeat(string(rune('a'+i)), 64)}
+			}
+			if mode == "success" || mode == "success-partial" {
+				// Dispatch before publication; completion must verify the complete set.
+				if e := s.ConfigureBuilds(c, f, multiImageRegistry{}); e != nil {
+					t.Fatal(e)
+				}
+			} else if e := s.ConfigureBuilds(c, f, r); e != nil {
+				t.Fatal(e)
+			}
+			b := queue(t, s, "")
+			tick(t, s)
+			if mode == "success" || mode == "success-partial" {
+				f.runs[0].Status = "success"
+				if e := s.ConfigureBuilds(c, f, r); e != nil {
+					t.Fatal(e)
+				}
+				tick(t, s)
+			}
+			v := getBuild(t, s, b)
+			switch mode {
+			case "all", "success":
+				if v.Status != "SUCCEEDED" || len(v.Images) != 3 {
+					t.Fatal(v)
+				}
+				for i, image := range v.Images {
+					if image.ID != c.Profiles[0].Images[i].ID || !strings.Contains(image.ImageRef, c.Profiles[0].Images[i].Repository+":main-") || !strings.HasSuffix(image.ImageRef, "@"+image.Digest) {
+						t.Fatal(image)
+					}
+				}
+			case "wrong-revision":
+				if v.FailureCode != "ARTIFACT_REVISION_MISMATCH" {
+					t.Fatal(v)
+				}
+			case "success-partial":
+				if v.FailureCode != "ARTIFACT_MISSING" || len(v.Images) != 0 {
+					t.Fatal(v)
+				}
+			default:
+				if f.dispatches != 1 || v.Status != "DISPATCHED" || len(v.Images) != 0 {
+					t.Fatal(v)
+				}
+			}
+		})
 	}
 }
