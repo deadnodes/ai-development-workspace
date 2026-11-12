@@ -187,8 +187,8 @@ func (c *Client) GetRun(ctx context.Context, cn buildconfig.Connection, repo str
 	return r, e
 }
 func (c *Client) ListRuns(ctx context.Context, cn buildconfig.Connection, repo, workflow string, f Filter) (Page, error) {
-	if f.Limit < 1 || f.Limit > 100 {
-		f.Limit = 100
+	if f.Limit < 1 || f.Limit > 50 {
+		f.Limit = 50
 	}
 	if f.Page < 1 {
 		f.Page = 1

@@ -22,6 +22,8 @@ type fakeForgejo struct {
 	uncertain   bool
 	branchCalls int
 	runCalls    int
+	listError   string
+	filters     []forgejo.Filter
 }
 
 func (f *fakeForgejo) BranchHead(context.Context, buildconfig.Connection, string, string) (string, error) {
@@ -52,15 +54,28 @@ func (f *fakeForgejo) GetRun(_ context.Context, _ buildconfig.Connection, _ stri
 	}
 	return forgejo.Run{}, errors.New("missing")
 }
-func (f *fakeForgejo) ListRuns(_ context.Context, _ buildconfig.Connection, _, _ string, filter forgejo.Filter) (forgejo.Page, error) {
+func (f *fakeForgejo) ListRuns(_ context.Context, _ buildconfig.Connection, _ string, workflow string, filter forgejo.Filter) (forgejo.Page, error) {
 	out := forgejo.Page{}
+	f.filters = append(f.filters, filter)
+	if f.listError != "" && (f.listError == "all" || f.listError == filter.Status) {
+		return out, errors.New("unavailable")
+	}
 	f.runCalls++
 	for _, r := range f.runs {
-		if (filter.SHA == "" || filter.SHA == r.SHA) && (filter.Status == "" || filter.Status == r.Status) {
+		if (filter.SHA == "" || filter.SHA == r.SHA) && (filter.Status == "" || filter.Status == r.Status) && r.Workflow == workflow && (filter.Event == "" || filter.Event == r.Event) {
 			out.Runs = append(out.Runs, r)
 		}
 	}
 	out.Total = len(out.Runs)
+	start := (filter.Page - 1) * filter.Limit
+	if start > len(out.Runs) {
+		start = len(out.Runs)
+	}
+	end := start + filter.Limit
+	if end > len(out.Runs) {
+		end = len(out.Runs)
+	}
+	out.Runs = out.Runs[start:end]
 	return out, nil
 }
 
@@ -274,7 +289,7 @@ func TestBuildCancelAndBranchRules(t *testing.T) {
 func TestBuildBusyWorkflowAndHeadMovement(t *testing.T) {
 	s, _, f, _ := buildFixture(t)
 	b := queue(t, s, "")
-	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("b", 40), Branch: "other", Workflow: "build.yml", Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("b", 40), Branch: "other", Workflow: "build.yml", Event: "workflow_dispatch", Status: "running"}}
 	tick(t, s)
 	if f.dispatches != 0 || getBuild(t, s, b).Status != "QUEUED" {
 		t.Fatal("busy workflow ignored")
@@ -349,7 +364,7 @@ func TestBuildFIFOBlockedHead(t *testing.T) {
 	first := queue(t, s, "first")
 	f.head = strings.Repeat("b", 40)
 	second := queue(t, s, "second")
-	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("c", 40), Branch: "other", Workflow: "build.yml", Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("c", 40), Branch: "other", Workflow: "build.yml", Event: "workflow_dispatch", Status: "running"}}
 	tick(t, s)
 	if f.dispatches != 0 || getBuild(t, s, first).Status != "QUEUED" || getBuild(t, s, second).Status != "QUEUED" {
 		t.Fatal("blocked FIFO head bypassed")
@@ -549,6 +564,7 @@ func TestBuildAttachOnlyDispatchInputs(t *testing.T) {
 			case "running":
 				run.Status = "running"
 			}
+			run.SHA = b.SourceSHA
 			f.runs = []forgejo.Run{run}
 			tick(t, s)
 			v := getBuild(t, s, b)
@@ -829,5 +845,105 @@ func TestRestoreBuildQuarantine(t *testing.T) {
 				t.Fatal("quarantine lost")
 			}
 		})
+	}
+}
+
+func TestBuildFilteredHistoryAndListingErrors(t *testing.T) {
+	for _, mode := range []string{"admit", "reuse", "recover", "all", "waiting", "running"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			b := queue(t, s, "")
+			if mode == "recover" {
+				f.uncertain = true
+				tick(t, s)
+			}
+			for i := 0; i < 1100; i++ {
+				f.runs = append(f.runs, forgejo.Run{ID: int64(i + 100), Workflow: "build.yml", Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("c", 40)})
+			}
+			if mode == "reuse" {
+				f.runs = append(f.runs, forgejo.Run{ID: 2000, Workflow: "build.yml", Event: "workflow_dispatch", Status: "running", SHA: b.SourceSHA, EventPayload: dispatchPayload(b.SourceSHA, "external")})
+			}
+			if mode == "all" || mode == "waiting" || mode == "running" {
+				f.listError = mode
+			}
+			tick(t, s)
+			got := getBuild(t, s, b)
+			if f.listError != "" {
+				if got.Status != "QUEUED" || !got.ProviderUnavailable || got.LastError == "" || f.dispatches != 0 {
+					t.Fatal(got)
+				}
+				f.listError = ""
+				tick(t, s)
+				got = getBuild(t, s, b)
+			}
+			if got.ProviderUnavailable || got.LastError != "" {
+				t.Fatal(got)
+			}
+			if mode == "recover" {
+				if got.ProviderRunID != 1 || f.dispatches != 1 {
+					t.Fatal(got)
+				}
+			} else if got.Status != "DISPATCHED" {
+				t.Fatal(got)
+			}
+			if mode == "reuse" && (got.ProviderRunID != 2000 || f.dispatches != 0) {
+				t.Fatal(got)
+			}
+			for _, filter := range f.filters {
+				if filter.Event != "workflow_dispatch" || filter.Limit != 50 || filter.SHA == "" && filter.Status != "waiting" && filter.Status != "running" {
+					t.Fatal(filter)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildUncertainListingErrorIsVisible(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	f.uncertain = true
+	tick(t, s)
+	f.listError = "all"
+	tick(t, s)
+	got := getBuild(t, s, b)
+	if got.Status != "RECONCILIATION_REQUIRED" || !got.ProviderUnavailable || got.LastError == "" || f.dispatches != 1 {
+		t.Fatal(got)
+	}
+	f.listError = ""
+	tick(t, s)
+	got = getBuild(t, s, b)
+	if got.Status != "DISPATCHED" || got.ProviderUnavailable || got.LastError != "" || f.dispatches != 1 {
+		t.Fatal(got)
+	}
+}
+
+func TestBuildSourceHistoryPagination(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	for i := 0; i < 51; i++ {
+		f.runs = append(f.runs, forgejo.Run{ID: int64(i + 100), Workflow: "build.yml", Event: "workflow_dispatch", Status: "failure", SHA: b.SourceSHA})
+	}
+	f.runs = append(f.runs, forgejo.Run{ID: 2000, Workflow: "build.yml", Event: "workflow_dispatch", Status: "success", SHA: b.SourceSHA, EventPayload: dispatchPayload(b.SourceSHA, "external")})
+	tick(t, s)
+	if got := getBuild(t, s, b); got.ProviderRunID != 2000 || got.Reused != "run" || f.dispatches != 0 {
+		t.Fatal(got)
+	}
+	if len(f.filters) != 4 || f.filters[1].Page != 2 || f.filters[1].SHA != b.SourceSHA {
+		t.Fatal(f.filters)
+	}
+}
+
+func TestBuildFilteredListingBoundIsVisible(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	for i := 0; i < 501; i++ {
+		f.runs = append(f.runs, forgejo.Run{ID: int64(i + 100), Workflow: "build.yml", Event: "workflow_dispatch", Status: "failure", SHA: b.SourceSHA})
+	}
+	tick(t, s)
+	if got := getBuild(t, s, b); got.Status != "QUEUED" || !got.ProviderUnavailable || got.LastError == "" || f.dispatches != 0 {
+		t.Fatal(got)
+	}
+	if len(f.filters) != 10 {
+		t.Fatal(f.filters)
 	}
 }

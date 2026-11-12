@@ -178,3 +178,24 @@ func TestDispatchInputsBounded(t *testing.T) {
 		t.Fatal("dispatch inputs lost")
 	}
 }
+
+func TestForgejoRunListingFiltersAndPageLimit(t *testing.T) {
+	for _, status := range []string{"waiting", "running", ""} {
+		t.Run(status, func(t *testing.T) {
+			sha := ""
+			if status == "" {
+				sha = strings.Repeat("a", 40)
+			}
+			c, cn := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				if r.URL.Path != "/api/v1/repos/o/r/actions/runs" || q.Get("workflow_id") != "build.yml" || q.Get("event") != "workflow_dispatch" || q.Get("status") != status || q.Get("head_sha") != sha || q.Get("page") != "2" || q.Get("limit") != "50" {
+					t.Error(r.URL.String())
+				}
+				fmt.Fprint(w, `{"workflow_runs":[],"total_count":0}`)
+			})
+			if _, err := c.ListRuns(context.Background(), cn, "o/r", "build.yml", Filter{SHA: sha, Status: status, Event: "workflow_dispatch", Page: 2, Limit: 100}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

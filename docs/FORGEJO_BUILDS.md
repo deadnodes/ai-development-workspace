@@ -187,8 +187,14 @@ repository's `build.yml` runs. A `workflow_dispatch` run with `event_payload.inp
 (any request ID) in waiting/running/success attaches with `reused:"run"`.
 Push/PR runs never attach. Waiting/running runs block dispatch unless owned by an
 active RCP Build already counted in the same pool. Per-pool capacity still applies.
-Listings use `workflow_id=build.yml`, without a head SHA filter (the workflow ref
-SHA is not the built SHA), and paginate up to 1000 entries. Incomplete observations
+All run listings use `workflow_id=build.yml` and `event=workflow_dispatch`.
+The active-run gate queries `status=waiting` and `status=running` separately.
+Reuse and uncertain-dispatch reconciliation query `head_sha=source_sha` and still
+verify the dispatch inputs above. Each filtered query is bounded to ten pages of
+50 runs; admission never requires the complete workflow history. Listing errors
+or exhausted bounds set `provider_unavailable:true` and a redacted `last_error`
+on the Build, preserving QUEUED or the uncertain state and its pool slot.
+A successful listing clears these transient fields. Incomplete observations
 defer work rather than treating occupancy as empty.
 
 Before listing runs or dispatching, RCP probes ordered `tag_candidates`. Missing

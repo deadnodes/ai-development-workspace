@@ -309,6 +309,12 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 		return missing("build", old.ID)
 	})
 }
+func (s *Service) buildProviderUnavailable(ctx context.Context, b domain.Build) error {
+	n := b
+	n.ProviderUnavailable = true
+	n.LastError = "Forgejo run listing unavailable"
+	return s.advanceBuild(ctx, b, n, false)
+}
 func matching(r forgejo.Run, b domain.Build) bool {
 	sha, _ := r.DispatchInputs()
 	return r.ID > 0 && r.Workflow == b.Workflow && r.Event == "workflow_dispatch" && sha == b.SourceSHA
@@ -316,15 +322,16 @@ func matching(r forgejo.Run, b domain.Build) bool {
 func usable(r forgejo.Run) bool {
 	return r.Status == "waiting" || r.Status == "running" || r.Status == "success"
 }
-func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, status string) ([]forgejo.Run, error) {
+func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, filter forgejo.Filter) ([]forgejo.Run, error) {
 	out := []forgejo.Run{}
 	for page := 1; page <= 10; page++ {
-		v, e := a.provider.ListRuns(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, forgejo.Filter{Status: status, Page: page, Limit: 100})
+		filter.Page, filter.Limit, filter.Event = page, 50, "workflow_dispatch"
+		v, e := a.provider.ListRuns(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, filter)
 		if e != nil {
 			return nil, e
 		}
 		out = append(out, v.Runs...)
-		if len(v.Runs) < 100 && len(out) >= v.Total || len(out) >= v.Total && v.Total > 0 {
+		if len(v.Runs) < 50 || v.Total > 0 && len(out) >= v.Total {
 			return out, nil
 		}
 	}
@@ -367,6 +374,8 @@ func artifactBuild(b domain.Build, images []domain.BuildImage) domain.Build {
 	now := time.Now().UTC()
 	b.FinishedAt = &now
 	b.Images = images
+	b.LastError = ""
+	b.ProviderUnavailable = false
 	b.Status = "SUCCEEDED"
 	b.FailureCode = ""
 	b.FailureMessage = ""
@@ -500,9 +509,24 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				}
 				continue
 			}
-			runs, e := a.runs(ctx, p, "")
+			runs, e := a.runs(ctx, p, forgejo.Filter{SHA: b.SourceSHA})
 			if e != nil {
+				if e = s.buildProviderUnavailable(ctx, b); e != nil {
+					return e
+				}
 				continue
+			}
+			if b.LastError != "" {
+				n := b
+				n.LastError = ""
+				n.ProviderUnavailable = false
+				if e = s.advanceBuild(ctx, b, n, false); e != nil {
+					return e
+				}
+				b, e = s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
+				if e != nil {
+					return e
+				}
 			}
 			for _, r := range runs {
 				if matching(r, b) && dispatchRequestID(r) == b.ID {
@@ -544,9 +568,35 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if !errors.Is(re, buildregistry.ErrMissing) {
 			continue
 		}
-		runs, e := a.runs(ctx, p, "")
+		runs, e := a.runs(ctx, p, forgejo.Filter{SHA: b.SourceSHA})
+		sourceRunCount := len(runs)
+		if e == nil {
+			for _, status := range []string{"waiting", "running"} {
+				var active []forgejo.Run
+				active, e = a.runs(ctx, p, forgejo.Filter{Status: status})
+				if e != nil {
+					break
+				}
+				runs = append(runs, active...)
+			}
+		}
 		if e != nil {
+			if e = s.buildProviderUnavailable(ctx, b); e != nil {
+				return e
+			}
 			continue
+		}
+		if b.LastError != "" {
+			n := b
+			n.LastError = ""
+			n.ProviderUnavailable = false
+			if e = s.advanceBuild(ctx, b, n, false); e != nil {
+				return e
+			}
+			b, e = s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
+			if e != nil {
+				return e
+			}
 		}
 		fresh, err := s.store.Read(ctx)
 		if err != nil {
@@ -556,7 +606,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		busy := false
 		for i := range runs {
 			r := &runs[i]
-			if matching(*r, b) && usable(*r) && (match == nil || r.ID > match.ID) {
+			if i < sourceRunCount && matching(*r, b) && usable(*r) && (match == nil || r.ID > match.ID) {
 				match = r
 			}
 			if r.Workflow == p.Workflow && (r.Status == "waiting" || r.Status == "running") {
