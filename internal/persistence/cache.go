@@ -105,13 +105,15 @@ func (s *Store) UpdateScoped(ctx context.Context, scope domain.StateMutationScop
 
 func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutationScope, fn func(*domain.State) error) error {
 	full := scope == nil || scope.AllCollections
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Always acquire a pool connection before the cache mutex, matching Read.
+	// Holding the mutex while waiting for the pool can deadlock with a reader.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(context.Background())
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var revision int64
 	if err = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR UPDATE").Scan(&revision); err != nil {
 		return err

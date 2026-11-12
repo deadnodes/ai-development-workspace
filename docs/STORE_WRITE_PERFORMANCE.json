@@ -388,6 +388,101 @@
       "max_ns": 19376662291,
       "warm_max_ns": 1031406042,
       "copy_dropped": true
+    },
+    {
+      "name": "after_lock_order_fix_progress",
+      "base_commit": "32d84d0",
+      "database_copy": "rcp_perf_20261113",
+      "authenticated_non_admin": false,
+      "note": "Connection-before-cache-mutex fix; one fresh template copy; run after verification completed, with no checks overlapping.",
+      "samples": [
+        {
+          "action": "record_progress",
+          "duration_ns": 8066328583
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 50187625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 53638625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 71760166
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 90496417
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 72021208
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 78103625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 97252458
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 110807583
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 127336917
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 79411542
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 78866125
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 52692875
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 53740000
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 47456583
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 51221334
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 44960625
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 82929583
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 67431542
+        },
+        {
+          "action": "record_progress",
+          "duration_ns": 63538541
+        }
+      ],
+      "cold_ns": 8066328583,
+      "p50_ns": 71760166,
+      "p95_ns": 127336917,
+      "max_ns": 8066328583,
+      "warm_max_ns": 127336917,
+      "copy_dropped": true
     }
   ]
 }

@@ -13,6 +13,12 @@ projection. Failed callbacks, validation, SQL statements and commits never publi
 mutated cache contents. Cache publication follows commit. An uncertain commit is
 resolved by the next revision check.
 
+Both reads and updates reserve a pool connection before taking the cache mutex.
+No pool acquisition may hold that mutex: otherwise a reader owning the last
+connection can wait for a writer that owns the mutex and is waiting for the pool.
+The PostgreSQL regression forces this interleaving with `pool_max_conns=1` and
+requires concurrent Read/Update to finish successfully within ten seconds.
+
 Application commands declare trusted mutation scopes. Feature/integration
 commands copy their mutable collections; memory creation shares immutable old
 memory values and detaches new documents. Derived gates and parent feature
@@ -103,13 +109,24 @@ test copied into that checkout. Runs share a host with test workloads; each copy
 has one benchmark writer.
 
 Implementation commits: `041f951` and `2e03fb3`; fixture-only follow-up: `65e85c5`.
-Final tip measurements below use `65e85c5`.
+Historical measurements below use `65e85c5`. The lock-order regression follow-up
+was measured from `32d84d0` plus the connection-before-cache-mutex fix.
 
 | Run (20 writes) | p50 | p95 | Maximum | First/cold | Warm maximum |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Main, progress | 66.237 s | 104.049 s | 126.494 s | 104.049 s | 126.494 s |
 | After, progress | 0.112 s | 0.371 s | 18.140 s | 18.140 s | 0.371 s |
 | After, authenticated mixed | 0.392 s | 0.544 s | 14.427 s | 14.427 s | 0.544 s |
+| After lock-order fix, progress | 0.072 s | 0.127 s | 8.066 s | 8.066 s | 0.127 s |
+
+The lock-order follow-up used one fresh `rcp_perf_20261113` template copy on
+2026-11-13, with no verification checks overlapping the measurement. All 19 warm
+writes completed below one second; the copy was dropped after the run. The
+regression passed against the dedicated `rcp_perf2_tests` database with one pool
+connection, and failed at its ten-second deadline with the original lock order.
+`go test -race ./internal/persistence/ -timeout 30m` passed in 138.597 seconds
+with PostgreSQL enabled. Formatting, `go vet ./...`, server build and JavaScript
+syntax checks also passed. No live RCP was contacted for this follow-up.
 
 The like-for-like progress p95 improved about 280 times. All 19 warm writes in
 both final after-runs completed below one second. Cold reloads are explicitly
