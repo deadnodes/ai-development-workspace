@@ -188,7 +188,7 @@ func TestForgejoRunListingFiltersAndPageLimit(t *testing.T) {
 			}
 			c, cn := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 				q := r.URL.Query()
-				if r.URL.Path != "/api/v1/repos/o/r/actions/runs" || q.Get("workflow_id") != "build.yml" || q.Get("event") != "workflow_dispatch" || q.Get("status") != status || q.Get("head_sha") != sha || q.Get("page") != "2" || q.Get("limit") != "50" {
+				if r.URL.Path != "/api/v1/repos/o/r/actions/runs" || q.Get("workflow_id") != "build.yml" || q.Get("event") != "workflow_dispatch" || q.Get("status") != status || q.Get("head_sha") != sha || (sha == "" && q.Has("head_sha")) || q.Get("page") != "2" || q.Get("limit") != "50" {
 					t.Error(r.URL.String())
 				}
 				fmt.Fprint(w, `{"workflow_runs":[],"total_count":0}`)

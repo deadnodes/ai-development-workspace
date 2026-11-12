@@ -82,3 +82,27 @@ func TestExampleProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRunLookback(t *testing.T) {
+	for _, seconds := range []int{-1, 0, 3600, 31536001} {
+		c := valid()
+		c.RunLookbackSeconds = seconds
+		err := c.Validate()
+		if seconds < 0 || seconds > 31536000 {
+			if err == nil {
+				t.Fatal(seconds)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := seconds
+		if expected == 0 {
+			expected = 86400
+		}
+		if c.RunLookbackSeconds != expected {
+			t.Fatal(c.RunLookbackSeconds)
+		}
+	}
+}

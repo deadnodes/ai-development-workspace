@@ -46,11 +46,12 @@ type Image struct {
 	Repository string `json:"repository"`
 }
 type Config struct {
-	Connections    []Connection `json:"connections"`
-	Registries     []Registry   `json:"registries"`
-	Pools          []Pool       `json:"pools"`
-	Profiles       []Profile    `json:"profiles"`
-	TimeoutSeconds int          `json:"timeout_seconds,omitempty"`
+	Connections        []Connection `json:"connections"`
+	Registries         []Registry   `json:"registries"`
+	Pools              []Pool       `json:"pools"`
+	Profiles           []Profile    `json:"profiles"`
+	TimeoutSeconds     int          `json:"timeout_seconds,omitempty"`
+	RunLookbackSeconds int          `json:"run_lookback_seconds,omitempty"`
 }
 
 var ident = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
@@ -170,6 +171,12 @@ func (c *Config) Validate() error {
 		}
 	}
 	if !unique(ids) {
+		return bad
+	}
+	if c.RunLookbackSeconds == 0 {
+		c.RunLookbackSeconds = 86400
+	}
+	if c.RunLookbackSeconds < 1 || c.RunLookbackSeconds > 31536000 {
 		return bad
 	}
 	if c.TimeoutSeconds == 0 {

@@ -176,7 +176,9 @@ configured Product. Repeating it returns the existing non-failed Build without
 another queue audit. FAILED/CANCELLED attempts require an explicit fresh
 `request_key`; replay of an old key returns its historical handle. Request keys
 are Product-scoped, durable receipts bound to normalized branch/source/profile
-and workflow inputs. Rebinding a key rejects `REQUEST_KEY_CONFLICT`.
+and workflow inputs. Rebinding a key rejects `REQUEST_KEY_CONFLICT`. Automatic deduplication requires
+the current authority hash; old receipt replay still returns its historical Build
+after registry, repository or image configuration changes.
 
 ## Execution and recovery
 
@@ -189,9 +191,14 @@ Push/PR runs never attach. Waiting/running runs block dispatch unless owned by a
 active RCP Build already counted in the same pool. Per-pool capacity still applies.
 All run listings use `workflow_id=build.yml` and `event=workflow_dispatch`.
 The active-run gate queries `status=waiting` and `status=running` separately.
-Reuse and uncertain-dispatch reconciliation query `head_sha=source_sha` and still
-verify the dispatch inputs above. Each filtered query is bounded to ten pages of
-50 runs; admission never requires the complete workflow history. Listing errors
+Reuse and uncertain-dispatch reconciliation do not filter by `head_sha`: it is
+the workflow ref commit, which can differ from the built source. They verify
+dispatch inputs locally and scan newest-first, stopping at the time window.
+Reconciliation starts at the Build queued time minus two minutes of clock skew;
+reuse looks back `run_lookback_seconds` (default 86400, range 1–31536000).
+Each query is capped at ten pages of 50 runs. Hitting that cap before reaching
+the window end is reported explicitly in `last_error`; admission never requires
+the complete workflow history. Listing errors
 or exhausted bounds set `provider_unavailable:true` and a redacted `last_error`
 on the Build, preserving QUEUED or the uncertain state and its pool slot.
 A successful listing clears these transient fields. Incomplete observations

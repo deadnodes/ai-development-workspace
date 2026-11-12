@@ -140,7 +140,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		var previous *domain.Build
 		for i := range st.Builds {
 			b := &st.Builds[i]
-			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow {
+			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow && b.AuthorityHash == a.hash {
 				if !b.RestoreQuarantined && b.Status != "FAILED" && b.Status != "CANCELLED" {
 					out = *b
 					bind(out)
@@ -309,10 +309,13 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 		return missing("build", old.ID)
 	})
 }
-func (s *Service) buildProviderUnavailable(ctx context.Context, b domain.Build) error {
+func (s *Service) buildProviderUnavailable(ctx context.Context, b domain.Build, cause error) error {
 	n := b
 	n.ProviderUnavailable = true
 	n.LastError = "Forgejo run listing unavailable"
+	if errors.Is(cause, errBuildRunBound) {
+		n.LastError = errBuildRunBound.Error()
+	}
 	return s.advanceBuild(ctx, b, n, false)
 }
 func matching(r forgejo.Run, b domain.Build) bool {
@@ -322,7 +325,11 @@ func matching(r forgejo.Run, b domain.Build) bool {
 func usable(r forgejo.Run) bool {
 	return r.Status == "waiting" || r.Status == "running" || r.Status == "success"
 }
-func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, filter forgejo.Filter) ([]forgejo.Run, error) {
+
+var errBuildRunBound = errors.New("build run listing page cap reached before time window ended")
+
+// Forgejo lists runs newest first. Active gates deliberately have no time cutoff.
+func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, filter forgejo.Filter, since time.Time) ([]forgejo.Run, error) {
 	out := []forgejo.Run{}
 	for page := 1; page <= 10; page++ {
 		filter.Page, filter.Limit, filter.Event = page, 50, "workflow_dispatch"
@@ -330,12 +337,17 @@ func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, filter f
 		if e != nil {
 			return nil, e
 		}
-		out = append(out, v.Runs...)
+		for _, run := range v.Runs {
+			if !since.IsZero() && !run.Created.IsZero() && run.Created.Before(since) {
+				return out, nil
+			}
+			out = append(out, run)
+		}
 		if len(v.Runs) < 50 || v.Total > 0 && len(out) >= v.Total {
 			return out, nil
 		}
 	}
-	return nil, errors.New("build run listing exceeds bound")
+	return nil, errBuildRunBound
 }
 
 var errRevision = errors.New("artifact revision mismatch")
@@ -509,9 +521,9 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				}
 				continue
 			}
-			runs, e := a.runs(ctx, p, forgejo.Filter{SHA: b.SourceSHA})
+			runs, e := a.runs(ctx, p, forgejo.Filter{}, b.QueuedAt.Add(-2*time.Minute))
 			if e != nil {
-				if e = s.buildProviderUnavailable(ctx, b); e != nil {
+				if e = s.buildProviderUnavailable(ctx, b, e); e != nil {
 					return e
 				}
 				continue
@@ -568,12 +580,12 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if !errors.Is(re, buildregistry.ErrMissing) {
 			continue
 		}
-		runs, e := a.runs(ctx, p, forgejo.Filter{SHA: b.SourceSHA})
+		runs, e := a.runs(ctx, p, forgejo.Filter{}, time.Now().UTC().Add(-time.Duration(a.config.RunLookbackSeconds)*time.Second))
 		sourceRunCount := len(runs)
 		if e == nil {
 			for _, status := range []string{"waiting", "running"} {
 				var active []forgejo.Run
-				active, e = a.runs(ctx, p, forgejo.Filter{Status: status})
+				active, e = a.runs(ctx, p, forgejo.Filter{Status: status}, time.Time{})
 				if e != nil {
 					break
 				}
@@ -581,7 +593,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			}
 		}
 		if e != nil {
-			if e = s.buildProviderUnavailable(ctx, b); e != nil {
+			if e = s.buildProviderUnavailable(ctx, b, e); e != nil {
 				return e
 			}
 			continue

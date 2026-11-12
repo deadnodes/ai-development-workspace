@@ -193,7 +193,10 @@ func (c *Client) ListRuns(ctx context.Context, cn buildconfig.Connection, repo, 
 	if f.Page < 1 {
 		f.Page = 1
 	}
-	q := url.Values{"workflow_id": {workflow}, "head_sha": {f.SHA}, "event": {f.Event}, "status": {f.Status}, "limit": {strconv.Itoa(f.Limit)}, "page": {strconv.Itoa(f.Page)}}
+	q := url.Values{"workflow_id": {workflow}, "event": {f.Event}, "status": {f.Status}, "limit": {strconv.Itoa(f.Limit)}, "page": {strconv.Itoa(f.Page)}}
+	if f.SHA != "" {
+		q.Set("head_sha", f.SHA)
+	}
 	var p Page
 	e := c.request(ctx, cn, "GET", repoPath(repo)+"/actions/runs?"+q.Encode(), nil, &p)
 	if e == nil {

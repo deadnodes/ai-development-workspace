@@ -10,6 +10,7 @@ import (
 	"releasecontrol/internal/buildregistry"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/providers/forgejo"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,7 @@ func (f *fakeForgejo) ListRuns(_ context.Context, _ buildconfig.Connection, _ st
 			out.Runs = append(out.Runs, r)
 		}
 	}
+	sort.SliceStable(out.Runs, func(i, j int) bool { return out.Runs[i].Created.After(out.Runs[j].Created) })
 	out.Total = len(out.Runs)
 	start := (filter.Page - 1) * filter.Limit
 	if start > len(out.Runs) {
@@ -564,7 +566,6 @@ func TestBuildAttachOnlyDispatchInputs(t *testing.T) {
 			case "running":
 				run.Status = "running"
 			}
-			run.SHA = b.SourceSHA
 			f.runs = []forgejo.Run{run}
 			tick(t, s)
 			v := getBuild(t, s, b)
@@ -858,10 +859,10 @@ func TestBuildFilteredHistoryAndListingErrors(t *testing.T) {
 				tick(t, s)
 			}
 			for i := 0; i < 1100; i++ {
-				f.runs = append(f.runs, forgejo.Run{ID: int64(i + 100), Workflow: "build.yml", Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("c", 40)})
+				f.runs = append(f.runs, forgejo.Run{ID: int64(i + 100), Workflow: "build.yml", Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("c", 40), Created: time.Now().Add(-48 * time.Hour)})
 			}
 			if mode == "reuse" {
-				f.runs = append(f.runs, forgejo.Run{ID: 2000, Workflow: "build.yml", Event: "workflow_dispatch", Status: "running", SHA: b.SourceSHA, EventPayload: dispatchPayload(b.SourceSHA, "external")})
+				f.runs = append(f.runs, forgejo.Run{ID: 2000, Workflow: "build.yml", Event: "workflow_dispatch", Status: "running", Created: time.Now().UTC(), SHA: b.SourceSHA, EventPayload: dispatchPayload(b.SourceSHA, "external")})
 			}
 			if mode == "all" || mode == "waiting" || mode == "running" {
 				f.listError = mode
@@ -890,7 +891,7 @@ func TestBuildFilteredHistoryAndListingErrors(t *testing.T) {
 				t.Fatal(got)
 			}
 			for _, filter := range f.filters {
-				if filter.Event != "workflow_dispatch" || filter.Limit != 50 || filter.SHA == "" && filter.Status != "waiting" && filter.Status != "running" {
+				if filter.Event != "workflow_dispatch" || filter.Limit != 50 || filter.SHA != "" {
 					t.Fatal(filter)
 				}
 			}
@@ -928,7 +929,7 @@ func TestBuildSourceHistoryPagination(t *testing.T) {
 	if got := getBuild(t, s, b); got.ProviderRunID != 2000 || got.Reused != "run" || f.dispatches != 0 {
 		t.Fatal(got)
 	}
-	if len(f.filters) != 4 || f.filters[1].Page != 2 || f.filters[1].SHA != b.SourceSHA {
+	if len(f.filters) != 4 || f.filters[1].Page != 2 || f.filters[1].SHA != "" {
 		t.Fatal(f.filters)
 	}
 }
@@ -945,5 +946,141 @@ func TestBuildFilteredListingBoundIsVisible(t *testing.T) {
 	}
 	if len(f.filters) != 10 {
 		t.Fatal(f.filters)
+	}
+}
+
+func TestBuildReconcileDifferentWorkflowCommit(t *testing.T) {
+	s, _, f, r := buildFixture(t)
+	b, err := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", SHA: strings.Repeat("b", 40)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.uncertain = true
+	tick(t, s)
+	f.runs[0].Status = "success"
+	r.err = nil
+	r.artifact = buildregistry.Artifact{Revision: b.SourceSHA, Digest: "sha256:" + strings.Repeat("d", 64)}
+	tick(t, s)
+	got := getBuild(t, s, b)
+	if got.Status != "SUCCEEDED" || got.ProviderRunID != 1 || f.dispatches != 1 {
+		t.Fatal(got)
+	}
+	for _, filter := range f.filters {
+		if filter.SHA != "" {
+			t.Fatal(filter)
+		}
+	}
+}
+
+func TestBuildAuthorityChangePreservesReceiptsOnly(t *testing.T) {
+	for _, change := range []string{"registry", "repository", "images"} {
+		t.Run(change, func(t *testing.T) {
+			s, _, f, r := buildFixture(t)
+			old := queue(t, s, "historical")
+			r.err = nil
+			r.artifact = buildregistry.Artifact{Revision: old.SourceSHA, Digest: "sha256:" + strings.Repeat("d", 64)}
+			tick(t, s)
+			c := buildConfig()
+			switch change {
+			case "registry":
+				c.Registries[0].Origin = "https://new.example"
+			case "repository":
+				c.Profiles[0].Repository = "o/new"
+			case "images":
+				c.Profiles[0].Images = append(c.Profiles[0].Images, buildconfig.Image{ID: "extra", Repository: "o/extra"})
+			}
+			if err := s.ConfigureBuilds(c, f, r); err != nil {
+				t.Fatal(err)
+			}
+			if got := queue(t, s, "historical"); got.ID != old.ID {
+				t.Fatal(got)
+			}
+			fresh := queue(t, s, "")
+			if fresh.ID == old.ID || fresh.AuthorityHash == old.AuthorityHash || fresh.Status != "QUEUED" {
+				t.Fatal(fresh)
+			}
+			if got := queue(t, s, "fresh"); got.ID != fresh.ID {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+
+func TestBuildRunWindowAndCap(t *testing.T) {
+	for _, reconcile := range []bool{false, true} {
+		t.Run(fmt.Sprint(reconcile), func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			b := queue(t, s, "")
+			if reconcile {
+				f.uncertain = true
+				tick(t, s)
+			}
+			f.runs = nil
+			for i := 0; i < 501; i++ {
+				f.runs = append(f.runs, forgejo.Run{ID: int64(i + 10), Workflow: "build.yml", Event: "workflow_dispatch", Status: "failure", Created: time.Now()})
+			}
+			tick(t, s)
+			if got := getBuild(t, s, b); got.LastError != errBuildRunBound.Error() {
+				t.Fatal(got)
+			}
+			f.filters = nil
+			for i := range f.runs {
+				f.runs[i].Created = b.QueuedAt.Add(-48 * time.Hour)
+			}
+			tick(t, s)
+			if got := getBuild(t, s, b); got.LastError != "" {
+				t.Fatal(got)
+			}
+			if len(f.filters) == 0 || f.filters[0].Page != 1 {
+				t.Fatal(f.filters)
+			}
+			if reconcile && len(f.filters) != 1 {
+				t.Fatal(f.filters)
+			}
+		})
+	}
+}
+
+func TestBuildReuseConfiguredLookback(t *testing.T) {
+	for _, lookback := range []int{0, 3600} {
+		t.Run(fmt.Sprint(lookback), func(t *testing.T) {
+			s, _, f, r := buildFixture(t)
+			c := buildConfig()
+			c.RunLookbackSeconds = lookback
+			if err := s.ConfigureBuilds(c, f, r); err != nil {
+				t.Fatal(err)
+			}
+			b := queue(t, s, "")
+			f.runs = []forgejo.Run{{ID: 99, Workflow: "build.yml", Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("b", 40), EventPayload: dispatchPayload(b.SourceSHA, "external"), Created: time.Now().Add(-2 * time.Hour)}}
+			tick(t, s)
+			got := getBuild(t, s, b)
+			if lookback == 0 {
+				if got.ProviderRunID != 99 || got.Reused != "run" {
+					t.Fatal(got)
+				}
+			} else if got.Reused != "" || f.dispatches != 1 {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+
+func TestBuildReconcileQueuedTimeSkew(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	f.uncertain = true
+	tick(t, s)
+	// A finished run just before queued_at remains eligible despite clock skew.
+	f.runs[0].Created = b.QueuedAt.Add(-time.Minute)
+	f.runs[0].Status = "failure"
+	// A newer, unrelated dispatch must not be mistaken for the lost response.
+	other := f.runs[0]
+	other.ID = 99
+	other.Created = b.QueuedAt
+	other.EventPayload = dispatchPayload(b.SourceSHA, "unrelated")
+	f.runs = append(f.runs, other)
+	tick(t, s)
+	if got := getBuild(t, s, b); got.Status != "FAILED" || got.ProviderRunID != 1 || f.dispatches != 1 {
+		t.Fatal(got)
 	}
 }
