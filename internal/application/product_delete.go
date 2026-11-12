@@ -41,6 +41,11 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 			return invalid("product has active artifact pins; release each pin explicitly before deletion")
 		}
 	}
+	for _, b := range st.Builds {
+		if b.ProductID == c.ProductID && (b.Status == "QUEUED" || buildActive(b)) {
+			return invalid("product has unfinished builds; cancel queued work and reconcile in-flight builds before deletion")
+		}
+	}
 	for _, op := range st.Operations {
 		if op.ProductID == c.ProductID && !terminalOperation(op.Status) {
 			return invalid("product has unfinished operations; finish or cancel them before deletion")

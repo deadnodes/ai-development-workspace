@@ -140,3 +140,18 @@ what was observed and what remains unverified. Keep build status, PR merge,
 runtime readiness and Feature acceptance separate. Save `record_progress` and
 `handoff` in the actual Product/Feature/Integration, then `resume` and verify both
 record IDs in that same scope before reporting completion.
+
+## Configured Forgejo build queue
+
+For an operator-enrolled Forgejo profile, use `list_build_profiles(product_id)`
+then `queue_build(product_id, profile_id, target, branch?, sha?, request_key?)`.
+`dev` deploys via the service repository's own workflow. `image` requires a
+configured non-deploying branch; never use dev queueing as a read-only probe.
+Follow the returned Build handle with `get_build`, or bounded `list_builds`
+(default25/max100, scope-bound cursor). A Build is independent of `get_operation`.
+Repeated profile/SHA/workflow/target returns the same non-failed handle. Failed or
+cancelled attempts need a new explicit request_key. Only QUEUED can be cancelled.
+RECONCILIATION_REQUIRED retains pool capacity: inspect that same handle and provider
+evidence, never request a replacement dispatch to resolve uncertainty. Success
+includes registry-verified digest and full source revision; dev registry reuse also
+requires a successful workflow run on the dev branch. See docs/FORGEJO_BUILDS.md.

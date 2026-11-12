@@ -11,6 +11,7 @@
     "repository": "https://github.com/deadnodes/ai-tools",
     "commit": "4a25d7edcdda49aa550d73967f156a9e572cd284",
     "path": ".workspace/skills/rcp-delivery/SKILL.md",
-    "sha256": "6ea608ca7c3d1503537a65610557ca07b6e36b569a9a2445a904ffcba062961e"
+    "sha256": "65eb16c8cd2b7d113bf0151444ae3368dd935cb316e8e4da7c2910ee91617232",
+    "local_amendments": "Forgejo build queue guidance maintained in this repository; upstream locator identifies original snapshot."
   }
 ]

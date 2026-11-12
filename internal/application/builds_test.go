@@ -1,0 +1,442 @@
+package application
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"releasecontrol/internal/auth"
+	"releasecontrol/internal/buildconfig"
+	"releasecontrol/internal/buildregistry"
+	"releasecontrol/internal/domain"
+	"releasecontrol/internal/providers/forgejo"
+	"strings"
+	"testing"
+	"time"
+)
+
+type fakeForgejo struct {
+	head        string
+	runs        []forgejo.Run
+	dispatches  int
+	uncertain   bool
+	branchCalls int
+}
+
+func (f *fakeForgejo) BranchHead(context.Context, buildconfig.Connection, string, string) (string, error) {
+	f.branchCalls++
+	return f.head, nil
+}
+func (f *fakeForgejo) Dispatch(_ context.Context, _ buildconfig.Connection, _ string, _ string, branch string) (forgejo.Run, error) {
+	f.dispatches++
+	r := forgejo.Run{ID: int64(f.dispatches), Status: "waiting", SHA: f.head, Branch: branch, Event: "workflow_dispatch", Created: time.Now().UTC(), URL: "https://git/run"}
+	f.runs = append(f.runs, r)
+	if f.uncertain {
+		return forgejo.Run{}, &forgejo.Uncertain{}
+	}
+	return r, nil
+}
+func (f *fakeForgejo) GetRun(_ context.Context, _ buildconfig.Connection, _ string, id int64) (forgejo.Run, error) {
+	for _, r := range f.runs {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return forgejo.Run{}, errors.New("missing")
+}
+func (f *fakeForgejo) ListRuns(_ context.Context, _ buildconfig.Connection, _, _ string, filter forgejo.Filter) (forgejo.Page, error) {
+	out := forgejo.Page{}
+	for _, r := range f.runs {
+		if (filter.SHA == "" || filter.SHA == r.SHA) && (filter.Status == "" || filter.Status == r.Status) {
+			out.Runs = append(out.Runs, r)
+		}
+	}
+	out.Total = len(out.Runs)
+	return out, nil
+}
+
+type fakeBuildRegistry struct {
+	artifact buildregistry.Artifact
+	err      error
+}
+
+func (f *fakeBuildRegistry) Resolve(context.Context, buildconfig.Registry, string, string) (buildregistry.Artifact, error) {
+	return f.artifact, f.err
+}
+func buildConfig() *buildconfig.Config {
+	return &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "forgejo", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "token"}}, Registries: []buildconfig.Registry{{ID: "zot", Origin: "http://registry.example", InsecureHTTP: true}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "forgejo", Repository: "o/r", Workflow: "dev.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "zot", ImageRepository: "o/r", TagTemplate: "forgejo-{sha8}", Targets: map[string]buildconfig.Target{"dev": {Branch: "main"}, "image": {AllowBranches: true}}}}}
+}
+func buildFixture(t *testing.T) (*Service, *memoryStore, *fakeForgejo, *fakeBuildRegistry) {
+	t.Helper()
+	s, m := fixture(t)
+	f := &fakeForgejo{head: strings.Repeat("a", 40)}
+	r := &fakeBuildRegistry{err: buildregistry.ErrMissing}
+	if e := s.ConfigureBuilds(buildConfig(), f, r); e != nil {
+		t.Fatal(e)
+	}
+	return s, m, f, r
+}
+func queue(t *testing.T, s *Service, key string) domain.Build {
+	t.Helper()
+	b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", RequestKey: key})
+	if e != nil {
+		t.Fatal(e)
+	}
+	return b
+}
+func tick(t *testing.T, s *Service) {
+	t.Helper()
+	if e := s.DispatchBuildsOnce(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+}
+func getBuild(t *testing.T, s *Service, b domain.Build) domain.Build {
+	t.Helper()
+	v, e := s.GetBuild(context.Background(), domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
+	if e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
+func TestBuildIdempotencyAndKeys(t *testing.T) {
+	s, m, f, _ := buildFixture(t)
+	b := queue(t, s, "one")
+	events := len(m.state.Events)
+	again := queue(t, s, "two")
+	if b.ID != again.ID || len(m.state.Builds) != 1 || len(m.state.Events) != events {
+		t.Fatal("duplicate build/audit")
+	}
+	f.head = strings.Repeat("b", 40)
+	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", RequestKey: "two"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
+		t.Fatal(e)
+	}
+	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", SHA: b.SourceSHA}); e == nil || !strings.Contains(e.Error(), "SHA_NOT_HEAD") {
+		t.Fatal(e)
+	}
+	if len(m.state.Builds) != 1 {
+		t.Fatal("rejected SHA created record")
+	}
+}
+func TestBuildPoolLimitAndDigest(t *testing.T) {
+	s, _, f, r := buildFixture(t)
+	b := queue(t, s, "one")
+	f.head = strings.Repeat("b", 40)
+	second := queue(t, s, "two")
+	f.head = b.SourceSHA
+	tick(t, s)
+	if f.dispatches != 1 || getBuild(t, s, b).Status != "DISPATCHED" || getBuild(t, s, second).Status != "QUEUED" {
+		t.Fatal("pool limit")
+	}
+	if _, e := s.CancelBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: b.ID}); e == nil {
+		t.Fatal("cancelled dispatched")
+	}
+	f.runs[0].Status = "running"
+	tick(t, s)
+	if getBuild(t, s, b).Status != "RUNNING" {
+		t.Fatal("running mapping")
+	}
+	f.runs[0].Status = "success"
+	r.err = nil
+	r.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
+	tick(t, s)
+	done := getBuild(t, s, b)
+	if done.Status != "SUCCEEDED" || done.Digest != r.artifact.Digest || !strings.HasSuffix(done.ImageRef, "@"+done.Digest) || done.RunURL == "" {
+		t.Fatal(done)
+	}
+}
+func TestBuildRegistryReuseAndRunAttachment(t *testing.T) {
+	for _, target := range []string{"dev", "image"} {
+		t.Run(target, func(t *testing.T) {
+			s, _, f, r := buildFixture(t)
+			branch := "main"
+			if target == "image" {
+				branch = "topic"
+			}
+			b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: target, Branch: branch})
+			if e != nil {
+				t.Fatal(e)
+			}
+			r.err = nil
+			r.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
+			if target == "dev" {
+				f.runs = []forgejo.Run{{ID: 99, SHA: b.SourceSHA, Branch: "main", Status: "success", Event: "push"}}
+			}
+			tick(t, s)
+			if v := getBuild(t, s, b); v.Status != "SUCCEEDED" || v.Reused != "registry" || f.dispatches != 0 {
+				t.Fatal(v)
+			}
+		})
+	}
+	s, _, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	f.runs = []forgejo.Run{{ID: 99, SHA: b.SourceSHA, Branch: "main", Status: "waiting", Event: "push"}}
+	tick(t, s)
+	v := getBuild(t, s, b)
+	if v.Reused != "run" || v.ProviderRunID != 99 || f.dispatches != 0 {
+		t.Fatal(v)
+	}
+}
+func TestBuildDevImageAloneDoesNotProveDeploy(t *testing.T) {
+	s, _, f, r := buildFixture(t)
+	b := queue(t, s, "")
+	r.err = nil
+	r.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
+	tick(t, s)
+	if getBuild(t, s, b).Status == "SUCCEEDED" || f.dispatches != 1 {
+		t.Fatal("dev deployment inferred from image")
+	}
+}
+func TestBuildUncertainDispatchAndRestart(t *testing.T) {
+	s, m, f, r := buildFixture(t)
+	f.uncertain = true
+	b := queue(t, s, "")
+	tick(t, s)
+	if getBuild(t, s, b).Status != "RECONCILIATION_REQUIRED" {
+		t.Fatal("uncertainty lost")
+	}
+	f.runs = nil
+	tick(t, s)
+	if f.dispatches != 1 {
+		t.Fatal("uncertain redispatched")
+	}
+	f.runs = []forgejo.Run{{ID: 1, SHA: b.SourceSHA, Branch: "main", Event: "workflow_dispatch", Created: time.Now().UTC(), Status: "running"}}
+	resumed := New(m)
+	if e := resumed.ConfigureBuilds(buildConfig(), f, r); e != nil {
+		t.Fatal(e)
+	}
+	tick(t, resumed)
+	tick(t, resumed)
+	if v := getBuild(t, resumed, b); v.Status != "RUNNING" || v.ProviderRunID != 1 || f.dispatches != 1 {
+		t.Fatal(v)
+	}
+}
+func TestBuildTerminalFailuresAndRetries(t *testing.T) {
+	for _, status := range []string{"failure", "cancelled", "success", "mismatch"} {
+		t.Run(status, func(t *testing.T) {
+			s, _, f, r := buildFixture(t)
+			b := queue(t, s, "old")
+			tick(t, s)
+			f.runs[0].Status = status
+			if status == "mismatch" {
+				f.runs[0].Status = "success"
+				r.err = nil
+				r.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("c", 64), Revision: strings.Repeat("b", 40)}
+			}
+			tick(t, s)
+			v := getBuild(t, s, b)
+			want := "FAILED"
+			if status == "cancelled" {
+				want = "CANCELLED"
+			}
+			if v.Status != want {
+				t.Fatal(v)
+			}
+			if status == "success" && v.FailureCode != "ARTIFACT_MISSING" || status == "mismatch" && v.FailureCode != "ARTIFACT_REVISION_MISMATCH" {
+				t.Fatal(v)
+			}
+			if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev"}); e == nil {
+				t.Fatal("implicit retry")
+			}
+			if same := queue(t, s, "old"); same.ID != b.ID {
+				t.Fatal("same key retried")
+			}
+			if next := queue(t, s, "new"); next.ID == b.ID {
+				t.Fatal("explicit retry missing")
+			}
+		})
+	}
+}
+func TestBuildCancelAndBranchRules(t *testing.T) {
+	s, _, _, _ := buildFixture(t)
+	b := queue(t, s, "")
+	v, e := s.CancelBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: b.ID})
+	if e != nil || v.Status != "CANCELLED" {
+		t.Fatal(v, e)
+	}
+	if _, e = s.CancelBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: b.ID}); e == nil {
+		t.Fatal("cancel rules")
+	}
+	for _, in := range []domain.QueueBuildRequest{{ProductID: "p", ProfileID: "app", Target: "dev", Branch: "topic"}, {ProductID: "p", ProfileID: "app", Target: "image", Branch: "main"}, {ProductID: "else", ProfileID: "app", Target: "dev"}} {
+		if _, e = s.QueueBuild(context.Background(), in); e == nil {
+			t.Fatal("unsafe branch/scope accepted")
+		}
+	}
+}
+func TestBuildBusyWorkflowAndHeadMovement(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("b", 40), Branch: "other", Status: "running"}}
+	tick(t, s)
+	if f.dispatches != 0 || getBuild(t, s, b).Status != "QUEUED" {
+		t.Fatal("busy workflow ignored")
+	}
+	f.runs = nil
+	f.head = strings.Repeat("b", 40)
+	tick(t, s)
+	if v := getBuild(t, s, b); v.FailureCode != "SHA_NOT_HEAD" || f.dispatches != 0 {
+		t.Fatal(v)
+	}
+}
+func TestBuildTimeoutAndProductAuthorization(t *testing.T) {
+	s, m, _, _ := buildFixture(t)
+	b := queue(t, s, "")
+	tick(t, s)
+	old := time.Now().Add(-3 * time.Hour)
+	m.state.Builds[0].DispatchedAt = &old
+	tick(t, s)
+	if v := getBuild(t, s, b); v.Status != "RECONCILIATION_REQUIRED" || v.FailureCode != "BUILD_TIMEOUT" {
+		t.Fatal(v)
+	}
+	tick(t, s)
+	if getBuild(t, s, b).Status != "RECONCILIATION_REQUIRED" {
+		t.Fatal("timeout resumed active")
+	}
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/other", Products: []string{"else"}, Permissions: []string{"read", "write"}})
+	if _, e := s.GetBuild(ctx, domain.BuildLookup{ProductID: "p", BuildID: b.ID}); e == nil {
+		t.Fatal("cross product read")
+	}
+	if _, e := s.QueueBuild(ctx, domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev"}); e == nil {
+		t.Fatal("cross product write")
+	}
+	if _, e := s.ListBuildProfiles(ctx, "p"); e == nil {
+		t.Fatal("cross product profiles")
+	}
+}
+func TestBuildPagination(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	for _, sha := range []string{"a", "b", "c"} {
+		f.head = strings.Repeat(sha, 40)
+		queue(t, s, "")
+	}
+	first, e := s.ListBuilds(context.Background(), domain.ListBuildsRequest{ProductID: "p", Limit: 2})
+	if e != nil || len(first.Items) != 2 || first.NextCursor == "" {
+		t.Fatal(first, e)
+	}
+	second, e := s.ListBuilds(context.Background(), domain.ListBuildsRequest{ProductID: "p", Limit: 2, Cursor: first.NextCursor})
+	if e != nil || len(second.Items) != 1 || second.NextCursor != "" {
+		t.Fatal(second, e)
+	}
+	if _, e = s.ListBuilds(context.Background(), domain.ListBuildsRequest{ProductID: "else", Cursor: first.NextCursor}); e == nil {
+		t.Fatal("cursor scope ignored")
+	}
+}
+
+func TestBuildAuthorityDriftFailsClosed(t *testing.T) {
+	s, _, f, r := buildFixture(t)
+	b := queue(t, s, "")
+	c := buildConfig()
+	c.TimeoutSeconds = 3600
+	if e := s.ConfigureBuilds(c, f, r); e != nil {
+		t.Fatal(e)
+	}
+	tick(t, s)
+	if v := getBuild(t, s, b); v.Status != "FAILED" || v.FailureCode != "BUILD_AUTHORITY_CHANGED" || f.dispatches != 0 {
+		t.Fatal(v)
+	}
+}
+
+func TestBuildFIFOBlockedHead(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	first := queue(t, s, "first")
+	f.head = strings.Repeat("b", 40)
+	second := queue(t, s, "second")
+	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("c", 40), Branch: "other", Status: "running"}}
+	tick(t, s)
+	if f.dispatches != 0 || getBuild(t, s, first).Status != "QUEUED" || getBuild(t, s, second).Status != "QUEUED" {
+		t.Fatal("blocked FIFO head bypassed")
+	}
+}
+
+// Empty provider listings isolate RCP's durable admission limit from external
+// workflow occupancy; neither runner ownership APIs nor listing latency is a lock.
+type emptyBuildListing struct{ *fakeForgejo }
+
+func (f emptyBuildListing) ListRuns(context.Context, buildconfig.Connection, string, string, forgejo.Filter) (forgejo.Page, error) {
+	return forgejo.Page{}, nil
+}
+func TestBuildPoolAdmissionIndependentOfWorkflowOccupancy(t *testing.T) {
+	for _, capacity := range []int{1, 2} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
+			s, _, f, r := buildFixture(t)
+			c := buildConfig()
+			c.Pools[0].MaxInFlight = capacity
+			p := c.Profiles[0]
+			p.ID = "second"
+			p.Repository = "o/second"
+			p.ImageRepository = "o/second"
+			c.Profiles = append(c.Profiles, p)
+			if e := s.ConfigureBuilds(c, emptyBuildListing{f}, r); e != nil {
+				t.Fatal(e)
+			}
+			queue(t, s, "first")
+			b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "second", Target: "dev"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			tick(t, s)
+			if f.dispatches != capacity {
+				t.Fatalf("capacity=%d dispatched=%d", capacity, f.dispatches)
+			}
+			v := getBuild(t, s, b)
+			if capacity == 1 && v.Status != "QUEUED" || capacity == 2 && v.Status != "DISPATCHED" {
+				t.Fatal(v)
+			}
+		})
+	}
+}
+
+func TestBuildPreventsProductDeletionWhileUnfinished(t *testing.T) {
+	s, _, _, _ := buildFixture(t)
+	queue(t, s, "")
+	if _, e := s.Execute(context.Background(), domain.Command{Action: "delete_product", Actor: "agent", ProductID: "p", Data: map[string]any{"name": "Product"}}); e == nil || !strings.Contains(e.Error(), "unfinished builds") {
+		t.Fatal(e)
+	}
+}
+func TestBuildUnchangedObservationDoesNotAppendAudit(t *testing.T) {
+	s, m, _, _ := buildFixture(t)
+	queue(t, s, "")
+	tick(t, s)
+	count := len(m.state.Events)
+	tick(t, s)
+	if len(m.state.Events) != count {
+		t.Fatal("unchanged observation appended audit")
+	}
+}
+
+func TestBuildWritePermissionAndAttribution(t *testing.T) {
+	s, m, _, _ := buildFixture(t)
+	reader := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/reader", Products: []string{"p"}, Permissions: []string{"read"}})
+	in := domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev"}
+	if _, e := s.QueueBuild(reader, in); e == nil {
+		t.Fatal("reader queued build")
+	}
+	writer := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/requester", Products: []string{"p"}, Permissions: []string{"read", "write"}})
+	b, e := s.QueueBuild(writer, in)
+	if e != nil || b.Actor != "agent/requester" {
+		t.Fatal(b, e)
+	}
+	lookup := domain.BuildLookup{ProductID: "p", BuildID: b.ID}
+	if _, e = s.CancelBuild(reader, lookup); e == nil {
+		t.Fatal("reader cancelled build")
+	}
+	canceller := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/canceller", Products: []string{"p"}, Permissions: []string{"write"}})
+	done, e := s.CancelBuild(canceller, lookup)
+	if e != nil || done.Actor != b.Actor || m.state.Builds[0].Actor != b.Actor || m.state.Events[len(m.state.Events)-1].Actor != "agent/canceller" {
+		t.Fatal(done, e)
+	}
+	if _, e = s.GetBuild(reader, lookup); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestBuildRequestKeyBindsWorkflow(t *testing.T) {
+	s, _, f, r := buildFixture(t)
+	queue(t, s, "bound-workflow")
+	c := buildConfig()
+	c.Profiles[0].Workflow = "other.yml"
+	if e := s.ConfigureBuilds(c, f, r); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", RequestKey: "bound-workflow"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
+		t.Fatal(e)
+	}
+}

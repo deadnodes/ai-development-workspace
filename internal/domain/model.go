@@ -216,6 +216,8 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
+	BuildReceipts          []BuildReceipt         `json:"build_receipts"`
+	Builds                 []Build                `json:"builds"`
 	RegistryInventories    []RegistryInventory    `json:"registry_inventories"`
 	ArtifactPins           []ArtifactPin          `json:"artifact_pins"`
 	NativeQuarantines      []NativeQuarantine     `json:"native_quarantines"`
@@ -264,7 +266,7 @@ type State struct {
 }
 
 func EmptyState() State {
-	return State{RegistryInventories: []RegistryInventory{}, ArtifactPins: []ArtifactPin{}, WorkerJobs: []WorkerJob{}, WorkerAttempts: []WorkerAttempt{}, RuntimeSnapshots: []RuntimeSnapshot{}, ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{BuildReceipts: []BuildReceipt{}, Builds: []Build{}, RegistryInventories: []RegistryInventory{}, ArtifactPins: []ArtifactPin{}, WorkerJobs: []WorkerJob{}, WorkerAttempts: []WorkerAttempt{}, RuntimeSnapshots: []RuntimeSnapshot{}, ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {
