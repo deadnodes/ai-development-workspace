@@ -555,7 +555,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				owned := false
 				for _, owner := range fresh.Builds {
 					ownerProfile, configured := a.config.Profile(owner.ProfileID)
-					if configured && ownerProfile.ConnectionID == p.ConnectionID && owner.Repository == b.Repository && owner.PoolID == b.PoolID && owner.Workflow == b.Workflow && owner.ProviderRunID == r.ID && buildActive(owner) {
+					if configured && owner.AuthorityHash == a.hash && ownerProfile.ConnectionID == p.ConnectionID && owner.Repository == b.Repository && owner.PoolID == b.PoolID && owner.Workflow == b.Workflow && owner.ProviderRunID == r.ID && buildActive(owner) {
 						owned = true
 						break
 					}

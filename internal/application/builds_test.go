@@ -589,3 +589,24 @@ func TestBuildOwnedRunsDoNotBlockPoolCapacity(t *testing.T) {
 		t.Fatal("pool capacity exceeded")
 	}
 }
+
+func TestBuildPoolOwnershipRejectsDriftedAuthority(t *testing.T) {
+	s, m, f, r := buildFixture(t)
+	c := buildConfig()
+	c.Pools[0].MaxInFlight = 2
+	if e := s.ConfigureBuilds(c, f, r); e != nil {
+		t.Fatal(e)
+	}
+	b := queue(t, s, "")
+	// An old provider's ID is not proof of ownership in the current provider.
+	owner := domain.Build{Meta: domain.Meta{ID: "old-owner", ProductID: "p", UpdatedAt: time.Now().UTC()}, ProfileID: "app", PoolID: "pool", Repository: "o/r", Workflow: "build.yml", AuthorityHash: "previous-authority", SourceSHA: strings.Repeat("b", 40), Status: "RUNNING", ProviderRunID: 99, QueuedAt: b.QueuedAt.Add(time.Second)}
+	m.state.Builds = append(m.state.Builds, owner)
+	f.runs = []forgejo.Run{{ID: 99, Workflow: "build.yml", Title: runTitle(owner), Event: "workflow_dispatch", Status: "running"}}
+	tick(t, s)
+	if getBuild(t, s, b).Status != "QUEUED" || f.dispatches != 0 {
+		t.Fatal("stale authority masked foreign run occupancy")
+	}
+	if v := getBuild(t, s, owner); v.Status != "RECONCILIATION_REQUIRED" || v.FailureCode != "BUILD_AUTHORITY_CHANGED" {
+		t.Fatal(v)
+	}
+}
