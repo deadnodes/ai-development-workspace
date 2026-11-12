@@ -10,7 +10,6 @@ type Build struct {
 	PoolID         string     `json:"pool_id"`
 	Repository     string     `json:"repository"`
 	Workflow       string     `json:"workflow"`
-	Target         string     `json:"target"`
 	Branch         string     `json:"branch"`
 	SourceSHA      string     `json:"source_sha"`
 	RequestKey     string     `json:"request_key,omitempty"`
@@ -31,7 +30,6 @@ type Build struct {
 type QueueBuildRequest struct {
 	ProductID  string `json:"product_id"`
 	ProfileID  string `json:"profile_id"`
-	Target     string `json:"target"`
 	Branch     string `json:"branch,omitempty"`
 	SHA        string `json:"sha,omitempty"`
 	RequestKey string `json:"request_key,omitempty"`
@@ -58,7 +56,6 @@ type BuildReceipt struct {
 	RequestKey string `json:"request_key"`
 	BuildID    string `json:"build_id"`
 	ProfileID  string `json:"profile_id"`
-	Target     string `json:"target"`
 	Branch     string `json:"branch"`
 	SourceSHA  string `json:"source_sha"`
 }

@@ -26,9 +26,15 @@ func (f *fakeForgejo) BranchHead(context.Context, buildconfig.Connection, string
 	f.branchCalls++
 	return f.head, nil
 }
-func (f *fakeForgejo) Dispatch(_ context.Context, _ buildconfig.Connection, _ string, _ string, branch string) (forgejo.Run, error) {
+func (f *fakeForgejo) CommitExists(_ context.Context, _ buildconfig.Connection, _, sha string) error {
+	if sha == strings.Repeat("f", 40) {
+		return errors.New("unknown commit")
+	}
+	return nil
+}
+func (f *fakeForgejo) Dispatch(_ context.Context, _ buildconfig.Connection, _ string, _ string, ref, sha, requestID string) (forgejo.Run, error) {
 	f.dispatches++
-	r := forgejo.Run{ID: int64(f.dispatches), Status: "waiting", SHA: f.head, Branch: branch, Event: "workflow_dispatch", Created: time.Now().UTC(), URL: "https://git/run"}
+	r := forgejo.Run{ID: int64(f.dispatches), Status: "waiting", SHA: f.head, Branch: ref, Workflow: "build.yml", Title: "build " + sha + " " + requestID, Event: "workflow_dispatch", Created: time.Now().UTC(), URL: "https://git/run"}
 	f.runs = append(f.runs, r)
 	if f.uncertain {
 		return forgejo.Run{}, &forgejo.Uncertain{}
@@ -63,7 +69,7 @@ func (f *fakeBuildRegistry) Resolve(context.Context, buildconfig.Registry, strin
 	return f.artifact, f.err
 }
 func buildConfig() *buildconfig.Config {
-	return &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "forgejo", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "token"}}, Registries: []buildconfig.Registry{{ID: "zot", Origin: "http://registry.example", InsecureHTTP: true}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "forgejo", Repository: "o/r", Workflow: "dev.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "zot", ImageRepository: "o/r", TagTemplate: "forgejo-{sha8}", Targets: map[string]buildconfig.Target{"dev": {Branch: "main"}, "image": {AllowBranches: true}}}}}
+	return &buildconfig.Config{Connections: []buildconfig.Connection{{ID: "forgejo", Kind: "forgejo", APIURL: "https://git.example", Owner: "o", TokenRef: "token"}}, Registries: []buildconfig.Registry{{ID: "zot", Origin: "http://registry.example", InsecureHTTP: true}}, Pools: []buildconfig.Pool{{ID: "pool", MaxInFlight: 1}}, Profiles: []buildconfig.Profile{{ID: "app", ProductID: "p", ConnectionID: "forgejo", Repository: "o/r", Workflow: "build.yml", DefaultBranch: "main", PoolID: "pool", RegistryID: "zot", ImageRepository: "o/r", DispatchRef: "main", TagCandidates: []string{"main-{sha8}", "br-{sha8}"}}}}
 }
 func buildFixture(t *testing.T) (*Service, *memoryStore, *fakeForgejo, *fakeBuildRegistry) {
 	t.Helper()
@@ -77,7 +83,7 @@ func buildFixture(t *testing.T) (*Service, *memoryStore, *fakeForgejo, *fakeBuil
 }
 func queue(t *testing.T, s *Service, key string) domain.Build {
 	t.Helper()
-	b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", RequestKey: key})
+	b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", RequestKey: key})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -106,14 +112,14 @@ func TestBuildIdempotencyAndKeys(t *testing.T) {
 		t.Fatal("duplicate build/audit")
 	}
 	f.head = strings.Repeat("b", 40)
-	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", RequestKey: "two"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
+	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", RequestKey: "two"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
 		t.Fatal(e)
 	}
-	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", SHA: b.SourceSHA}); e == nil || !strings.Contains(e.Error(), "SHA_NOT_HEAD") {
+	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", SHA: b.SourceSHA}); e != nil {
 		t.Fatal(e)
 	}
 	if len(m.state.Builds) != 1 {
-		t.Fatal("rejected SHA created record")
+		t.Fatal("SHA alias created duplicate")
 	}
 }
 func TestBuildPoolLimitAndDigest(t *testing.T) {
@@ -151,7 +157,7 @@ func TestBuildRegistryReuseAndRunAttachment(t *testing.T) {
 			if target == "image" {
 				branch = "topic"
 			}
-			b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: target, Branch: branch})
+			b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Branch: branch})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -168,21 +174,21 @@ func TestBuildRegistryReuseAndRunAttachment(t *testing.T) {
 	}
 	s, _, f, _ := buildFixture(t)
 	b := queue(t, s, "")
-	f.runs = []forgejo.Run{{ID: 99, SHA: b.SourceSHA, Branch: "main", Status: "waiting", Event: "push"}}
+	f.runs = []forgejo.Run{{ID: 99, SHA: b.SourceSHA, Branch: "main", Workflow: "build.yml", Title: "build " + b.SourceSHA + " external", Status: "waiting", Event: "workflow_dispatch"}}
 	tick(t, s)
 	v := getBuild(t, s, b)
 	if v.Reused != "run" || v.ProviderRunID != 99 || f.dispatches != 0 {
 		t.Fatal(v)
 	}
 }
-func TestBuildDevImageAloneDoesNotProveDeploy(t *testing.T) {
+func TestBuildImageAloneProvesBuild(t *testing.T) {
 	s, _, f, r := buildFixture(t)
 	b := queue(t, s, "")
 	r.err = nil
 	r.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
 	tick(t, s)
-	if getBuild(t, s, b).Status == "SUCCEEDED" || f.dispatches != 1 {
-		t.Fatal("dev deployment inferred from image")
+	if getBuild(t, s, b).Status != "SUCCEEDED" || f.dispatches != 0 {
+		t.Fatal("image not reused")
 	}
 }
 func TestBuildUncertainDispatchAndRestart(t *testing.T) {
@@ -198,7 +204,7 @@ func TestBuildUncertainDispatchAndRestart(t *testing.T) {
 	if f.dispatches != 1 {
 		t.Fatal("uncertain redispatched")
 	}
-	f.runs = []forgejo.Run{{ID: 1, SHA: b.SourceSHA, Branch: "main", Event: "workflow_dispatch", Created: time.Now().UTC(), Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 1, SHA: b.SourceSHA, Branch: "main", Workflow: "build.yml", Title: runTitle(b), Event: "workflow_dispatch", Created: time.Now().UTC(), Status: "running"}}
 	resumed := New(m)
 	if e := resumed.ConfigureBuilds(buildConfig(), f, r); e != nil {
 		t.Fatal(e)
@@ -233,7 +239,7 @@ func TestBuildTerminalFailuresAndRetries(t *testing.T) {
 			if status == "success" && v.FailureCode != "ARTIFACT_MISSING" || status == "mismatch" && v.FailureCode != "ARTIFACT_REVISION_MISMATCH" {
 				t.Fatal(v)
 			}
-			if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev"}); e == nil {
+			if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app"}); e == nil {
 				t.Fatal("implicit retry")
 			}
 			if same := queue(t, s, "old"); same.ID != b.ID {
@@ -255,7 +261,7 @@ func TestBuildCancelAndBranchRules(t *testing.T) {
 	if _, e = s.CancelBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: b.ID}); e == nil {
 		t.Fatal("cancel rules")
 	}
-	for _, in := range []domain.QueueBuildRequest{{ProductID: "p", ProfileID: "app", Target: "dev", Branch: "topic"}, {ProductID: "p", ProfileID: "app", Target: "image", Branch: "main"}, {ProductID: "else", ProfileID: "app", Target: "dev"}} {
+	for _, in := range []domain.QueueBuildRequest{{ProductID: "p", ProfileID: "app", Branch: "bad branch"}, {ProductID: "p", ProfileID: "app", Branch: "main", SHA: strings.Repeat("a", 40)}, {ProductID: "else", ProfileID: "app"}} {
 		if _, e = s.QueueBuild(context.Background(), in); e == nil {
 			t.Fatal("unsafe branch/scope accepted")
 		}
@@ -264,7 +270,7 @@ func TestBuildCancelAndBranchRules(t *testing.T) {
 func TestBuildBusyWorkflowAndHeadMovement(t *testing.T) {
 	s, _, f, _ := buildFixture(t)
 	b := queue(t, s, "")
-	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("b", 40), Branch: "other", Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("b", 40), Branch: "other", Workflow: "build.yml", Status: "running"}}
 	tick(t, s)
 	if f.dispatches != 0 || getBuild(t, s, b).Status != "QUEUED" {
 		t.Fatal("busy workflow ignored")
@@ -272,7 +278,7 @@ func TestBuildBusyWorkflowAndHeadMovement(t *testing.T) {
 	f.runs = nil
 	f.head = strings.Repeat("b", 40)
 	tick(t, s)
-	if v := getBuild(t, s, b); v.FailureCode != "SHA_NOT_HEAD" || f.dispatches != 0 {
+	if v := getBuild(t, s, b); v.Status != "DISPATCHED" || f.dispatches != 1 {
 		t.Fatal(v)
 	}
 }
@@ -294,7 +300,7 @@ func TestBuildTimeoutAndProductAuthorization(t *testing.T) {
 	if _, e := s.GetBuild(ctx, domain.BuildLookup{ProductID: "p", BuildID: b.ID}); e == nil {
 		t.Fatal("cross product read")
 	}
-	if _, e := s.QueueBuild(ctx, domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev"}); e == nil {
+	if _, e := s.QueueBuild(ctx, domain.QueueBuildRequest{ProductID: "p", ProfileID: "app"}); e == nil {
 		t.Fatal("cross product write")
 	}
 	if _, e := s.ListBuildProfiles(ctx, "p"); e == nil {
@@ -339,7 +345,7 @@ func TestBuildFIFOBlockedHead(t *testing.T) {
 	first := queue(t, s, "first")
 	f.head = strings.Repeat("b", 40)
 	second := queue(t, s, "second")
-	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("c", 40), Branch: "other", Status: "running"}}
+	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("c", 40), Branch: "other", Workflow: "build.yml", Status: "running"}}
 	tick(t, s)
 	if f.dispatches != 0 || getBuild(t, s, first).Status != "QUEUED" || getBuild(t, s, second).Status != "QUEUED" {
 		t.Fatal("blocked FIFO head bypassed")
@@ -368,7 +374,7 @@ func TestBuildPoolAdmissionIndependentOfWorkflowOccupancy(t *testing.T) {
 				t.Fatal(e)
 			}
 			queue(t, s, "first")
-			b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "second", Target: "dev"})
+			b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "second"})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -405,7 +411,7 @@ func TestBuildUnchangedObservationDoesNotAppendAudit(t *testing.T) {
 func TestBuildWritePermissionAndAttribution(t *testing.T) {
 	s, m, _, _ := buildFixture(t)
 	reader := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/reader", Products: []string{"p"}, Permissions: []string{"read"}})
-	in := domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev"}
+	in := domain.QueueBuildRequest{ProductID: "p", ProfileID: "app"}
 	if _, e := s.QueueBuild(reader, in); e == nil {
 		t.Fatal("reader queued build")
 	}
@@ -428,15 +434,158 @@ func TestBuildWritePermissionAndAttribution(t *testing.T) {
 	}
 }
 
-func TestBuildRequestKeyBindsWorkflow(t *testing.T) {
+func TestBuildRejectsOtherWorkflow(t *testing.T) {
 	s, _, f, r := buildFixture(t)
-	queue(t, s, "bound-workflow")
 	c := buildConfig()
 	c.Profiles[0].Workflow = "other.yml"
+	if e := s.ConfigureBuilds(c, f, r); e == nil {
+		t.Fatal("wrong workflow accepted")
+	}
+}
+
+// Tags are individually observable; the workflow chooses main/br based on history.
+type candidateRegistry struct {
+	calls  []string
+	values map[string]buildregistry.Artifact
+}
+
+func (r *candidateRegistry) Resolve(_ context.Context, _ buildconfig.Registry, _, tag string) (buildregistry.Artifact, error) {
+	r.calls = append(r.calls, tag)
+	v, ok := r.values[tag]
+	if !ok {
+		return v, buildregistry.ErrMissing
+	}
+	return v, nil
+}
+func TestBuildCandidateTags(t *testing.T) {
+	for _, phase := range []string{"reuse", "success", "mismatch"} {
+		t.Run(phase, func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			r := &candidateRegistry{values: map[string]buildregistry.Artifact{}}
+			if e := s.ConfigureBuilds(buildConfig(), f, r); e != nil {
+				t.Fatal(e)
+			}
+			b := queue(t, s, "")
+			if phase == "success" {
+				tick(t, s)
+				f.runs[0].Status = "success"
+			}
+			revision := b.SourceSHA
+			if phase == "mismatch" {
+				revision = strings.Repeat("b", 40)
+			}
+			r.values["br-aaaaaaaa"] = buildregistry.Artifact{Revision: revision, Digest: "sha256:" + strings.Repeat("c", 64)}
+			tick(t, s)
+			v := getBuild(t, s, b)
+			if phase == "mismatch" {
+				if v.FailureCode != "ARTIFACT_REVISION_MISMATCH" || f.dispatches != 0 {
+					t.Fatal(v)
+				}
+				return
+			}
+			if v.Status != "SUCCEEDED" || !strings.Contains(v.ImageRef, ":br-aaaaaaaa@sha256:") {
+				t.Fatal(v)
+			}
+			if phase == "reuse" && (v.Reused != "registry" || f.dispatches != 0) {
+				t.Fatal(v)
+			}
+			if len(r.calls) < 2 || r.calls[len(r.calls)-2] != "main-aaaaaaaa" || r.calls[len(r.calls)-1] != "br-aaaaaaaa" {
+				t.Fatal(r.calls)
+			}
+		})
+	}
+}
+func TestBuildSHASourceValidation(t *testing.T) {
+	s, m, f, _ := buildFixture(t)
+	sha := strings.Repeat("b", 40)
+	b, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", SHA: sha})
+	if e != nil || b.SourceSHA != sha || b.Branch != "" || f.branchCalls != 0 {
+		t.Fatal(b, e)
+	}
+	for _, in := range []domain.QueueBuildRequest{
+		{ProductID: "p", ProfileID: "app", SHA: strings.Repeat("f", 40)},
+		{ProductID: "p", ProfileID: "app", SHA: sha, Branch: "main"},
+		{ProductID: "p", ProfileID: "app", SHA: "bad"},
+	} {
+		if _, e = s.QueueBuild(context.Background(), in); e == nil {
+			t.Fatal("invalid source accepted")
+		}
+	}
+	if len(m.state.Builds) != 1 {
+		t.Fatal("rejected request persisted")
+	}
+	tick(t, s)
+	if getBuild(t, s, b).Status != "DISPATCHED" || f.branchCalls != 0 {
+		t.Fatal("SHA dispatch depended on HEAD")
+	}
+	tick(t, s)
+	if getBuild(t, s, b).FailureCode != "" {
+		t.Fatal("workflow ref SHA confused with built SHA")
+	}
+}
+func TestBuildAttachOnlyDispatchTitle(t *testing.T) {
+	for _, mode := range []string{"push", "pull_request", "wrong-workflow", "wrong-title", "success", "running"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			b := queue(t, s, "")
+			run := forgejo.Run{ID: 99, Workflow: "build.yml", Title: "build " + b.SourceSHA + " external", Event: "workflow_dispatch", Status: "success", SHA: strings.Repeat("b", 40)}
+			switch mode {
+			case "push", "pull_request":
+				run.Event = mode
+			case "wrong-workflow":
+				run.Workflow = "checks.yml"
+			case "wrong-title":
+				run.Title = "build " + b.SourceSHA + " invalid request"
+			case "running":
+				run.Status = "running"
+			}
+			f.runs = []forgejo.Run{run}
+			tick(t, s)
+			v := getBuild(t, s, b)
+			if mode == "success" || mode == "running" {
+				if v.Reused != "run" || v.ProviderRunID != 99 || f.dispatches != 0 {
+					t.Fatal(v)
+				}
+			} else if v.Reused == "run" || f.dispatches != 1 {
+				t.Fatal(v)
+			}
+		})
+	}
+}
+func TestBuildUncertainRequiresExactRequestTitle(t *testing.T) {
+	s, _, f, _ := buildFixture(t)
+	f.uncertain = true
+	b := queue(t, s, "")
+	tick(t, s)
+	f.runs[0].Title = "build " + b.SourceSHA + " other"
+	tick(t, s)
+	if v := getBuild(t, s, b); v.ProviderRunID != 0 || v.Status != "RECONCILIATION_REQUIRED" {
+		t.Fatal(v)
+	}
+	f.runs[0].Title = runTitle(b)
+	tick(t, s)
+	if v := getBuild(t, s, b); v.ProviderRunID != 1 || f.dispatches != 1 {
+		t.Fatal(v)
+	}
+}
+func TestBuildOwnedRunsDoNotBlockPoolCapacity(t *testing.T) {
+	s, _, f, r := buildFixture(t)
+	c := buildConfig()
+	c.Pools[0].MaxInFlight = 2
 	if e := s.ConfigureBuilds(c, f, r); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", Target: "dev", RequestKey: "bound-workflow"}); e == nil || !strings.Contains(e.Error(), "REQUEST_KEY_CONFLICT") {
-		t.Fatal(e)
+	first := queue(t, s, "one")
+	f.head = strings.Repeat("b", 40)
+	second := queue(t, s, "two")
+	tick(t, s)
+	if f.dispatches != 2 || getBuild(t, s, first).Status != "DISPATCHED" || getBuild(t, s, second).Status != "DISPATCHED" {
+		t.Fatal("owned run blocked spare capacity")
+	}
+	f.head = strings.Repeat("c", 40)
+	third := queue(t, s, "three")
+	tick(t, s)
+	if f.dispatches != 2 || getBuild(t, s, third).Status != "QUEUED" {
+		t.Fatal("pool capacity exceeded")
 	}
 }

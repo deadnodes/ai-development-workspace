@@ -10,7 +10,7 @@ cancellation, runner occupancy APIs and production promotion are out of scope.
 Set `RCP_BUILDS_FILE` to a mounted JSON file at server startup. Empty disables the
 build dispatcher. Compose passes this variable to the app; mount the configuration
 separately (for example with a Compose override). Configuration is immutable until
-restart, rejects unknown fields and validates references, target branches, URL
+restart, rejects unknown fields and validates references, dispatch refs, URL
 origins, identifiers and tag templates. No API can enroll build authority.
 
 ```json
@@ -20,10 +20,9 @@ origins, identifiers and tag templates. No API can enroll build authority.
   "pools": [{"id":"build01","max_in_flight":1}],
   "profiles": [{
     "id":"pp-front","product_id":"deadnodes","connection_id":"forgejo-dev",
-    "repository":"deadnodes/pp-front","workflow":"dev.yml","default_branch":"main",
+    "repository":"deadnodes/pp-front","workflow":"build.yml","dispatch_ref":"main","default_branch":"main",
     "pool_id":"build01","registry_id":"dev-zot","image_repository":"deadnodes/pp-front",
-    "tag_template":"forgejo-{sha8}",
-    "targets":{"dev":{"branch":"main"},"image":{"allow_branches":true}}
+    "tag_candidates":["main-{sha8}","br-{sha8}"]
   }],
   "timeout_seconds":7200
 }
@@ -45,24 +44,28 @@ Use `list_build_profiles {"product_id":"deadnodes"}` to discover configured
 profiles, then:
 
 ```json
-{"product_id":"deadnodes","profile_id":"pp-front","target":"dev","request_key":"operator-request-001"}
+{"product_id":"deadnodes","profile_id":"pp-front","request_key":"operator-request-001"}
 ```
 
-Pass this to MCP `queue_build` or `POST /api/builds`. **dev deploys via the service
-repository's own workflow**, including its deploy-dev job; queueing it is an
-explicit request for that effect. For an image-only workflow run, use
-`target:"image",branch:"feature/example"`. The default branch and configured dev deployment branch
-are forbidden for image requests. Operators must select workflows whose other
-branches actually satisfy the image-only contract; RCP cannot inspect arbitrary
-workflow code to prove absence of side effects.
+Pass this to MCP `queue_build` or `POST /api/builds`. A Build produces an image
+only; it does not deploy or write Flux. Deployment is a separate future capability.
+Supply exactly one of `branch` or `sha`, or neither to use the profile default
+branch. Branch requests resolve HEAD once. A SHA must be lowercase 40-hex and is
+verified with `GET /repos/{o}/{r}/git/commits/{sha}`; any existing commit is allowed,
+including commits away from HEAD. Unknown commits are rejected before persistence.
 
-Optional `sha` must be full lowercase 40-hex and match observed branch HEAD or
-`SHA_NOT_HEAD` rejects without creating a Build. HEAD is checked again before
-dispatch. Forgejo workflow_dispatch accepts a ref, not a SHA: a branch can still
-move between that observation and Forgejo's dispatch. RCP verifies the actual run
-SHA and branch, preserves mismatches as `RECONCILIATION_REQUIRED`, and never reports
-success for a different source. Protect refs externally if dispatch-time ref
-stability is required.
+Every service uses `.forgejo/workflows/build.yml` with `workflow_dispatch` only;
+push/PR workflows run checks only. Dispatch sends:
+
+```json
+{"ref":"main","inputs":{"sha":"<40-hex>","request_id":"<RCP build id>"},"return_run_info":true}
+```
+
+`dispatch_ref` selects only the workflow version. The workflow builds exactly
+`inputs.sha`, independent of branch movement, and returns `{id,run_number,jobs}`.
+Its `run-name: build <sha> <request_id>` is exposed as ActionRun `title` (task
+listings use `display_title`). The request ID is the Build ID, at most 64 characters
+from `[A-Za-z0-9._-]`. RCP never parses logs, including human-only `RCP_RESULT` lines.
 
 A Build is its own async handle (not an Operation):
 
@@ -79,11 +82,11 @@ The authenticated principal supplies attribution. Profiles expose no credentials
 List pages default to 25/max100 with filter-bound live ID cursors, not snapshots.
 Cancellation accepts only QUEUED builds and does not cancel external runs.
 
-The idempotency identity is `(profile_id,source_sha,workflow,target)` within the
+The idempotency identity is `(profile_id,source_sha,workflow)` within the
 configured Product. Repeating it returns the existing non-failed Build without
 another queue audit. FAILED/CANCELLED attempts require an explicit fresh
 `request_key`; replay of an old key returns its historical handle. Request keys
-are Product-scoped, durable receipts bound to normalized branch/source/target/profile
+are Product-scoped, durable receipts bound to normalized branch/source/profile
 and workflow inputs. Rebinding a key rejects `REQUEST_KEY_CONFLICT`.
 
 ## Execution and recovery
@@ -91,20 +94,26 @@ and workflow inputs. Rebinding a key rejects `REQUEST_KEY_CONFLICT`.
 The context-cancellable server loop runs immediately and every 15 seconds, with
 single-flight processing. FIFO admission atomically counts DISPATCHED, RUNNING and
 RECONCILIATION_REQUIRED records per configured pool. Before dispatch it checks the
-workflow's runs: waiting/running work on another SHA makes the queued build wait;
-matching branch/SHA waiting/running/success work is attached with `reused:"run"`.
-Run listing filters by source SHA or waiting/running status, and is paginated
-with a bound of 1000 entries per filter observation; exceeding
-that bound defers the build rather than treating incomplete occupancy as empty.
+repository's `build.yml` runs. A `workflow_dispatch` run with title
+`build <sha> <request_id>` in waiting/running/success attaches with `reused:"run"`.
+Push/PR runs never attach. Waiting/running runs block dispatch unless owned by an
+active RCP Build already counted in the same pool. Per-pool capacity still applies.
+Listings use `workflow_id=build.yml`, without a head SHA filter (the workflow ref
+SHA is not the built SHA), and paginate up to 1000 entries. Incomplete observations
+defer work rather than treating occupancy as empty.
 
-A matching registry revision can finish immediately with `reused:"registry"`.
-For dev, this also requires a successful workflow run on the configured branch
-and SHA, since image presence alone does not prove the deploy job ran.
+Before listing runs or dispatching, RCP probes ordered `tag_candidates`. Missing
+tags continue to the next candidate; the first tag with matching revision finishes
+with `reused:"registry"`. An existing tag with a different revision fails
+`ARTIFACT_REVISION_MISMATCH`. Templates allow only `{sha8}` and `{sha}` and must
+include a SHA placeholder. The service chooses `main-<sha8>` when the SHA is in
+main's history, otherwise `br-<sha8>`, and labels it with the full revision. Existing
+tags with the same revision succeed without rebuilding; conflicting revisions fail
+without overwriting. The image is `192.168.32.242:5000/deadnodes/<image>:<tag>`.
 
 RCP stores dispatch intent as RECONCILIATION_REQUIRED before network I/O. A lost
 response or restart in that window never automatically dispatches again. It
-reconciles by workflow + SHA + workflow_dispatch event + branch, with creation
-at/after queued time. Until evidence appears, uncertainty retains the pool slot.
+reconciles by workflow + workflow_dispatch event + exact title `build <sha> <our Build id>`. Until evidence appears, uncertainty retains the pool slot.
 No automated reset or retry of uncertainty is provided. Operator investigation is
 required if Forgejo never accepted the original request. In-flight deadline expiry
 also requires reconciliation; terminal run evidence can still close that handle.
@@ -112,7 +121,7 @@ Restart resumes durable records. Changed operator authority fails closed rather
 than executing old queued intent under a different configuration.
 
 Waiting maps to DISPATCHED; running to RUNNING; failure/skipped/blocked to FAILED;
-cancelled to CANCELLED. Successful runs resolve the configured tag from the
+cancelled to CANCELLED. Successful runs probe the ordered candidate tags from the
 registry: missing artifacts fail ARTIFACT_MISSING, a different revision label
 fails ARTIFACT_REVISION_MISMATCH. Temporary registry read failures defer observation.
 Top-level manifest/index digest is hashed and checked against Docker-Content-Digest
@@ -126,5 +135,5 @@ All automated tests use fakes/httptest, never real Forgejo or zot. PostgreSQL te
 use isolated schemas under `TEST_DATABASE_URL`. Live acceptance is separate: on an
 explicitly configured installation queue pp-front through MCP, observe its run,
 compare returned SHA/digest/revision with zot and confirm duplicate queueing returns
-the same handle. Installing this source or running that deploying workflow requires
+the same handle. Installing this source or dispatching that workflow requires
 an explicit operator request; a local test result does not perform either action.

@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"maps"
 	"reflect"
+	"slices"
 
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
@@ -24,7 +24,8 @@ import (
 // ForgejoBuildProvider keeps provider execution replaceable without duplicating policy.
 type ForgejoBuildProvider interface {
 	BranchHead(context.Context, buildconfig.Connection, string, string) (string, error)
-	Dispatch(context.Context, buildconfig.Connection, string, string, string) (forgejo.Run, error)
+	CommitExists(context.Context, buildconfig.Connection, string, string) error
+	Dispatch(context.Context, buildconfig.Connection, string, string, string, string, string) (forgejo.Run, error)
 	GetRun(context.Context, buildconfig.Connection, string, int64) (forgejo.Run, error)
 	ListRuns(context.Context, buildconfig.Connection, string, string, forgejo.Filter) (forgejo.Page, error)
 }
@@ -82,46 +83,35 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 	if !ok || p.ProductID != in.ProductID {
 		return out, invalid("profile not configured for Product")
 	}
-	t, ok := p.Targets[in.Target]
-	if !ok {
-		return out, invalid("target not configured")
+	if in.Branch != "" && in.SHA != "" {
+		return out, invalid("branch and sha are mutually exclusive")
 	}
-	if in.Branch == "" {
-		in.Branch = t.Branch
+	if len(in.RequestKey) > 128 {
+		return out, invalid("invalid request_key")
+	}
+	head := in.SHA
+	var e error
+	if head != "" {
+		if !buildconfig.SHA.MatchString(head) {
+			return out, invalid("invalid sha")
+		}
+		if e = a.provider.CommitExists(ctx, a.config.Connection(p.ConnectionID), p.Repository, head); e != nil {
+			return out, invalid("commit observation failed")
+		}
+	} else {
 		if in.Branch == "" {
 			in.Branch = p.DefaultBranch
 		}
-	}
-	if !buildconfig.Branch(in.Branch) || len(in.RequestKey) > 128 {
-		return out, invalid("invalid branch or request_key")
-	}
-	branch := t.Branch
-	if branch == "" {
-		branch = p.DefaultBranch
-	}
-	if in.Branch != branch && !t.AllowBranches {
-		return out, invalid("branch denied by target")
-	}
-	if in.Target == "image" {
-		if in.Branch == p.DefaultBranch {
-			return out, invalid("image target requires a non-default branch")
+		if !buildconfig.Branch(in.Branch) {
+			return out, invalid("invalid branch")
 		}
-		if dev, ok := p.Targets["dev"]; ok && in.Branch == dev.Branch {
-			return out, invalid("image target must not dispatch the dev deployment branch")
+		head, e = a.provider.BranchHead(ctx, a.config.Connection(p.ConnectionID), p.Repository, in.Branch)
+		if e != nil {
+			return out, errors.New("build branch observation failed")
 		}
-	}
-	if in.SHA != "" && !buildconfig.SHA.MatchString(in.SHA) {
-		return out, invalid("invalid sha")
-	}
-	head, e := a.provider.BranchHead(ctx, a.config.Connection(p.ConnectionID), p.Repository, in.Branch)
-	if e != nil {
-		return out, errors.New("build branch observation failed")
-	}
-	if !buildconfig.SHA.MatchString(head) {
-		return out, invalid("invalid provider HEAD")
-	}
-	if in.SHA != "" && in.SHA != head {
-		return out, invalid("SHA_NOT_HEAD")
+		if !buildconfig.SHA.MatchString(head) {
+			return out, invalid("invalid provider HEAD")
+		}
 	}
 	e = s.store.Update(ctx, func(st *domain.State) error {
 		if !productExists(st, in.ProductID) {
@@ -129,7 +119,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 		for _, receipt := range st.BuildReceipts {
 			if in.RequestKey != "" && receipt.ProductID == in.ProductID && receipt.RequestKey == in.RequestKey {
-				if receipt.Workflow != p.Workflow || receipt.ProfileID != p.ID || receipt.SourceSHA != head || receipt.Target != in.Target || receipt.Branch != in.Branch {
+				if receipt.Workflow != p.Workflow || receipt.ProfileID != p.ID || receipt.SourceSHA != head || receipt.Branch != in.Branch {
 					return invalid("REQUEST_KEY_CONFLICT")
 				}
 				for _, b := range st.Builds {
@@ -143,14 +133,14 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 		bind := func(b domain.Build) {
 			if in.RequestKey != "" {
-				st.BuildReceipts = append(st.BuildReceipts, domain.BuildReceipt{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: time.Now().UTC()}, RequestKey: in.RequestKey, BuildID: b.ID, Workflow: p.Workflow, ProfileID: p.ID, Target: in.Target, Branch: in.Branch, SourceSHA: head})
+				st.BuildReceipts = append(st.BuildReceipts, domain.BuildReceipt{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: time.Now().UTC()}, RequestKey: in.RequestKey, BuildID: b.ID, Workflow: p.Workflow, ProfileID: p.ID, Branch: in.Branch, SourceSHA: head})
 			}
 		}
 
 		var previous *domain.Build
 		for i := range st.Builds {
 			b := &st.Builds[i]
-			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow && b.Target == in.Target {
+			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow {
 				if b.Status != "FAILED" && b.Status != "CANCELLED" {
 					out = *b
 					bind(out)
@@ -164,7 +154,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 		now := time.Now().UTC()
 		actor := attributedActor(ctx, "agent")
-		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Target: in.Target, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
+		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
 		bind(out)
 		st.Builds = append(st.Builds, out)
 		buildEvent(st, out, "queue_build")
@@ -232,7 +222,7 @@ func (s *Service) ListBuildProfiles(ctx context.Context, productID string) ([]bu
 	if s.builds != nil {
 		for _, p := range s.builds.config.Profiles {
 			if p.ProductID == productID {
-				p.Targets = maps.Clone(p.Targets)
+				p.TagCandidates = slices.Clone(p.TagCandidates)
 				out = append(out, p)
 			}
 		}
@@ -318,17 +308,19 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 		return missing("build", old.ID)
 	})
 }
-func runBranch(r forgejo.Run) string { return strings.TrimPrefix(r.Branch, "refs/heads/") }
+func runTitle(b domain.Build) string { return "build " + b.SourceSHA + " " + b.ID }
 func matching(r forgejo.Run, b domain.Build) bool {
-	return r.ID > 0 && r.SHA == b.SourceSHA && runBranch(r) == b.Branch
+	prefix := "build " + b.SourceSHA + " "
+	requestID := strings.TrimPrefix(r.Title, prefix)
+	return r.ID > 0 && r.Workflow == b.Workflow && r.Event == "workflow_dispatch" && strings.HasPrefix(r.Title, prefix) && buildconfig.RequestID.MatchString(requestID)
 }
 func usable(r forgejo.Run) bool {
 	return r.Status == "waiting" || r.Status == "running" || r.Status == "success"
 }
-func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, sha, status string) ([]forgejo.Run, error) {
+func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, status string) ([]forgejo.Run, error) {
 	out := []forgejo.Run{}
 	for page := 1; page <= 10; page++ {
-		v, e := a.provider.ListRuns(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, forgejo.Filter{SHA: sha, Status: status, Page: page, Limit: 100})
+		v, e := a.provider.ListRuns(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, forgejo.Filter{Status: status, Page: page, Limit: 100})
 		if e != nil {
 			return nil, e
 		}
@@ -339,11 +331,31 @@ func (a *buildRuntime) runs(ctx context.Context, p buildconfig.Profile, sha, sta
 	}
 	return nil, errors.New("build run listing exceeds bound")
 }
-func artifactBuild(b domain.Build, p buildconfig.Profile, c buildconfig.Registry, v buildregistry.Artifact) domain.Build {
+
+var errRevision = errors.New("artifact revision mismatch")
+
+func (a *buildRuntime) artifact(ctx context.Context, p buildconfig.Profile, sha string) (buildregistry.Artifact, string, error) {
+	for _, template := range p.TagCandidates {
+		tag := buildconfig.ExpandTag(template, sha)
+		v, e := a.registry.Resolve(ctx, a.config.Registry(p.RegistryID), p.ImageRepository, tag)
+		if errors.Is(e, buildregistry.ErrMissing) {
+			continue
+		}
+		if e != nil {
+			return v, tag, e
+		}
+		if v.Revision != sha {
+			return v, tag, errRevision
+		}
+		return v, tag, nil
+	}
+	return buildregistry.Artifact{}, "", buildregistry.ErrMissing
+}
+func artifactBuild(b domain.Build, p buildconfig.Profile, c buildconfig.Registry, v buildregistry.Artifact, tag string) domain.Build {
 	now := time.Now().UTC()
 	b.FinishedAt = &now
 	b.Digest = v.Digest
-	b.ImageRef = strings.TrimRight(c.Origin, "/") + "/" + p.ImageRepository + ":" + p.Tag(b.SourceSHA) + "@" + v.Digest
+	b.ImageRef = strings.TrimRight(c.Origin, "/") + "/" + p.ImageRepository + ":" + tag + "@" + v.Digest
 	b.Status = "SUCCEEDED"
 	b.FailureCode = ""
 	b.FailureMessage = ""
@@ -378,17 +390,17 @@ func (s *Service) observeBuild(ctx context.Context, b domain.Build, p buildconfi
 	case "running":
 		next.Status = "RUNNING"
 	case "success":
-		v, e := s.builds.registry.Resolve(ctx, s.builds.config.Registry(p.RegistryID), p.ImageRepository, p.Tag(b.SourceSHA))
-		if e != nil {
-			if !errors.Is(e, buildregistry.ErrMissing) {
-				return nil
-			}
+		v, tag, e := s.builds.artifact(ctx, p, b.SourceSHA)
+		if errors.Is(e, buildregistry.ErrMissing) {
 			next = failedBuild(next, "ARTIFACT_MISSING")
-		} else if v.Revision != b.SourceSHA {
+		} else if errors.Is(e, errRevision) {
 			next = failedBuild(next, "ARTIFACT_REVISION_MISMATCH")
+		} else if e != nil {
+			return nil
 		} else {
-			next = artifactBuild(next, p, s.builds.config.Registry(p.RegistryID), v)
+			next = artifactBuild(next, p, s.builds.config.Registry(p.RegistryID), v, tag)
 		}
+
 	case "cancelled":
 		now := time.Now().UTC()
 		next.Status = "CANCELLED"
@@ -474,12 +486,12 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				}
 				continue
 			}
-			runs, e := a.runs(ctx, p, b.SourceSHA, "")
+			runs, e := a.runs(ctx, p, "")
 			if e != nil {
 				continue
 			}
 			for _, r := range runs {
-				if matching(r, b) && r.Event == "workflow_dispatch" && !r.Created.Before(b.QueuedAt) {
+				if matching(r, b) && r.Title == runTitle(b) {
 					n := b
 					n.ProviderRunID = r.ID
 					n.RunURL = r.URL
@@ -504,46 +516,56 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		blockedPools[b.PoolID] = true
-		// Evaluate existing runs before registry reuse: dev success must prove workflow completion.
-		runs, e := a.runs(ctx, p, b.SourceSHA, "")
-		if e != nil {
-			continue
-		}
-		var match *forgejo.Run
-		busy := false
-		devSuccess := false
-		for i := range runs {
-			r := &runs[i]
-			if matching(*r, b) && usable(*r) {
-				if match == nil || r.ID > match.ID {
-					match = r
-				}
-				if r.Status == "success" {
-					devSuccess = true
-				}
-			}
-			if r.Status == "waiting" || r.Status == "running" {
-				busy = true
-			}
-		}
-		v, re := a.registry.Resolve(ctx, a.config.Registry(p.RegistryID), p.ImageRepository, p.Tag(b.SourceSHA))
-		if re == nil && v.Revision == b.SourceSHA && (b.Target != "dev" || devSuccess) {
-			n := artifactBuild(b, p, a.config.Registry(p.RegistryID), v)
+		v, tag, re := a.artifact(ctx, p, b.SourceSHA)
+		if re == nil {
+			n := artifactBuild(b, p, a.config.Registry(p.RegistryID), v, tag)
 			n.Reused = "registry"
-			if match != nil {
-				n.ProviderRunID = match.ID
-				n.RunURL = match.URL
-				n.RunStatus = match.Status
-			}
 			if e = s.advanceBuild(ctx, b, n, false); e != nil {
 				return e
 			}
 			delete(blockedPools, b.PoolID)
 			continue
 		}
-		if re != nil && !errors.Is(re, buildregistry.ErrMissing) {
+		if errors.Is(re, errRevision) {
+			if e = s.advanceBuild(ctx, b, failedBuild(b, "ARTIFACT_REVISION_MISMATCH"), false); e != nil {
+				return e
+			}
+			delete(blockedPools, b.PoolID)
 			continue
 		}
+		if !errors.Is(re, buildregistry.ErrMissing) {
+			continue
+		}
+		runs, e := a.runs(ctx, p, "")
+		if e != nil {
+			continue
+		}
+		fresh, err := s.store.Read(ctx)
+		if err != nil {
+			return err
+		}
+		var match *forgejo.Run
+		busy := false
+		for i := range runs {
+			r := &runs[i]
+			if matching(*r, b) && usable(*r) && (match == nil || r.ID > match.ID) {
+				match = r
+			}
+			if r.Workflow == p.Workflow && (r.Status == "waiting" || r.Status == "running") {
+				owned := false
+				for _, owner := range fresh.Builds {
+					ownerProfile, configured := a.config.Profile(owner.ProfileID)
+					if configured && ownerProfile.ConnectionID == p.ConnectionID && owner.Repository == b.Repository && owner.PoolID == b.PoolID && owner.Workflow == b.Workflow && owner.ProviderRunID == r.ID && buildActive(owner) {
+						owned = true
+						break
+					}
+				}
+				if !owned {
+					busy = true
+				}
+			}
+		}
+
 		if match != nil {
 			n := b
 			now := time.Now().UTC()
@@ -559,29 +581,10 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			delete(blockedPools, b.PoolID)
 			continue
 		}
-		if !busy {
-			for _, status := range []string{"waiting", "running"} {
-				occupied, err := a.runs(ctx, p, "", status)
-				if err != nil || len(occupied) > 0 {
-					busy = true
-					break
-				}
-			}
-		}
 		if busy {
 			continue
 		}
-		head, e := a.provider.BranchHead(ctx, a.config.Connection(p.ConnectionID), p.Repository, b.Branch)
-		if e != nil {
-			continue
-		}
-		if head != b.SourceSHA {
-			if e = s.advanceBuild(ctx, b, failedBuild(b, "SHA_NOT_HEAD"), false); e != nil {
-				return e
-			}
-			delete(blockedPools, b.PoolID)
-			continue
-		}
+
 		n := b
 		now := time.Now().UTC()
 		n.Status = "RECONCILIATION_REQUIRED"
@@ -596,7 +599,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		r, e := a.provider.Dispatch(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, b.Branch)
+		r, e := a.provider.Dispatch(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, p.DispatchRef, b.SourceSHA, b.ID)
 		next := current
 		if e != nil {
 			var uncertain *forgejo.Uncertain

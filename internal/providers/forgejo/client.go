@@ -1,4 +1,4 @@
-// Package forgejo implements only branch observation and Actions builds.
+// Package forgejo implements bounded source observation and Actions builds.
 package forgejo
 
 import (
@@ -19,6 +19,7 @@ import (
 )
 
 type Run struct {
+	Title    string    `json:"title"`
 	ID       int64     `json:"id"`
 	Status   string    `json:"status"`
 	SHA      string    `json:"commit_sha"`
@@ -155,13 +156,27 @@ func (c *Client) BranchHead(ctx context.Context, cn buildconfig.Connection, repo
 	}
 	return v.Commit.ID, e
 }
-func (c *Client) Dispatch(ctx context.Context, cn buildconfig.Connection, repo, workflow, branch string) (Run, error) {
-	var r Run
-	e := c.request(ctx, cn, "POST", repoPath(repo)+"/actions/workflows/"+url.PathEscape(workflow)+"/dispatches", map[string]any{"ref": branch, "inputs": map[string]string{}, "return_run_info": true}, &r)
-	if e == nil && (r.ID <= 0 || !validRun(r)) {
+func (c *Client) CommitExists(ctx context.Context, cn buildconfig.Connection, repo, sha string) error {
+	var v struct {
+		SHA string `json:"sha"`
+	}
+	if e := c.request(ctx, cn, "GET", repoPath(repo)+"/git/commits/"+url.PathEscape(sha), nil, &v); e != nil {
+		return e
+	}
+	if v.SHA != sha {
+		return errors.New("invalid Forgejo commit")
+	}
+	return nil
+}
+func (c *Client) Dispatch(ctx context.Context, cn buildconfig.Connection, repo, workflow, ref, sha, requestID string) (Run, error) {
+	var info struct {
+		ID int64 `json:"id"`
+	}
+	e := c.request(ctx, cn, "POST", repoPath(repo)+"/actions/workflows/"+url.PathEscape(workflow)+"/dispatches", map[string]any{"ref": ref, "inputs": map[string]string{"sha": sha, "request_id": requestID}, "return_run_info": true}, &info)
+	if e == nil && info.ID <= 0 {
 		e = &Uncertain{}
 	}
-	return r, e
+	return Run{ID: info.ID}, e
 }
 func (c *Client) GetRun(ctx context.Context, cn buildconfig.Connection, repo string, id int64) (Run, error) {
 	var r Run
@@ -195,5 +210,5 @@ func (c *Client) ListRuns(ctx context.Context, cn buildconfig.Connection, repo, 
 }
 
 func validRun(r Run) bool {
-	return len(r.URL) <= 2048 && len(r.Branch) <= 270 && len(r.Status) <= 64 && len(r.Event) <= 64 && len(r.Workflow) <= 255 && (r.SHA == "" || buildconfig.SHA.MatchString(r.SHA))
+	return len(r.Title) <= 128 && len(r.URL) <= 2048 && len(r.Branch) <= 270 && len(r.Status) <= 64 && len(r.Event) <= 64 && len(r.Workflow) <= 255 && (r.SHA == "" || buildconfig.SHA.MatchString(r.SHA))
 }

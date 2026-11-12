@@ -107,7 +107,7 @@ func registerBuildRoutes(mux *http.ServeMux, service Service) {
 }
 func registerBuildTools(server *mcp.Server, service Service) {
 	unavailable := errors.New("build service unavailable")
-	mcp.AddTool(server, buildTool("queue_build", "Queue an idempotent configured Forgejo build at branch HEAD. dev deploys via the service repository's own workflow; image requires a branch that does not deploy dev. Returns a durable Build handle; inspect get_build, never re-dispatch an uncertain build."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.QueueBuildRequest) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, buildTool("queue_build", "Queue an idempotent image-only Forgejo build from branch HEAD or a verified commit SHA (mutually exclusive; neither uses the default branch). No deployment. Returns a durable Build handle; inspect get_build, never re-dispatch an uncertain build."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.QueueBuildRequest) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(buildService)
 		if !ok {
 			return nil, nil, unavailable
@@ -139,7 +139,7 @@ func registerBuildTools(server *mcp.Server, service Service) {
 		v, e := s.ListBuilds(ctx, in)
 		return nil, v, e
 	})
-	mcp.AddTool(server, buildTool("list_build_profiles", "List operator-configured Build profiles for a Product, without credentials. dev deploys via the service repository's own workflow."), func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, buildTool("list_build_profiles", "List operator-configured Build profiles for a Product, without credentials. Image builds only; no deployment."), func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		ProductID string `json:"product_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(buildService)
@@ -162,11 +162,10 @@ func buildTool(name, description string) *mcp.Tool {
 	switch name {
 	case "queue_build":
 		fields["profile_id"] = str(128)
-		fields["target"] = map[string]any{"type": "string", "enum": []string{"dev", "image"}}
 		fields["branch"] = str(255)
 		fields["sha"] = map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"}
 		fields["request_key"] = str(128)
-		required = append(required, "profile_id", "target")
+		required = append(required, "profile_id")
 	case "get_build", "cancel_build":
 		fields["build_id"] = str(128)
 		required = append(required, "build_id")
@@ -176,5 +175,9 @@ func buildTool(name, description string) *mcp.Tool {
 		fields["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
 		fields["cursor"] = str(2048)
 	}
-	return &mcp.Tool{Name: name, Description: description, InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": fields}}
+	schema := map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": fields}
+	if name == "queue_build" {
+		schema["not"] = map[string]any{"required": []string{"branch", "sha"}}
+	}
+	return &mcp.Tool{Name: name, Description: description, InputSchema: schema}
 }

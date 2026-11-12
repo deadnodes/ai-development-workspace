@@ -28,22 +28,18 @@ type Pool struct {
 	ID          string `json:"id"`
 	MaxInFlight int    `json:"max_in_flight"`
 }
-type Target struct {
-	Branch        string `json:"branch,omitempty"`
-	AllowBranches bool   `json:"allow_branches,omitempty"`
-}
 type Profile struct {
-	ID              string            `json:"id"`
-	ProductID       string            `json:"product_id"`
-	ConnectionID    string            `json:"connection_id"`
-	Repository      string            `json:"repository"`
-	Workflow        string            `json:"workflow"`
-	DefaultBranch   string            `json:"default_branch"`
-	PoolID          string            `json:"pool_id"`
-	RegistryID      string            `json:"registry_id"`
-	ImageRepository string            `json:"image_repository"`
-	TagTemplate     string            `json:"tag_template"`
-	Targets         map[string]Target `json:"targets"`
+	ID              string   `json:"id"`
+	ProductID       string   `json:"product_id"`
+	ConnectionID    string   `json:"connection_id"`
+	Repository      string   `json:"repository"`
+	Workflow        string   `json:"workflow"`
+	DefaultBranch   string   `json:"default_branch"`
+	PoolID          string   `json:"pool_id"`
+	RegistryID      string   `json:"registry_id"`
+	ImageRepository string   `json:"image_repository"`
+	DispatchRef     string   `json:"dispatch_ref"`
+	TagCandidates   []string `json:"tag_candidates"`
 }
 type Config struct {
 	Connections    []Connection `json:"connections"`
@@ -55,6 +51,7 @@ type Config struct {
 
 var ident = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var repo = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_./-]*$`)
+var RequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 var SHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func Branch(s string) bool {
@@ -146,21 +143,12 @@ func (c *Config) Validate() error {
 	for _, v := range c.Profiles {
 		ids = append(ids, v.ID)
 		cn, ok := con[v.ConnectionID]
-		if !ok || !ident.MatchString(v.ProductID) || !repo.MatchString(v.Repository) || strings.Split(v.Repository, "/")[0] != cn.Owner || strings.Count(v.Repository, "/") != 1 || !ident.MatchString(v.Workflow) || !Branch(v.DefaultBranch) || !pools[v.PoolID] || !regs[v.RegistryID] || !repo.MatchString(v.ImageRepository) || strings.Contains(v.ImageRepository, "..") || len(v.Targets) == 0 {
+		if !ok || !ident.MatchString(v.ProductID) || !repo.MatchString(v.Repository) || strings.Split(v.Repository, "/")[0] != cn.Owner || strings.Count(v.Repository, "/") != 1 || v.Workflow != "build.yml" || !Branch(v.DispatchRef) || !Branch(v.DefaultBranch) || !pools[v.PoolID] || !regs[v.RegistryID] || !repo.MatchString(v.ImageRepository) || strings.Contains(v.ImageRepository, "..") || len(v.TagCandidates) == 0 || len(v.TagCandidates) > 16 {
 			return bad
 		}
-		tag := v.Tag(strings.Repeat("a", 40))
-		if !regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`).MatchString(tag) || (!strings.Contains(v.TagTemplate, "{sha8}") && !strings.Contains(v.TagTemplate, "{sha}")) {
-			return bad
-		}
-		for k, t := range v.Targets {
-			if k != "dev" && k != "image" {
-				return bad
-			}
-			if t.Branch != "" && !Branch(t.Branch) {
-				return bad
-			}
-			if k == "dev" && (t.Branch == "" || t.AllowBranches) {
+		for _, template := range v.TagCandidates {
+			tag := ExpandTag(template, strings.Repeat("a", 40))
+			if !regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`).MatchString(tag) || (!strings.Contains(template, "{sha8}") && !strings.Contains(template, "{sha}")) {
 				return bad
 			}
 		}
@@ -176,8 +164,8 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
-func (p Profile) Tag(sha string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(p.TagTemplate, "{sha8}", sha[:8]), "{sha}", sha)
+func ExpandTag(template, sha string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(template, "{sha8}", sha[:8]), "{sha}", sha)
 }
 func (c *Config) Profile(id string) (Profile, bool) {
 	if c != nil {
