@@ -119,7 +119,11 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 	if err := authorize(ctx, permission, c.ProductID); err != nil {
 		return err
 	}
-	rows, err := stateRows(st)
+	projected, err := authorizationProjection(st, c)
+	if err != nil {
+		return err
+	}
+	rows, err := stateRows(projected)
 	if err != nil {
 		return err
 	}

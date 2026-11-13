@@ -133,7 +133,7 @@ func newNativeFixture(t *testing.T, kind string) *nativeFixture {
 	r.Hash = workerconfig.PublicationHash(r)
 	t.Setenv("NATIVE_BUILD_TOKEN", nativeBuildToken)
 	t.Setenv("NATIVE_PUBLISH_TOKEN", nativeToken)
-	cfg := workerconfig.Config{Revision: "cfg1", LeaseSeconds: 5, Recipes: []workerconfig.Recipe{buildRecipe}, Publications: []workerconfig.PublicationRecipe{r}, Credentials: []workerconfig.Credential{{ID: "build", Principal: "worker/build", TokenEnv: "NATIVE_BUILD_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "NATIVE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}
+	cfg := workerconfig.Config{Revision: "cfg1", LeaseSeconds: nativeFixtureLeaseSeconds(), Recipes: []workerconfig.Recipe{buildRecipe}, Publications: []workerconfig.PublicationRecipe{r}, Credentials: []workerconfig.Credential{{ID: "build", Principal: "worker/build", TokenEnv: "NATIVE_BUILD_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)}, {ID: "publish", Principal: "worker/publish", TokenEnv: "NATIVE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)}}}
 	a, err := workerconfig.New(cfg, "native-control-fixture", os.Getenv)
 	if err != nil {
 		t.Fatal(err)
@@ -590,4 +590,13 @@ func TestNativeQuarantineRejectsProductDeletionAcrossReopenAndBackup(t *testing.
 			}
 		})
 	}
+}
+
+// Long multi-component audit fixtures can spend more than five seconds in
+// race-instrumented bbolt serialization. Expiry/fence tests keep the short lease.
+func nativeFixtureLeaseSeconds() int {
+	if os.Getenv("RCP_TEST_LONG_NATIVE_LEASE") == "1" {
+		return 30
+	}
+	return 5
 }

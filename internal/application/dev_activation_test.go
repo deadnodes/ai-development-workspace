@@ -523,7 +523,7 @@ func devActivationMultiFixture(t *testing.T, kind string, setup ...func(*nativeF
 	second.ComponentID = "component-b"
 	second.Repository += "-b"
 	second.Hash = workerconfig.PublicationHash(second)
-	cfg := workerconfig.Config{Revision: "cfg1", LeaseSeconds: 5, Recipes: []workerconfig.Recipe{b}, Publications: []workerconfig.PublicationRecipe{f.recipe, second}, Credentials: []workerconfig.Credential{
+	cfg := workerconfig.Config{Revision: "cfg1", LeaseSeconds: nativeFixtureLeaseSeconds(), Recipes: []workerconfig.Recipe{b}, Publications: []workerconfig.PublicationRecipe{f.recipe, second}, Credentials: []workerconfig.Credential{
 		{ID: "build", Principal: "worker/build", TokenEnv: "NATIVE_BUILD_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"local_oci_build"}, ExpiresAt: time.Now().Add(time.Hour)},
 		{ID: "publish", Principal: "worker/publish", TokenEnv: "NATIVE_PUBLISH_TOKEN", ProductIDs: []string{"p"}, RepositoryIDs: []string{"source"}, Capabilities: []string{"registry_publish"}, ExpiresAt: time.Now().Add(time.Hour)},
 	}}

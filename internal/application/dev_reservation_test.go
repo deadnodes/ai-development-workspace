@@ -288,7 +288,12 @@ func TestDevReservationOverflowRestoreAndPortableExport(t *testing.T) {
 				if string(before) != string(b) {
 					t.Fatal("overflow mutated state")
 				}
-				if err := f.store.Update(ctx, func(st *domain.State) error { *st = original; return nil }); err != nil {
+				if err := f.store.Update(ctx, func(st *domain.State) error {
+					events := st.Events
+					*st = original
+					st.Events = events
+					return nil
+				}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -564,7 +569,12 @@ func TestDevReservationAdmissionAuthorityNegatives(t *testing.T) {
 					if !reflect.DeepEqual(before, after) {
 						t.Fatal("negative command mutated state")
 					}
-					if err := f.store.Update(ctx, func(st *domain.State) error { *st = original; return nil }); err != nil {
+					if err := f.store.Update(ctx, func(st *domain.State) error {
+						events := st.Events
+						*st = original
+						st.Events = events
+						return nil
+					}); err != nil {
 						t.Fatal(err)
 					}
 				})

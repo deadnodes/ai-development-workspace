@@ -458,7 +458,14 @@ func TestDevRuntimeAdmissionCoverageAndImmutableGuards(t *testing.T) {
 			}
 			copy := cloneRuntimeState(state)
 			operationByID(&copy, op.ID).DevRuntime.Generation = math.MaxUint64
-			_ = f.store.Update(ctx, func(st *domain.State) error { *st = copy; return nil })
+			if err := f.store.Update(ctx, func(st *domain.State) error {
+				events := st.Events
+				*st = copy
+				st.Events = events
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
 			next := runtimeVerifyCommand(activation, "runtime-exhausted-next-0002")
 			if _, e = f.s.Execute(ctx, next); e == nil {
 				t.Fatal("generation exhaustion accepted")

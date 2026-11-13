@@ -349,6 +349,9 @@ func ValidateRegistryWorkerReport(j WorkerJob, a WorkerAttempt, r WorkerReport, 
 	return nil
 }
 func ValidateRegistryInventories(st State) error {
+	if len(st.WorkerJobs) == 0 && len(st.RegistryInventories) == 0 {
+		return nil
+	}
 	fail := func() error { return fmt.Errorf("invalid registry inventory references or immutable receipt") }
 	jobs := map[string]WorkerJob{}
 	attempts := map[string]WorkerAttempt{}
