@@ -28,6 +28,7 @@ type Deployment struct {
 	PRURL             string            `json:"pr_url,omitempty"`
 	HeadSHA           string            `json:"head_sha,omitempty"`
 	BaseSHA           string            `json:"base_sha,omitempty"`
+	ProposalBaseSHA   string            `json:"proposal_base_sha,omitempty"`
 	MergeCommitSHA    string            `json:"merge_commit_sha,omitempty"`
 	AlreadyApplied    bool              `json:"already_applied,omitempty"`
 	RetryCount        int               `json:"retry_count"`

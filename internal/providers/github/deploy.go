@@ -19,8 +19,8 @@ type DeployFile struct {
 	Tags []DeployTag
 }
 type DeployPlan struct {
-	ID, Branch, Body, ExpectedHead string
-	Files                          []DeployFile
+	ID, Branch, Body, ExpectedHead, ProposalBaseSHA string
+	Files                                           []DeployFile
 }
 type DeployPR struct {
 	Number    int    `json:"number"`
@@ -267,28 +267,18 @@ func (p *Provider) VerifyDeployment(ctx context.Context, g buildconfig.GitOps, d
 	if (!pr.Merged && pr.State != "open") || pr.Head.Ref != d.Branch || pr.Head.SHA != d.ExpectedHead || pr.Base.Ref != "main" || pr.Head.Repo.FullName != g.Repository || pr.Base.Repo.FullName != g.Repository {
 		return ErrConflict
 	}
-	if !pr.Merged && pr.Mergeable == nil {
-		return errors.New("mergeability pending")
-	}
-	if !pr.Merged && !*pr.Mergeable {
-		return &APIError{Status: 409, Operation: "verify merge"}
-	}
-	c, e := deployConnection(g)
-	if e != nil {
-		return e
-	}
-	base := pr.Base.SHA
-	if !pr.Merged {
-		base, e = p.deployHead(ctx, c, g.Repository, "main")
-		if e != nil {
-			return e
-		}
+	// GitHub's PR base follows main. Scope belongs to the immutable base used
+	// to render our proposal, even when unrelated main commits arrive later.
+	base := d.ProposalBaseSHA
+	if base == "" {
+		return &APIError{Status: 409, Operation: "proposal base missing"}
 	}
 	if !fullSHA.MatchString(base) || !fullSHA.MatchString(pr.Head.SHA) {
 		return ErrConflict
 	}
-	if pr.Base.SHA != base {
-		return &APIError{Status: 409, Operation: "base moved"}
+	c, e := deployConnection(g)
+	if e != nil {
+		return e
 	}
 	r, e := p.batchReader(ctx, c)
 	if e != nil {

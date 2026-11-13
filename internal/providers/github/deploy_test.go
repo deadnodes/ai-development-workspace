@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,8 +32,10 @@ func TestDeployProviderOffline(t *testing.T) {
 				t.Fatal(e)
 			}
 			base, head, tree, newTree := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)
+			mainHead := base
 			branch := "rcp/deploy/test"
 			branchExists := false
+			extraEdit := false
 			writes, merges := 0, 0
 			body := "build: build-1; sha: abc; digest sha256:abc; CI evidence success"
 			pr := DeployPR{Number: 1, URL: "https://github.example/pull/1", State: "open"}
@@ -56,7 +59,7 @@ func TestDeployProviderOffline(t *testing.T) {
 				}
 				switch {
 				case r.Method == "GET" && strings.HasPrefix(path, "/repos/o/flux/git/ref/heads/"):
-					sha := base
+					sha := mainHead
 					if strings.HasSuffix(path, branch) {
 						if !branchExists {
 							status = 404
@@ -84,7 +87,11 @@ func TestDeployProviderOffline(t *testing.T) {
 						treeSHA = newTree
 						blob = gitOpsBlobSHA([]byte(after))
 					}
-					result = map[string]any{"sha": treeSHA, "truncated": false, "tree": []map[string]string{{"path": "app.yaml", "type": "blob", "mode": "100644", "sha": blob}, {"path": "untouched.yaml", "type": "blob", "mode": "100644", "sha": strings.Repeat("e", 40)}}}
+					untouched := strings.Repeat("e", 40)
+					if extraEdit && treeSHA == newTree {
+						untouched = strings.Repeat("8", 40)
+					}
+					result = map[string]any{"sha": treeSHA, "truncated": false, "tree": []map[string]string{{"path": "app.yaml", "type": "blob", "mode": "100644", "sha": blob}, {"path": "untouched.yaml", "type": "blob", "mode": "100644", "sha": untouched}}}
 				case r.Method == "POST" && strings.HasSuffix(path, "/git/trees"):
 					var in struct {
 						Tree []struct{ Path, Content string }
@@ -143,6 +150,10 @@ func TestDeployProviderOffline(t *testing.T) {
 				return
 			}
 			plan.ExpectedHead = proposal.HeadSHA
+			plan.ProposalBaseSHA = proposal.BaseSHA
+			// Main advances independently; it must never be used as our diff base.
+			mainHead = strings.Repeat("9", 40)
+			pr.Base.SHA = mainHead
 			if e = p.VerifyDeployment(ctx, g, plan, pr); e != nil {
 				t.Fatal(e)
 			}
@@ -153,8 +164,13 @@ func TestDeployProviderOffline(t *testing.T) {
 			if e != nil || found.Head.SHA != head {
 				t.Fatal(found, e)
 			}
+			extraEdit = true
+			if e = p.VerifyDeployment(ctx, g, plan, pr); !errors.Is(e, ErrConflict) {
+				t.Fatalf("extra file edit accepted: %v", e)
+			}
+			extraEdit = false
 			pr.Head.SHA = base
-			if e = p.VerifyDeployment(ctx, g, plan, pr); e == nil {
+			if e = p.VerifyDeployment(ctx, g, plan, pr); !errors.Is(e, ErrConflict) {
 				t.Fatal("changed PR head accepted")
 			}
 		})

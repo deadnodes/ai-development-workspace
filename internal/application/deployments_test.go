@@ -30,6 +30,8 @@ type deploymentFake struct {
 	pr                               github.DeployPR
 	already                          bool
 	plan                             github.DeployPlan
+	advanceBase                      bool
+	verifyPlans                      []github.DeployPlan
 }
 
 func (f *deploymentFake) CommitStatus(context.Context, buildconfig.Connection, string, string) (forgejo.CommitStatus, error) {
@@ -48,7 +50,7 @@ func (f *deploymentFake) ProposeDeployment(_ context.Context, g buildconfig.GitO
 	f.pr.Head.Ref = d.Branch
 	f.pr.Head.Repo.FullName = g.Repository
 	f.pr.Base.Ref = "main"
-	f.pr.Base.SHA = strings.Repeat("c", 40)
+	f.pr.Base.SHA = strings.Repeat(fmt.Sprint(f.proposals), 40)
 	f.pr.Base.Repo.FullName = g.Repository
 	f.pr.State = "open"
 	return github.DeployProposal{PR: f.pr, BaseSHA: f.pr.Base.SHA, HeadSHA: f.pr.Head.SHA, AlreadyApplied: f.already}, f.proposalErr
@@ -57,9 +59,19 @@ func (f *deploymentFake) FindDeployment(context.Context, buildconfig.GitOps, str
 	return f.pr, nil
 }
 func (f *deploymentFake) ReadDeployment(context.Context, buildconfig.GitOps, int) (github.DeployPR, error) {
+	if f.advanceBase {
+		f.pr.Base.SHA = strings.Repeat("9", 40)
+	}
 	return f.pr, nil
 }
-func (f *deploymentFake) VerifyDeployment(context.Context, buildconfig.GitOps, github.DeployPlan, github.DeployPR) error {
+func (f *deploymentFake) VerifyDeployment(_ context.Context, _ buildconfig.GitOps, plan github.DeployPlan, pr github.DeployPR) error {
+	f.verifyPlans = append(f.verifyPlans, plan)
+	if plan.ExpectedHead != pr.Head.SHA {
+		return github.ErrConflict
+	}
+	if plan.ProposalBaseSHA == "" {
+		return &github.APIError{Status: 409}
+	}
 	return f.verifyErr
 }
 func (f *deploymentFake) MergeDeployment(_ context.Context, _ buildconfig.GitOps, _ int, sha string) (string, error) {
@@ -184,11 +196,15 @@ func TestDeployAlreadyApplied(t *testing.T) {
 func TestDeployConflictRetry(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		s, m, f, in := deploymentFixture(t)
+		f.advanceBase = true
 		f.mergeErr = &github.APIError{Status: 409}
 		s.DeployBuild(context.Background(), in)
 		deployTick(t, s)
 		if m.state.Deployments[0].Status != "PROPOSING" {
 			t.Fatal(m.state.Deployments)
+		}
+		if len(f.verifyPlans) != 1 || f.verifyPlans[0].ProposalBaseSHA != strings.Repeat("1", 40) {
+			t.Fatal(f.verifyPlans)
 		}
 		if !persistent {
 			f.mergeErr = nil
@@ -197,6 +213,9 @@ func TestDeployConflictRetry(t *testing.T) {
 		want := "SUCCEEDED"
 		if persistent {
 			want = "FAILED"
+		}
+		if len(f.verifyPlans) != 2 || f.verifyPlans[1].ProposalBaseSHA != strings.Repeat("2", 40) || m.state.Deployments[0].RetryCount != 1 {
+			t.Fatal(f.verifyPlans, m.state.Deployments)
 		}
 		if m.state.Deployments[0].Status != want || f.proposals != 2 || f.merges != 2 || m.state.Deployments[0].PRNumber != 1 {
 			t.Fatal(m.state.Deployments, f)
@@ -234,6 +253,12 @@ func TestDeployLostResponsesRestart(t *testing.T) {
 				f.proposalErr = nil
 			}
 			deployTick(t, fresh)
+			if action == "propose" {
+				if m.state.Deployments[0].Status != "RECONCILIATION_REQUIRED" || f.proposals != 1 || f.merges != 0 {
+					t.Fatal(m.state.Deployments, f)
+				}
+				return
+			}
 			if m.state.Deployments[0].Status != "SUCCEEDED" || f.proposals != 1 || f.merges != 1 {
 				t.Fatal(m.state.Deployments, f)
 			}
@@ -408,6 +433,41 @@ func TestDeployStatusRequiredContextOnPageTwo(t *testing.T) {
 			deployTick(t, s)
 			if calls != 2 || m.state.Deployments[0].Status != "SUCCEEDED" {
 				t.Fatalf("calls=%d deployment=%+v", calls, m.state.Deployments[0])
+			}
+		})
+	}
+}
+
+func TestDeployMissingProposalBaseAndEditedHead(t *testing.T) {
+	for _, edited := range []bool{false, true} {
+		t.Run(fmt.Sprint(edited), func(t *testing.T) {
+			s, m, f, in := deploymentFixture(t)
+			f.verifyErr = errors.New("wait before merge")
+			s.DeployBuild(context.Background(), in)
+			deployTick(t, s)
+			d := &m.state.Deployments[0]
+			if d.ProposalBaseSHA != strings.Repeat("1", 40) {
+				t.Fatal(d)
+			}
+			if edited {
+				f.pr.Head.SHA = strings.Repeat("e", 40)
+			} else {
+				d.ProposalBaseSHA = ""
+			}
+			f.verifyErr = nil
+			deployTick(t, s)
+			if edited {
+				if m.state.Deployments[0].FailureCode != "GITOPS_SCOPE_CHANGED" || f.merges != 0 {
+					t.Fatal(m.state.Deployments, f)
+				}
+				return
+			}
+			if m.state.Deployments[0].Status != "PROPOSING" || f.merges != 0 {
+				t.Fatal(m.state.Deployments, f)
+			}
+			deployTick(t, s)
+			if m.state.Deployments[0].Status != "SUCCEEDED" || f.proposals != 2 || f.merges != 1 || m.state.Deployments[0].ProposalBaseSHA != strings.Repeat("2", 40) {
+				t.Fatal(m.state.Deployments, f)
 			}
 		})
 	}

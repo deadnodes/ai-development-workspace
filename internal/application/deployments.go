@@ -298,7 +298,7 @@ func ciVerdict(v forgejo.CommitStatus, required []string) (green, failed bool, c
 	return
 }
 func deploymentPlan(d domain.Deployment, p buildconfig.Profile) github.DeployPlan {
-	plan := github.DeployPlan{ID: d.ID, Branch: d.Branch, ExpectedHead: d.HeadSHA}
+	plan := github.DeployPlan{ID: d.ID, Branch: d.Branch, ExpectedHead: d.HeadSHA, ProposalBaseSHA: d.ProposalBaseSHA}
 	evidence, _ := json.Marshal(d.CIContexts)
 	plan.Body = fmt.Sprintf("RCP Dev deployment %s\nBuild: %s\nSource SHA: %s\nRun: %s\nCI state: %s\nCI contexts: %s\nChecked: %v\nRegistry checked: %v\n", d.ID, d.BuildID, d.SourceSHA, d.RunURL, d.CIState, evidence, d.CheckedAt, d.RegistryCheckedAt)
 	for _, i := range d.Images {
@@ -468,6 +468,7 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		}
 		next = d
 		next.BaseSHA = proposal.BaseSHA
+		next.ProposalBaseSHA = proposal.BaseSHA
 		if proposal.AlreadyApplied {
 			next.AlreadyApplied = true
 			return save(succeededDeployment(next), false)
@@ -493,8 +494,12 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		if pr.Head.Ref != d.Branch || pr.Base.Ref != "main" || pr.Head.Repo.FullName != g.Repository || pr.Base.Repo.FullName != g.Repository {
 			return nil
 		}
-		if d.HeadSHA != "" && d.UncertainAction == "merge" && pr.Head.SHA != d.HeadSHA {
+		if d.HeadSHA == "" {
+			// A lost proposal response cannot establish which commit we created.
 			return nil
+		}
+		if pr.Head.SHA != d.HeadSHA {
+			return save(failedDeployment(d, "GITOPS_SCOPE_CHANGED"), false)
 		}
 		next := d
 		next.PRNumber = pr.Number
@@ -520,7 +525,6 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 			return save(failedDeployment(next, "MERGE_CONFLICT"), false)
 		}
 		next.HeadSHA = pr.Head.SHA
-		next.BaseSHA = pr.Base.SHA
 		next.Status = "MERGING"
 		next.UncertainAction = ""
 		next.FailureCode = ""
