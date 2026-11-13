@@ -2,13 +2,20 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/providers/forgejo"
 	"releasecontrol/internal/providers/github"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +24,7 @@ import (
 type deploymentFake struct {
 	status                           forgejo.CommitStatus
 	registryErr                      error
+	statusErr                        error
 	proposals, merges, heads         int
 	proposalErr, mergeErr, verifyErr error
 	pr                               github.DeployPR
@@ -25,7 +33,7 @@ type deploymentFake struct {
 }
 
 func (f *deploymentFake) CommitStatus(context.Context, buildconfig.Connection, string, string) (forgejo.CommitStatus, error) {
-	return f.status, nil
+	return f.status, f.statusErr
 }
 func (f *deploymentFake) HeadDigest(context.Context, buildconfig.Registry, string, string) error {
 	f.heads++
@@ -337,5 +345,70 @@ func TestDeploymentPlanContainerImage(t *testing.T) {
 	tag := plan.Files[0].Tags[0]
 	if tag.Format != "container_image" || tag.Value != "forgejo-12345678@"+digest || tag.MinMatches != 2 {
 		t.Fatal(tag)
+	}
+}
+
+func TestDeployStatusPageLimitUnavailable(t *testing.T) {
+	s, m, f, in := deploymentFixture(t)
+	f.statusErr = forgejo.ErrStatusPageLimit
+	if _, err := s.DeployBuild(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	m.state.Deployments[0].Deadline = time.Now().Add(-time.Hour)
+	deployTick(t, s)
+	d := m.state.Deployments[0]
+	if d.Status != "PENDING_CHECKS" || d.FailureCode != "CI_UNAVAILABLE" || f.proposals != 0 {
+		t.Fatalf("pagination exhaustion must wait: %+v", d)
+	}
+}
+
+type deployStatusTransport func(*http.Request) (*http.Response, error)
+
+func (f deployStatusTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestDeployStatusRequiredContextOnPageTwo(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		t.Run(fmt.Sprint(required), func(t *testing.T) {
+			s, m, f, in := deploymentFixture(t)
+			if !required {
+				s.builds.config.Profiles[0].RequiredStatusContexts = nil
+			}
+			dir := t.TempDir()
+			t.Setenv("RCP_SECRET_DIR", dir)
+			if err := os.WriteFile(filepath.Join(dir, "token"), []byte("private-token"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			s.builds.config.Connections[0].TokenRef = "token"
+			calls := 0
+			source := forgejo.NewWithClient(&http.Client{Transport: deployStatusTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.URL.Query().Get("page") != strconv.Itoa(calls) || r.URL.Query().Get("limit") != "50" {
+					t.Fatal(r.URL)
+				}
+				v := forgejo.CommitStatus{State: "success", TotalCount: 51}
+				if calls == 1 {
+					for i := 0; i < 50; i++ {
+						v.Statuses = append(v.Statuses, forgejo.StatusContext{Context: fmt.Sprint(i), Status: "success"})
+					}
+				} else {
+					v.Statuses = []forgejo.StatusContext{{Context: "verify", Status: "success"}}
+				}
+				body, err := json.Marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+			})})
+			if err := s.ConfigureDeployments(source, f, f); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DeployBuild(context.Background(), in); err != nil {
+				t.Fatal(err)
+			}
+			deployTick(t, s)
+			if calls != 2 || m.state.Deployments[0].Status != "SUCCEEDED" {
+				t.Fatalf("calls=%d deployment=%+v", calls, m.state.Deployments[0])
+			}
+		})
 	}
 }

@@ -407,7 +407,7 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		if e != nil {
 			next := d
 			next.FailureCode = "CI_UNAVAILABLE"
-			if time.Now().After(d.Deadline) {
+			if time.Now().After(d.Deadline) && !errors.Is(e, forgejo.ErrStatusPageLimit) {
 				next = failedDeployment(next, "CI_NOT_GREEN")
 			}
 			return save(next, false)
