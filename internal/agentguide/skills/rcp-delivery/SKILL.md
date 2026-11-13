@@ -187,7 +187,8 @@ Follow `get_deployment {product_id,deployment_id}` or bounded `list_deployments`
 States: PENDING_CHECKS → PROPOSING → MERGING → SUCCEEDED/FAILED; uncertain writes
 use RECONCILIATION_REQUIRED. Never submit a replacement to resolve uncertainty.
 A lost merge response reconciles read-only and never sends another merge request.
-Non-failed (environment, profile, image digests) deduplicates; failed retry needs a
-fresh request_key. SUCCEEDED means GitOps merged (or already_applied), not Flux
+Only active (environment, profile, image digests) deployments deduplicate. Terminal
+matches create a new deployment without a key or with a fresh request_key; existing
+request_key replay returns its historical handle and rebinding conflicts. SUCCEEDED means GitOps merged (or already_applied), not Flux
 reconciliation, runtime health, functional acceptance or production approval.
 See docs/FORGEJO_DELIVERY.md for operator configuration and recovery limits.

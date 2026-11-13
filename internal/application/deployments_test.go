@@ -32,6 +32,8 @@ type deploymentFake struct {
 	plan                             github.DeployPlan
 	advanceBase                      bool
 	verifyPlans                      []github.DeployPlan
+	content, proposedContent         string
+	openedPRs                        int
 }
 
 func (f *deploymentFake) CommitStatus(context.Context, buildconfig.Connection, string, string) (forgejo.CommitStatus, error) {
@@ -44,6 +46,17 @@ func (f *deploymentFake) HeadDigest(context.Context, buildconfig.Registry, strin
 func (f *deploymentFake) ProposeDeployment(_ context.Context, g buildconfig.GitOps, d github.DeployPlan) (github.DeployProposal, error) {
 	f.proposals++
 	f.plan = d
+	if f.content != "" {
+		rendered, err := github.RenderDeployment(f.content, d.Files[0].Tags)
+		if err != nil {
+			return github.DeployProposal{}, err
+		}
+		if rendered == f.content {
+			return github.DeployProposal{AlreadyApplied: true}, nil
+		}
+		f.proposedContent = rendered
+		f.openedPRs++
+	}
 	f.pr.Number = 1
 	f.pr.URL = "https://github.example/pr/1"
 	f.pr.Head.SHA = strings.Repeat("b", 40)
@@ -78,6 +91,9 @@ func (f *deploymentFake) MergeDeployment(_ context.Context, _ buildconfig.GitOps
 	f.merges++
 	if sha != f.pr.Head.SHA {
 		panic("missing SHA lock")
+	}
+	if f.mergeErr == nil && f.content != "" {
+		f.content = f.proposedContent
 	}
 	return strings.Repeat("d", 40), f.mergeErr
 }
@@ -470,5 +486,99 @@ func TestDeployMissingProposalBaseAndEditedHead(t *testing.T) {
 				t.Fatal(m.state.Deployments, f)
 			}
 		})
+	}
+}
+
+func TestDeployRollbackAndTerminalIdempotency(t *testing.T) {
+	for _, keyed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keyed=%t", keyed), func(t *testing.T) {
+			s, m, f, in := deploymentFixture(t)
+			ctx := context.Background()
+			f.content = "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nspec:\n  values:\n    image:\n      repository: registry.example/o/r\n      tag: initial\n"
+			b := m.state.Builds[0]
+			b.ID = "build-b"
+			b.Images = append([]domain.BuildImage(nil), b.Images...)
+			b.Images[0].Digest = "sha256:" + strings.Repeat("b", 64)
+			b.Images[0].ImageRef = "registry.example/o/r:main-bbbbbbbb@" + b.Images[0].Digest
+			m.state.Builds = append(m.state.Builds, b)
+			request := func(build, key string) domain.Deployment {
+				t.Helper()
+				in.BuildID, in.RequestKey = build, ""
+				if keyed {
+					in.RequestKey = key
+				}
+				d, err := s.DeployBuild(ctx, in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return d
+			}
+			finish := func(d domain.Deployment) domain.Deployment {
+				t.Helper()
+				deployTick(t, s)
+				got, err := s.GetDeployment(ctx, domain.DeploymentLookup{ProductID: "p", DeploymentID: d.ID})
+				if err != nil || got.Status != "SUCCEEDED" {
+					t.Fatal(got, err)
+				}
+				return got
+			}
+			a := finish(request("build", "a"))
+			finish(request("build-b", "b"))
+			if !strings.Contains(f.content, b.Images[0].Digest) {
+				t.Fatal("B not applied", f.content)
+			}
+			if keyed {
+				if replay := request("build", "a"); replay.ID != a.ID || replay.Status != "SUCCEEDED" || len(m.state.Deployments) != 2 {
+					t.Fatal("historical receipt changed desired state", replay)
+				}
+			}
+			rollback := request("build", "rollback")
+			if rollback.ID == a.ID {
+				t.Fatal("rollback reused historical handle")
+			}
+			duplicate := request("build", "active-duplicate")
+			if duplicate.ID != rollback.ID {
+				t.Fatal("active duplicate created another deployment")
+			}
+			rollback = finish(rollback)
+			if rollback.AlreadyApplied || rollback.PRNumber == 0 || f.openedPRs != 3 || f.merges != 3 || !strings.Contains(f.content, a.Images[0].Digest) {
+				t.Fatal("rollback did not apply A through a PR", rollback, f.content)
+			}
+			repeat := request("build", "repeat")
+			if repeat.ID == a.ID || repeat.ID == rollback.ID {
+				t.Fatal("terminal deployment reused")
+			}
+			repeat = finish(repeat)
+			if !repeat.AlreadyApplied || repeat.PRNumber != 0 || f.openedPRs != 3 || f.merges != 3 {
+				t.Fatal("applied repeat opened a PR", repeat)
+			}
+			if keyed {
+				for key, want := range map[string]string{"a": a.ID, "rollback": rollback.ID, "active-duplicate": rollback.ID, "repeat": repeat.ID} {
+					if got := request("build", key); got.ID != want || got.Status != "SUCCEEDED" {
+						t.Fatal("receipt did not replay historical handle", key, got)
+					}
+				}
+				in.BuildID, in.RequestKey = "build-b", "a"
+				if _, err := s.DeployBuild(ctx, in); err == nil || !strings.Contains(err.Error(), "REQUEST_KEY_CONFLICT") {
+					t.Fatal("receipt rebound", err)
+				}
+			}
+			if len(m.state.Deployments) != 4 {
+				t.Fatal("unexpected deployment count", len(m.state.Deployments))
+			}
+		})
+	}
+}
+
+func TestDeployFailedIdentityCreatesNewDeployment(t *testing.T) {
+	s, m, _, in := deploymentFixture(t)
+	first, err := s.DeployBuild(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.state.Deployments[0].Status = "FAILED"
+	retry, err := s.DeployBuild(context.Background(), in)
+	if err != nil || retry.ID == first.ID || retry.Status != "PENDING_CHECKS" {
+		t.Fatal(retry, err)
 	}
 }

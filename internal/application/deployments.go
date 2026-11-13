@@ -122,19 +122,12 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 				st.DeploymentReceipts = append(st.DeploymentReceipts, domain.DeploymentReceipt{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: time.Now().UTC()}, RequestKey: in.RequestKey, BuildID: in.BuildID, EnvironmentID: in.EnvironmentID, DeploymentID: d.ID})
 			}
 		}
-		failed := false
 		for _, d := range st.Deployments {
-			if d.ProductID == in.ProductID && d.EnvironmentID == "dev" && d.ProfileID == p.ID && d.Identity == identity {
-				if d.Status != "FAILED" {
-					out = d
-					bind(d)
-					return nil
-				}
-				failed = true
+			if d.ProductID == in.ProductID && d.EnvironmentID == "dev" && d.ProfileID == p.ID && d.Identity == identity && !deploymentTerminal(d) {
+				out = d
+				bind(d)
+				return nil
 			}
-		}
-		if failed && in.RequestKey == "" {
-			return invalid("new request_key required to retry failed deployment")
 		}
 		now := time.Now().UTC()
 		out = domain.Deployment{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: now, UpdatedAt: now}, BuildID: b.ID, ProfileID: p.ID, EnvironmentID: "dev", RequestKey: in.RequestKey, AuthorityHash: s.builds.hash, Identity: identity, Status: "PENDING_CHECKS", Images: append([]domain.BuildImage(nil), b.Images...), SourceSHA: b.SourceSHA, RunURL: b.RunURL, Deadline: now.Add(time.Duration(s.builds.config.TimeoutSeconds) * time.Second)}

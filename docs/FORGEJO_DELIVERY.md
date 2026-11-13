@@ -110,10 +110,14 @@ HTTP 405/409 causes at most one re-render against fresh main, on the same branch
 with an expected-head check and non-force fast-forward update. Persistent conflict
 fails MERGE_CONFLICT and leaves the PR open. Runtime observers are optional.
 
-Non-failed deployments deduplicate by Product/environment/profile and the sorted
-image digest set. Product-scoped request keys are durable receipts bound to Build
-and environment. Replay returns the original handle; rebinding rejects
-REQUEST_KEY_CONFLICT. Failed retry requires a new explicit key.
+Only active (non-terminal) deployments deduplicate by Product/environment/profile
+and the sorted image digest set. Without a request key, or with a new key, an
+identity matching only terminal deployments creates a new Deployment. Rendering
+returns SUCCEEDED / already_applied without a PR if Flux already has the requested
+values; otherwise it opens a PR, including when rolling back to a previous digest.
+Product-scoped request keys are durable receipts bound to Build and environment.
+Replay returns the original historical handle, including terminal deployments;
+rebinding rejects REQUEST_KEY_CONFLICT.
 
 ## Recovery and verification
 
