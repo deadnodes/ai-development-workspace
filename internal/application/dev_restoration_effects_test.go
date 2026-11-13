@@ -240,8 +240,13 @@ func restorationChangedFixture(t *testing.T, kind string, setup ...func(*nativeF
 	p.merged = true
 	activationTicks(t, f, 20)
 	st, _ := f.store.Read(ctx)
-	if operationByID(&st, activation.ID).Status != "SUCCEEDED" {
-		t.Fatal("activation not merged")
+	if current := operationByID(&st, activation.ID); current.Status != "SUCCEEDED" {
+		for _, id := range current.ChildIDs {
+			if child := operationByID(&st, id); child != nil {
+				t.Logf("activation child %s: status=%s phase=%s detail=%s", id, child.Status, child.Phase, child.Detail)
+			}
+		}
+		t.Fatalf("activation not merged: status=%s phase=%s detail=%s", current.Status, current.Phase, current.Detail)
 	}
 	peer := newRestorationEffectPeer(t, f, p, hold)
 	f.s.provider = peer
@@ -1405,6 +1410,8 @@ func TestDevRestorationStaleConfirmationObserverPreservesWinner(t *testing.T) {
 }
 
 func TestDevRestorationRenewedRetentionSettlement(t *testing.T) {
+	// This tests retained-root settlement, not expiry of the fixture worker lease.
+	t.Setenv("RCP_TEST_LONG_NATIVE_LEASE", "1")
 	for _, kind := range []string{"local", "postgres"} {
 		for _, mode := range []string{"closed_confirmed", "prepared_unsent", "admitted_no_plan", "merged_verified"} {
 			t.Run(kind+"/"+mode, func(t *testing.T) {

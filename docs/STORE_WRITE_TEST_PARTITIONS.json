@@ -1,0 +1,642 @@
+{
+  "commit": "041f951",
+  "package": "releasecontrol/internal/application",
+  "total_top_level_tests": 307,
+  "completed_serial_tests": [
+    {
+      "name": "TestArtifactPinsIdempotencyScopeAndRelease",
+      "result": "pass"
+    },
+    {
+      "name": "TestArtifactPinsRejectUnboundedFreeformAndUnknownIdentity",
+      "result": "pass"
+    },
+    {
+      "name": "TestArtifactPinsProductDeletionCascadesWithoutDanglingReferences",
+      "result": "pass"
+    },
+    {
+      "name": "TestAuthorizationProjectionAndAttribution",
+      "result": "pass"
+    },
+    {
+      "name": "TestAuthorizationFailsClosedForPrivilegesAndReferences",
+      "result": "pass"
+    },
+    {
+      "name": "TestBootstrapAdministrationDoesNotGrantReleaseAuthority",
+      "result": "pass"
+    },
+    {
+      "name": "TestBackupRoundTripHistoryAndActiveOperationSafety",
+      "result": "pass"
+    },
+    {
+      "name": "TestBackupRejectsCorruptionVersionAndDuplicateIDs",
+      "result": "pass"
+    },
+    {
+      "name": "TestBackupRejectsExpandedBomb",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentNormalPathAndPersistentReopen",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentMultipleComponents",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentAdmissionHistoryAndCompleteSet",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentBaseOnlyHasNoFabricatedFeatureInputs",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentRejectsBrokenHistoricalChain",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentPrivacyAndHistoricalLease",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentNonBuildFailuresAndTextualPrecedence",
+      "result": "pass"
+    },
+    {
+      "name": "TestBuildFailureAgentCompleteSetBudget",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksLongRunningWaitDoesNotSpendObservationBudget",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksCancellationUnknownAndLateTimeoutGrace",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksRegisteredAliasOwnershipAndAtomicAdmission",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksTypedReferenceAndPayloadValidation",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksPostIOAuthorityLeaseAndPhysicalFences",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksAcceptedSuccessFinalizesDuringGraceAndOldSHA",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksRestoreActiveAndCompletedMetadataCannotWrite",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksManagedTerminalFailureUsesImmutableOrigin",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksPersistedSuccessRequiresAcceptedTypedReport",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksClaimedDeadlineAndAcceptedFailureClassification",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksLifecycleReplayReopen",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksUnknownCreatePatchNeverRepeatsWrites",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksPostIOGrantLossAndRestoreNoWrites",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksPhysicalConnectionAssociation",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksPhysicalAPIAliasOwnership",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksCurrentAuthorityAtWorkerAdmission",
+      "result": "pass"
+    },
+    {
+      "name": "TestWorkerChecksProviderAPIIdentity",
+      "result": "pass"
+    },
+    {
+      "name": "TestSpecializedCommandsRequireAuthenticatedAuthority",
+      "result": "pass"
+    },
+    {
+      "name": "TestCommandAuthorizationRechecksAtomicOwnership",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictEvidenceRecheckedAtAdmissionAndQueuedGuards",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictEvidenceWorkerStopsBeforeProviderEffects",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictEvidenceMutationAdmissionRechecksCurrentState",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictEvidenceSameFeatureNeedsBothIntegrations",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictEvidenceAtomicAttachmentAndQueuedBinding",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictEvidenceReverifySameCommitAcrossPersistentReopen",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictClaimAndExactTwoSidedVerification",
+      "result": "pass"
+    },
+    {
+      "name": "TestConflictContextIncludesBothSidesOnlyForAffectedWork",
+      "result": "pass"
+    },
+    {
+      "name": "TestCompositionFailurePersistsSemanticConflict",
+      "result": "pass"
+    },
+    {
+      "name": "TestResolutionCanOnlyRebuildExactPinnedComposition",
+      "result": "pass"
+    },
+    {
+      "name": "TestAssembleComponentsGroupsMultipleIntegrationsByRepository",
+      "result": "pass"
+    },
+    {
+      "name": "TestCompositionSnapshotsSurviveNewRevisionAndSelectOnlyDesired",
+      "result": "pass"
+    },
+    {
+      "name": "TestCompositionProductAndRepositoryIsolation",
+      "result": "pass"
+    },
+    {
+      "name": "TestMonorepoApplicationsShareOneBranchPlan",
+      "result": "pass"
+    },
+    {
+      "name": "TestEnvironmentNamesAndTargetChangeInvalidateSelection",
+      "result": "pass"
+    },
+    {
+      "name": "TestCompositionDependencyAndSHAValidation",
+      "result": "pass"
+    },
+    {
+      "name": "TestSafeBranchRejectsInvalidGitReferenceNames",
+      "result": "pass"
+    },
+    {
+      "name": "TestConfigurationMirrorScopeAndRevision",
+      "result": "pass"
+    },
+    {
+      "name": "TestCallerConflictActionFrozenInputsAndPrivacy",
+      "result": "pass"
+    },
+    {
+      "name": "TestCallerConflictActionRejectsAmbiguousInputs",
+      "result": "pass"
+    },
+    {
+      "name": "TestCallerConflictActionProviderAddressWhitelist",
+      "result": "pass"
+    },
+    {
+      "name": "TestCallerConflictActionStatusesAndRetainedEvidence",
+      "result": "pass"
+    },
+    {
+      "name": "TestCallerConflictActionByteBudget",
+      "result": "pass"
+    },
+    {
+      "name": "TestCallerConflictActionStoredQueryAndReopen",
+      "result": "pass"
+    },
+    {
+      "name": "TestResumeSummaryBoundedAndScoped",
+      "result": "pass"
+    },
+    {
+      "name": "TestProjectContextSummaryBoundedAndNoDocuments",
+      "result": "pass"
+    },
+    {
+      "name": "TestKnowledgeSearchSummaryBoundedUTF8AndHTTPFull",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationGroupFrozenMembershipAtomicResultsAndGETOnlyRecovery",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationGroupRejectsPhysicalConnectionAliasesBeforeIO",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationOrphanAuthorityCannotFallback",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationDuplicateOriginalChildRejectedBeforeSourceIO",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationExactArtifactsPreservedBaselineAndOneShotRecovery",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationAdmissionAndCapabilityGuards",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationInflightInvalidationRetainsUncertainHold",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationMergedDesiredStateAndRestoreQuarantine",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationMultiComponentPartialOutcomeRetainsHold",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationMalformedUncertainEvidenceFailsClosed",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationFirstProposalHeadRequiresCompleteLookupAgreement",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationAlteredCompletedChildResultBlocksAggregate",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationRevalidatesBetweenPhysicalWrites",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevActivationNeverFallsBackToUnguardedProposer",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselinePositiveReadOnlyFullCapture",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineImageContentEvidenceBoundaries",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineAdmissionReplayGenerationsAndNoProvenance",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineCurrentProofAndCausalTamperGuards",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineKnownNativeAvailabilityAndHistoricalMaterial",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineConcurrencyLateCompletionAndInflightDrift",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineCompleteComponentsBackupAndExport",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevBaselineIncludesUntouchedApplication",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevReservationLegacyTwoSourceMutationAcknowledgements",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevReservationLegacyUnknownSourceOutcomeRetainsIntent",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevReservationPreservesBaselineReplayReleaseAndEpoch",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevReservationConcurrentCASAndUncertainEffects",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevReservationDelayedGitOpsIntentOrdering",
+      "result": "pass"
+    },
+    {
+      "name": "TestDevReservationSourceIntentOrderingAndHistoricalReleaseScope",
+      "result": "pass"
+    }
+  ],
+  "parallel_partitions": [
+    {
+      "number": 1,
+      "tests": [
+        "TestDevReservationOverflowRestoreAndPortableExport",
+        "TestDevRestorationMergeChronologyAndGETSaveRace",
+        "TestDevRestorationFinalUnlockReadSaveRacesRetainHold",
+        "TestDevRestorationCombinedSelectedABUntouchedCSharedFile",
+        "TestDevRestorationNoEffectExpiryReplayAndScopedRelease",
+        "TestDevRestorationMissingFreshOriginalImageContentBlocks",
+        "TestDevRestorationSettledRetentionIsolation",
+        "TestDevRuntimeConcurrentGenerationsAndInflightInvalidation",
+        "TestDevRuntimePhysicalGitOpsAuthorityIsolation",
+        "TestDeployExistingArtifactRejectsScopeAndUnprovenance",
+        "TestExternalScopeHistoryAndIntegrationFiltering",
+        "TestDeliveryBlocksSourceDriftAndRequiresExplicitPolicy",
+        "TestDeploymentPolicyChangeStopsPinnedOperation",
+        "TestSchedulerPrioritizesDeliveryOverBackgroundRefresh",
+        "TestCallerDigestConstraintDoesNotProveArtifactSource",
+        "TestFeatureGraphScopesEvidenceAndDeduplicatesPR",
+        "TestFeaturePatchRejectsAtomically",
+        "TestFeaturePatchMonorepoAppCohortAndAppendOrder",
+        "TestFlowConflictAndSupersessionDoNotDeploy",
+        "TestFlowRestartDoesNotDuplicateSourceOrBuild",
+        "TestUnlinkedBranchDriftIsNotActionableAttention",
+        "TestAutomaticGitTreatsDeletedBranchAsBenign",
+        "TestIntelligenceDurableEncryptedScopedDraft",
+        "TestReleaseNotesUnchangedSameRepoAndNewFeature",
+        "TestIntelligenceFailureStatusesPersistBackupAndRestore",
+        "TestIntelligencePatchWorkerBindingAndNoAdmission",
+        "TestMainCandidateCausalAuthorityAndDrift",
+        "TestMainCandidateCancellationRestoreAndReplay",
+        "TestNativeCompositionAuthorityFrozenBeforeChildren",
+        "TestAutomaticNativeLiveFences",
+        "TestNativeCancellationAndAuthorityEdges",
+        "TestNativeOrdinaryExpiryReconciliationPreservesAttempt",
+        "TestNativeQuarantineRejectsProductDeletionAcrossReopenAndBackup",
+        "TestPublicationRejectsKindsScopesAndInvalidReferences",
+        "TestRegistryObservationDurableReferenceCorruption",
+        "TestMixedRepositoryApplicationCompositionExcludesLibrary",
+        "TestResumeBoundsAuditWithoutCommandPayloads",
+        "TestContextRetrievalAuthorizationAndLimits",
+        "TestRuntimeObserverScopesAndPersistsEvidence",
+        "TestRuntimeRefreshScopeValidation",
+        "TestScenarioRejectsForgedOrCrossProductEvidence",
+        "TestFailedGateRequiresResolutionAndRerun",
+        "TestRejectCaseBypassAndDuplicateHistoryID",
+        "TestSourceRetentionRealGitDurableReopenAndBranchDeletion",
+        "TestSourceRetentionLineageRequiresUnambiguousScopedCreation",
+        "TestSourceRetentionSchedulerLegacySkipAndExplicitLineage",
+        "TestSourceRetentionTickContextBoundedAndCancellation",
+        "TestStatePageBudgetCursorAndUnicode",
+        "TestStatusServerOwnedFieldsCannotBeInjected",
+        "TestWorkerRejectsScopeAndImmutableInputMismatch",
+        "TestWorkerBackupRestoreReconciliationAgreement",
+        "TestWorkerHistoryAuthorizationAndNoFallback",
+        "TestMatchWorkspacePreservesRegisteredIdentityAndScope",
+        "TestWriteProjectionWorkerAdmissionParity"
+      ],
+      "initial_passes": 53,
+      "initial_failures": [
+        "TestDevReservationOverflowRestoreAndPortableExport"
+      ],
+      "remaining_failures_after_targeted_reruns": []
+    },
+    {
+      "number": 2,
+      "tests": [
+        "TestDevReservationAdmissionAuthorityNegatives",
+        "TestDevRestorationBoundsAndReadReconciliationPastGenericTTL",
+        "TestDevRestorationDistinctPhysicalGroupsRemainHonestPartial",
+        "TestDevRestorationUnapprovedClassificationFencesWorker",
+        "TestDevRestorationStrictRawCommand",
+        "TestDevRestorationSuccessorNestedEvidenceTampering",
+        "TestDevRuntimeExactObservationReplayAndCurrentTruth",
+        "TestDevRuntimeCommonGroupCommitAndSharedPodContainers",
+        "TestDevRuntimeFailureEnvelopeReservesBound",
+        "TestDeployExistingArtifactCannotBuildWhenMissingOrStale",
+        "TestDurableDeliveryPinsInputsAndStopsBeforeReconciliation",
+        "TestGitObservationDoesNotModifyBranchOrCommits",
+        "TestRegistryNumericIdentitySurvivesRename",
+        "TestRefreshCommandsReusePendingObservation",
+        "TestOtherProductArtifactDoesNotGrantSourceProvenance",
+        "TestFeatureGraphDeploymentRepositoryIdentity",
+        "TestFeaturePatchSelectionGenerationABAResetAndObservedState",
+        "TestFeaturePatchDelayedOldBuildCannotPublish",
+        "TestFlowHotfixKeepsFeatureAndReleaseHistory",
+        "TestFlowSourceRejectsUndeclaredHistory",
+        "TestBranchDriftRemainsGitContextNotOperationsAttention",
+        "TestDeletedBranch404IsNotAttention",
+        "TestIntelligenceStaleCancelBudgetAndUncertainRecovery",
+        "TestReleaseNotesRejectUnshippedModelCitations",
+        "TestReleaseNotesCurrentConfigurationGuard",
+        "TestIntelligencePatchStaleScopeAndRecipeGuards",
+        "TestMainCandidateMalformedAndMergedProof",
+        "TestManagedBranchesAreAsyncScopedAndPinned",
+        "TestNativeCompositionMalformedAuthorityFailsBeforeSource",
+        "TestAutomaticNativeUnknownBuildAndExpiredPublication",
+        "TestNativeExplicitIDRequestReplayScope",
+        "TestNativeRestoreActiveSourceContinuesAndQuarantinePersists",
+        "TestDeleteProductIsolationAndConfirmation",
+        "TestPublicationURLAndDigestGuards",
+        "TestRegistryObservationRestoreQuarantinesHistoryAndActiveLease",
+        "TestRepositoryClassificationKeepsBindingHistoryAndScope",
+        "TestResumeIncludesOnlyFeatureSourceSubset",
+        "TestReviewImportDedupResolutionAndContext",
+        "TestObservedDeploymentEnvironmentAndAttention",
+        "TestRuntimeComparisonTaggedDigestAndStalePods",
+        "TestFailedRerunAndDifferentCandidateInvalidate",
+        "TestDependencyCycleAndAtomicFailure",
+        "TestReleaseSnapshotAndDependencySelection",
+        "TestSourceRetentionRealGitStageDriftBlocksSavedResult",
+        "TestSourceRetentionBoundedPinsLostResponseAndSavedResultDrift",
+        "TestSourceRetentionRequestBoundaries",
+        "TestSourceRetentionNativeAuthorityChangesDuringIO",
+        "TestStatePageScopeAndInput",
+        "TestStatusPullRequestsUseCatalog",
+        "TestWorkerDeadlineAttemptBudgetAndGitHubCoexistence",
+        "TestWorkerLocalOCIAssertionBindingReplayAndReopen",
+        "TestWorkerHistoryPagingScopeAndBudget",
+        "TestKnowledgeGraphUpsertSearchAndCorrection",
+        "TestPostgresCommandAuthorizationKeepsUnprojectedEventScope"
+      ],
+      "initial_passes": 53,
+      "initial_failures": [
+        "TestDevReservationAdmissionAuthorityNegatives"
+      ],
+      "remaining_failures_after_targeted_reruns": []
+    },
+    {
+      "number": 3,
+      "tests": [
+        "TestDevRestorationEveryPhysicalSendAndRedirectFenced",
+        "TestDevRestorationClosedUnmergedRequiresExplicitNewAttempt",
+        "TestDevRestorationExactMappedDevProdSelectorsSharedFile",
+        "TestDevRestorationStaleConfirmationObserverPreservesWinner",
+        "TestDevRestorationUnknownOriginalEffectFencesAndBlocksRenewal",
+        "TestDevRestorationConcurrentDistinctKeyConfirmation",
+        "TestDevRuntimeAdmissionCoverageAndImmutableGuards",
+        "TestDevRuntimeBackupQuarantineAndProofFreshness",
+        "TestDevRuntimeMalformedLatestNeverFallsBackOrPanics",
+        "TestDeployExistingArtifactRespectsGitOpsCAS",
+        "TestUncertainDispatchAndApplyRecoverWithoutDuplicates",
+        "TestInstanceRegistrySharedAcrossProductsAndConnections",
+        "TestArtifactTagAloneCannotProveSourceButTrustedDigestIsReused",
+        "TestDisabledRebuildPolicyNeverDispatchesMissingArtifact",
+        "TestGraphRuntimeMatchesAndIsolation",
+        "TestFeaturePatchRealGitPreservesOtherFeatureAndPinnedBase",
+        "TestFeaturePatchSchedulerStaleAndFreshTicks",
+        "TestFlowContextIncludesSharedExecutionAndVersionedEvidence",
+        "TestFlowSelectedMainCandidateRequiresOwnVerification",
+        "TestFlowPromotionRefreshesRegistryProofAndPinsApprovedDigest",
+        "TestAutomaticGitScopeAndBackoff",
+        "TestRepositoryGitRefreshFindsUnlinkedCommit",
+        "TestReleaseNotesActualDeltaAndStaleCandidate",
+        "TestReleaseNotesDifferentComponentBaselinesAndHistoricalRecord",
+        "TestReleaseNotesNativeLoadedAuthorityGuard",
+        "TestIntelligenceConflictFallbackWithoutModelAuthority",
+        "TestMainCandidateManagedWorkerFences",
+        "TestManagedBranchRejectsMovedBase",
+        "TestMixedNativeParentAuthorityFencesGHAChild",
+        "TestNativeReleaseDeniedBeforeProtectedMutation",
+        "TestNativeAdmissionReopenReplayRestoreAndPR",
+        "TestNativeClaimsRolesFiltersAndUnforgeableQueue",
+        "TestDeleteProductPreservesOptionalFieldsOfOtherProducts",
+        "TestRegistryObservationAdmissionReplayCurrentCoverageLocalPostgres",
+        "TestRepositoryPurposeAndComponentKindCatalog",
+        "TestLibraryPullRequestReviewRemainsSourceContext",
+        "TestRetentionPolicyValidationAndWarnings",
+        "TestReviewPriorities",
+        "TestRuntimeSnapshotIndependentOfDeploymentAndMultipleWorkloads",
+        "TestRuntimeReferenceComparisonSeparateFromDigest",
+        "TestCompositionRunRequiresDeployedSnapshotAndKeepsHistoricalScope",
+        "TestBlockerAndHandoffHistory",
+        "TestExternalReleaseRecordPreservesEvidence",
+        "TestSourceRetentionConflictAdmissionAtomicAuthority",
+        "TestSourceRetentionInitialWrongPinAndGeneratedDrift",
+        "TestSourceRetentionConcurrentTicksAndRestoreSchedulerFence",
+        "TestStatePageAuthorizationDoesNotReadGlobalState",
+        "TestStatusFeatureCatalogAndCompletionGuard",
+        "TestWorkerDurabilityAndConcurrentClaims",
+        "TestWorkerQueueIdempotencyConcurrentConflictAndReopen",
+        "TestRefreshGitLinkedPRWithoutBranch",
+        "TestWorkerHistoryCompleteByteSplitLinksAndCursorTampering",
+        "TestWriteProjectionSourceRetentionProvenanceParity",
+        "TestUIStateFeatureScopeAndHistoryBudget"
+      ],
+      "initial_passes": 52,
+      "initial_failures": [
+        "TestDevRestorationClosedUnmergedRequiresExplicitNewAttempt",
+        "TestDevRuntimeAdmissionCoverageAndImmutableGuards"
+      ],
+      "remaining_failures_after_targeted_reruns": []
+    },
+    {
+      "number": 4,
+      "tests": [
+        "TestDevRestorationLostProposalCachedOnlyRenewalAndEarlyMerge",
+        "TestDevRestorationLateCandidateMergeAfterExpiryIgnoresCurrentSourceChecks",
+        "TestDevRestorationLostPhysicalStagesPersistAcrossReopenWithoutPOST",
+        "TestDevRestorationRenewedRetentionSettlement",
+        "TestDevRestorationCompleteThreeComponentBaselineIncludesUntouchedC",
+        "TestDevRestorationExpiredProposalFreshVerificationAndUnlock",
+        "TestDevRuntimeRoleAndGitOpsNegativeEvidence",
+        "TestDevRuntimeBoundsAndExactImageReferences",
+        "TestDeployExistingArtifactRechecksWithoutCI",
+        "TestExternalSystemInstanceSharingScopeAndGateReadiness",
+        "TestRestartAfterDispatchIntentOnlyFindsExistingRun",
+        "TestDeployCapturesBoundBranchWithoutManualSHA",
+        "TestSchedulerSelectsEarliestEligibleOperation",
+        "TestConfiguredBaseBranchDrivesComparison",
+        "TestFeatureGraphSeparatesMergeReportedAndRuntimeEvidence",
+        "TestFeaturePatchPreservesPinnedInputsAndHistoricalReceipt",
+        "TestFeaturePatchLocalConcurrentCASReplayReopenRestore",
+        "TestFlowIndependentTargetsRemoveFeature",
+        "TestFlowSelectionChangesDuringGitOpsRead",
+        "TestUnlinkedGitCommitsRemainAttentionUntilLinked",
+        "TestAutomaticGitDiscoversPRAndObservesBoundBranch",
+        "TestGitOpsPRWaitsForMergeAndExactDigest",
+        "TestReleaseNotesNegativeBaselinesAndIntent",
+        "TestIntelligenceDecodedProviderPrivacy",
+        "TestReleaseNotesPreservesProductionRoleRestriction",
+        "TestLocalGitPlanAndResultAreScopedAndObserved",
+        "TestMainCandidateSelectedSourceAndOtherBlockingGates",
+        "TestCommonCommandMutationScopes",
+        "TestAutomaticNativeRequestConcurrencyReopenAndCancellation",
+        "TestNativeSelectedCompositionOriginAndPublicProofDenial",
+        "TestNativePostIORecheckAndNoNetworkUnderLock",
+        "TestNativeDisabledAuthorityReopenBlocksWithoutPanic",
+        "TestLibraryPublicationNeedsNoEnvironmentAndRetainsProvenance",
+        "TestRegistryObservationRejectsReportAndAuthorityDrift",
+        "TestLibraryNeedsNoClusterAndCannotBecomeDeployment",
+        "TestResumeCombinesLatestHandoffsAndRemainingInPlanOrder",
+        "TestRetentionAttentionHasNoPhantomWarningsWithoutImageEvidence",
+        "TestSharedPRRequiresExplicitAttribution",
+        "TestRuntimeComparisonNeverCertifiesTags",
+        "TestScenarioVersionsAndCandidateEvidence",
+        "TestScenarioDefinitionScopeAndBlankEvidence",
+        "TestCrossFeatureAndEvidenceValidation",
+        "TestFeatureAuditIsInResume",
+        "TestSourceRetentionRestoreUsesCausalLineage",
+        "TestSourceRetentionAdmissionFences",
+        "TestSourceRetentionFullHistoryRejectsContaminatedCaptureDespitePins",
+        "TestStatePageNoRawFallback",
+        "TestStatusIntegrationTransitionsAreExplicit",
+        "TestWorkerExpiryFencesCancellationAndRecovery",
+        "TestWorkerStartLostResponseReplay",
+        "TestSuccessfulGitRefreshClearsOnlyOlderFailedAttention",
+        "TestWorkspaceScanKnowledgeAndPortableSetup",
+        "TestWriteProjectionPinValidationAndRetentionParity"
+      ],
+      "initial_passes": 52,
+      "initial_failures": [
+        "TestDevRestorationRenewedRetentionSettlement"
+      ],
+      "remaining_failures_after_targeted_reruns": []
+    }
+  ],
+  "follow_up_tests": [
+    "TestDevReservationOverflowRestoreAndPortableExport",
+    "TestDevReservationAdmissionAuthorityNegatives",
+    "TestDevRuntimeAdmissionCoverageAndImmutableGuards",
+    "TestFeaturePatchExplicitIdentityReplayPostgres",
+    "TestNativeExplicitIDRequestReplayScope",
+    "TestDevRestorationClosedUnmergedRequiresExplicitNewAttempt",
+    "TestDevRestorationRenewedRetentionSettlement"
+  ],
+  "notes": "All original 306 test roots completed across 91 serial tests and four remaining-test partitions. Follow-ups supersede fixture resets and parallel-load deadline/lease failures, and add an explicit identity replay regression (307 roots total).",
+  "follow_up_commit": "2e03fb3792847c49f64c9e632773df8aab204306",
+  "fixture_commit": "65e85c5",
+  "coverage_verified": true
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"time"
@@ -116,7 +117,17 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 	cancelled := []string{}
 	reconciliationRequired := []string{}
 	quarantinedBuilds := []string{}
-	err = s.store.Update(ctx, func(current *domain.State) error {
+	// PostgreSQL write callbacks receive projected events; test the full journal
+	// under the same writer lock before importing. Full-state stores use the guard below.
+	update := s.store.Update
+	if scoped, ok := s.store.(interface {
+		UpdateScoped(context.Context, domain.StateMutationScope, func(*domain.State) error) error
+	}); ok {
+		update = func(ctx context.Context, fn func(*domain.State) error) error {
+			return scoped.UpdateScoped(ctx, domain.StateMutationScope{AllCollections: true, RequireEmptyJournal: true}, fn)
+		}
+	}
+	err = update(ctx, func(current *domain.State) error {
 		b, _ := json.Marshal(current)
 		var groups map[string][]json.RawMessage
 		_ = json.Unmarshal(b, &groups)
@@ -230,6 +241,9 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		*current = restored
 		return nil
 	})
+	if errors.Is(err, domain.ErrJournalNotEmpty) {
+		return nil, invalid("restore requires an empty instance; existing state is never replaced")
+	}
 	if err != nil {
 		return nil, err
 	}

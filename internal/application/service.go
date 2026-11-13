@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
@@ -89,7 +90,7 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	request := *s
 	request.store = commandAuthorizationStore{Store: s.store, command: c}
 	if _, authenticated := auth.FromContext(ctx); authenticated {
-		if _, err := request.store.Read(ctx); err != nil {
+		if err := request.store.(commandAuthorizationStore).authorizePreflight(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -132,7 +133,14 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 		return s.executeWorkerCommand(ctx, c)
 	}
 	var result any
-	err := s.store.Update(ctx, func(st *domain.State) error {
+	store := s.store
+	if authorized, ok := store.(commandAuthorizationStore); ok {
+		authorized.checkCreationIdentity = true
+		store = authorized
+	} else {
+		store = commandAuthorizationStore{Store: store, command: c, checkCreationIdentity: true}
+	}
+	err := store.Update(ctx, func(st *domain.State) error {
 		if c.Action == "configure_component" && c.Data["mode"] == "NATIVE" {
 			component, _ := c.Data["application_id"].(string)
 			profile, _ := c.Data["profile"].(string)
@@ -497,18 +505,14 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 			}
 		}
 	}
-	if c.ID != "" && !sameDeliveryRetry && !slices.Contains([]string{"release_artifact_pin", "update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action) {
-		b, _ := json.Marshal(st)
-		var arrays map[string][]map[string]any
-		_ = json.Unmarshal(b, &arrays)
-		for _, a := range arrays {
-			for _, v := range a {
-				if v["id"] == c.ID {
-					return nil, invalid("id already exists")
-				}
-			}
+
+	if c.ID != "" && !sameDeliveryRetry && commandNeedsNewID(c) {
+		if stateHasID(*st, c.ID) {
+			return nil, invalid("id already exists")
 		}
+
 	}
+
 	switch c.Action {
 	case "pin_artifact", "release_artifact_pin":
 		var changed bool
@@ -1157,4 +1161,36 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 	st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: eventAt, EntityID: m.ID, ProductID: m.ProductID, FeatureID: m.FeatureID, Data: c})
 	derive(st)
 	return out, nil
+}
+
+func commandNeedsNewID(c domain.Command) bool {
+	return c.ID != "" && !slices.Contains([]string{"release_artifact_pin", "update_feature", "update_integration", "start_integration", "complete_integration", "transition_integration", "resolve_blocker", "resolve_finding", "update_environment", "select_composition", "update_external_system", "reconcile_composition", "promote_release_candidate", "record_runtime_observation", "classify_repository"}, c.Action)
+}
+
+// Resolve embedded Meta.ID paths once. FieldByName per retained record allocates
+// and turns a simple identity check into a large-state hot path.
+var stateIDPaths = func() [][]int {
+	typ := reflect.TypeOf(domain.State{})
+	paths := make([][]int, typ.NumField())
+	for i := range paths {
+		field, ok := typ.Field(i).Type.Elem().FieldByName("ID")
+		if !ok {
+			panic("State collection has no ID")
+		}
+		paths[i] = field.Index
+	}
+	return paths
+}()
+
+func stateHasID(st domain.State, id string) bool {
+	value := reflect.ValueOf(st)
+	for i, path := range stateIDPaths {
+		field := value.Field(i)
+		for j := 0; j < field.Len(); j++ {
+			if field.Index(j).FieldByIndex(path).String() == id {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -83,6 +83,14 @@ func checkSuccessProvenance(st State, j WorkerJob) bool {
 // ValidateWorkerChecks protects typed references and durable provider intents
 // on every store update/reopen and backup import. It grants no execution rights.
 func ValidateWorkerChecks(st State) error {
+	if len(st.WorkerJobs) == 0 {
+		for i := range st.Operations {
+			if st.Operations[i].Kind == "CHECK_PUBLICATION" || st.Operations[i].CheckPublication != nil {
+				return fmt.Errorf("invalid worker check publication references or intent")
+			}
+		}
+		return nil
+	}
 	fail := func() error { return fmt.Errorf("invalid worker check publication references or intent") }
 	jobs := map[string]WorkerJob{}
 	ops := map[string]ExternalOperation{}
