@@ -26,6 +26,7 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
+	builds       *buildRuntime
 	intelligence IntelligenceProvider
 	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
 	nativeAuthorityNow func() time.Time

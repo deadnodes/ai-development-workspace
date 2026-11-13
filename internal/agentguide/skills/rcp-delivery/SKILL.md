@@ -140,3 +140,31 @@ what was observed and what remains unverified. Keep build status, PR merge,
 runtime readiness and Feature acceptance separate. Save `record_progress` and
 `handoff` in the actual Product/Feature/Integration, then `resume` and verify both
 record IDs in that same scope before reporting completion.
+
+## Configured Forgejo build queue
+
+For an operator-enrolled Forgejo profile, use `list_build_profiles(product_id)`
+then `queue_build(product_id, profile_id, branch? | sha?, request_key?)`.
+Supply branch or SHA, never both; neither selects the profile default branch.
+Branch resolves HEAD once; SHA verifies any existing repository commit. Builds
+produce images only: no deployment or Flux writes. The configured build.yml
+workflow version comes from dispatch_ref; inputs.sha pins the build and the Build
+ID is inputs.request_id. Forgejo 15.0.11 ignores run-name. Parse bounded event_payload JSON inputs.sha
+to identify the built SHA; push/PR runs cannot attach. Never log event_payload.
+Follow the returned Build handle with `get_build`, or bounded `list_builds`
+(default25/max100, scope-bound cursor). A Build is independent of `get_operation`.
+Repeated profile/SHA/workflow returns the same non-failed handle. Failed or
+cancelled attempts need a new explicit request_key. Only QUEUED can be cancelled.
+Ordered registry tag_candidates with the exact revision can short-circuit with
+reused:registry; existing build.yml workflow_dispatch waiting/running/success runs with matching
+event_payload.inputs.sha can attach with
+reused:run. Foreign waiting/running build.yml runs block dispatch; owned active
+builds count toward the pool limit. RECONCILIATION_REQUIRED retains pool capacity:
+inspect that same handle and reconcile event_payload.inputs.sha and inputs.request_id with our Build ID, never
+request a replacement dispatch to resolve uncertainty. Success includes a candidate
+tag's registry-verified digest and full source revision; a conflicting tag fails.
+Never parse RCP_RESULT logs. See docs/FORGEJO_BUILDS.md.
+
+Build profiles declare images: [{id,repository}, …]. Registry reuse and success
+require ALL images with matching revision at the same candidate tag; partial presence
+dispatches normally. Build images results list each id, image_ref and digest.

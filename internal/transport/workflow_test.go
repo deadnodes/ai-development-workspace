@@ -139,7 +139,7 @@ func TestPostgresHTTPMCPWorkflow(t *testing.T) {
 	for _, tool := range listed.Tools {
 		names[tool.Name] = true
 	}
-	for _, name := range []string{"get_state", "resume", "execute"} {
+	for _, name := range []string{"get_state", "resume", "execute", "queue_build", "get_build", "list_builds", "cancel_build", "list_build_profiles"} {
 		if !names[name] {
 			t.Errorf("MCP missing %s", name)
 		}

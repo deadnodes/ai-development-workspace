@@ -16,10 +16,13 @@ import (
 	"releasecontrol/internal/agentconnect"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/auth"
+	"releasecontrol/internal/buildconfig"
+	"releasecontrol/internal/buildregistry"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/intelligence"
 	"releasecontrol/internal/persistence"
+	"releasecontrol/internal/providers/forgejo"
 	"releasecontrol/internal/providers/github"
 	"releasecontrol/internal/providers/runtimeobserver"
 	"releasecontrol/internal/transport"
@@ -86,6 +89,19 @@ func run() error {
 		addr = "127.0.0.1:8090"
 	}
 	service := application.NewWithProvider(store, github.New())
+	if path := os.Getenv("RCP_BUILDS_FILE"); path != "" {
+		config, e := buildconfig.Load(path)
+		if e != nil {
+			return fmt.Errorf("load build authority: %w", e)
+		}
+		if e = service.ConfigureBuilds(config, forgejo.New(), buildregistry.New()); e != nil {
+			return e
+		}
+		done := make(chan struct{})
+		go func() { defer close(done); service.RunBuilds(ctx) }()
+		defer func() { stop(); <-done }()
+	}
+
 	workspaceRoot := os.Getenv("RCP_WORKSPACE_ROOT")
 	service.SetWorkspaceRoot(workspaceRoot)
 	if path := os.Getenv("RCP_INTELLIGENCE_FILE"); path != "" {
