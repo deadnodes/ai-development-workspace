@@ -311,7 +311,10 @@ func deploymentPlan(d domain.Deployment, p buildconfig.Profile) github.DeployPla
 				ref, _, _ := strings.Cut(i.ImageRef, "@")
 				tag := ref[strings.LastIndex(ref, ":")+1:]
 				value := strings.ReplaceAll(strings.ReplaceAll(f.TagFormat, "{tag}", tag), "{digest}", i.Digest)
-				byPath[f.Path] = append(byPath[f.Path], github.DeployTag{Repository: f.ImageRepository, Value: value, MinMatches: f.MinMatches})
+				if f.Format == "container_image" {
+					value = tag + "@" + i.Digest
+				}
+				byPath[f.Path] = append(byPath[f.Path], github.DeployTag{Repository: f.ImageRepository, Value: value, MinMatches: f.MinMatches, Format: f.Format})
 			}
 		}
 	}

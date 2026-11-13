@@ -14,10 +14,10 @@ var ErrTargetMissing = errors.New("GITOPS_TARGET_MISSING")
 type DeployTag struct {
 	Repository, Value string
 	MinMatches        int
+	Format            string
 }
 
-// RenderDeployment reuses the GitOps scalar editor, selecting only HelmRelease
-// tag scalars. Reparsing compares the entire semantic tree after permitted edits.
+// RenderDeployment reuses the GitOps scalar editor for configured image scalars. Reparsing compares the entire semantic tree after permitted edits.
 func RenderDeployment(content string, tags []DeployTag) (string, error) {
 	if len(content) > 1<<20 || len(tags) == 0 {
 		return "", errors.New("invalid deployment content")
@@ -52,6 +52,32 @@ func RenderDeployment(content string, tags []DeployTag) (string, error) {
 			return "", errors.New("invalid deployment tag")
 		}
 		matches := []imageDocument{}
+		if t.Format == "container_image" {
+			if !strings.Contains(t.Value, "@") || strings.HasPrefix(t.Value, "sha256:") {
+				return "", errors.New("container image requires tag and digest")
+			}
+			for _, doc := range docs {
+				nodes, err := containerImageNodes(doc, t.Repository)
+				if err != nil {
+					return "", err
+				}
+				for _, n := range nodes {
+					if selected[n] {
+						return "", errors.New("overlapping image selectors")
+					}
+					selected[n] = true
+					matches = append(matches, imageDocument{doc, n, n})
+				}
+			}
+			if len(matches) < t.MinMatches {
+				return "", ErrTargetMissing
+			}
+			replacements = append(replacements, imageReplacement{matches, t.Repository, t.Repository + ":" + t.Value})
+			continue
+		}
+		if t.Format != "" && t.Format != "helm_values" {
+			return "", errors.New("unknown deployment format")
+		}
 		selector := delivery.GitOpsRequest{ImageField: "spec.values.image.repository", DigestField: "spec.values.image.tag"}
 		for _, doc := range docs {
 			if !batchDocumentMatches(doc, selector) {
@@ -132,4 +158,50 @@ func validDeployTag(s string) bool {
 	}
 	tag, digest, ok := strings.Cut(s, "@")
 	return ok && digestPattern.MatchString(digest) && len(tag) > 0 && len(tag) <= 128 && !strings.ContainsAny(tag, ":/")
+}
+
+// imageRepository removes the digest and a tag only after the last slash, so
+// registry ports remain part of the repository identity.
+func imageRepository(value string) string {
+	value, _, _ = strings.Cut(value, "@")
+	if colon := strings.LastIndex(value, ":"); colon > strings.LastIndex(value, "/") {
+		value = value[:colon]
+	}
+	return value
+}
+
+func containerImageNodes(doc *yaml.Node, repository string) ([]*yaml.Node, error) {
+	var result []*yaml.Node
+	var walk func(*yaml.Node, bool) error
+	walk = func(n *yaml.Node, unsafe bool) error {
+		unsafe = unsafe || n.Style&yaml.FlowStyle != 0 || n.Anchor != "" || n.Kind == yaml.AliasNode
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i < len(n.Content); i += 2 {
+				key, value := n.Content[i], n.Content[i+1]
+				if (key.Value == "containers" || key.Value == "initContainers") && value.Kind == yaml.SequenceNode {
+					for _, container := range value.Content {
+						image, err := mappingValue(container, "image")
+						if err != nil {
+							continue
+						}
+						if image.Kind != yaml.ScalarNode || imageRepository(image.Value) != repository {
+							continue
+						}
+						if unsafe || value.Style&yaml.FlowStyle != 0 || container.Style&yaml.FlowStyle != 0 || container.Anchor != "" || image.Anchor != "" {
+							return errors.New("unsupported container image mapping")
+						}
+						result = append(result, image)
+					}
+				}
+			}
+		}
+		for _, child := range n.Content {
+			if err := walk(child, unsafe); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	err := walk(doc, false)
+	return result, err
 }

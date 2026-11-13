@@ -136,3 +136,19 @@ func TestDeploymentAuthority(t *testing.T) {
 		}
 	}
 }
+
+func TestDeploymentFormats(t *testing.T) {
+	for _, format := range []string{"", "helm_values", "container_image", "unknown"} {
+		c := deliveryConfig()
+		f := &c.Profiles[0].Deployments["dev"].Files[0]
+		f.Format = format
+		if format == "container_image" {
+			f.TagFormat = "ignored"
+		}
+		raw, _ := json.Marshal(c)
+		_, err := Decode(strings.NewReader(string(raw)))
+		if (err != nil) != (format == "unknown") {
+			t.Fatalf("format %q: %v", format, err)
+		}
+	}
+}

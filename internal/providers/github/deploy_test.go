@@ -26,7 +26,7 @@ func TestDeployProviderOffline(t *testing.T) {
 			if already {
 				before = deployYAML("registry/o/r", value)
 			}
-			after, e := RenderDeployment(before, []DeployTag{{"registry/o/r", value, 1}})
+			after, e := RenderDeployment(before, []DeployTag{{"registry/o/r", value, 1, ""}})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -131,7 +131,7 @@ func TestDeployProviderOffline(t *testing.T) {
 			}
 			key := fmt.Sprintf("%s|%d|%d|%s", g.APIURL, g.AppID, g.InstallationID, c.PrivateKeyRef)
 			p.tokens[key] = cachedToken{"existing-token", time.Now().Add(time.Hour)}
-			plan := DeployPlan{ID: "test", Branch: branch, Body: body, Files: []DeployFile{{Path: "app.yaml", Tags: []DeployTag{{"registry/o/r", value, 1}}}}}
+			plan := DeployPlan{ID: "test", Branch: branch, Body: body, Files: []DeployFile{{Path: "app.yaml", Tags: []DeployTag{{"registry/o/r", value, 1, ""}}}}}
 			proposal, e := p.ProposeDeployment(ctx, g, plan)
 			if e != nil {
 				t.Fatal(e)

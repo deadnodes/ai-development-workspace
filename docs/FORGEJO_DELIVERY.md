@@ -36,7 +36,9 @@ Each build profile may add:
 
 All objects reject unknown fields. Only Dev with auto merge enabled and base
 branch main are accepted. Targets must reference a configured profile image and
-its registry repository. The tag format is `{tag}@{digest}` or `{digest}`. Each
+its registry repository. The file `format` defaults to `helm_values`; its tag format is `{tag}@{digest}` or `{digest}`.
+The other supported format is `container_image`; unknown formats are rejected.
+For `container_image`, `tag_format` is ignored and may be omitted. Each
 file selector requires a positive min_matches (maximum 100). Up to 16 entries
 per profile are supported; several image selectors may share a file.
 The example paths are operator templates: verify them against the installation.
@@ -77,6 +79,28 @@ It preserves quote style, indentation, comments and all other bytes, then repars
 to check semantic scope. A selector below min_matches fails GITOPS_TARGET_MISSING.
 Anchored, multiline, ambiguous or unsupported targets fail closed. All exact
 values already present short-circuit with SUCCEEDED / already_applied and no PR.
+
+For plain Kubernetes manifests, use an entry such as:
+
+```json
+{
+  "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
+  "format": "container_image",
+  "image_id": "web",
+  "image_repository": "192.168.32.242:5000/deadnodes/meteroid-web",
+  "min_matches": 1
+}
+```
+
+The same format applies to plain manifests such as
+`clusters/platform-dev/custom-resources/lp-dev/pp-content-cms.yaml` with that
+profile's configured image ID and repository. Across all YAML documents, each
+`containers` or `initContainers` entry with an exact matching image repository
+is rewritten to `<image_repository>:<tag>@<digest>`. Registry ports are preserved
+when removing the previous tag/digest; repositories sharing only a prefix do not
+match. Only the image scalar token changes, preserving quotes, indentation,
+comments and every other byte. The same min_matches, already-applied short-circuit
+and reparse verification apply. Anchored, multiline or flow targets fail closed.
 
 RCP creates `rcp/deploy/<deployment-id>` and a PR containing Build ID, source SHA,
 run URL, image digests and CI evidence. It rereads the PR before merging, checks

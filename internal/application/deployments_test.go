@@ -325,3 +325,17 @@ func TestDeployListCursorBinding(t *testing.T) {
 		}
 	}
 }
+
+func TestDeploymentPlanContainerImage(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	p := buildconfig.Profile{Deployments: map[string]buildconfig.DeploymentTarget{"dev": {Files: []buildconfig.DeploymentFile{{Path: "workloads.yaml", Format: "container_image", ImageID: "web", ImageRepository: "registry:5000/o/web", TagFormat: "ignored", MinMatches: 2}}}}}
+	d := domain.Deployment{Images: []domain.BuildImage{{ID: "web", ImageRef: "registry:5000/o/web:forgejo-12345678@" + digest, Digest: digest}}}
+	plan := deploymentPlan(d, p)
+	if len(plan.Files) != 1 || len(plan.Files[0].Tags) != 1 {
+		t.Fatal(plan)
+	}
+	tag := plan.Files[0].Tags[0]
+	if tag.Format != "container_image" || tag.Value != "forgejo-12345678@"+digest || tag.MinMatches != 2 {
+		t.Fatal(tag)
+	}
+}

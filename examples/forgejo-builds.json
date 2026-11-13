@@ -131,25 +131,25 @@
         "dev": {
           "files": [
             {
-              "path": "clusters/platform-dev/custom-resources/lp-dev/meteroid-api.yaml",
+              "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
               "image_id": "api",
               "image_repository": "192.168.32.242:5000/deadnodes/meteroid-api",
-              "tag_format": "{tag}@{digest}",
-              "min_matches": 1
+              "min_matches": 1,
+              "format": "container_image"
             },
             {
-              "path": "clusters/platform-dev/custom-resources/lp-dev/meteroid-scheduler.yaml",
+              "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
               "image_id": "scheduler",
               "image_repository": "192.168.32.242:5000/deadnodes/meteroid-scheduler",
-              "tag_format": "{tag}@{digest}",
-              "min_matches": 1
+              "min_matches": 1,
+              "format": "container_image"
             },
             {
-              "path": "clusters/platform-dev/custom-resources/lp-dev/meteroid-web.yaml",
+              "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
               "image_id": "web",
               "image_repository": "192.168.32.242:5000/deadnodes/meteroid-web",
-              "tag_format": "{tag}@{digest}",
-              "min_matches": 1
+              "min_matches": 1,
+              "format": "container_image"
             }
           ]
         }

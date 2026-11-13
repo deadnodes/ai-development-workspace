@@ -48,6 +48,7 @@ type DeploymentTarget struct {
 	Files []DeploymentFile `json:"files"`
 }
 type DeploymentFile struct {
+	Format          string `json:"format,omitempty"`
 	Path            string `json:"path"`
 	ImageID         string `json:"image_id"`
 	ImageRepository string `json:"image_repository"`
@@ -239,7 +240,7 @@ func (c *Config) Validate() error {
 				}
 				registryURL, _ := url.Parse(c.Registry(v.RegistryID).Origin)
 				key := f.Path + "|" + f.ImageRepository
-				if imageRepo == "" || f.ImageRepository != registryURL.Host+"/"+imageRepo || seen[key] || f.MinMatches < 1 || f.MinMatches > 100 || f.Path == "" || path.IsAbs(f.Path) || path.Clean(f.Path) != f.Path || strings.HasPrefix(f.Path, "../") || f.Path == ".." || strings.ContainsAny(f.Path, "\\\r\n\t\x00?#%") || len(f.Path) > 1024 || (f.TagFormat != "{tag}@{digest}" && f.TagFormat != "{digest}") {
+				if imageRepo == "" || f.ImageRepository != registryURL.Host+"/"+imageRepo || seen[key] || f.MinMatches < 1 || f.MinMatches > 100 || f.Path == "" || path.IsAbs(f.Path) || path.Clean(f.Path) != f.Path || strings.HasPrefix(f.Path, "../") || f.Path == ".." || strings.ContainsAny(f.Path, "\\\r\n\t\x00?#%") || len(f.Path) > 1024 || (f.Format != "" && f.Format != "helm_values" && f.Format != "container_image") || (f.Format != "container_image" && f.TagFormat != "{tag}@{digest}" && f.TagFormat != "{digest}") {
 					return bad
 				}
 				seen[key] = true
