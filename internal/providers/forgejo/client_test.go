@@ -243,3 +243,57 @@ func TestListRunsOmitsEmptyFilters(t *testing.T) {
 		})
 	}
 }
+
+func TestForgejo15EffectiveEvent(t *testing.T) {
+	for _, tc := range []struct{ event, trigger, want string }{
+		{"", "workflow_dispatch", "workflow_dispatch"},
+		{"push", "workflow_dispatch", "push"},
+		{"workflow_dispatch", "push", "workflow_dispatch"},
+		{"", "", ""},
+		{"", strings.Repeat("x", 65), ""},
+	} {
+		t.Run(tc.event+tc.trigger, func(t *testing.T) {
+			payload := `{"inputs":{"sha":"` + strings.Repeat("a", 40) + `","request_id":"build-id"}}`
+			c, cn := inMemoryFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				run := fmt.Sprintf(`{"id":42,"workflow_id":"build.yml","status":"running","event":%q,"trigger_event":%q,"event_payload":%q}`, tc.event, tc.trigger, payload)
+				if strings.HasSuffix(r.URL.Path, "/42") {
+					fmt.Fprint(w, run)
+				} else {
+					fmt.Fprintf(w, `{"workflow_runs":[%s],"total_count":1}`, run)
+				}
+			})
+			run, err := c.GetRun(context.Background(), cn, "o/r", 42)
+			page, listErr := c.ListRuns(context.Background(), cn, "o/r", "build.yml", Filter{Event: "workflow_dispatch"})
+			if len(tc.trigger) > 64 {
+				if err == nil || listErr == nil {
+					t.Fatal("unbounded trigger accepted")
+				}
+				return
+			}
+			if err != nil || listErr != nil || run.EffectiveEvent() != tc.want || len(page.Runs) != 1 || page.Runs[0].EffectiveEvent() != tc.want {
+				t.Fatal(run, page, err, listErr)
+			}
+			if sha, request := run.DispatchInputs(); sha != strings.Repeat("a", 40) || request != "build-id" {
+				t.Fatal("inputs lost")
+			}
+		})
+	}
+}
+
+// Exercise real request/decoding paths without requiring a listening socket.
+type handlerTransport struct{ handler http.HandlerFunc }
+
+func (h handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	recorder := httptest.NewRecorder()
+	h.handler.ServeHTTP(recorder, r)
+	return recorder.Result(), nil
+}
+func inMemoryFixture(t *testing.T, handler http.HandlerFunc) (*Client, buildconfig.Connection) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("RCP_SECRET_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "token"), []byte("secret-forgejo-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return NewWithClient(&http.Client{Transport: handlerTransport{handler}}), buildconfig.Connection{APIURL: "https://forgejo.example", TokenRef: "token"}
+}

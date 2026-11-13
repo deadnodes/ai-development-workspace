@@ -341,7 +341,7 @@ func (s *Service) buildProviderUnavailable(ctx context.Context, b domain.Build, 
 }
 func matching(r forgejo.Run, b domain.Build) bool {
 	sha, _ := r.DispatchInputs()
-	return r.ID > 0 && r.Workflow == b.Workflow && r.Event == "workflow_dispatch" && sha == b.SourceSHA
+	return r.ID > 0 && r.Workflow == b.Workflow && r.EffectiveEvent() == "workflow_dispatch" && sha == b.SourceSHA
 }
 func usable(r forgejo.Run) bool {
 	return r.Status == "waiting" || r.Status == "running" || r.Status == "success"
@@ -431,6 +431,8 @@ func (s *Service) observeBuild(ctx context.Context, b domain.Build, p buildconfi
 		next.FailureCode = "RUN_SOURCE_MISMATCH"
 		return s.advanceBuild(ctx, b, next, false)
 	}
+	next.ProviderUnavailable = false
+	next.LastError = ""
 	next.ProviderRunID = r.ID
 	next.RunURL = r.URL
 	next.RunStatus = r.Status
@@ -521,6 +523,12 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		if buildActive(b) {
+			if b.Status == "RECONCILIATION_REQUIRED" && b.DispatchedAt != nil && time.Since(*b.DispatchedAt) > time.Duration(a.config.TimeoutSeconds)*time.Second+buildReconciliationGrace {
+				if e = s.expireReconciliation(ctx, b, p); e != nil {
+					return e
+				}
+				continue
+			}
 			if b.DispatchedAt != nil && time.Since(*b.DispatchedAt) > time.Duration(a.config.TimeoutSeconds)*time.Second && b.Status != "RECONCILIATION_REQUIRED" {
 				n := b
 				n.Status = "RECONCILIATION_REQUIRED"
@@ -642,7 +650,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			if i < sourceRunCount && matching(*r, b) && usable(*r) && (match == nil || r.ID > match.ID) {
 				match = r
 			}
-			if r.Workflow == p.Workflow && (r.Status == "waiting" || r.Status == "running") {
+			if r.Workflow == p.Workflow && r.EffectiveEvent() == "workflow_dispatch" && (r.Status == "waiting" || r.Status == "running") {
 				owned := false
 				for _, owner := range fresh.Builds {
 					ownerProfile, configured := a.config.Profile(owner.ProfileID)
@@ -726,4 +734,70 @@ func (s *Service) RunBuilds(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// The grace is additional time for delayed provider visibility after the deadline.
+const buildReconciliationGrace = 10 * time.Minute
+
+func (s *Service) expireReconciliation(ctx context.Context, b domain.Build, p buildconfig.Profile) error {
+	a := s.builds
+	keep := func() error {
+		next := b
+		next.ProviderUnavailable = false
+		next.LastError = ""
+		return s.advanceBuild(ctx, b, next, false)
+	}
+	// Preserve terminal evidence and self-heal known runs before considering expiry.
+	if b.ProviderRunID > 0 {
+		r, err := a.provider.GetRun(ctx, a.config.Connection(p.ConnectionID), p.Repository, b.ProviderRunID)
+		if err != nil {
+			return s.buildProviderUnavailable(ctx, b, err)
+		}
+		if matching(r, b) && (usable(r) || r.Status == "failure" || r.Status == "cancelled" || r.Status == "skipped" || r.Status == "blocked") {
+			if b.FailureCode == "BUILD_TIMEOUT" && (r.Status == "waiting" || r.Status == "running") {
+				return keep()
+			}
+			return s.observeBuild(ctx, b, p, r)
+		}
+	}
+	for _, status := range []string{"waiting", "running"} {
+		runs, err := a.runs(ctx, p, forgejo.Filter{Status: status}, time.Time{})
+		if err != nil {
+			return s.buildProviderUnavailable(ctx, b, err)
+		}
+		for _, r := range runs {
+			sha, _ := r.DispatchInputs()
+			if r.Workflow == b.Workflow && r.EffectiveEvent() == "workflow_dispatch" && (r.Status == "waiting" || r.Status == "running") && (sha == b.SourceSHA || b.ProviderRunID > 0 && r.ID == b.ProviderRunID) {
+				return keep()
+			}
+		}
+	}
+	next := failedBuild(b, "RECONCILIATION_TIMEOUT")
+	next.ProviderUnavailable = false
+	next.LastError = ""
+	return s.advanceBuild(ctx, b, next, false)
+}
+
+// Keep the build contribution bounded independently of other attention sources.
+func buildReconciliationAttention(st domain.State, productID string, now time.Time) []map[string]any {
+	builds := []domain.Build{}
+	for _, b := range st.Builds {
+		if b.ProductID == productID && b.Status == "RECONCILIATION_REQUIRED" {
+			builds = append(builds, b)
+		}
+	}
+	sort.Slice(builds, func(i, j int) bool { return builds[i].ID < builds[j].ID })
+	if len(builds) > 100 {
+		builds = builds[:100]
+	}
+	items := []map[string]any{}
+	for _, b := range builds {
+		since := b.QueuedAt
+		if b.DispatchedAt != nil {
+			since = *b.DispatchedAt
+		}
+		age := max(int64(0), int64(now.Sub(since)/time.Second))
+		items = append(items, map[string]any{"id": b.ID, "reason": "BUILD_RECONCILIATION_REQUIRED", "profile_id": b.ProfileID, "failure_code": b.FailureCode, "age_seconds": age})
+	}
+	return items
 }

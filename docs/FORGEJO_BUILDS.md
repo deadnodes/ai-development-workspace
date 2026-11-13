@@ -150,6 +150,9 @@ push/PR workflows run checks only. Dispatch sends:
 `dispatch_ref` selects only the workflow version. The workflow builds exactly
 `inputs.sha`, independent of branch movement, and returns `{id,run_number,jobs}`.
 Forgejo 15.0.11 ignores `run-name`; ActionRun `title` is the workflow name.
+The effective event is `event` when non-empty, otherwise `trigger_event` (each
+limited to 64 bytes). Forgejo 15.0.11 returns an empty `event` and carries
+`workflow_dispatch` in `trigger_event`; neither field means no match.
 Run identity comes from `event_payload`, a JSON string in run list/detail responses,
 whose `inputs.sha` is the built SHA and `inputs.request_id` is the Build ID.
 RCP parses at most 256 KiB per run, skips larger or malformed payloads and tolerates
@@ -219,9 +222,23 @@ RCP stores dispatch intent as RECONCILIATION_REQUIRED before network I/O. A lost
 response or restart in that window never automatically dispatches again. It
 reconciles by workflow + workflow_dispatch event + `event_payload.inputs.sha == source_sha` and
 `event_payload.inputs.request_id == our Build ID`. Until evidence appears, uncertainty retains the pool slot.
-No automated reset or retry of uncertainty is provided. Operator investigation is
-required if Forgejo never accepted the original request. In-flight deadline expiry
-also requires reconciliation; terminal run evidence can still close that handle.
+No automatic redispatch occurs. A RECONCILIATION_REQUIRED Build with a non-null
+`dispatched_at` strictly older than configured `timeout_seconds` (default 7200)
+plus a fixed 600-second grace can become FAILED / RECONCILIATION_TIMEOUT, releasing
+its slot. RCP first re-reads a known `provider_run_id`; matching terminal evidence
+still closes the handle normally and matching active evidence retains it. It then
+queries waiting and running runs separately, with no age cutoff, for the configured
+workflow and effective workflow_dispatch event. Any such run whose `inputs.sha`
+equals the Build source OR whose ID equals `provider_run_id` prevents expiry,
+regardless of request ID. Both queries must complete within the ten-page bounds;
+provider errors (including failed GetRun) or exhausted bounds retain uncertainty
+and the slot. Missing dispatch time, quarantined restore records and changed
+operator authority do not qualify for this escape. Source-mismatch records with
+a known run ID self-heal on polling when fresh run metadata matches.
+
+`get_attention_required` includes up to 100 reconciliation Build entries per
+Product, ordered by ID, with `id`, `profile_id`, `failure_code`, and `age_seconds`
+since dispatch (queue time when dispatch time is absent).
 Restart resumes durable records. Changed operator authority fails closed rather
 than executing old queued intent under a different configuration.
 

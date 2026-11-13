@@ -25,6 +25,7 @@ type Run struct {
 	SHA          string    `json:"commit_sha"`
 	URL          string    `json:"html_url"`
 	Event        string    `json:"event"`
+	TriggerEvent string    `json:"trigger_event"`
 	Branch       string    `json:"prettyref"`
 	Workflow     string    `json:"workflow_id"`
 	Created      time.Time `json:"created"`
@@ -219,7 +220,7 @@ func (c *Client) ListRuns(ctx context.Context, cn buildconfig.Connection, repo, 
 }
 
 func validRun(r Run) bool {
-	return len(r.URL) <= 2048 && len(r.Branch) <= 270 && len(r.Status) <= 64 && len(r.Event) <= 64 && len(r.Workflow) <= 255 && (r.SHA == "" || buildconfig.SHA.MatchString(r.SHA))
+	return len(r.URL) <= 2048 && len(r.Branch) <= 270 && len(r.Status) <= 64 && len(r.Event) <= 64 && len(r.TriggerEvent) <= 64 && len(r.Workflow) <= 255 && (r.SHA == "" || buildconfig.SHA.MatchString(r.SHA))
 }
 
 // DispatchInputs parses only bounded event metadata. Payloads must never be logged.
@@ -237,4 +238,12 @@ func (r Run) DispatchInputs() (sha, requestID string) {
 		return "", ""
 	}
 	return event.Inputs.SHA, event.Inputs.RequestID
+}
+
+// EffectiveEvent preserves the explicit event, falling back for Forgejo 15 runs.
+func (r Run) EffectiveEvent() string {
+	if r.Event != "" {
+		return r.Event
+	}
+	return r.TriggerEvent
 }

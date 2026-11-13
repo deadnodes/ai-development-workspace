@@ -282,6 +282,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		}
 		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC()))
 		items = append(items, unlinkedGitCommits(st, id)...)
+		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
 		for _, finding := range st.Findings {
 			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {
 				integrationID := ""
