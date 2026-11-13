@@ -1374,3 +1374,89 @@ func TestBuildReconciliationAttention(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildChangedAuthorityReconciliation(t *testing.T) {
+	for _, status := range []string{"success", "failure", "cancelled", "skipped", "blocked", "waiting", "running", "missing", "no-id", "no-profile", "no-connection", "changed-connection", "queued-time", "no-id-before-grace", "get-error-before-grace", "missing-connection-id"} {
+		t.Run(status, func(t *testing.T) {
+			s, m, f, registry := buildFixture(t)
+			b := queue(t, s, "old")
+			tick(t, s)
+			m.state.Builds[0].Status = "RUNNING"
+			cfg := buildConfig()
+			cfg.TimeoutSeconds = 60
+			if err := s.ConfigureBuilds(cfg, f, registry); err != nil {
+				t.Fatal(err)
+			}
+			tick(t, s)
+			if got := getBuild(t, s, b); got.Status != "RECONCILIATION_REQUIRED" || got.FailureCode != "BUILD_AUTHORITY_CHANGED" {
+				t.Fatal(got)
+			}
+			old := time.Now().Add(-time.Hour - buildReconciliationGrace)
+			m.state.Builds[0].DispatchedAt = &old
+			f.runs[0].Status = status
+			finished := time.Now().UTC().Add(-time.Minute)
+			f.runs[0].Stopped = finished
+			terminal := true
+			switch status {
+			case "waiting", "running":
+				terminal = false
+			case "no-id-before-grace", "get-error-before-grace":
+				terminal = false
+				recent := time.Now().UTC()
+				m.state.Builds[0].DispatchedAt = &recent
+				if status == "no-id-before-grace" {
+					m.state.Builds[0].ProviderRunID = 0
+				} else {
+					f.runs = nil
+				}
+			case "missing-connection-id":
+				m.state.Builds[0].ConnectionID = ""
+			case "missing":
+				f.runs = nil
+			case "no-id":
+				m.state.Builds[0].ProviderRunID = 0
+			case "no-profile":
+				s.builds.config.Profiles = nil
+			case "no-connection":
+				s.builds.config.Connections = nil
+			case "changed-connection":
+				s.builds.config.Profiles[0].ConnectionID = "other"
+			case "queued-time":
+				m.state.Builds[0].DispatchedAt = nil
+				m.state.Builds[0].QueuedAt = old
+				m.state.Builds[0].ProviderRunID = 0
+			}
+			// An old-authority success must not even attempt artifact resolution.
+			registry.err = nil
+			registry.artifact.Revision = b.SourceSHA
+			tick(t, s)
+			got := getBuild(t, s, b)
+			if got.FailureCode != "BUILD_AUTHORITY_CHANGED" || len(got.Images) != 0 || f.dispatches != 1 {
+				t.Fatal(got, f.dispatches)
+			}
+			if terminal {
+				if got.Status != "FAILED" || got.FinishedAt == nil || buildActive(got) {
+					t.Fatal(got)
+				}
+			} else if got.Status != "RECONCILIATION_REQUIRED" || !buildActive(got) {
+				t.Fatal(got)
+			}
+			if status == "success" {
+				if !got.FinishedAt.Equal(finished) || got.RunStatus != status || got.ProviderRunID != 1 || got.RunURL != "https://git/run" {
+					t.Fatal(got)
+				}
+				registry.err = buildregistry.ErrMissing
+				f.head = strings.Repeat("c", 40)
+				next := queue(t, s, "next")
+				tick(t, s)
+				if getBuild(t, s, next).Status != "DISPATCHED" || f.dispatches != 2 {
+					t.Fatal("pool was not released")
+				}
+			}
+			tick(t, s)
+			if status != "success" && f.dispatches != 1 {
+				t.Fatal("old build redispatched")
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ type Build struct {
 	RestoreQuarantined  bool   `json:"restore_quarantined,omitempty"`
 	AuthorityHash       string `json:"authority_hash"`
 	Meta
+	ConnectionID   string       `json:"connection_id"`
 	ProfileID      string       `json:"profile_id"`
 	PoolID         string       `json:"pool_id"`
 	Repository     string       `json:"repository"`

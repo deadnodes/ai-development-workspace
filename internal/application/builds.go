@@ -180,7 +180,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 		now := time.Now().UTC()
 		actor := attributedActor(ctx, "agent")
-		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
+		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ConnectionID: p.ConnectionID, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
 		bind(out)
 		st.Builds = append(st.Builds, out)
 		buildEvent(st, out, "queue_build")
@@ -480,6 +480,46 @@ func (s *Service) observeBuild(ctx context.Context, b domain.Build, p buildconfi
 	return s.advanceBuild(ctx, b, next, false)
 }
 
+// Changed authority can observe an existing run, but can never accept its artifacts
+// or dispatch again. Unobservable runs release admission after timeout plus grace.
+func (s *Service) reconcileChangedBuildAuthority(ctx context.Context, b domain.Build, p buildconfig.Profile, configured bool) error {
+	a := s.builds
+	next := b
+	next.Status = "RECONCILIATION_REQUIRED"
+	next.FailureCode = "BUILD_AUTHORITY_CHANGED"
+	next.FailureMessage = "BUILD_AUTHORITY_CHANGED"
+	observedActive := false
+	// A missing original connection identity cannot safely locate an old run.
+	if configured && p.Repository == b.Repository && p.ConnectionID == b.ConnectionID && a.config.Connection(p.ConnectionID).ID != "" && b.ProviderRunID > 0 {
+		r, err := a.provider.GetRun(ctx, a.config.Connection(p.ConnectionID), b.Repository, b.ProviderRunID)
+		if err == nil {
+			next.ProviderUnavailable = false
+			next.LastError = ""
+			next.RunStatus = r.Status
+			switch r.Status {
+			case "success", "failure", "cancelled", "skipped", "blocked":
+				next = failedBuild(next, "BUILD_AUTHORITY_CHANGED")
+				if !r.Stopped.IsZero() {
+					next.FinishedAt = &r.Stopped
+				}
+			case "waiting", "running":
+				observedActive = true
+			}
+		}
+	}
+	since := b.QueuedAt
+	if b.DispatchedAt != nil {
+		since = *b.DispatchedAt
+	}
+	if next.Status != "FAILED" && !observedActive && time.Since(since) > time.Duration(a.config.TimeoutSeconds)*time.Second+buildReconciliationGrace {
+		next = failedBuild(next, "BUILD_AUTHORITY_CHANGED")
+	}
+	if b.Status != next.Status || b.FailureCode != next.FailureCode {
+		slog.Warn("build authority changed", "build_id", b.ID, "from_status", b.Status, "to_status", next.Status, "run_status", next.RunStatus)
+	}
+	return s.advanceBuild(ctx, b, next, false)
+}
+
 // DispatchBuildsOnce performs bounded external I/O outside Store transactions. Intent
 // is persisted before dispatch; a crash in that window can only reconcile, never retry.
 func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
@@ -515,11 +555,8 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				if e = s.advanceBuild(ctx, b, failedBuild(b, "BUILD_AUTHORITY_CHANGED"), false); e != nil {
 					return e
 				}
-			} else if buildActive(b) && b.FailureCode != "BUILD_AUTHORITY_CHANGED" {
-				next := b
-				next.Status = "RECONCILIATION_REQUIRED"
-				next.FailureCode = "BUILD_AUTHORITY_CHANGED"
-				if e = s.advanceBuild(ctx, b, next, false); e != nil {
+			} else if buildActive(b) {
+				if e = s.reconcileChangedBuildAuthority(ctx, b, p, ok); e != nil {
 					return e
 				}
 			}
