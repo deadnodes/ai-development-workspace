@@ -180,7 +180,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 		now := time.Now().UTC()
 		actor := attributedActor(ctx, "agent")
-		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ConnectionID: p.ConnectionID, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
+		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ConnectionID: p.ConnectionID, ConnectionAPIURL: a.config.Connection(p.ConnectionID).APIURL, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
 		bind(out)
 		st.Builds = append(st.Builds, out)
 		buildEvent(st, out, "queue_build")
@@ -481,18 +481,23 @@ func (s *Service) observeBuild(ctx context.Context, b domain.Build, p buildconfi
 }
 
 // Changed authority can observe an existing run, but can never accept its artifacts
-// or dispatch again. Unobservable runs release admission after timeout plus grace.
+// or dispatch again. Unlocatable runs release admission after timeout plus grace.
 func (s *Service) reconcileChangedBuildAuthority(ctx context.Context, b domain.Build, p buildconfig.Profile, configured bool) error {
 	a := s.builds
 	next := b
 	next.Status = "RECONCILIATION_REQUIRED"
 	next.FailureCode = "BUILD_AUTHORITY_CHANGED"
 	next.FailureMessage = "BUILD_AUTHORITY_CHANGED"
-	observedActive := false
+	located := false
 	// A missing original connection identity cannot safely locate an old run.
-	if configured && p.Repository == b.Repository && p.ConnectionID == b.ConnectionID && a.config.Connection(p.ConnectionID).ID != "" && b.ProviderRunID > 0 {
-		r, err := a.provider.GetRun(ctx, a.config.Connection(p.ConnectionID), b.Repository, b.ProviderRunID)
-		if err == nil {
+	connection := a.config.Connection(p.ConnectionID)
+	if configured && p.Repository == b.Repository && b.ConnectionID != "" && p.ConnectionID == b.ConnectionID && connection.ID != "" && b.ConnectionAPIURL != "" && connection.APIURL == b.ConnectionAPIURL && b.ProviderRunID > 0 {
+		r, err := a.provider.GetRun(ctx, connection, b.Repository, b.ProviderRunID)
+		located = true
+		if err != nil {
+			next.ProviderUnavailable = true
+			next.LastError = "Forgejo run listing unavailable"
+		} else {
 			next.ProviderUnavailable = false
 			next.LastError = ""
 			next.RunStatus = r.Status
@@ -502,8 +507,6 @@ func (s *Service) reconcileChangedBuildAuthority(ctx context.Context, b domain.B
 				if !r.Stopped.IsZero() {
 					next.FinishedAt = &r.Stopped
 				}
-			case "waiting", "running":
-				observedActive = true
 			}
 		}
 	}
@@ -511,7 +514,7 @@ func (s *Service) reconcileChangedBuildAuthority(ctx context.Context, b domain.B
 	if b.DispatchedAt != nil {
 		since = *b.DispatchedAt
 	}
-	if next.Status != "FAILED" && !observedActive && time.Since(since) > time.Duration(a.config.TimeoutSeconds)*time.Second+buildReconciliationGrace {
+	if next.Status != "FAILED" && !located && time.Since(since) > time.Duration(a.config.TimeoutSeconds)*time.Second+buildReconciliationGrace {
 		next = failedBuild(next, "BUILD_AUTHORITY_CHANGED")
 	}
 	if b.Status != next.Status || b.FailureCode != next.FailureCode {

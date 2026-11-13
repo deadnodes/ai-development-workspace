@@ -1376,10 +1376,13 @@ func TestBuildReconciliationAttention(t *testing.T) {
 }
 
 func TestBuildChangedAuthorityReconciliation(t *testing.T) {
-	for _, status := range []string{"success", "failure", "cancelled", "skipped", "blocked", "waiting", "running", "missing", "no-id", "no-profile", "no-connection", "changed-connection", "queued-time", "no-id-before-grace", "get-error-before-grace", "missing-connection-id"} {
+	for _, status := range []string{"success", "failure", "cancelled", "skipped", "blocked", "waiting", "running", "missing", "no-id", "no-profile", "no-connection", "changed-connection", "queued-time", "no-id-before-grace", "get-error-before-grace", "missing-connection-id", "missing-connection-api-url", "changed-api-url", "unknown"} {
 		t.Run(status, func(t *testing.T) {
 			s, m, f, registry := buildFixture(t)
 			b := queue(t, s, "old")
+			if b.ConnectionID != "forgejo" || b.ConnectionAPIURL != "https://git.example" {
+				t.Fatal("queue did not freeze provider identity", b)
+			}
 			tick(t, s)
 			m.state.Builds[0].Status = "RUNNING"
 			cfg := buildConfig()
@@ -1398,7 +1401,7 @@ func TestBuildChangedAuthorityReconciliation(t *testing.T) {
 			f.runs[0].Stopped = finished
 			terminal := true
 			switch status {
-			case "waiting", "running":
+			case "waiting", "running", "unknown":
 				terminal = false
 			case "no-id-before-grace", "get-error-before-grace":
 				terminal = false
@@ -1412,7 +1415,13 @@ func TestBuildChangedAuthorityReconciliation(t *testing.T) {
 			case "missing-connection-id":
 				m.state.Builds[0].ConnectionID = ""
 			case "missing":
+				terminal = false
 				f.runs = nil
+			case "missing-connection-api-url":
+				m.state.Builds[0].ConnectionAPIURL = ""
+			case "changed-api-url":
+				s.builds.config.Connections[0].APIURL = "https://other.example"
+				f.runs[0].Status = "success"
 			case "no-id":
 				m.state.Builds[0].ProviderRunID = 0
 			case "no-profile":
@@ -1426,6 +1435,7 @@ func TestBuildChangedAuthorityReconciliation(t *testing.T) {
 				m.state.Builds[0].QueuedAt = old
 				m.state.Builds[0].ProviderRunID = 0
 			}
+			calls := f.runCalls
 			// An old-authority success must not even attempt artifact resolution.
 			registry.err = nil
 			registry.artifact.Revision = b.SourceSHA
@@ -1433,6 +1443,16 @@ func TestBuildChangedAuthorityReconciliation(t *testing.T) {
 			got := getBuild(t, s, b)
 			if got.FailureCode != "BUILD_AUTHORITY_CHANGED" || len(got.Images) != 0 || f.dispatches != 1 {
 				t.Fatal(got, f.dispatches)
+			}
+			if status == "missing" || status == "get-error-before-grace" {
+				if !got.ProviderUnavailable || got.LastError != "Forgejo run listing unavailable" || got.FinishedAt != nil {
+					t.Fatal("provider failure lost reconciliation state", got)
+				}
+			}
+			if status == "changed-api-url" || status == "missing-connection-api-url" || status == "missing-connection-id" {
+				if f.runCalls != calls {
+					t.Fatal("consumed evidence without matching provider identity")
+				}
 			}
 			if terminal {
 				if got.Status != "FAILED" || got.FinishedAt == nil || buildActive(got) {
@@ -1456,6 +1476,14 @@ func TestBuildChangedAuthorityReconciliation(t *testing.T) {
 			tick(t, s)
 			if status != "success" && f.dispatches != 1 {
 				t.Fatal("old build redispatched")
+			}
+			if status == "missing" {
+				f.runs = []forgejo.Run{{ID: got.ProviderRunID, Status: "running"}}
+				tick(t, s)
+				recovered := getBuild(t, s, b)
+				if recovered.Status != "RECONCILIATION_REQUIRED" || recovered.ProviderUnavailable || recovered.LastError != "" || recovered.RunStatus != "running" {
+					t.Fatal("provider recovery did not clear unavailability", recovered)
+				}
 			}
 		})
 	}
