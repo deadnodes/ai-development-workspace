@@ -31,6 +31,11 @@ func ValidateStateStatuses(st State) error {
 		}
 		return nil
 	}
+	for _, v := range st.Deployments {
+		if err := check("deployment", v.ID, v.Status, false); err != nil {
+			return err
+		}
+	}
 	for _, v := range st.Builds {
 		if err := check("build", v.ID, v.Status, false); err != nil {
 			return err

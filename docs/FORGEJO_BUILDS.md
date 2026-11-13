@@ -134,7 +134,7 @@ profiles, then:
 ```
 
 Pass this to MCP `queue_build` or `POST /api/builds`. A Build produces its configured images
-only; it does not deploy or write Flux. Deployment is a separate future capability.
+only; it does not deploy or write Flux. Deployment uses a separate explicit [`deploy_build` request](FORGEJO_DELIVERY.md).
 Supply exactly one of `branch` or `sha`, or neither to use the profile default
 branch. Branch requests resolve HEAD once. A SHA must be lowercase 40-hex and is
 verified with `GET /repos/{o}/{r}/git/commits/{sha}`; any existing commit is allowed,
@@ -272,7 +272,7 @@ Meteroid builds api, scheduler and web in one dispatch, each using the same
 `main-<sha8>` or `br-<sha8>` tag and full revision label.
 These are supplied live facts; this change's validation performs no live requests.
 
-The configuration schema has no `required_status_contexts` field. Stage-2 inputs:
+The configuration supports `required_status_contexts` and Dev targets; see [Forgejo delivery](FORGEJO_DELIVERY.md). Required contexts:
 
 | Profile | Required status context |
 | --- | --- |

@@ -168,3 +168,26 @@ Never parse RCP_RESULT logs. See docs/FORGEJO_BUILDS.md.
 Build profiles declare images: [{id,repository}, …]. Registry reuse and success
 require ALL images with matching revision at the same candidate tag; partial presence
 dispatches normally. Build images results list each id, image_ref and digest.
+
+
+## Finished Forgejo build delivery to Dev
+
+For a configured Dev target, an explicitly requested `deploy_build` takes
+`{product_id, build_id, environment_id:"dev", request_key?}`. RCP verifies the
+SUCCEEDED Build, fresh Forgejo source-SHA CI contexts (or combined success when
+none are configured), and fresh registry HEAD evidence for every image digest.
+It renders only configured HelmRelease image tag scalars, preserving other bytes,
+opens `rcp/deploy/<deployment-id>` in the configured GitHub Flux repository and
+merges its own PR using squash and a server-side head SHA lock. This operator-owned
+builds-file authority is independent of State connections. No service-repository
+merge deploys anything. Production targets are rejected by config and API.
+
+Follow `get_deployment {product_id,deployment_id}` or bounded `list_deployments`
+(default 25/max 100, scope-bound cursor). Deployments are independent of Operations.
+States: PENDING_CHECKS → PROPOSING → MERGING → SUCCEEDED/FAILED; uncertain writes
+use RECONCILIATION_REQUIRED. Never submit a replacement to resolve uncertainty.
+A lost merge response reconciles read-only and never sends another merge request.
+Non-failed (environment, profile, image digests) deduplicates; failed retry needs a
+fresh request_key. SUCCEEDED means GitOps merged (or already_applied), not Flux
+reconciliation, runtime health, functional acceptance or production approval.
+See docs/FORGEJO_DELIVERY.md for operator configuration and recovery limits.

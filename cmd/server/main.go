@@ -88,13 +88,18 @@ func run() error {
 	if addr == "" {
 		addr = "127.0.0.1:8090"
 	}
-	service := application.NewWithProvider(store, github.New())
+	githubProvider := github.New()
+	service := application.NewWithProvider(store, githubProvider)
 	if path := os.Getenv("RCP_BUILDS_FILE"); path != "" {
 		config, e := buildconfig.Load(path)
 		if e != nil {
 			return fmt.Errorf("load build authority: %w", e)
 		}
-		if e = service.ConfigureBuilds(config, forgejo.New(), buildregistry.New()); e != nil {
+		forgejoProvider, registryReader := forgejo.New(), buildregistry.New()
+		if e = service.ConfigureBuilds(config, forgejoProvider, registryReader); e != nil {
+			return e
+		}
+		if e = service.ConfigureDeployments(forgejoProvider, registryReader, githubProvider); e != nil {
 			return e
 		}
 		done := make(chan struct{})

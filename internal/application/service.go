@@ -27,6 +27,7 @@ type Store interface {
 }
 type Service struct {
 	builds       *buildRuntime
+	deployments  *deployRuntime
 	intelligence IntelligenceProvider
 	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
 	nativeAuthorityNow func() time.Time
