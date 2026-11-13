@@ -1223,6 +1223,7 @@ func TestBuildReconciliationTimeout(t *testing.T) {
 				f.runs = []forgejo.Run{active}
 			case "active-waiting":
 				active.Status = "waiting"
+				active.EventPayload = dispatchPayload(b.SourceSHA, "other")
 				f.runs = []forgejo.Run{active}
 			case "known-inactive":
 				m.state.Builds[0].ProviderRunID = 1
@@ -1268,6 +1269,64 @@ func TestBuildReconciliationTimeout(t *testing.T) {
 				if getBuild(t, s, second).Status != "DISPATCHED" {
 					t.Fatal("slot not released")
 				}
+			}
+		})
+	}
+}
+
+func TestBuildLostDispatchReconciliationAfterGrace(t *testing.T) {
+	for _, mode := range []string{"success", "failure", "listing-error", "page-cap"} {
+		t.Run(mode, func(t *testing.T) {
+			s, m, f, registry := buildFixture(t)
+			f.uncertain = true
+			b := queue(t, s, "lost-dispatch")
+			tick(t, s)
+			if got := getBuild(t, s, b); got.ProviderRunID != 0 || got.FailureCode != "DISPATCH_UNCERTAIN" {
+				t.Fatal(got)
+			}
+			old := time.Now().Add(-2*time.Hour - buildReconciliationGrace - time.Minute)
+			m.state.Builds[0].DispatchedAt = &old
+			f.runs[0].Status = "success"
+			registry.err = nil
+			registry.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
+			switch mode {
+			case "failure":
+				f.runs[0].Status = "failure"
+			case "listing-error":
+				f.listError = "all"
+			case "page-cap":
+				// Terminal unrelated runs fill the listing before our match.
+				for i := 0; i < 501; i++ {
+					r := f.runs[0]
+					r.ID = int64(i + 10)
+					r.Created = r.Created.Add(time.Minute)
+					r.EventPayload = dispatchPayload(b.SourceSHA, "other")
+					f.runs = append(f.runs, r)
+				}
+			}
+			tick(t, s)
+			got := getBuild(t, s, b)
+			switch mode {
+			case "success":
+				if got.Status != "SUCCEEDED" || got.FailureCode != "" || len(got.Images) != 1 || got.Images[0].Digest != registry.artifact.Digest {
+					t.Fatal(got)
+				}
+			case "failure":
+				if got.Status != "FAILED" || got.FailureCode != "RUN_FAILED" {
+					t.Fatal(got)
+				}
+			default:
+				if got.Status != "RECONCILIATION_REQUIRED" || !got.ProviderUnavailable || got.FinishedAt != nil {
+					t.Fatal(got)
+				}
+			}
+			if mode == "success" || mode == "failure" {
+				if got.ProviderRunID != 1 || got.RunStatus != mode || got.FinishedAt == nil {
+					t.Fatalf("terminal evidence lost: %+v", got)
+				}
+			}
+			if f.dispatches != 1 {
+				t.Fatal("lost dispatch was retried")
 			}
 		})
 	}

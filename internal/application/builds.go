@@ -759,6 +759,18 @@ func (s *Service) expireReconciliation(ctx context.Context, b domain.Build, p bu
 			}
 			return s.observeBuild(ctx, b, p, r)
 		}
+	} else {
+		// A lost dispatch response has no run ID. Reconcile the request across
+		// terminal runs too, using the same time window as ordinary observation.
+		runs, err := a.runs(ctx, p, forgejo.Filter{}, b.QueuedAt.Add(-2*time.Minute))
+		if err != nil {
+			return s.buildProviderUnavailable(ctx, b, err)
+		}
+		for _, r := range runs {
+			if matching(r, b) && dispatchRequestID(r) == b.ID {
+				return s.observeBuild(ctx, b, p, r)
+			}
+		}
 	}
 	for _, status := range []string{"waiting", "running"} {
 		runs, err := a.runs(ctx, p, forgejo.Filter{Status: status}, time.Time{})
