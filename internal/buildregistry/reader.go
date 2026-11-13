@@ -135,3 +135,34 @@ func (r *Reader) Resolve(ctx context.Context, c buildconfig.Registry, repo, tag 
 	out.Revision = cfg.Config.Labels["org.opencontainers.image.revision"]
 	return out, nil
 }
+
+// HeadDigest freshly checks the exact immutable manifest; it never follows a tag.
+func (r *Reader) HeadDigest(ctx context.Context, c buildconfig.Registry, repo, digest string) error {
+	if !digestPattern.MatchString(digest) || !regexp.MustCompile(`^[a-z0-9][a-z0-9_./-]*$`).MatchString(repo) || strings.Contains(repo, "..") {
+		return errors.New("invalid digest reference")
+	}
+	u, e := url.Parse(c.Origin)
+	if e != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(u.Scheme == "http" && c.InsecureHTTP)) {
+		return errors.New("registry origin denied")
+	}
+	req, e := http.NewRequestWithContext(ctx, "HEAD", strings.TrimRight(c.Origin, "/")+"/v2/"+repo+"/manifests/"+digest, nil)
+	if e != nil {
+		return errors.New("invalid registry request")
+	}
+	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json")
+	res, e := r.http.Do(req)
+	if e != nil {
+		return errors.New("registry HEAD unavailable")
+	}
+	defer res.Body.Close()
+	if res.StatusCode == 404 {
+		return ErrMissing
+	}
+	if res.StatusCode != 200 {
+		return errors.New("registry HEAD rejected")
+	}
+	if h := res.Header.Get("Docker-Content-Digest"); h != "" && h != digest {
+		return errors.New("registry digest mismatch")
+	}
+	return nil
+}

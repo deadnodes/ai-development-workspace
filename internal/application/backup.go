@@ -222,6 +222,17 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 				}
 			}
 		}
+		originalDeployments := []domain.Deployment{}
+		for i := range restored.Deployments {
+			d := &restored.Deployments[i]
+			if !deploymentTerminal(*d) {
+				originalDeployments = append(originalDeployments, *d)
+				d.Status = "RECONCILIATION_REQUIRED"
+				d.UncertainAction = "restored"
+				d.FailureCode = "DEPLOYMENT_RESTORED"
+				d.UpdatedAt = now
+			}
+		}
 		originalBuilds := []domain.Build{}
 		for i := range restored.Builds {
 			b := &restored.Builds[i]
@@ -237,7 +248,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		}
 		// Preserve pre-restore operation state as audit evidence; destination workers
 		// must not race the source instance or repeat CI/GitOps mutations.
-		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "interrupted_operations": originalOperations, "quarantined_builds": originalBuilds}}})
+		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "interrupted_operations": originalOperations, "quarantined_builds": originalBuilds, "quarantined_deployments": originalDeployments}}})
 		*current = restored
 		return nil
 	})

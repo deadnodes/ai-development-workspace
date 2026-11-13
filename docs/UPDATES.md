@@ -174,3 +174,16 @@ same connection command again for each connected workspace:
 Preserve the original URL, product, server name and token-environment option.
 The installer refreshes its managed instructions and handoff skill; it should
 not replace unrelated workspace instructions. Reload MCP/start a new agent session.
+
+
+### Forgejo Dev deployment authority
+
+`RCP_BUILDS_FILE` may now include `gitops`, `environments`, profile
+`required_status_contexts` and `deployments.dev.files`. This is startup operator
+authority and works with an empty database; do not enroll a duplicate State
+connection. Mount the referenced GitHub App PEM under `RCP_SECRET_DIR`, using a
+single filename `private_key_ref`. The existing App JWT/installation token client
+is reused. Only `dev` with `allow_auto_merge:true` and Flux branch `main` are
+accepted. Review paths, image repositories, min_matches, required contexts and
+App permissions before restarting. Changes to authority stop old deployment intent
+from executing under new configuration. See [delivery](FORGEJO_DELIVERY.md).

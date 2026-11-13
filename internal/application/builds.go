@@ -725,6 +725,9 @@ func (s *Service) RunBuilds(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
+		if err := s.DispatchDeploymentsOnce(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("deployment observation failed")
+		}
 		if err := s.DispatchBuildsOnce(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("build queue observation failed")
 		}

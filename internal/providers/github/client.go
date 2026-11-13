@@ -134,7 +134,7 @@ func apiBase(c delivery.Connection) (string, error) {
 	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")) {
 		return "", errors.New("GitHub API requires HTTPS")
 	}
-	allowed := u.Scheme == "https" && u.Host == "api.github.com" && (u.Path == "" || u.Path == "/")
+	allowed := u.Scheme == "https" && (u.Host == "api.github.com" || c.OperatorAPIURL) && (u.Path == "" || u.Path == "/")
 	configured := strings.TrimRight(os.Getenv("RCP_GITHUB_API_URL"), "/")
 	if configured != "" && strings.TrimRight(s, "/") == configured {
 		allowed = true

@@ -72,6 +72,9 @@ func replaceImageScalars(content string, docs []imageDocument, repo, digest stri
 	return replaceImageSelections(content, []imageReplacement{{docs, repo, digest}})
 }
 func replaceImageSelections(content string, replacements []imageReplacement) (string, error) {
+	return replaceImageSelectionsMode(content, replacements, false)
+}
+func replaceImageSelectionsMode(content string, replacements []imageReplacement, tagOnly bool) (string, error) {
 	type edit struct {
 		start, end int
 		value      string
@@ -80,6 +83,9 @@ func replaceImageSelections(content string, replacements []imageReplacement) (st
 	for _, replacement := range replacements {
 		for _, doc := range replacement.docs {
 			for i, n := range []*yaml.Node{doc.image, doc.digest} {
+				if tagOnly && i == 0 {
+					continue
+				}
 				if n.Style&(yaml.LiteralStyle|yaml.FoldedStyle|yaml.TaggedStyle) != 0 {
 					return "", errors.New("unsupported image scalar style")
 				}
@@ -131,7 +137,17 @@ func replaceImageSelections(content string, replacements []imageReplacement) (st
 					value = replacement.digest
 				}
 				encoded, _ := json.Marshal(value)
-				edits = append(edits, edit{start, end, string(encoded)})
+				token := string(encoded)
+				if tagOnly {
+					switch content[start] {
+					case '\'':
+						token = "'" + strings.ReplaceAll(value, "'", "''") + "'"
+					case '"':
+					default:
+						token = value
+					}
+				}
+				edits = append(edits, edit{start, end, token})
 			}
 		}
 	}

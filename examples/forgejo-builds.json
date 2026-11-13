@@ -41,7 +41,23 @@
           "id": "web",
           "repository": "deadnodes/pp-front"
         }
-      ]
+      ],
+      "required_status_contexts": [
+        "pp-front dev / verify (push)"
+      ],
+      "deployments": {
+        "dev": {
+          "files": [
+            {
+              "path": "clusters/platform-dev/custom-resources/lp-dev/pp-front.yaml",
+              "image_id": "web",
+              "image_repository": "192.168.32.242:5000/deadnodes/pp-front",
+              "tag_format": "{tag}@{digest}",
+              "min_matches": 1
+            }
+          ]
+        }
+      }
     },
     {
       "id": "pp-back",
@@ -62,7 +78,23 @@
           "id": "runtime",
           "repository": "deadnodes/pp-back/runtime"
         }
-      ]
+      ],
+      "required_status_contexts": [
+        "pp-back baseline / gate (push)"
+      ],
+      "deployments": {
+        "dev": {
+          "files": [
+            {
+              "path": "clusters/platform-dev/custom-resources/lp-dev/pp-back.yaml",
+              "image_id": "runtime",
+              "image_repository": "192.168.32.242:5000/deadnodes/pp-back/runtime",
+              "tag_format": "{tag}@{digest}",
+              "min_matches": 1
+            }
+          ]
+        }
+      }
     },
     {
       "id": "meteroid",
@@ -91,8 +123,57 @@
           "id": "web",
           "repository": "deadnodes/meteroid-web"
         }
-      ]
+      ],
+      "required_status_contexts": [
+        "meteroid ci / gate (push)"
+      ],
+      "deployments": {
+        "dev": {
+          "files": [
+            {
+              "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
+              "image_id": "api",
+              "image_repository": "192.168.32.242:5000/deadnodes/meteroid-api",
+              "min_matches": 1,
+              "format": "container_image"
+            },
+            {
+              "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
+              "image_id": "scheduler",
+              "image_repository": "192.168.32.242:5000/deadnodes/meteroid-scheduler",
+              "min_matches": 1,
+              "format": "container_image"
+            },
+            {
+              "path": "clusters/platform-dev/custom-resources/meteroid-dev/workloads.yaml",
+              "image_id": "web",
+              "image_repository": "192.168.32.242:5000/deadnodes/meteroid-web",
+              "min_matches": 1,
+              "format": "container_image"
+            }
+          ]
+        }
+      }
     }
   ],
-  "timeout_seconds": 7200
+  "timeout_seconds": 7200,
+  "gitops": [
+    {
+      "id": "github-flux",
+      "kind": "github",
+      "api_url": "https://api.github.com",
+      "app_id": 4967151,
+      "installation_id": 162235198,
+      "private_key_ref": "github-app.pem",
+      "repository": "deadnodes/flux",
+      "branch": "main"
+    }
+  ],
+  "environments": [
+    {
+      "id": "dev",
+      "gitops_id": "github-flux",
+      "allow_auto_merge": true
+    }
+  ]
 }

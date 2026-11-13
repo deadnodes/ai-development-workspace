@@ -7,6 +7,8 @@ import (
 )
 
 type Connection struct {
+	// OperatorAPIURL is set only from immutable startup configuration, never State/API.
+	OperatorAPIURL        bool   `json:"-"`
 	ID                    string `json:"id"`
 	AppID                 int64  `json:"app_id"`
 	InstallationID        int64  `json:"installation_id"`

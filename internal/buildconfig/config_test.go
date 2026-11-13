@@ -106,3 +106,49 @@ func TestBuildRunLookback(t *testing.T) {
 		}
 	}
 }
+
+func deliveryConfig() Config {
+	c := valid()
+	c.GitOps = []GitOps{{ID: "flux", Kind: "github", APIURL: "https://api.github.com", AppID: 4967151, InstallationID: 162235198, PrivateKeyRef: "github-app.pem", Repository: "deadnodes/flux", Branch: "main"}}
+	c.Environments = []Environment{{ID: "dev", GitOpsID: "flux", AllowAutoMerge: true}}
+	c.Profiles[0].RequiredStatusContexts = []string{"verify"}
+	c.Profiles[0].Deployments = map[string]DeploymentTarget{"dev": {Files: []DeploymentFile{{Path: "clusters/dev/app.yaml", ImageID: "app", ImageRepository: "localhost:5000/o/r", TagFormat: "{tag}@{digest}", MinMatches: 1}}}}
+	return c
+}
+func TestDeploymentAuthority(t *testing.T) {
+	c := deliveryConfig()
+	raw, _ := json.Marshal(c)
+	if _, e := Decode(strings.NewReader(string(raw))); e != nil {
+		t.Fatal(e)
+	}
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.Environments[0].ID = "prod" }, func(c *Config) { c.Environments[0].ID = "production" }, func(c *Config) { c.Environments[0].AllowAutoMerge = false }, func(c *Config) { c.Environments[0].GitOpsID = "missing" }, func(c *Config) { c.GitOps[0].PrivateKeyRef = "../key" }, func(c *Config) { c.GitOps[0].Branch = "prod" }, func(c *Config) { c.GitOps[0].AppID = 0 }, func(c *Config) { c.GitOps[0].APIURL = "http://api.github.com" }, func(c *Config) { c.Profiles[0].Deployments["prod"] = c.Profiles[0].Deployments["dev"] }, func(c *Config) { v := c.Profiles[0].Deployments["dev"]; v.Files[0].Path = "../escape.yaml" }, func(c *Config) { v := c.Profiles[0].Deployments["dev"]; v.Files[0].ImageID = "missing" }, func(c *Config) { v := c.Profiles[0].Deployments["dev"]; v.Files[0].ImageRepository = "other/o/r" }, func(c *Config) { v := c.Profiles[0].Deployments["dev"]; v.Files[0].MinMatches = 0 }, func(c *Config) { v := c.Profiles[0].Deployments["dev"]; v.Files[0].TagFormat = "latest" },
+	} {
+		c = deliveryConfig()
+		mutate(&c)
+		if e := c.Validate(); e == nil {
+			t.Fatal("invalid delivery config accepted")
+		}
+	}
+	for _, changed := range []string{strings.Replace(string(raw), `"allow_auto_merge":true`, `"allow_auto_merge":true,"unknown":true`, 1), strings.Replace(string(raw), `"min_matches":1`, `"min_matches":1,"unknown":true`, 1)} {
+		if _, e := Decode(strings.NewReader(changed)); e == nil {
+			t.Fatal("unknown nested field accepted")
+		}
+	}
+}
+
+func TestDeploymentFormats(t *testing.T) {
+	for _, format := range []string{"", "helm_values", "container_image", "unknown"} {
+		c := deliveryConfig()
+		f := &c.Profiles[0].Deployments["dev"].Files[0]
+		f.Format = format
+		if format == "container_image" {
+			f.TagFormat = "ignored"
+		}
+		raw, _ := json.Marshal(c)
+		_, err := Decode(strings.NewReader(string(raw)))
+		if (err != nil) != (format == "unknown") {
+			t.Fatalf("format %q: %v", format, err)
+		}
+	}
+}

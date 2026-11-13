@@ -10,6 +10,7 @@ import (
 func statusStateConstructors() map[string]func(string) State {
 	m := Meta{ID: "entity"}
 	return map[string]func(string) State{
+		"deployment":     func(v string) State { return State{Deployments: []Deployment{{Meta: m, Status: v}}} },
 		"feature":        func(v string) State { return State{Features: []Feature{{Meta: m, Status: v}}} },
 		"integration":    func(v string) State { return State{Integrations: []Integration{{Meta: m, Status: v}}} },
 		"blocker":        func(v string) State { return State{Memories: []Memory{{Meta: m, Kind: "blocker", Status: v}}} },

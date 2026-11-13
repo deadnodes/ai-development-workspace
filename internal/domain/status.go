@@ -5,6 +5,7 @@ import "slices"
 // StatusCatalog returns fresh copies; caller configuration cannot extend it.
 func StatusCatalog() map[string][]string {
 	return map[string][]string{
+		"deployment":           {"PENDING_CHECKS", "PROPOSING", "MERGING", "SUCCEEDED", "FAILED", "RECONCILIATION_REQUIRED"},
 		"build":                {"QUEUED", "DISPATCHED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "RECONCILIATION_REQUIRED"},
 		"worker_job":           {"QUEUED", "CLAIMED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "DEADLINE_EXCEEDED", "RECONCILIATION_REQUIRED"},
 		"worker_attempt":       {"CLAIMED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED", "RECONCILIATION_REQUIRED"},
