@@ -175,16 +175,17 @@ func (s *Service) GetDeployment(ctx context.Context, in domain.DeploymentLookup)
 	if e := authorize(ctx, "read", in.ProductID); e != nil {
 		return domain.Deployment{}, e
 	}
-	st, e := s.store.Read(ctx)
-	if e != nil {
-		return domain.Deployment{}, e
-	}
-	for _, d := range st.Deployments {
-		if d.ProductID == in.ProductID && d.ID == in.DeploymentID {
-			return d, nil
+	var out domain.Deployment
+	err := s.view(ctx, func(st *domain.State) error {
+		for _, d := range st.Deployments {
+			if d.ProductID == in.ProductID && d.ID == in.DeploymentID {
+				out = copyDeployment(d)
+				return nil
+			}
 		}
-	}
-	return domain.Deployment{}, missing("deployment", in.DeploymentID)
+		return missing("deployment", in.DeploymentID)
+	})
+	return out, err
 }
 
 type deploymentCursor struct{ Product, Environment, Profile, After string }
@@ -209,23 +210,23 @@ func (s *Service) ListDeployments(ctx context.Context, in domain.ListDeployments
 		}
 		after = c.After
 	}
-	st, e := s.store.Read(ctx)
-	if e != nil {
-		return out, e
-	}
-	sort.Slice(st.Deployments, func(i, j int) bool { return st.Deployments[i].ID < st.Deployments[j].ID })
-	for _, d := range st.Deployments {
-		if d.ProductID != in.ProductID || in.EnvironmentID != "" && d.EnvironmentID != in.EnvironmentID || in.ProfileID != "" && d.ProfileID != in.ProfileID || d.ID <= after {
-			continue
+	err := s.view(ctx, func(st *domain.State) error {
+		deployments := append([]domain.Deployment(nil), st.Deployments...)
+		sort.Slice(deployments, func(i, j int) bool { return deployments[i].ID < deployments[j].ID })
+		for _, d := range deployments {
+			if d.ProductID != in.ProductID || in.EnvironmentID != "" && d.EnvironmentID != in.EnvironmentID || in.ProfileID != "" && d.ProfileID != in.ProfileID || d.ID <= after {
+				continue
+			}
+			if len(out.Items) == in.Limit {
+				raw, _ := json.Marshal(deploymentCursor{in.ProductID, in.EnvironmentID, in.ProfileID, out.Items[len(out.Items)-1].ID})
+				out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
+				break
+			}
+			out.Items = append(out.Items, copyDeployment(d))
 		}
-		if len(out.Items) == in.Limit {
-			raw, _ := json.Marshal(deploymentCursor{in.ProductID, in.EnvironmentID, in.ProfileID, out.Items[len(out.Items)-1].ID})
-			out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
-			break
-		}
-		out.Items = append(out.Items, d)
-	}
-	return out, nil
+		return nil
+	})
+	return out, err
 }
 func (s *Service) advanceDeployment(ctx context.Context, old domain.Deployment, next *domain.Deployment, claim bool) error {
 	return s.store.Update(ctx, func(st *domain.State) error {
@@ -346,7 +347,7 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 		return nil
 	}
 	defer a.mu.Unlock()
-	st, e := s.store.Read(ctx)
+	st, e := s.deploymentSnapshot(ctx)
 	if e != nil {
 		return e
 	}

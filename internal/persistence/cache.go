@@ -13,7 +13,7 @@ import (
 	"releasecontrol/internal/domain"
 )
 
-// The committed cache never escapes to a callback. A revision read under the
+// The committed cache is borrowed only by read-only View callbacks. A revision read under the
 // database writer lock is the authority even when several processes share a DB.
 type stateCache struct {
 	revision  int64
@@ -135,7 +135,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 		}
 		// Only provenance consulted by domain/application write logic belongs in the
 		// write projection. UI/history/export use the separate full journal reader.
-		if e = readWriteEvents(ctx, tx, &st); e != nil {
+		if e = s.readCachedWriteEvents(ctx, tx, &st, revision); e != nil {
 			return e
 		}
 		if e = domain.ValidateStateStatuses(st); e != nil {
@@ -423,8 +423,22 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 	if _, err = tx.Exec(ctx, "UPDATE control_revision SET revision=revision+1 WHERE id=1"); err != nil {
 		return err
 	}
+	var journalMax int64
+	if err = tx.QueryRow(ctx, "SELECT COALESCE(max(sequence),0) FROM events").Scan(&journalMax); err != nil {
+		return err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return err
+	}
+	s.writeJournal = &journalCache{revision: revision + 1, max: journalMax, events: next.Events}
+	// Restore imports a new journal into an empty instance. Drop any previously
+	// borrowed full snapshot even if the imported sequence happens to match it.
+	for _, event := range st.Events[oldEvents:] {
+		if event.Action == "restore_backup" {
+			s.journal = nil
+			s.viewState = nil
+			break
+		}
 	}
 
 	positions := s.cached.positions
@@ -561,4 +575,50 @@ func mutableType(typ reflect.Type) bool {
 		return mutableType(typ.Elem())
 	}
 	return false
+}
+
+// Writer transactions hold control_revision's row lock: all journal and record
+// observations are stable against other Store writers until commit. Keep this
+// narrow projection separate so ordinary opaque history need not be decoded.
+func (s *Store) readCachedWriteEvents(ctx context.Context, tx pgx.Tx, st *domain.State, revision int64) error {
+	var max int64
+	if err := tx.QueryRow(ctx, "SELECT COALESCE(max(sequence),0) FROM events").Scan(&max); err != nil {
+		return err
+	}
+	cache := s.writeJournal
+	if cache == nil || revision < cache.revision || max < cache.max {
+		cache = &journalCache{}
+	}
+	if cache.max > 0 && max > cache.max {
+		var added int64
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM events WHERE sequence > $1", cache.max).Scan(&added); err != nil {
+			return err
+		}
+		if added != max-cache.max {
+			cache = &journalCache{}
+		}
+	}
+	rows, err := tx.Query(ctx, "SELECT document FROM events WHERE sequence > $1 AND ("+writeEventPredicate+") ORDER BY sequence", cache.max)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	events := append([]domain.Event(nil), cache.events...)
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return err
+		}
+		var event domain.Event
+		if err = json.Unmarshal(raw, &event); err != nil {
+			return err
+		}
+		events = append(events, event)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	st.Events = events
+	s.writeJournal = &journalCache{revision: revision, max: max, events: events}
+	return nil
 }
