@@ -121,11 +121,16 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		return false, nil
 	}
 	if in.RequestKey != "" {
-		st, err := s.store.Read(ctx)
-		if err != nil {
-			return out, err
-		}
-		if found, err := replay(&st); found {
+		var found bool
+		err := s.view(ctx, func(st *domain.State) error {
+			var err error
+			found, err = replay(st)
+			if found {
+				out = copyBuild(out)
+			}
+			return err
+		})
+		if err != nil || found {
 			return out, err
 		}
 	}
@@ -190,16 +195,17 @@ func (s *Service) GetBuild(ctx context.Context, in domain.BuildLookup) (domain.B
 	if e := authorize(ctx, "read", in.ProductID); e != nil {
 		return domain.Build{}, e
 	}
-	st, e := s.store.Read(ctx)
-	if e != nil {
-		return domain.Build{}, e
-	}
-	for _, b := range st.Builds {
-		if b.ID == in.BuildID && b.ProductID == in.ProductID {
-			return b, nil
+	var out domain.Build
+	err := s.view(ctx, func(st *domain.State) error {
+		for _, b := range st.Builds {
+			if b.ID == in.BuildID && b.ProductID == in.ProductID {
+				out = copyBuild(b)
+				return nil
+			}
 		}
-	}
-	return domain.Build{}, missing("build", in.BuildID)
+		return missing("build", in.BuildID)
+	})
+	return out, err
 }
 func (s *Service) CancelBuild(ctx context.Context, in domain.BuildLookup) (domain.Build, error) {
 	var out domain.Build
@@ -274,23 +280,23 @@ func (s *Service) ListBuilds(ctx context.Context, in domain.ListBuildsRequest) (
 		}
 		after = c.After
 	}
-	st, e := s.store.Read(ctx)
-	if e != nil {
-		return out, e
-	}
-	sort.Slice(st.Builds, func(i, j int) bool { return st.Builds[i].ID < st.Builds[j].ID })
-	for _, b := range st.Builds {
-		if b.ProductID != in.ProductID || in.ProfileID != "" && b.ProfileID != in.ProfileID || in.Status != "" && b.Status != in.Status || b.ID <= after {
-			continue
+	err := s.view(ctx, func(st *domain.State) error {
+		builds := slices.Clone(st.Builds)
+		sort.Slice(builds, func(i, j int) bool { return builds[i].ID < builds[j].ID })
+		for _, b := range builds {
+			if b.ProductID != in.ProductID || in.ProfileID != "" && b.ProfileID != in.ProfileID || in.Status != "" && b.Status != in.Status || b.ID <= after {
+				continue
+			}
+			if len(out.Items) == in.Limit {
+				raw, _ := json.Marshal(buildCursor{in.ProductID, in.ProfileID, in.Status, out.Items[len(out.Items)-1].ID})
+				out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
+				break
+			}
+			out.Items = append(out.Items, copyBuild(b))
 		}
-		if len(out.Items) == in.Limit {
-			raw, _ := json.Marshal(buildCursor{in.ProductID, in.ProfileID, in.Status, out.Items[len(out.Items)-1].ID})
-			out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
-			break
-		}
-		out.Items = append(out.Items, b)
-	}
-	return out, nil
+		return nil
+	})
+	return out, err
 }
 func buildFingerprint(p any) string {
 	b, _ := json.Marshal(p)
@@ -299,7 +305,12 @@ func buildFingerprint(p any) string {
 }
 
 // advanceBuild uses CAS so cancellation/concurrent pollers cannot overwrite newer evidence.
-func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admit bool) error {
+func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admit bool) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Warn("build transition failed", "build_id", old.ID, "from_status", old.Status, "to_status", next.Status, "error", err.Error())
+		}
+	}()
 	if reflect.DeepEqual(old, next) {
 		return nil
 	}
@@ -480,7 +491,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		return nil
 	}
 	defer a.mu.Unlock()
-	st, e := s.store.Read(ctx)
+	st, e := s.buildSnapshot(ctx)
 	if e != nil {
 		return e
 	}
@@ -607,6 +618,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		if !errors.Is(re, buildregistry.ErrMissing) {
+			slog.Warn("build registry lookup failed; pool stays blocked", "build_id", b.ID, "profile_id", b.ProfileID, "error", re.Error())
 			continue
 		}
 		runs, e := a.runs(ctx, p, forgejo.Filter{}, time.Now().UTC().Add(-time.Duration(a.config.RunLookbackSeconds)*time.Second))
@@ -639,7 +651,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				return e
 			}
 		}
-		fresh, err := s.store.Read(ctx)
+		fresh, err := s.buildSnapshot(ctx)
 		if err != nil {
 			return err
 		}
@@ -703,6 +715,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if e != nil {
 			var uncertain *forgejo.Uncertain
 			if errors.As(e, &uncertain) {
+				slog.Warn("build dispatch uncertain", "build_id", b.ID, "profile_id", b.ProfileID)
 				continue
 			}
 			next = failedBuild(next, "DISPATCH_REJECTED")

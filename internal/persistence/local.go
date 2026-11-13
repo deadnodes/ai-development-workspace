@@ -226,3 +226,12 @@ func (s *LocalStore) Update(ctx context.Context, fn func(*domain.State) error) e
 		return tx.Bucket(localBucket).Put(localStateKey, encoded)
 	})
 }
+
+// View provides the same callback lifetime contract as the PostgreSQL store.
+func (s *LocalStore) View(ctx context.Context, fn func(*domain.State) error) error {
+	st, err := s.Read(ctx)
+	if err != nil {
+		return err
+	}
+	return fn(&st)
+}

@@ -20,9 +20,14 @@ import (
 var migrations embed.FS
 
 type Store struct {
-	pool   *pgxpool.Pool
-	mu     sync.Mutex
-	cached *stateCache
+	pool          *pgxpool.Pool
+	mu            sync.Mutex
+	cached        *stateCache
+	journal       *journalCache
+	viewRevision  int64
+	viewState     *domain.State
+	decodedEvents uint64
+	writeJournal  *journalCache
 }
 
 func Open(ctx context.Context, url string) (*Store, error) {
@@ -105,60 +110,141 @@ func migrate(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 func (s *Store) Close() { s.pool.Close() }
-func (s *Store) Read(ctx context.Context) (domain.State, error) {
-	tx, e := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if e != nil {
-		return domain.State{}, e
+
+// View borrows a validated snapshot only for the duration of fn. The callback
+// must not mutate or retain any part of it, call this Store, or perform I/O.
+// Read remains the detached, mutable snapshot API.
+func (s *Store) View(ctx context.Context, fn func(*domain.State) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
 	}
-	defer tx.Rollback(ctx)
-	var revision int64
-	if e = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1").Scan(&revision); e != nil {
-		return domain.State{}, e
-	}
-	var st domain.State
+	defer tx.Rollback(context.Background())
 	s.mu.Lock()
-	hit := s.cached != nil && s.cached.revision == revision
-	var base domain.State
-	if hit {
-		base = s.cached.state
-		base.Events = nil
+	defer s.mu.Unlock()
+	var revision int64
+	if err = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1").Scan(&revision); err != nil {
+		return err
 	}
-	s.mu.Unlock()
-	if hit {
-		st = cloneValue(reflect.ValueOf(base)).Interface().(domain.State)
+	if s.journal != nil && revision < s.journal.revision {
+		s.journal = nil
+		s.viewState = nil
 	}
-	positions := map[string]int{}
-	if !hit {
-		st, e = loadRecords(ctx, tx, positions)
+	_, err = s.refreshJournal(ctx, tx, revision)
+	if err != nil {
+		return err
 	}
-	if e == nil {
-		st.Events = []domain.Event{}
-		e = readJournal(ctx, tx, &st)
-	}
-	if e != nil {
-		return st, e
-	}
-	if e = tx.Commit(ctx); e != nil {
-		return st, e
-	}
-	// Read-only processes also warm their record cache. Publish only a fully
-	// validated, detached snapshot, and never replace a newer local commit.
-	if !hit && domain.ValidateStateStatuses(st) == nil {
-		base := st
-		base.Events = nil
-		owned := cloneValue(reflect.ValueOf(base)).Interface().(domain.State)
-		for _, event := range st.Events {
-			if domain.IsWriteProvenanceEvent(event) {
-				owned.Events = append(owned.Events, cloneValue(reflect.ValueOf(event)).Interface().(domain.Event))
+	if s.viewState == nil || s.viewRevision != revision || len(s.viewState.Events) != len(s.journal.events) {
+		var st domain.State
+		if s.cached != nil && s.cached.revision == revision {
+			st = s.cached.state
+		} else {
+			positions := map[string]int{}
+			st, err = loadRecords(ctx, tx, positions)
+			if err != nil {
+				return err
+			}
+			// Warm the write cache without copying record payloads. It owns immutable
+			// decoded records; write callbacks detach all mutable collections.
+			base := st
+			base.Events = nil
+			for _, event := range s.journal.events {
+				if domain.IsWriteProvenanceEvent(event) {
+					base.Events = append(base.Events, event)
+				}
+			}
+			if domain.ValidateStateStatuses(base) == nil {
+				s.cached = &stateCache{revision: revision, state: base, positions: positions}
 			}
 		}
-		s.mu.Lock()
-		if s.cached == nil || s.cached.revision < revision {
-			s.cached = &stateCache{revision: revision, state: owned, positions: positions}
+		st.Events = s.journal.events
+		// Records may change references to old events: retain complete validations
+		// whenever the revision changes. Unchanged Views reuse their validated result.
+		if err = domain.ValidateRegistryInventories(st); err != nil {
+			return err
 		}
-		s.mu.Unlock()
+		if err = domain.ValidateArtifactPins(st); err != nil {
+			return err
+		}
+		s.viewState = &st
+		s.viewRevision = revision
 	}
-	return st, nil
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	borrowed := *s.viewState
+	return fn(&borrowed)
+}
+func (s *Store) Read(ctx context.Context) (domain.State, error) {
+	var st domain.State
+	err := s.View(ctx, func(snapshot *domain.State) error {
+		st = cloneValue(reflect.ValueOf(*snapshot)).Interface().(domain.State)
+		return nil
+	})
+	return st, err
+}
+
+// Events have no rewrite/delete path, including restore (empty journal only).
+// Sequence gaps can arise from rolled-back inserts; rebuild on discovering one
+// rather than assuming contiguous IDs. A revision regression also rebuilds.
+type journalCache struct {
+	revision, max int64
+	events        []domain.Event
+}
+
+func (s *Store) refreshJournal(ctx context.Context, tx pgx.Tx, revision int64) (int64, error) {
+	var max int64
+	if err := tx.QueryRow(ctx, "SELECT COALESCE(max(sequence),0) FROM events").Scan(&max); err != nil {
+		return 0, err
+	}
+	if s.journal == nil || max < s.journal.max {
+		s.journal = &journalCache{events: []domain.Event{}}
+		s.viewState = nil
+	}
+	old := s.journal
+	if max == old.max {
+		old.revision = revision
+		return max, nil
+	}
+	fetch := func(after int64) ([]domain.Event, bool, error) {
+		rows, err := tx.Query(ctx, "SELECT sequence, document FROM events WHERE sequence > $1 ORDER BY sequence", after)
+		if err != nil {
+			return nil, false, err
+		}
+		defer rows.Close()
+		events := []domain.Event{}
+		gap := false
+		for rows.Next() {
+			var seq int64
+			var raw []byte
+			if err = rows.Scan(&seq, &raw); err != nil {
+				return nil, false, err
+			}
+			gap = gap || seq != after+1
+			after = seq
+			var event domain.Event
+			if err = json.Unmarshal(raw, &event); err != nil {
+				return nil, false, err
+			}
+			s.decodedEvents++
+			events = append(events, event)
+		}
+		return events, gap, rows.Err()
+	}
+	added, gap, err := fetch(old.max)
+	if err != nil {
+		return 0, err
+	}
+	if gap && old.max != 0 {
+		added, _, err = fetch(0)
+		if err != nil {
+			return 0, err
+		}
+		old = &journalCache{events: []domain.Event{}}
+		s.viewState = nil
+	}
+	s.journal = &journalCache{revision: revision, max: max, events: append(old.events, added...)}
+	return max, nil
 }
 func readRecords(ctx context.Context, tx pgx.Tx) (domain.State, error) {
 	return loadRecords(ctx, tx, nil)
