@@ -65,7 +65,7 @@ func (f *fakeForgejo) ListRuns(_ context.Context, _ buildconfig.Connection, _ st
 	}
 	f.runCalls++
 	for _, r := range f.runs {
-		if (filter.SHA == "" || filter.SHA == r.SHA) && (filter.Status == "" || filter.Status == r.Status) && r.Workflow == workflow && (filter.Event == "" || filter.Event == r.Event) {
+		if (filter.SHA == "" || filter.SHA == r.SHA) && (filter.Status == "" || filter.Status == r.Status) && r.Workflow == workflow && (filter.Event == "" || filter.Event == r.EffectiveEvent()) {
 			out.Runs = append(out.Runs, r)
 		}
 	}
@@ -1119,5 +1119,258 @@ func TestBuildReconcileQueuedTimeSkew(t *testing.T) {
 	tick(t, s)
 	if got := getBuild(t, s, b); got.Status != "FAILED" || got.ProviderRunID != 1 || f.dispatches != 1 {
 		t.Fatal(got)
+	}
+}
+
+func forgejo15Run(t *testing.T, b domain.Build) forgejo.Run {
+	t.Helper()
+	raw := fmt.Sprintf(`{"id":1,"workflow_id":"build.yml","status":"running","event":"","trigger_event":"workflow_dispatch","commit_sha":%q,"event_payload":%q}`, strings.Repeat("b", 40), dispatchPayload(b.SourceSHA, b.ID))
+	var r forgejo.Run
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestBuildForgejo15MatchingAndSelfHeal(t *testing.T) {
+	s, m, f, _ := buildFixture(t)
+	b := queue(t, s, "")
+	tick(t, s)
+	run := forgejo15Run(t, b)
+	if !matching(run, b) {
+		t.Fatal("trigger_event did not match")
+	}
+	run.Event = "push"
+	if matching(run, b) {
+		t.Fatal("trigger overrode event")
+	}
+	run.Event = ""
+	run.TriggerEvent = ""
+	if matching(run, b) {
+		t.Fatal("missing event matched")
+	}
+	f.runs = []forgejo.Run{forgejo15Run(t, b)}
+	m.state.Builds[0].Status = "RECONCILIATION_REQUIRED"
+	m.state.Builds[0].FailureCode = "RUN_SOURCE_MISMATCH"
+	tick(t, s)
+	got := getBuild(t, s, b)
+	if got.Status != "RUNNING" || got.FailureCode != "" || got.ProviderRunID != 1 || f.dispatches != 1 {
+		t.Fatal(got)
+	}
+}
+
+func TestBuildForgejo15ReuseGateAndReconcile(t *testing.T) {
+	for _, mode := range []string{"reuse", "gate", "reconcile"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, f, _ := buildFixture(t)
+			b := queue(t, s, "")
+			if mode == "reconcile" {
+				f.uncertain = true
+				tick(t, s)
+			}
+			run := forgejo15Run(t, b)
+			if mode == "gate" {
+				run.EventPayload = dispatchPayload(strings.Repeat("c", 40), "other")
+			}
+			f.runs = []forgejo.Run{run}
+			tick(t, s)
+			got := getBuild(t, s, b)
+			switch mode {
+			case "reuse":
+				if got.Reused != "run" || got.ProviderRunID != 1 || f.dispatches != 0 {
+					t.Fatal(got)
+				}
+			case "gate":
+				if got.Status != "QUEUED" || f.dispatches != 0 {
+					t.Fatal(got)
+				}
+			case "reconcile":
+				if got.Status != "RUNNING" || got.ProviderRunID != 1 || f.dispatches != 1 {
+					t.Fatal(got)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildReconciliationTimeout(t *testing.T) {
+	for _, mode := range []string{"release", "before-grace", "no-dispatch-time", "unavailable", "running-query-error", "get-error", "active-sha", "active-waiting", "active-id", "known-inactive", "page-cap", "other-sha", "other-event", "other-workflow"} {
+		t.Run(mode, func(t *testing.T) {
+			s, m, f, _ := buildFixture(t)
+			b := queue(t, s, "first")
+			tick(t, s)
+			old := time.Now().Add(-2*time.Hour - buildReconciliationGrace - time.Minute)
+			m.state.Builds[0].Status = "RECONCILIATION_REQUIRED"
+			m.state.Builds[0].FailureCode = "RUN_SOURCE_MISMATCH"
+			m.state.Builds[0].DispatchedAt = &old
+			m.state.Builds[0].ProviderRunID = 0
+			f.runs = nil
+			active := forgejo15Run(t, b)
+			switch mode {
+			case "before-grace":
+				recent := time.Now().Add(-2*time.Hour - time.Minute)
+				m.state.Builds[0].DispatchedAt = &recent
+			case "no-dispatch-time":
+				m.state.Builds[0].DispatchedAt = nil
+			case "unavailable":
+				f.listError = "waiting"
+			case "running-query-error":
+				f.listError = "running"
+			case "get-error":
+				m.state.Builds[0].ProviderRunID = 99
+			case "active-sha":
+				active.EventPayload = dispatchPayload(b.SourceSHA, "other")
+				f.runs = []forgejo.Run{active}
+			case "active-waiting":
+				active.Status = "waiting"
+				active.EventPayload = dispatchPayload(b.SourceSHA, "other")
+				f.runs = []forgejo.Run{active}
+			case "known-inactive":
+				m.state.Builds[0].ProviderRunID = 1
+				active.Status = "success"
+				active.EventPayload = `{}`
+				f.runs = []forgejo.Run{active}
+			case "active-id":
+				m.state.Builds[0].ProviderRunID = 1
+				active.EventPayload = `{}`
+				f.runs = []forgejo.Run{active}
+			case "page-cap":
+				for i := 0; i < 501; i++ {
+					r := active
+					r.ID = int64(i + 10)
+					r.EventPayload = `{}`
+					f.runs = append(f.runs, r)
+				}
+			case "other-sha":
+				active.EventPayload = dispatchPayload(strings.Repeat("c", 40), "other")
+				active.Status = "waiting"
+				f.runs = []forgejo.Run{active}
+			case "other-event":
+				active.Event = "push"
+				f.runs = []forgejo.Run{active}
+			case "other-workflow":
+				active.Workflow = "other.yml"
+				f.runs = []forgejo.Run{active}
+			}
+			tick(t, s)
+			got := getBuild(t, s, b)
+			release := mode == "release" || mode == "known-inactive" || mode == "other-sha" || mode == "other-event" || mode == "other-workflow"
+			if release {
+				if got.Status != "FAILED" || got.FailureCode != "RECONCILIATION_TIMEOUT" || got.FinishedAt == nil || buildActive(got) {
+					t.Fatal(got)
+				}
+			} else if got.Status != "RECONCILIATION_REQUIRED" || !buildActive(got) {
+				t.Fatal(got)
+			}
+			if mode == "release" {
+				f.head = strings.Repeat("c", 40)
+				second := queue(t, s, "second")
+				tick(t, s)
+				if getBuild(t, s, second).Status != "DISPATCHED" {
+					t.Fatal("slot not released")
+				}
+			}
+		})
+	}
+}
+
+func TestBuildLostDispatchReconciliationAfterGrace(t *testing.T) {
+	for _, mode := range []string{"success", "failure", "listing-error", "page-cap"} {
+		t.Run(mode, func(t *testing.T) {
+			s, m, f, registry := buildFixture(t)
+			f.uncertain = true
+			b := queue(t, s, "lost-dispatch")
+			tick(t, s)
+			if got := getBuild(t, s, b); got.ProviderRunID != 0 || got.FailureCode != "DISPATCH_UNCERTAIN" {
+				t.Fatal(got)
+			}
+			old := time.Now().Add(-2*time.Hour - buildReconciliationGrace - time.Minute)
+			m.state.Builds[0].DispatchedAt = &old
+			f.runs[0].Status = "success"
+			registry.err = nil
+			registry.artifact = buildregistry.Artifact{Digest: "sha256:" + strings.Repeat("d", 64), Revision: b.SourceSHA}
+			switch mode {
+			case "failure":
+				f.runs[0].Status = "failure"
+			case "listing-error":
+				f.listError = "all"
+			case "page-cap":
+				// Terminal unrelated runs fill the listing before our match.
+				for i := 0; i < 501; i++ {
+					r := f.runs[0]
+					r.ID = int64(i + 10)
+					r.Created = r.Created.Add(time.Minute)
+					r.EventPayload = dispatchPayload(b.SourceSHA, "other")
+					f.runs = append(f.runs, r)
+				}
+			}
+			tick(t, s)
+			got := getBuild(t, s, b)
+			switch mode {
+			case "success":
+				if got.Status != "SUCCEEDED" || got.FailureCode != "" || len(got.Images) != 1 || got.Images[0].Digest != registry.artifact.Digest {
+					t.Fatal(got)
+				}
+			case "failure":
+				if got.Status != "FAILED" || got.FailureCode != "RUN_FAILED" {
+					t.Fatal(got)
+				}
+			default:
+				if got.Status != "RECONCILIATION_REQUIRED" || !got.ProviderUnavailable || got.FinishedAt != nil {
+					t.Fatal(got)
+				}
+			}
+			if mode == "success" || mode == "failure" {
+				if got.ProviderRunID != 1 || got.RunStatus != mode || got.FinishedAt == nil {
+					t.Fatalf("terminal evidence lost: %+v", got)
+				}
+			}
+			if f.dispatches != 1 {
+				t.Fatal("lost dispatch was retried")
+			}
+		})
+	}
+}
+
+func TestBuildReconciliationAttention(t *testing.T) {
+	s, m, _, _ := buildFixture(t)
+	b := queue(t, s, "")
+	old := time.Now().Add(-time.Hour)
+	m.state.Builds[0].Status = "RECONCILIATION_REQUIRED"
+	m.state.Builds[0].FailureCode = "RUN_SOURCE_MISMATCH"
+	m.state.Builds[0].DispatchedAt = &old
+	result, err := s.Query(context.Background(), "list_attention", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range result.([]map[string]any) {
+		if item["id"] == b.ID {
+			found = true
+			if item["profile_id"] != "app" || item["failure_code"] != "RUN_SOURCE_MISMATCH" || item["age_seconds"].(int64) < 3600 {
+				t.Fatal(item)
+			}
+		}
+	}
+	if !found {
+		t.Fatal(result)
+	}
+	for i := 0; i < 110; i++ {
+		copy := m.state.Builds[0]
+		copy.ID = fmt.Sprintf("extra-%03d", i)
+		m.state.Builds = append(m.state.Builds, copy)
+	}
+	foreign := m.state.Builds[0]
+	foreign.ID = "foreign"
+	foreign.ProductID = "other"
+	m.state.Builds = append(m.state.Builds, foreign)
+	items := buildReconciliationAttention(m.state, "p", time.Now())
+	if len(items) != 100 {
+		t.Fatal(len(items))
+	}
+	for _, item := range items {
+		if item["id"] == "foreign" {
+			t.Fatal("scope leaked")
+		}
 	}
 }
