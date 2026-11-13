@@ -199,3 +199,47 @@ func TestForgejoRunListingFiltersAndPageLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestListRunsOmitsEmptyFilters(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name   string
+		filter Filter
+	}{
+		{name: "unfiltered"},
+		{name: "status", filter: Filter{Status: "waiting"}},
+		{name: "event", filter: Filter{Event: "workflow_dispatch"}},
+		{name: "sha", filter: Filter{SHA: sha}},
+		{name: "all", filter: Filter{Status: "running", Event: "workflow_dispatch", SHA: sha}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, cn := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				if q.Has("status") && q.Get("status") == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"message":"unknown status: "}`)
+					return
+				}
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/repos/o/r/actions/runs" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				for key, want := range map[string]string{"status": tc.filter.Status, "event": tc.filter.Event, "head_sha": tc.filter.SHA} {
+					if q.Has(key) != (want != "") || q.Get(key) != want {
+						t.Errorf("filter %s: got %v, want %q (present=%t)", key, q[key], want, want != "")
+					}
+				}
+				if q.Get("workflow_id") != "build.yml" || q.Get("limit") != "50" || q.Get("page") != "1" {
+					t.Errorf("unexpected listing parameters: %s", r.URL.RawQuery)
+				}
+				fmt.Fprint(w, `{"workflow_runs":[{"id":42,"status":"success"}],"total_count":1}`)
+			})
+			page, err := c.ListRuns(context.Background(), cn, "o/r", "build.yml", tc.filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if page.Total != 1 || len(page.Runs) != 1 || page.Runs[0].ID != 42 {
+				t.Fatalf("unexpected run page: %+v", page)
+			}
+		})
+	}
+}

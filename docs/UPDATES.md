@@ -132,6 +132,26 @@ let Flux reconcile. Verify rollout, health and API/MCP context. See
 [KUBERNETES.md](KUBERNETES.md). Do not patch managed application workloads or
 switch database credentials during a Control Plane update.
 
+## Operator configuration files (builds, workers, observers)
+
+`RCP_BUILDS_FILE`, `RCP_WORKERS_FILE`, `RCP_OBSERVERS_FILE` and
+`RCP_INTELLIGENCE_FILE` are read once at startup and are not stored in the
+database. An application or PostgreSQL backup does not contain them, so keep them
+durable outside the container and include them in every update backup:
+
+- Source Compose: keep the JSON in the installation directory (for example
+  `.local/rcp-config/builds.json`) and mount it with a Compose override listed in
+  `COMPOSE_FILE` in `.env`, setting `RCP_BUILDS_FILE` to the in-container path.
+  Before an update copy the JSON files, the override and `.env` next to the
+  database dump (`.local/backups/config-<timestamp>/`).
+- Kubernetes/Flux: keep the JSON in a ConfigMap in the GitOps repository and mount
+  it read-only; Git history is the backup. Credentials stay in Secrets referenced
+  by `token_ref`/`private_key_ref` filenames under `RCP_SECRET_DIR`.
+
+After restart verify the configuration was loaded, for example
+`list_build_profiles {"product_id":"…"}` returns the expected profiles. Profiles
+reference a Product ID; create that Product in a new installation before queuing.
+
 ## Failure and rollback
 
 Keep the app stopped if the database migration or state verification fails.
