@@ -119,6 +119,7 @@ func deploymentFixture(t *testing.T) (*Service, *memoryStore, *deploymentFake, d
 	c.GitOps = []buildconfig.GitOps{{ID: "flux", Kind: "github", APIURL: "https://api.github.com", AppID: 1, InstallationID: 2, PrivateKeyRef: "github.pem", Repository: "o/flux", Branch: "main"}}
 	c.Environments = []buildconfig.Environment{{ID: "dev", GitOpsID: "flux", AllowAutoMerge: true}}
 	c.Profiles[0].Deployments = map[string]buildconfig.DeploymentTarget{"dev": {Files: []buildconfig.DeploymentFile{{Path: "clusters/dev/app.yaml", ImageID: "app", ImageRepository: "registry.example/o/r", TagFormat: "{tag}@{digest}", MinMatches: 1}}}}
+	c.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: true, TrustedProducers: "any"}
 	c.Profiles[0].RequiredStatusContexts = []string{"verify"}
 	if e := s.ConfigureBuilds(c, &fakeForgejo{}, &fakeBuildRegistry{}); e != nil {
 		t.Fatal(e)

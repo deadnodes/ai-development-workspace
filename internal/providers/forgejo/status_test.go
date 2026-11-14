@@ -82,3 +82,16 @@ func TestDeploymentStatusPagination(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusProducerParsing(t *testing.T) {
+	c, cn := treeTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"state":"success","total_count":2,"statuses":[{"id":2,"context":"verify","status":"success","creator":{"login":"alice"},"target_url":"/o/r/actions/runs/47/jobs/0"},{"id":1,"context":"verify","status":"failure","creator":null,"target_url":"/o/r/actions/runs/46/jobs/0"}]}`))
+	})
+	v, err := c.CommitStatus(context.Background(), cn, "o/r", strings.Repeat("a", 40))
+	if err != nil || len(v.Statuses) != 2 {
+		t.Fatal(v, err)
+	}
+	if v.Statuses[0].Creator == nil || v.Statuses[0].Creator.Login != "alice" || v.Statuses[1].Creator != nil || v.Statuses[1].TargetURL != "/o/r/actions/runs/46/jobs/0" || v.Statuses[0].ID != 2 {
+		t.Fatal(v)
+	}
+}

@@ -38,6 +38,7 @@ func copyBuild(b domain.Build) domain.Build {
 func copyDeployment(d domain.Deployment) domain.Deployment {
 	d.RolloutDeadline = copyTime(d.RolloutDeadline)
 	d.MergedAt = copyTime(d.MergedAt)
+	d.MainCICheckedAt = copyTime(d.MainCICheckedAt)
 	d.Images = slices.Clone(d.Images)
 	d.TargetFiles = slices.Clone(d.TargetFiles)
 	d.CIContexts = maps.Clone(d.CIContexts)

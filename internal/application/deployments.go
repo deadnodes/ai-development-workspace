@@ -57,7 +57,7 @@ func deploymentTerminal(d domain.Deployment) bool {
 	return d.Status == "SUCCEEDED" || d.Status == "FAILED"
 }
 func deploymentEvent(st *domain.State, d domain.Deployment, action string) {
-	st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: d.Actor, At: d.UpdatedAt, EntityID: d.ID, ProductID: d.ProductID, Data: domain.Command{Action: action, ProductID: d.ProductID, ID: d.ID, Actor: d.Actor, Data: map[string]any{"status": d.Status, "failure_code": d.FailureCode, "rollout_verified": d.RolloutVerified, "rollout_failure": d.RolloutFailure, "rollout_deadline": d.RolloutDeadline, "merged_at": d.MergedAt, "pr_url": d.PRURL, "merge_commit_sha": d.MergeCommitSHA}}})
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: d.Actor, At: d.UpdatedAt, EntityID: d.ID, ProductID: d.ProductID, Data: domain.Command{Action: action, ProductID: d.ProductID, ID: d.ID, Actor: d.Actor, Data: map[string]any{"ci_evidence": d.CIEvidence, "ci_pr_number": d.CIPRNumber, "ci_pr_head_sha": d.CIPRHeadSHA, "status": d.Status, "failure_code": d.FailureCode, "rollout_verified": d.RolloutVerified, "rollout_failure": d.RolloutFailure, "rollout_deadline": d.RolloutDeadline, "merged_at": d.MergedAt, "pr_url": d.PRURL, "merge_commit_sha": d.MergeCommitSHA}}})
 }
 func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest) (domain.Deployment, error) {
 	var out domain.Deployment
@@ -387,6 +387,7 @@ func deploymentPlan(d domain.Deployment, p buildconfig.Profile) github.DeployPla
 	plan := github.DeployPlan{ID: d.ID, Branch: d.Branch, ExpectedHead: d.HeadSHA, ProposalBaseSHA: d.ProposalBaseSHA}
 	evidence, _ := json.Marshal(d.CIContexts)
 	plan.Body = fmt.Sprintf("RCP Dev deployment %s\nBuild: %s\nSource SHA: %s\nRun: %s\nCI state: %s\nCI contexts: %s\nChecked: %v\nRegistry checked: %v\n", d.ID, d.BuildID, d.SourceSHA, d.RunURL, d.CIState, evidence, d.CheckedAt, d.RegistryCheckedAt)
+	plan.Body += fmt.Sprintf("CI evidence: %s; PR: %d; head: %s\n", d.CIEvidence, d.CIPRNumber, d.CIPRHeadSHA)
 	for _, i := range d.Images {
 		plan.Body += fmt.Sprintf("Image %s: %s; digest %s\n", i.ID, i.ImageRef, i.Digest)
 	}
@@ -518,6 +519,9 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 			verificationErrors = append(verificationErrors, e)
 		}
 	}
+	if err := s.watchMainCI(ctx); err != nil {
+		verificationErrors = append(verificationErrors, err)
+	}
 	return errors.Join(verificationErrors...)
 }
 func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p buildconfig.Profile, g buildconfig.GitOps) error {
@@ -542,13 +546,22 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 			}
 			return save(next, false)
 		}
-		green, failed, contexts := ciVerdict(v, p.RequiredStatusContexts)
+		green, failed, contexts := ciVerdict(trustedCIStatus(v, p), p.RequiredStatusContexts)
 		next := d
 		now := time.Now().UTC()
 		next.CheckedAt = &now
+		next.CIEvidence, next.CIPRNumber, next.CIPRHeadSHA = "", 0, ""
+		next.MainCIState, next.MainCICheckedAt = "", nil
 		next.CIState = v.State
 		next.CIContexts = contexts
 		next.FailureCode = ""
+		if green {
+			next.CIEvidence = "main"
+		} else if !failed {
+			if err := s.acceptPRTree(ctx, &next, p); err == nil && next.CIEvidence == "pr_tree" {
+				green = true
+			}
+		}
 		if failed || !green && now.After(d.Deadline) {
 			return save(failedDeployment(next, "CI_NOT_GREEN"), false)
 		}

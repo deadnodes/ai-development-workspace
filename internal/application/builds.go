@@ -64,14 +64,15 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
 	}{Config: copy, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
-	// Build scope: every Profile field except Deployments and RequiredStatusContexts;
+	// Build scope: every Profile field except Deployments, RequiredStatusContexts and CIGate;
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,
 	// InsecureHTTP; global TimeoutSeconds and RunLookbackSeconds.
-	// Deployment scope adds RequiredStatusContexts, the profile's dev target,
+	// Deployment scope adds optional CIGate, RequiredStatusContexts, the profile's dev target,
 	// and DevGitOps (all fields) and registry. Unrelated profiles and unreferenced
 	// resources are excluded.
 	for _, profile := range copy.Profiles {
 		buildProfile := profile
+		buildProfile.CIGate = nil
 		buildProfile.Deployments = nil
 		buildProfile.RequiredStatusContexts = nil
 		pool := buildconfig.Pool{ID: profile.PoolID, MaxInFlight: copy.Capacity(profile.PoolID)}
@@ -86,13 +87,14 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 		a.buildHashes[profile.ID] = hash
 		gitops, _ := copy.DevGitOps()
 		a.deploymentHashes[profile.ID] = buildFingerprint(struct {
+			CIGate                 *buildconfig.CIGate        `json:",omitempty"`
 			Rollout                *buildconfig.RolloutConfig `json:",omitempty"`
 			BuildAuthority         string
 			RequiredStatusContexts []string
 			Dev                    buildconfig.DeploymentTarget
 			GitOps                 buildconfig.GitOps
 			Registry               buildconfig.Registry
-		}{rolloutAuthority([]buildconfig.Profile{profile}, copy.Rollout), hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
+		}{profile.CIGate, rolloutAuthority([]buildconfig.Profile{profile}, copy.Rollout), hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
 	}
 	s.builds = a
 	return nil

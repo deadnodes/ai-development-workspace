@@ -260,3 +260,58 @@ Without rollout targets or a verifier, success retains GitOps-only semantics and
 This is point-in-time controller/spec rollout evidence, not pod imageID inspection,
 functional acceptance, automatic remediation or production approval. Only configured files
 are verified; unconfigured files retain GitOps-only coverage.
+
+## CI gate: PR tree equivalence
+
+The deployment gate first checks the SourceSHA's required status contexts. Green
+main CI records `ci_evidence: "main"`; any failed required main context fails the
+gate and cannot be overridden. When main CI is pending or missing, the default
+shortcut accepts green CI on the merged PR head only if the PR targets the
+profile's `default_branch` and its tree equals the SourceSHA tree. `dispatch_ref`
+selects the workflow version, not the PR target. Direct pushes (no associated PR),
+unmerged PRs and different trees continue waiting. Enable “branch must be up to
+date” protection for this shortcut to apply often; stale branches usually produce
+a different merged tree.
+
+Forgejo's reported tree SHA is not trustworthy on affected versions. RCP compares
+sorted top-level `(path, mode, type, sha)` entries, including real subtree hashes.
+Truncated, incomplete or over-1000-entry responses never establish equality.
+Only a trailing ` (push)` in a required context maps to ` (pull_request)`; all
+other contexts match exactly. Without configured contexts, combined success is
+required. Provider errors never authorize the shortcut.
+
+Profiles may set `"ci_gate": {"accept_pr_tree": false}` to retain the main-only
+gate. Omission defaults to true and preserves existing authority hashes. An
+explicit `ci_gate` contributes to deployment authority, not build authority.
+Build queue/dispatch does not wait on commit CI and is unchanged.
+
+Shortcut evidence is `ci_evidence: "pr_tree"`, `ci_pr_number` and
+`ci_pr_head_sha`. After GitOps merge (including already-applied targets), the
+regular deployment dispatcher continues watching main CI even after rollout or
+terminal deployment status, for up to three hours from `merged_at`. Checks are
+bounded to a shared 25-second pass budget, at most once per minute per deployment,
+with provider I/O outside the store lock. `main_ci_state` is pending, success or
+failure; `main_ci_checked_at` records the latest poll attempt. Success and failure
+stop polling. Expiry leaves pending evidence pending; it does not claim success.
+Failure emits `main_ci_failed` with failing required contexts and a
+`MAIN_CI_FAILED` deployment/profile item in `get_attention_required`. It never
+rolls back automatically or rewrites the deployment's rollout result. Polling
+pauses if the deployment's configured authority no longer matches.
+
+### Trusted CI producers and safety-net scheduling
+
+Both the main-commit gate and PR-head tree gate default to
+`ci_gate.trusted_producers: "forgejo_actions"`. A status is trusted only when
+`creator` is null and `target_url` is exactly
+`/{owner}/{repo}/actions/runs/[0-9]+/jobs/[0-9]+` for the profile repository
+(owner/repo are case-insensitive). User-created statuses, absolute URLs and
+other repositories are ignored and required contexts remain missing.
+The newest trusted status per context wins. Repositories using bot-posted
+statuses can explicitly select `"any"`. The setting enters authority hashes
+only when explicitly present; omission preserves existing hashes.
+Keep `accept_pr_tree` set explicitly when configuring the `ci_gate` object.
+
+The main-CI safety net schedules the oldest `main_ci_checked_at` first
+(unchecked deployments first), uses at most four concurrent status requests,
+and limits each request to 10 seconds within the existing 25-second pass budget.
+It reserves poll timestamps before I/O so retries remain bounded across passes.

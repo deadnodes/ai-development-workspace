@@ -65,7 +65,13 @@ type DeploymentFile struct {
 	TagFormat       string         `json:"tag_format"`
 	MinMatches      int            `json:"min_matches"`
 }
+type CIGate struct {
+	TrustedProducers string `json:"trusted_producers,omitempty"`
+	AcceptPRTree     bool   `json:"accept_pr_tree"`
+}
+
 type Profile struct {
+	CIGate                 *CIGate                     `json:"ci_gate,omitempty"`
 	RequiredStatusContexts []string                    `json:"required_status_contexts,omitempty"`
 	Deployments            map[string]DeploymentTarget `json:"deployments,omitempty"`
 	ID                     string                      `json:"id"`
@@ -218,6 +224,9 @@ func (c *Config) Validate() error {
 	}
 	ids = nil
 	for _, v := range c.Profiles {
+		if v.CIGate != nil && v.CIGate.TrustedProducers != "" && v.CIGate.TrustedProducers != "forgejo_actions" && v.CIGate.TrustedProducers != "any" {
+			return errors.New("ci_gate.trusted_producers must be forgejo_actions or any")
+		}
 		ids = append(ids, v.ID)
 		cn, ok := con[v.ConnectionID]
 		if !ok || !ident.MatchString(v.ProductID) || !repo.MatchString(v.Repository) || strings.Split(v.Repository, "/")[0] != cn.Owner || strings.Count(v.Repository, "/") != 1 || v.Workflow != "build.yml" || !Branch(v.DispatchRef) || !Branch(v.DefaultBranch) || !pools[v.PoolID] || !regs[v.RegistryID] || len(v.Images) == 0 || len(v.Images) > 64 || len(v.TagCandidates) == 0 || len(v.TagCandidates) > 16 {
