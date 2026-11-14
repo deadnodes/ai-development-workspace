@@ -150,3 +150,47 @@ destructive approval, measured freed disk space and successful protected re-pull
 remain stage-04 work. Full shared A+B Dev and selective Production acceptance also
 remain. Source fixtures do not authorize registry deletion, live provider writes,
 infrastructure change, main/Flux merge, or runtime cutover.
+
+## Completed operation retention
+
+`RCP_OPERATION_RETENTION` is a Go duration, default `720h` (30 days), minimum
+`72h`; `0` disables operation pruning. A maintenance pass runs at startup and
+hourly, independently of runtime observers. If a pass deletes the full 5,000
+operation cap, the next pass runs after one minute; smaller or failed passes
+return to hourly scheduling. This bounded catch-up drains an eligible 100,000
+operation backlog in about 20 minutes plus processing time. Each pass removes at most 5,000
+terminal operations (`GITOPS_APPLIED`, `SUCCEEDED`, `FAILED`, `BLOCKED`,
+`CANCELLED`) whose later finished/updated timestamp predates the cutoff.
+Missing timestamps are retained.
+
+System Git sync observations of kind `REFRESH_GIT` and
+`REFRESH_REPOSITORY_GIT` instead use `RCP_REFRESH_OPERATION_RETENTION`,
+a Go duration with default `168h` (7 days), minimum `24h`.
+Setting it to `0` uses the general `RCP_OPERATION_RETENTION` window.
+The general setting of `0` still disables all operation pruning. The same
+terminal-state, reference, latest-target and request-key protections apply
+to both windows.
+
+The latest operation by creation time (ID breaks ties) for each product, kind,
+integration, repository, environment and application target is retained. All
+non-terminal operations and durable restoration/baseline proofs are retained.
+Operations with any non-empty `request_key` are never pruned: they are durable
+idempotency replay receipts. Nested request keys and `idempotency_key` values
+(including feature-update and main-candidate requests), and frozen build dispatch
+correlations (`build_request.operation_id`), also protect their owning operation,
+even without an incoming operation reference.
+Exact operation ID references anywhere in retained state protect their targets,
+including features/integrations, deployments/compositions, environment selections,
+releases, runtime observations, artifacts/pins, recovery and baseline lineage,
+flows, workers, Git observations, results and idempotency receipts. Nested frozen
+snapshots, map keys and opaque payloads are scanned conservatively; even an
+incidental exact ID value can therefore prevent pruning.
+
+Only operations and their owned operation steps are deleted. Other per-operation
+provenance (results, artifacts, receipts, worker records and observations) protects
+its operation instead of being deleted. A step's owner link and an operation's
+self references do not pin that operation; cross-operation references do.
+Candidates are planned in a borrowed read view and revalidated under the scoped
+writer lock. PostgreSQL deletes records in one batch per touched collection.
+The event journal is preserved and receives one `prune_operations` summary with
+deleted operation/step counts and general/refresh cutoffs per nonempty pass. Idle passes do not write.

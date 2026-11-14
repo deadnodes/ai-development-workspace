@@ -126,7 +126,7 @@ func secretRef(ref string) bool {
 	return (strings.HasPrefix(ref, "env:") && len(ref) > 4 && !strings.ContainsAny(ref[4:], " /\n\r\t")) || (strings.HasPrefix(ref, "file:/") && len(ref) > 6 && !strings.ContainsAny(ref, "\n\r"))
 }
 func terminalOperation(status string) bool {
-	return slices.Contains([]string{"GITOPS_APPLIED", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"}, status)
+	return domain.TerminalOperation(status)
 }
 func pendingRefresh(st *domain.State, kind, productID, integrationID, repositoryID, environmentID, applicationID string) *domain.ExternalOperation {
 	for i := range st.Operations {

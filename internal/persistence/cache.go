@@ -260,6 +260,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 			}
 		}
 	}
+	removedIDs := []string{}
 	for i := 0; i < src.NumField(); i++ {
 		kind := typ.Field(i).Tag.Get("json")
 		if kind == "events" || !full && !selected[kind] {
@@ -273,9 +274,9 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 			oldByID[id] = old.Index(j)
 			positions[id] = s.cached.positions[id]
 		}
-		runtimeDelete := !full && kind == "runtime_observations" && selected[kind] && !appendOnly[kind]
+		retentionDelete := !full && (kind == "runtime_observations" || kind == "operations" || kind == "operation_steps") && selected[kind] && !appendOnly[kind]
 		currentIDs := map[string]bool{}
-		if runtimeDelete {
+		if retentionDelete {
 			for j := 0; j < cur.Len(); j++ {
 				currentIDs[recordString(cur.Index(j), "ID")] = true
 			}
@@ -289,13 +290,14 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 			if kind == "products" {
 				owner = id
 			}
-			if runtimeDelete && !currentIDs[id] || deleting && owner != "" && productsBefore[owner] && !productsAfter[owner] && !afterOwners[owner] && !afterIDs[kind][id] {
+			if retentionDelete && !currentIDs[id] || deleting && owner != "" && productsBefore[owner] && !productsAfter[owner] && !afterOwners[owner] && !afterIDs[kind][id] {
 				deleted = append(deleted, id)
 			} else {
 				values[id] = v
 			}
 		}
 		if len(deleted) > 0 {
+			removedIDs = append(removedIDs, deleted...)
 			if _, err = tx.Exec(ctx, "DELETE FROM records WHERE id=ANY($1::text[]) AND kind=$2", deleted, kind); err != nil {
 				return err
 			}
@@ -449,6 +451,9 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 	}
 
 	positions := s.cached.positions
+	for _, id := range removedIDs {
+		delete(positions, id)
+	}
 	for _, c := range changes {
 		positions[c.id] = c.position
 	}

@@ -253,7 +253,7 @@ func (s *LocalStore) update(ctx context.Context, scope *domain.StateMutationScop
 				if err = json.Unmarshal(raw, &meta); err != nil {
 					return err
 				}
-				if ids[meta.ID] != kind && !(scope != nil && !scope.AllCollections && kind == "runtime_observations" && slices.Contains(scope.MutableCollections, kind)) && !productRecordRemoved(before, after, kind, raw) {
+				if ids[meta.ID] != kind && !(scope != nil && !scope.AllCollections && (kind == "runtime_observations" || kind == "operations" || kind == "operation_steps") && slices.Contains(scope.MutableCollections, kind)) && !productRecordRemoved(before, after, kind, raw) {
 					return errors.New("existing records cannot be removed or change kind")
 				}
 			}
