@@ -73,6 +73,7 @@ func sortedUnique(v []string) []string {
 
 type retentionCollector struct {
 	st                   State
+	freshness            map[string]time.Time
 	product              string
 	now                  time.Time
 	images               map[string]*RetentionImage
@@ -346,7 +347,7 @@ func terminalRetention(status string) bool {
 }
 func (c *retentionCollector) reconciled(o ExternalOperation) bool {
 	for _, r := range c.st.RuntimeObservations {
-		if r.ProductID == c.product && r.OperationID == o.ID && r.EnvironmentID == o.EnvironmentID && r.Healthy && o.GitOpsResult != nil && o.Artifact != nil && r.GitOpsCommit == o.GitOpsResult.CommitSHA && r.ArtifactDigest == o.Artifact.Digest && !r.CreatedAt.Before(o.UpdatedAt) && !r.CreatedAt.IsZero() && !r.CreatedAt.After(c.now) {
+		if r.ProductID == c.product && runtimeReconciliationWitness(r, o) && !r.CreatedAt.After(c.now) {
 			return true
 		}
 	}
@@ -612,7 +613,7 @@ func (c *retentionCollector) environments() {
 			c.ref(r.ArtifactDigest, "", "", "runtime_attestation")
 			c.block("runtime_lineage_unresolved")
 		}
-		if evidenceFreshness(r.CreatedAt, c.now) != "FRESH" {
+		if evidenceFreshness(RuntimeObservedAt(r, c.freshness), c.now) != "FRESH" {
 			c.block("runtime_attestation_stale_or_unknown")
 		}
 	}
@@ -682,7 +683,7 @@ func (c *retentionCollector) releases() {
 			healthy := false
 			if child.GitOpsResult != nil {
 				for _, obs := range c.st.RuntimeObservations {
-					if obs.ProductID == c.product && obs.OperationID == child.ID && obs.EnvironmentID == child.EnvironmentID && obs.Healthy && obs.GitOpsCommit == child.GitOpsResult.CommitSHA && obs.ArtifactDigest == digest && !obs.CreatedAt.IsZero() && !obs.CreatedAt.After(r.CreatedAt) {
+					if obs.ProductID == c.product && runtimeReleaseWitness(obs, child, r) {
 						healthy = true
 					}
 				}
@@ -818,8 +819,11 @@ func newRetentionCollector(st State, product string, now time.Time) *retentionCo
 
 // EvaluateRetention is a pure protected-root inventory. Its fingerprint is an
 // advisory input identity, never a deletion capability, lease or completeness proof.
-func EvaluateRetention(st State, product string, now time.Time, authorities []RegistryObservationAuthority) RetentionReport {
+func EvaluateRetention(st State, product string, now time.Time, authorities []RegistryObservationAuthority, freshness ...map[string]time.Time) RetentionReport {
 	c := newRetentionCollector(st, product, now)
+	if len(freshness) > 0 {
+		c.freshness = freshness[0]
+	}
 	c.evaluate()
 	products := map[string]bool{}
 	for _, p := range st.Products {
@@ -836,6 +840,7 @@ func EvaluateRetention(st State, product string, now time.Time, authorities []Re
 			continue
 		}
 		foreign := newRetentionCollector(st, other, now)
+		foreign.freshness = c.freshness
 		foreign.evaluate()
 		localRepositories := map[string]bool{}
 		for _, v := range c.images {
@@ -978,7 +983,7 @@ func (c *retentionCollector) relevantEvidence() {
 			c.evidence = append(c.evidence, checkHash(struct {
 				ID, Operation, Environment, Digest, GitOps, Freshness string
 				Healthy                                               bool
-			}{r.ID, r.OperationID, r.EnvironmentID, r.ArtifactDigest, r.GitOpsCommit, evidenceFreshness(r.CreatedAt, c.now), r.Healthy}))
+			}{r.ID, r.OperationID, r.EnvironmentID, r.ArtifactDigest, r.GitOpsCommit, evidenceFreshness(RuntimeObservedAt(r, c.freshness), c.now), r.Healthy}))
 		}
 	}
 	for _, e := range c.st.Environments {

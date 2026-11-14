@@ -273,6 +273,13 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 			oldByID[id] = old.Index(j)
 			positions[id] = s.cached.positions[id]
 		}
+		runtimeDelete := !full && kind == "runtime_observations" && selected[kind] && !appendOnly[kind]
+		currentIDs := map[string]bool{}
+		if runtimeDelete {
+			for j := 0; j < cur.Len(); j++ {
+				currentIDs[recordString(cur.Index(j), "ID")] = true
+			}
+		}
 		values := map[string]reflect.Value{}
 		deleted := []string{}
 		for j := 0; j < old.Len(); j++ {
@@ -282,7 +289,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 			if kind == "products" {
 				owner = id
 			}
-			if deleting && owner != "" && productsBefore[owner] && !productsAfter[owner] && !afterOwners[owner] && !afterIDs[kind][id] {
+			if runtimeDelete && !currentIDs[id] || deleting && owner != "" && productsBefore[owner] && !productsAfter[owner] && !afterOwners[owner] && !afterIDs[kind][id] {
 				deleted = append(deleted, id)
 			} else {
 				values[id] = v

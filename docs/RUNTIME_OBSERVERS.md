@@ -55,3 +55,45 @@ operation to attribute evidence to and writes nothing.
 
 Observers consider only legacy DEPLOY ExternalOperations with `GitOpsResult`,
 not Forgejo `Deployment` records created by `deploy_build`.
+
+## Recording, freshness and retention
+
+The legacy deployment observer records `record_runtime_observation` only when
+`healthy`, `details`, `gitops_commit` or `artifact_digest` differs from the latest
+observation for that operation, or no observation exists. Time alone never creates
+another record. An unhealthy/unknown observer result is still an observation;
+a cancelled poll is not. Changed evidence retains the existing command and audit
+semantics.
+
+Every completed poll touches a separate lightweight freshness store. PostgreSQL
+migration **008_runtime_observation_freshness.sql** creates
+`runtime_observation_freshness(operation_id, observation_id, observed_at, healthy)`; one upsert
+updates liveness without a control revision, State copy or cache invalidation.
+Local storage uses a separate bbolt bucket. Stores without the optional interface
+skip freshness. Freshness is operational metadata outside State, so full State
+exports/backups do not carry heartbeats. A restored instance needs a new poll.
+Environment state, operation and feature-graph queries expose `observed_at` alongside
+unchanged provenance `created_at`. Read-time retention/attention and release-note
+baseline checks use the later timestamp only for the latest observation of an
+operation and only when its identity and health match the heartbeat. Historical observations
+retain their recorded timestamp. Freshness reads fail closed on errors.
+
+Historical ordering, worker reconciliation, release-time evidence and retention's
+reconciliation witnesses continue to use `created_at`: these compare provenance,
+not current liveness. Transaction-only retention evaluations in baseline capture,
+restoration and registry-inventory admission have no external heartbeat read;
+they conservatively use recorded timestamps. They can report stale evidence until
+new change evidence exists. Pure domain evaluations likewise need an explicitly
+supplied freshness map. Runtime snapshots have their own `runtime.observed_at`
+and are independent of legacy observation heartbeats.
+
+An hourly pass (also when observers are paused/unconfigured) prunes observations
+older than `RCP_RUNTIME_OBSERVATION_RETENTION`, a Go duration defaulting to `168h`.
+The minimum nonzero value is `24h`; `0` disables pruning. It deletes at most 5,000
+rows per pass, retaining the latest per operation and per product/environment/app,
+one historical witness per operation/digest (retention's protected image roots),
+reconciliation and release-time witnesses, and evidence matching active artifact
+pins. Existing audit history remains append-only. A borrowed-view plan skips idle
+writes; a scoped transaction revalidates only the selected IDs using linear reference
+indexes and emits one `prune_runtime_observations`
+summary event with `deleted` and `cutoff` for an actual deletion batch.

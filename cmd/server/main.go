@@ -146,6 +146,31 @@ func run() error {
 			slog.Warn("initial workspace scan incomplete; server will remain available", "error", err)
 		}
 	}
+	runtimeRetention := 168 * time.Hour
+	if raw := os.Getenv("RCP_RUNTIME_OBSERVATION_RETENTION"); raw != "" {
+		runtimeRetention, err = time.ParseDuration(raw)
+		if err != nil || runtimeRetention < 0 || runtimeRetention > 0 && runtimeRetention < 24*time.Hour {
+			return fmt.Errorf("RCP_RUNTIME_OBSERVATION_RETENTION must be 0 or a duration of at least 24h")
+		}
+	}
+	// Retention also runs when observers are paused or not configured.
+	retentionDone := make(chan struct{})
+	go func() {
+		defer close(retentionDone)
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			if err := service.PruneRuntimeObservations(ctx, time.Now().UTC(), runtimeRetention); err != nil && ctx.Err() == nil {
+				slog.Warn("runtime observation retention failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { stop(); <-retentionDone }()
 	if path := os.Getenv("RCP_OBSERVERS_FILE"); path != "" {
 		configuredObservers, err := runtimeobserver.Load(path)
 		if err != nil {
