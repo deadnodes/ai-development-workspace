@@ -13,6 +13,7 @@ import (
 )
 
 type buildService interface {
+	CloseBuild(context.Context, domain.CloseBuildRequest) (domain.Build, error)
 	QueueBuild(context.Context, domain.QueueBuildRequest) (domain.Build, error)
 	GetBuild(context.Context, domain.BuildLookup) (domain.Build, error)
 	ListBuilds(context.Context, domain.ListBuildsRequest) (domain.BuildPage, error)
@@ -75,6 +76,23 @@ func registerBuildRoutes(mux *http.ServeMux, service Service) {
 		v, e := s.CancelBuild(r.Context(), domain.BuildLookup{ProductID: in.ProductID, BuildID: r.PathValue("id")})
 		respond(w, v, e)
 	})
+
+	mux.HandleFunc("POST /api/builds/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		s, ok := get(w)
+		if !ok {
+			return
+		}
+		var in struct {
+			ProductID  string `json:"product_id"`
+			Reason     string `json:"reason"`
+			RequestKey string `json:"request_key,omitempty"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		v, e := s.CloseBuild(r.Context(), domain.CloseBuildRequest{ProductID: in.ProductID, BuildID: r.PathValue("id"), Reason: in.Reason, RequestKey: in.RequestKey})
+		respond(w, v, e)
+	})
 	mux.HandleFunc("GET /api/builds", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := get(w)
 		if !ok {
@@ -131,6 +149,15 @@ func registerBuildTools(server *mcp.Server, service Service) {
 		v, e := s.CancelBuild(ctx, in)
 		return nil, v, e
 	})
+
+	mcp.AddTool(server, buildTool("close_build", "Admin only: close a DISPATCHED, RUNNING or RECONCILIATION_REQUIRED build as FAILED, preserving evidence and freeing RCP pool admission. RCP does NOT cancel the Forgejo run; the operator must cancel it in Forgejo if still active. Use cancel_build for QUEUED builds."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.CloseBuildRequest) (*mcp.CallToolResult, any, error) {
+		s, ok := service.(buildService)
+		if !ok {
+			return nil, nil, unavailable
+		}
+		v, e := s.CloseBuild(ctx, in)
+		return nil, v, e
+	})
 	mcp.AddTool(server, buildTool("list_builds", "List Product-scoped Builds, optional profile/status filter and scope-bound cursor. Default 25, maximum 100."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.ListBuildsRequest) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(buildService)
 		if !ok {
@@ -166,6 +193,11 @@ func buildTool(name, description string) *mcp.Tool {
 		fields["sha"] = map[string]any{"type": "string", "pattern": "^[0-9a-f]{40}$"}
 		fields["request_key"] = str(128)
 		required = append(required, "profile_id")
+	case "close_build":
+		fields["build_id"] = str(128)
+		fields["reason"] = map[string]any{"type": "string", "minLength": 8, "maxLength": 500}
+		fields["request_key"] = str(128)
+		required = append(required, "build_id", "reason")
 	case "get_build", "cancel_build":
 		fields["build_id"] = str(128)
 		required = append(required, "build_id")

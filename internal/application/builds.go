@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
@@ -238,6 +240,79 @@ func (s *Service) CancelBuild(ctx context.Context, in domain.BuildLookup) (domai
 	})
 	return out, e
 }
+
+// CloseBuild abandons an active handle without changing any provider evidence.
+func (s *Service) CloseBuild(ctx context.Context, in domain.CloseBuildRequest) (domain.Build, error) {
+	var out domain.Build
+	if e := authorize(ctx, "admin", ""); e != nil {
+		return out, e
+	}
+	if in.ProductID == "" || in.BuildID == "" {
+		return out, invalid("product_id and build_id required")
+	}
+	in.Reason = strings.TrimSpace(in.Reason)
+	if n := utf8.RuneCountInString(in.Reason); n < 8 || n > 500 {
+		return out, invalid("reason must contain 8..500 characters")
+	}
+	if len(in.RequestKey) > 128 {
+		return out, invalid("invalid request_key")
+	}
+	old, err := s.GetBuild(ctx, domain.BuildLookup{ProductID: in.ProductID, BuildID: in.BuildID})
+	if err != nil {
+		return out, err
+	}
+	err = s.store.Update(ctx, func(st *domain.State) error {
+		for i, b := range st.Builds {
+			if b.ID != in.BuildID || b.ProductID != in.ProductID {
+				continue
+			}
+			if in.RequestKey != "" {
+				for _, event := range st.Events {
+					if event.Action == "close_build" && event.ProductID == in.ProductID && event.EntityID == in.BuildID {
+						command := event.Data
+						if command.Data["request_key"] == in.RequestKey {
+							if command.Data["reason"] != in.Reason {
+								return invalid("REQUEST_KEY_CONFLICT")
+							}
+							out = copyBuild(b)
+							return nil
+						}
+					}
+				}
+			}
+			if b.Status != old.Status || !b.UpdatedAt.Equal(old.UpdatedAt) {
+				return invalid("build changed")
+			}
+			switch b.Status {
+			case "QUEUED":
+				return invalid("use cancel_build for QUEUED builds")
+			case "DISPATCHED", "RUNNING", "RECONCILIATION_REQUIRED":
+			default:
+				return invalid("only active builds may be closed")
+			}
+			now := time.Now().UTC()
+			next := b
+			next.Status, next.FailureCode, next.FailureMessage = "FAILED", "OPERATOR_CLOSED", in.Reason
+			next.UpdatedAt, next.FinishedAt = now, &now
+			st.Builds[i] = next
+			audit := next
+			audit.Actor = attributedActor(ctx, "agent")
+			buildEvent(st, audit, "close_build")
+			event := &st.Events[len(st.Events)-1]
+			command := event.Data
+			command.Data["reason"] = in.Reason
+			command.Data["request_key"] = in.RequestKey
+			command.Data["previous_status"] = b.Status
+			command.Data["previous_failure_code"] = b.FailureCode
+			command.Data["provider_run_id"] = b.ProviderRunID
+			event.Data = command
+			out = copyBuild(next)
+			return nil
+		}
+		return missing("build", in.BuildID)
+	})
+	return out, err
+}
 func (s *Service) ListBuildProfiles(ctx context.Context, productID string) ([]buildconfig.Profile, error) {
 	if productID == "" {
 		return nil, invalid("product_id required")
@@ -304,10 +379,13 @@ func buildFingerprint(p any) string {
 	return hex.EncodeToString(h[:])
 }
 
+var errBuildPoolFull = invalid("build pool full")
+var errBuildTerminal = invalid("build is terminal")
+
 // advanceBuild uses CAS so cancellation/concurrent pollers cannot overwrite newer evidence.
 func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admit bool) (err error) {
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, errBuildPoolFull) && !errors.Is(err, errBuildTerminal) {
 			slog.Warn("build transition failed", "build_id", old.ID, "from_status", old.Status, "to_status", next.Status, "error", err.Error())
 		}
 	}()
@@ -318,6 +396,10 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 		for i, b := range st.Builds {
 			if b.ID != old.ID {
 				continue
+			}
+			// Terminal evidence is immutable, even when a caller re-read it as its CAS base.
+			if b.Status == "SUCCEEDED" || b.Status == "FAILED" || b.Status == "CANCELLED" {
+				return errBuildTerminal
 			}
 			if b.Status != old.Status || !b.UpdatedAt.Equal(old.UpdatedAt) {
 				return invalid("build changed")
@@ -330,7 +412,7 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 					}
 				}
 				if n >= s.builds.config.Capacity(old.PoolID) {
-					return invalid("build pool full")
+					return errBuildPoolFull
 				}
 			}
 			next.UpdatedAt = time.Now().UTC()
@@ -615,9 +697,13 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				if e = s.advanceBuild(ctx, b, n, false); e != nil {
 					return e
 				}
+				previousStatus := b.Status
 				b, e = s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
 				if e != nil {
 					return e
+				}
+				if !buildActive(b) || b.Status != previousStatus {
+					continue
 				}
 			}
 			for _, r := range runs {
@@ -686,9 +772,13 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			if e = s.advanceBuild(ctx, b, n, false); e != nil {
 				return e
 			}
+			previousStatus := b.Status
 			b, e = s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
 			if e != nil {
 				return e
+			}
+			if b.RestoreQuarantined || b.Status != previousStatus || b.Status != "QUEUED" {
+				continue
 			}
 		}
 		fresh, err := s.buildSnapshot(ctx)
@@ -745,13 +835,20 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		delete(blockedPools, b.PoolID)
-		// Read the admitted CAS timestamp before contacting provider.
+		// Verify admission still holds before contacting the provider.
 		current, e := s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
 		if e != nil {
 			return e
 		}
+		if !buildActive(current) || current.ID != n.ID || current.Status != n.Status || current.FailureCode != n.FailureCode ||
+			current.DispatchedAt == nil || !current.DispatchedAt.Equal(*n.DispatchedAt) {
+			continue
+		}
+		// advanceBuild assigns UpdatedAt when persisting the admitted intent.
+		// Keep that intent as the CAS base even if an operator closes it during dispatch.
+		n.UpdatedAt = current.UpdatedAt
 		r, e := a.provider.Dispatch(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, p.DispatchRef, b.SourceSHA, b.ID)
-		next := current
+		next := n
 		if e != nil {
 			var uncertain *forgejo.Uncertain
 			if errors.As(e, &uncertain) {
@@ -766,7 +863,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			next.RunStatus = r.Status
 			next.FailureCode = ""
 		}
-		if e = s.advanceBuild(ctx, current, next, false); e != nil {
+		if e = s.advanceBuild(ctx, n, next, false); e != nil {
 			return e
 		}
 	}
