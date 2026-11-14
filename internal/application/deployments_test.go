@@ -22,6 +22,11 @@ import (
 )
 
 type deploymentFake struct {
+	ancestor      bool
+	ancestorErr   error
+	ancestorCalls int
+	ancestorHook  func()
+
 	status                           forgejo.CommitStatus
 	registryErr                      error
 	statusErr                        error
@@ -36,6 +41,16 @@ type deploymentFake struct {
 	openedPRs                        int
 }
 
+func (f *deploymentFake) IsAncestor(ctx context.Context, cn buildconfig.Connection, repo, ancestor, descendant string) (bool, error) {
+	f.ancestorCalls++
+	if _, ok := ctx.Deadline(); !ok {
+		panic("comparison must be bounded")
+	}
+	if f.ancestorHook != nil {
+		f.ancestorHook()
+	}
+	return f.ancestor, f.ancestorErr
+}
 func (f *deploymentFake) CommitStatus(context.Context, buildconfig.Connection, string, string) (forgejo.CommitStatus, error) {
 	return f.status, f.statusErr
 }
@@ -293,7 +308,18 @@ func TestDeployFileSerializationAndDeadline(t *testing.T) {
 	b.Images[0].ImageRef = "registry.example/o/r:main-aaaaaaaa@" + b.Images[0].Digest
 	m.state.Builds = append(m.state.Builds, b)
 	in.BuildID = b.ID
-	s.DeployBuild(context.Background(), in)
+	if _, err := s.DeployBuild(context.Background(), in); err == nil || !strings.Contains(err.Error(), "DEPLOYMENT_IN_PROGRESS:") {
+		t.Fatal(err)
+	}
+	if len(m.state.Deployments) != 1 {
+		t.Fatal(m.state.Deployments)
+	}
+	m.state.Deployments[0].Status = "FAILED"
+	if _, err := s.DeployBuild(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	f.status.State = "pending"
+	f.status.Statuses = nil
 	deployTick(t, s)
 	if f.proposals != 1 || m.state.Deployments[1].Status != "PENDING_CHECKS" {
 		t.Fatal(m.state.Deployments)
@@ -580,5 +606,219 @@ func TestDeployFailedIdentityCreatesNewDeployment(t *testing.T) {
 	retry, err := s.DeployBuild(context.Background(), in)
 	if err != nil || retry.ID == first.ID || retry.Status != "PENDING_CHECKS" {
 		t.Fatal(retry, err)
+	}
+}
+
+func TestDeployBuildRollbackGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name                                         string
+		previous, same, ancestor, unavailable, allow bool
+		reason, code, check                          string
+	}{
+		{name: "ancestor refused", previous: true, ancestor: true, code: "ROLLBACK_REFUSED:"},
+		{name: "ancestor override", previous: true, ancestor: true, allow: true, reason: " owner approved rollback ", check: "ancestor"},
+		{name: "missing reason", allow: true, code: "allow_rollback requires reason"},
+		{name: "long reason", allow: true, reason: strings.Repeat("я", 501), code: "allow_rollback requires reason"},
+		{name: "unicode reason", previous: true, ancestor: true, allow: true, reason: strings.Repeat("я", 8), check: "ancestor"},
+		{name: "short trimmed reason", allow: true, reason: "  short  ", code: "allow_rollback requires reason"},
+		{name: "reason only", reason: "owner approved rollback", code: "reason requires allow_rollback"},
+		{name: "newer or diverged", previous: true},
+		{name: "unused override", previous: true, allow: true, reason: "owner approved rollback"},
+		{name: "unavailable refused", previous: true, unavailable: true, code: "ROLLBACK_CHECK_UNAVAILABLE:"},
+		{name: "unavailable override", previous: true, unavailable: true, allow: true, reason: "owner approved rollback", check: "unavailable"},
+		{name: "same SHA", previous: true, same: true, ancestor: true},
+		{name: "no previous", ancestor: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, m, f, in := deploymentFixture(t)
+			f.ancestor, f.ancestorErr = tc.ancestor, nil
+			if tc.unavailable {
+				f.ancestorErr = errors.New("provider unavailable")
+			}
+			if tc.previous {
+				sha := strings.Repeat("b", 40)
+				if tc.same {
+					sha = m.state.Builds[0].SourceSHA
+				}
+				now := time.Now().UTC()
+				m.state.Deployments = []domain.Deployment{{Meta: domain.Meta{ID: "current", ProductID: "p", UpdatedAt: now}, ProfileID: "app", EnvironmentID: "dev", Status: "SUCCEEDED", SourceSHA: sha, AlreadyApplied: true}}
+			}
+			in.AllowRollback, in.Reason = tc.allow, tc.reason
+			eventsBefore := len(m.state.Events)
+			d, err := s.DeployBuild(context.Background(), in)
+			if tc.code != "" {
+				if err == nil || !strings.HasPrefix(strings.TrimPrefix(err.Error(), ErrValidation.Error()+": "), tc.code) {
+					t.Fatal(d, err)
+				}
+				if len(m.state.Events) != eventsBefore {
+					t.Fatal("rejected deployment emitted event")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			if tc.previous && !tc.same {
+				calls = 1
+			}
+			if f.ancestorCalls != calls {
+				t.Fatal("provider calls", f.ancestorCalls)
+			}
+			if tc.check != "" {
+				if d.RollbackFromDeploymentID != "current" || d.RollbackFromSHA != strings.Repeat("b", 40) || d.OverrideReason != strings.TrimSpace(tc.reason) {
+					t.Fatal(d)
+				}
+				data := m.state.Events[len(m.state.Events)-1].Data.Data
+				if data["allow_rollback"] != true || data["reason"] != d.OverrideReason || data["rollback_from_sha"] != d.RollbackFromSHA || data["rollback_from_deployment_id"] != "current" || data["rollback_check"] != tc.check {
+					t.Fatal(data)
+				}
+			} else if d.RollbackFromSHA != "" || d.RollbackFromDeploymentID != "" || d.OverrideReason != "" {
+				t.Fatal(d)
+			}
+		})
+	}
+}
+
+func TestDeployBuildInProgressGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile, repository, path string
+		sameIdentity, refused           bool
+	}{
+		{"same profile", "app", "other/repo", "other.yaml", false, true},
+		{"overlapping profile", "other", "o/flux", "clusters/dev/app.yaml", false, true},
+		{"separate files", "other", "o/flux", "other.yaml", false, false},
+		{"separate repository", "other", "other/repo", "clusters/dev/app.yaml", false, false},
+		{"identity dedupe", "app", "o/flux", "clusters/dev/app.yaml", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, m, _, in := deploymentFixture(t)
+			first, err := s.DeployBuild(context.Background(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.ProfileID, first.GitOpsRepository, first.TargetFiles = tc.profile, tc.repository, []string{tc.path}
+			if !tc.sameIdentity {
+				first.Identity = "other-identity"
+			}
+			m.state.Deployments[0] = first
+			d, err := s.DeployBuild(context.Background(), in)
+			if tc.refused {
+				if err == nil || !strings.HasPrefix(strings.TrimPrefix(err.Error(), ErrValidation.Error()+": "), "DEPLOYMENT_IN_PROGRESS:") || !strings.Contains(err.Error(), first.ID) || !strings.Contains(err.Error(), first.BuildID) || !strings.Contains(err.Error(), first.Status) {
+					t.Fatal(err)
+				}
+			} else if err != nil || tc.sameIdentity && d.ID != first.ID {
+				t.Fatal(d, err)
+			}
+		})
+	}
+}
+
+func TestDeployBuildReceiptPrecedesGuards(t *testing.T) {
+	s, m, f, in := deploymentFixture(t)
+	in.RequestKey = "receipt"
+	first, err := s.DeployBuild(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.state.Deployments[0].Status = "SUCCEEDED"
+	m.state.Deployments = append(m.state.Deployments, domain.Deployment{Meta: domain.Meta{ID: "busy", ProductID: "p"}, EnvironmentID: "dev", ProfileID: "app", Identity: "different", Status: "PENDING_CHECKS"})
+	m.state.Builds = nil // Replay does not revalidate the build either.
+	in.AllowRollback = true
+	in.Reason = "" // Changed and invalid override arguments still replay.
+	got, err := s.DeployBuild(context.Background(), in)
+	if err != nil || got.ID != first.ID || f.ancestorCalls != 0 {
+		t.Fatal(got, err)
+	}
+	in.AllowRollback = false
+	in.Reason = "reason without flag"
+	got, err = s.DeployBuild(context.Background(), in)
+	if err != nil || got.ID != first.ID {
+		t.Fatal(got, err)
+	}
+}
+
+func TestDeployBuildStateChanged(t *testing.T) {
+	s, m, f, in := deploymentFixture(t)
+	now := time.Now().UTC()
+	current := domain.Deployment{Meta: domain.Meta{ID: "current", ProductID: "p", UpdatedAt: now}, EnvironmentID: "dev", ProfileID: "app", Status: "SUCCEEDED", SourceSHA: strings.Repeat("b", 40)}
+	m.state.Deployments = []domain.Deployment{current}
+	f.ancestorHook = func() {
+		if err := s.store.Update(context.Background(), func(st *domain.State) error {
+			next := current
+			next.ID = "new-current"
+			finished := now.Add(time.Second)
+			next.FinishedAt = &finished
+			st.Deployments = append(st.Deployments, next)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := s.DeployBuild(context.Background(), in)
+	if err == nil || !strings.HasPrefix(strings.TrimPrefix(err.Error(), ErrValidation.Error()+": "), "DEPLOYMENT_STATE_CHANGED: retry deploy_build") || len(m.state.Deployments) != 2 {
+		t.Fatal(err, m.state.Deployments)
+	}
+}
+
+func TestDeployBuildInProgressRecheckedAfterAncestry(t *testing.T) {
+	s, m, f, in := deploymentFixture(t)
+	m.state.Deployments = []domain.Deployment{{Meta: domain.Meta{ID: "current", ProductID: "p"}, EnvironmentID: "dev", ProfileID: "app", Status: "SUCCEEDED", SourceSHA: strings.Repeat("b", 40)}}
+	f.ancestorHook = func() {
+		if err := s.store.Update(context.Background(), func(st *domain.State) error {
+			st.Deployments = append(st.Deployments, domain.Deployment{Meta: domain.Meta{ID: "busy", ProductID: "p"}, BuildID: "other", EnvironmentID: "dev", ProfileID: "app", Identity: "other", Status: "PENDING_CHECKS"})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := s.DeployBuild(context.Background(), in)
+	if err == nil || !strings.HasPrefix(strings.TrimPrefix(err.Error(), ErrValidation.Error()+": "), "DEPLOYMENT_IN_PROGRESS:") || len(m.state.Deployments) != 2 {
+		t.Fatal(err, m.state.Deployments)
+	}
+}
+
+func TestLatestDevDeployment(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-time.Hour)
+	st := domain.State{Deployments: []domain.Deployment{
+		{Meta: domain.Meta{ID: "finished", ProductID: "p", UpdatedAt: now.Add(time.Hour)}, ProfileID: "app", EnvironmentID: "dev", Status: "SUCCEEDED", FinishedAt: &old},
+		{Meta: domain.Meta{ID: "fallback", ProductID: "p", UpdatedAt: now}, ProfileID: "app", EnvironmentID: "dev", Status: "SUCCEEDED", AlreadyApplied: true},
+	}}
+	for _, d := range []domain.Deployment{
+		{Meta: domain.Meta{ID: "failed", ProductID: "p", UpdatedAt: now.Add(time.Hour)}, ProfileID: "app", EnvironmentID: "dev", Status: "FAILED"},
+		{Meta: domain.Meta{ID: "other product", ProductID: "other", UpdatedAt: now.Add(time.Hour)}, ProfileID: "app", EnvironmentID: "dev", Status: "SUCCEEDED"},
+		{Meta: domain.Meta{ID: "other profile", ProductID: "p", UpdatedAt: now.Add(time.Hour)}, ProfileID: "other", EnvironmentID: "dev", Status: "SUCCEEDED"},
+		{Meta: domain.Meta{ID: "prod", ProductID: "p", UpdatedAt: now.Add(time.Hour)}, ProfileID: "app", EnvironmentID: "prod", Status: "SUCCEEDED"},
+	} {
+		st.Deployments = append(st.Deployments, d)
+	}
+	if got := latestDevDeployment(&st, "p", "app"); got.ID != "fallback" {
+		t.Fatal(got)
+	}
+}
+
+func TestDeployBuildCrossProductInProgressRedactsHandle(t *testing.T) {
+	s, m, f, in := deploymentFixture(t)
+	m.state.Products = append(m.state.Products, domain.Product{Meta: domain.Meta{ID: "other-product"}})
+	other := domain.Deployment{
+		Meta:    domain.Meta{ID: "private-deployment-id", ProductID: "other-product"},
+		BuildID: "private-build-id", ProfileID: "other-profile", EnvironmentID: "dev",
+		GitOpsRepository: "o/flux", TargetFiles: []string{"clusters/dev/app.yaml"},
+		Identity: "other-identity", Status: "RECONCILIATION_REQUIRED",
+	}
+	m.state.Deployments = append(m.state.Deployments, other)
+	eventsBefore := len(m.state.Events)
+	got, err := s.DeployBuild(context.Background(), in)
+	if err == nil || !strings.Contains(err.Error(), "DEPLOYMENT_IN_PROGRESS:") {
+		t.Fatalf("expected overlapping deployment refusal, got %+v, %v", got, err)
+	}
+	for _, secret := range []string{other.ID, other.BuildID, other.Status} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("cross-product refusal reveals %q: %v", secret, err)
+		}
+	}
+	if got.ID != "" || len(m.state.Deployments) != 1 || len(m.state.Events) != eventsBefore || f.ancestorCalls != 0 {
+		t.Fatalf("refusal changed state or checked ancestry: %+v", got)
 	}
 }

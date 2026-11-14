@@ -126,7 +126,7 @@ func TestPostgresWriteProjectionDoesNotLoadOrdinaryJournal(t *testing.T) {
 	s := retrievalPostgres(t)
 	ctx := context.Background()
 	if err := s.Update(ctx, func(st *domain.State) error {
-		st.Events = []domain.Event{{ID: "progress", Action: "record_progress"}, {ID: "close", Action: "close_build"}, {ID: "restore", Action: "restore_backup"}, {ID: "root", Action: "assemble_environment"}, {ID: "child", Action: "reconcile_composition"}, {ID: "selection", Action: "update_environment_feature"}, {ID: "report", Action: "worker_report"}, {ID: "pin", Action: "pin_artifact"}, {ID: "release", Action: "release_artifact_pin"}, {ID: "malformed-release", Action: "record_progress", Data: domain.Command{Action: "release_artifact_pin"}}}
+		st.Events = []domain.Event{{ID: "progress", Action: "record_progress"}, {ID: "close", Action: "close_build"}, {ID: "close-deployment", Action: "close_deployment"}, {ID: "restore", Action: "restore_backup"}, {ID: "root", Action: "assemble_environment"}, {ID: "child", Action: "reconcile_composition"}, {ID: "selection", Action: "update_environment_feature"}, {ID: "report", Action: "worker_report"}, {ID: "pin", Action: "pin_artifact"}, {ID: "release", Action: "release_artifact_pin"}, {ID: "malformed-release", Action: "record_progress", Data: domain.Command{Action: "release_artifact_pin"}}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestPostgresWriteProjectionDoesNotLoadOrdinaryJournal(t *testing.T) {
 		for _, e := range st.Events {
 			ids = append(ids, e.ID)
 		}
-		want := []string{"close", "restore", "root", "child", "selection", "report", "pin", "release", "malformed-release"}
+		want := []string{"close", "close-deployment", "restore", "root", "child", "selection", "report", "pin", "release", "malformed-release"}
 		if !reflect.DeepEqual(ids, want) {
 			t.Fatalf("projection/order: %v", ids)
 		}
@@ -146,11 +146,11 @@ func TestPostgresWriteProjectionDoesNotLoadOrdinaryJournal(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.cached.state.Events) != 9 {
+	if len(s.cached.state.Events) != 10 {
 		t.Fatal("ordinary events accumulated in cache")
 	}
 	full, err := s.Read(ctx)
-	if err != nil || len(full.Events) != 11 {
+	if err != nil || len(full.Events) != 12 {
 		t.Fatal("full journal lost", err)
 	}
 	// Record fixture resets must preserve the write-side index, not transplant

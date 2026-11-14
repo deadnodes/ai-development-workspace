@@ -70,7 +70,7 @@ func TestDeploymentHTTPMCPWithoutSockets(t *testing.T) {
 	if code, _ := call("GET", "/api/deployments?product_id=p", "", false); code != 401 {
 		t.Fatal(code)
 	}
-	payload := `{"product_id":"p","build_id":"` + b.ID + `","environment_id":"dev"}`
+	payload := `{"product_id":"p","build_id":"` + b.ID + `","environment_id":"dev","allow_rollback":true,"reason":"owner approved rollback"}`
 	code, raw := call("POST", "/api/deployments", payload, true)
 	if code != 200 {
 		t.Fatal(code, string(raw))
@@ -82,6 +82,14 @@ func TestDeploymentHTTPMCPWithoutSockets(t *testing.T) {
 	for _, body := range []string{strings.Replace(payload, "dev", "prod", 1), strings.TrimSuffix(payload, "}") + `,"unknown":true}`, payload + `{}`} {
 		if code, _ := call("POST", "/api/deployments", body, true); code < 400 {
 			t.Fatal(body, code)
+		}
+	}
+	for _, body := range []string{
+		strings.Replace(payload, `"owner approved rollback"`, `"short"`, 1),
+		strings.Replace(payload, `"allow_rollback":true`, `"allow_rollback":false`, 1),
+	} {
+		if code, raw := call("POST", "/api/deployments", body, true); code < 400 {
+			t.Fatal("invalid override accepted", code, string(raw))
 		}
 	}
 	for _, path := range []string{"/api/deployments?product_id=p&limit=101", "/api/deployments?product_id=p&unknown=x", "/api/deployments?product_id=p&product_id=x"} {
@@ -111,17 +119,62 @@ func TestDeploymentHTTPMCPWithoutSockets(t *testing.T) {
 	for _, tool := range tools.Tools {
 		found[tool.Name] = true
 	}
-	for _, name := range []string{"deploy_build", "get_deployment", "list_deployments"} {
+	for _, name := range []string{"deploy_build", "get_deployment", "list_deployments", "close_deployment"} {
 		if !found[name] {
 			t.Fatal("missing", name)
 		}
 	}
-	result, e := session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_build", Arguments: map[string]any{"product_id": "p", "build_id": b.ID, "environment_id": "dev"}})
+	result, e := session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_build", Arguments: map[string]any{"product_id": "p", "build_id": b.ID, "environment_id": "dev", "allow_rollback": true, "reason": "owner approved rollback"}})
 	if e != nil || result.IsError {
 		t.Fatal(result, e)
+	}
+
+	// Bind a receipt through MCP, then replay with an invalid override reason.
+	keyed := map[string]any{"product_id": "p", "build_id": b.ID, "environment_id": "dev", "request_key": "replay-short"}
+	result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_build", Arguments: keyed})
+	if e != nil || result.IsError {
+		t.Fatal(result, e)
+	}
+	keyed["allow_rollback"], keyed["reason"] = true, "short"
+	result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_build", Arguments: keyed})
+	if e != nil || result.IsError {
+		t.Fatal("receipt replay rejected invalid reason", result, e)
+	}
+	rawReplay, e := json.Marshal(result.StructuredContent)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var replay domain.Deployment
+	if e = json.Unmarshal(rawReplay, &replay); e != nil || replay.ID != d.ID || replay.BuildID != d.BuildID || replay.Status != d.Status {
+		t.Fatalf("replay did not return stored handle: %s, %v", rawReplay, e)
 	}
 	result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "deploy_build", Arguments: map[string]any{"product_id": "p", "build_id": b.ID, "environment_id": "prod"}})
 	if e == nil && !result.IsError {
 		t.Fatal("MCP prod accepted")
 	}
+	for _, reason := range []string{"short", ""} {
+		result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "close_deployment", Arguments: map[string]any{"product_id": "p", "deployment_id": d.ID, "reason": reason}})
+		if e != nil || !result.IsError {
+			t.Fatal("MCP validation mapping", result, e)
+		}
+	}
+	if code, raw := call("POST", "/api/deployments/"+d.ID+"/close", `{"product_id":"p","reason":"short"}`, true); code != 422 {
+		t.Fatal(code, string(raw))
+	}
+	result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "close_deployment", Arguments: map[string]any{"product_id": "p", "deployment_id": d.ID, "reason": "operator abandoned deployment", "request_key": "close"}})
+	if e != nil || result.IsError {
+		t.Fatal(result, e)
+	}
+	if code, raw := call("POST", "/api/deployments/"+d.ID+"/close", `{"product_id":"p","reason":"operator abandoned deployment","request_key":"close"}`, true); code != 200 || !strings.Contains(string(raw), "OPERATOR_CLOSED") {
+		t.Fatal(code, string(raw))
+	}
+
+	code, raw = call("POST", "/api/deployments", payload, true)
+	if code != 200 || json.Unmarshal(raw, &d) != nil {
+		t.Fatal(code, string(raw))
+	}
+	if code, raw := call("POST", "/api/deployments/"+d.ID+"/close", `{"product_id":"p","reason":"operator closed via HTTP"}`, true); code != 200 || !strings.Contains(string(raw), "OPERATOR_CLOSED") {
+		t.Fatal(code, string(raw))
+	}
+
 }

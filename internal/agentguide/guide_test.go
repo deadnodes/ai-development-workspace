@@ -32,7 +32,10 @@ func TestCanonicalSkillProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sources []struct{ Name, Repository, Commit, Path, SHA256 string }
+	var sources []struct {
+		Name, Repository, Commit, Path, SHA256 string
+		LocalAmendments                        string `json:"local_amendments"`
+	}
 	if json.Unmarshal(raw, &sources) != nil || len(sources) != 2 {
 		t.Fatal("invalid skill provenance")
 	}
@@ -51,7 +54,10 @@ func TestCanonicalSkillProvenance(t *testing.T) {
 			t.Fatal("missing canonical skill")
 		}
 		h := sha256.Sum256([]byte(skill.Content))
-		if hex.EncodeToString(h[:]) != sha || skill.SHA256 != sha {
+		// Upstream hashes identify the original snapshots; declared local amendments
+		// change the served bytes, whose checksum must still match the payload.
+		actual := hex.EncodeToString(h[:])
+		if skill.SHA256 != actual || (actual != sha && source.LocalAmendments == "") {
 			t.Fatal("canonical bytes differ")
 		}
 	}
@@ -67,5 +73,17 @@ func TestCanonicalSkillProvenance(t *testing.T) {
 	}
 	if strings.Contains(Instructions, "get_product_state") || strings.Contains(Instructions, "proactively offer") {
 		t.Fatal("unbounded or implicit adoption guidance")
+	}
+}
+
+func TestDeliveryCloseDeploymentGuidance(t *testing.T) {
+	skill, ok := Lookup(DeliverySkillName)
+	if !ok {
+		t.Fatal("missing delivery skill")
+	}
+	for _, text := range []string{"close_deployment", "DEPLOYMENT_IN_PROGRESS", "PENDING_CHECKS", "never use it for deployments with a PR"} {
+		if !strings.Contains(skill.Content, text) {
+			t.Fatalf("missing close deployment guidance %q", text)
+		}
 	}
 }

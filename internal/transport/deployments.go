@@ -13,6 +13,7 @@ import (
 )
 
 type deploymentService interface {
+	CloseDeployment(context.Context, domain.CloseDeploymentRequest) (domain.Deployment, error)
 	DeployBuild(context.Context, domain.DeployBuildRequest) (domain.Deployment, error)
 	GetDeployment(context.Context, domain.DeploymentLookup) (domain.Deployment, error)
 	ListDeployments(context.Context, domain.ListDeploymentsRequest) (domain.DeploymentPage, error)
@@ -51,6 +52,22 @@ func registerDeploymentRoutes(mux *http.ServeMux, service Service) {
 		v, e := s.DeployBuild(r.Context(), in)
 		respond(w, v, e)
 	})
+	mux.HandleFunc("POST /api/deployments/{id}/close", func(w http.ResponseWriter, r *http.Request) {
+		s, ok := get(w)
+		if !ok {
+			return
+		}
+		var in struct {
+			ProductID  string `json:"product_id"`
+			Reason     string `json:"reason"`
+			RequestKey string `json:"request_key,omitempty"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		v, e := s.CloseDeployment(r.Context(), domain.CloseDeploymentRequest{ProductID: in.ProductID, DeploymentID: r.PathValue("id"), Reason: in.Reason, RequestKey: in.RequestKey})
+		respond(w, v, e)
+	})
 	mux.HandleFunc("GET /api/deployments/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := get(w)
 		if !ok {
@@ -83,12 +100,20 @@ func registerDeploymentRoutes(mux *http.ServeMux, service Service) {
 }
 func registerDeploymentTools(server *mcp.Server, service Service) {
 	unavailable := errors.New("deployment service unavailable")
-	mcp.AddTool(server, deploymentTool("deploy_build", "Deploy a finished build to Dev only after CI and registry verification. RCP opens and squash-merges its GitHub Flux PR with a SHA lock. Production rejected. Only active deployments deduplicate by environment, profile and image digests; terminal matches create a new Deployment, already_applied without a PR when Flux has the values. Existing request_key replay returns its historical handle; rebinding conflicts. Returns a durable Deployment; uncertainty reconciles without blindly merging again."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.DeployBuildRequest) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, deploymentTool("deploy_build", "Deploy a finished build to Dev only after CI and registry verification. RCP opens and squash-merges its GitHub Flux PR with a SHA lock. Concurrent overlapping deployments are refused; older builds require allow_rollback with reason after an ancestry check. Production rejected. Only active deployments deduplicate by environment, profile and image digests; terminal matches create a new Deployment, already_applied without a PR when Flux has the values. Existing request_key replay returns its historical handle; rebinding conflicts. Returns a durable Deployment; uncertainty reconciles without blindly merging again."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.DeployBuildRequest) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(deploymentService)
 		if !ok {
 			return nil, nil, unavailable
 		}
 		v, e := s.DeployBuild(ctx, in)
+		return nil, v, e
+	})
+	mcp.AddTool(server, deploymentTool("close_deployment", "Admin only: close a pending Dev deployment before any GitOps proposal side effects, with an audit reason. Never use for deployments with a PR."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.CloseDeploymentRequest) (*mcp.CallToolResult, any, error) {
+		s, ok := service.(deploymentService)
+		if !ok {
+			return nil, nil, unavailable
+		}
+		v, e := s.CloseDeployment(ctx, in)
 		return nil, v, e
 	})
 	mcp.AddTool(server, deploymentTool("get_deployment", "Read one Product-scoped Deployment including CI and registry evidence, PR and merge SHA. GitOps completion does not claim runtime health."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.DeploymentLookup) (*mcp.CallToolResult, any, error) {
@@ -117,10 +142,17 @@ func deploymentTool(name, description string) *mcp.Tool {
 	required := []string{"product_id"}
 	switch name {
 	case "deploy_build":
+		fields["allow_rollback"] = map[string]any{"type": "boolean"}
+		fields["reason"] = map[string]any{"type": "string", "maxLength": 2000}
 		fields["build_id"] = str(128)
 		fields["environment_id"] = map[string]any{"type": "string", "enum": []string{"dev"}}
 		fields["request_key"] = str(128)
 		required = append(required, "build_id", "environment_id")
+	case "close_deployment":
+		fields["deployment_id"] = str(128)
+		fields["reason"] = map[string]any{"type": "string", "maxLength": 2000}
+		fields["request_key"] = str(128)
+		required = append(required, "deployment_id", "reason")
 	case "get_deployment":
 		fields["deployment_id"] = str(128)
 		required = append(required, "deployment_id")

@@ -56,7 +56,8 @@ No API can modify this configuration. Restart is required for changes.
 
 | MCP | HTTP |
 | --- | --- |
-| `deploy_build {product_id,build_id,environment_id:"dev",request_key?}` | `POST /api/deployments` with the same JSON |
+| `close_deployment {product_id,deployment_id,reason,request_key?}` | `POST /api/deployments/{id}/close` with `{product_id,reason,request_key?}` |
+| `deploy_build {product_id,build_id,environment_id:"dev",request_key?,allow_rollback?,reason?}` | `POST /api/deployments` with the same JSON |
 | `get_deployment {product_id,deployment_id}` | `GET /api/deployments/{id}?product_id=…` |
 | `list_deployments {product_id,environment_id?,profile_id?,limit?,cursor?}` | `GET /api/deployments?product_id=…` with the same query fields |
 
@@ -155,3 +156,44 @@ or re-dispatches the handle and immediately frees RCP pool admission.
 Forgejo. Provider-side active-run safety gates still apply to subsequent builds.
 Replay with the same optional request key and reason returns the closed build
 without another journal event.
+
+## Rollback and concurrency guards
+
+Request-key replay returns the stored handle for the same build/environment even
+if `allow_rollback` or `reason` changes. Active deployments with the same product,
+environment, profile and image identity still deduplicate. A different identity
+in the same environment with the same profile or overlapping GitOps target files
+is refused with `DEPLOYMENT_IN_PROGRESS:` naming its deployment, build and status.
+Wait for that handle with `get_deployment`; there is no concurrency override.
+
+Before creating a deployment, RCP selects the latest SUCCEEDED Dev deployment for
+that product/profile by FinishedAt (UpdatedAt fallback), including `already_applied`.
+Equal source SHAs need no ancestry check. Otherwise it checks whether the requested
+build is an ancestor of that deployed SHA using the source profile connection and
+repository. This uses the commits API `not` filter (Forgejo/Gitea ≥ 1.22) and does
+not need the pull-request unit. Newer or diverged commits are allowed.
+`ROLLBACK_REFUSED:` blocks older commits; `ROLLBACK_CHECK_UNAVAILABLE:` fails closed
+when ancestry cannot be established. The bounded 15-second check runs outside the
+store transaction; a changed current deployment returns
+`DEPLOYMENT_STATE_CHANGED: retry deploy_build` for a fresh explicit attempt.
+
+Only with owner/coordinator rollback intent, pass `allow_rollback:true` and a
+`reason` of 8–500 trimmed runes to override an ancestor or unavailable check.
+A reason without the flag is invalid. An override actually used records
+`rollback_from_sha`, `rollback_from_deployment_id` and `override_reason` on the
+Deployment, and `allow_rollback`, `reason`, both rollback-from fields and
+`rollback_check` (`ancestor` or `unavailable`) in the `deploy_build` event.
+An unused override records none of these fields.
+
+Limitation: “current” is RCP deployment history for that profile only; manual Flux
+edits are not seen. GitOps completion does not prove runtime or functional health.
+
+## Closing a deployment before GitOps
+
+Instance admins may use `close_deployment` to release `DEPLOYMENT_IN_PROGRESS`
+held by a deployment stuck in `PENDING_CHECKS`. `PROPOSING` and later states are
+refused because a GitHub proposal may already be in flight. Never use it for a deployment with a PR
+or uncertain GitOps side effects. The trimmed reason must contain 8–500 runes.
+Closure records `FAILED` / `OPERATOR_CLOSED`, `close_reason`, timestamps and an
+append-only audit event. A matching request key replays without another event;
+reusing the key for another deployment or reason returns `REQUEST_KEY_CONFLICT`.
