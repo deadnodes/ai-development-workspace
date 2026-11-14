@@ -175,3 +175,49 @@ func TestCloseBuildPostgresReplayAfterRestart(t *testing.T) {
 		t.Fatalf("conflict changed journal: %+v, error: %v", after.Events, err)
 	}
 }
+
+// Close the admitted build after its transaction, before the dispatch re-read.
+type closeAfterAdmissionStore struct {
+	*memoryStore
+	afterAdmission func()
+}
+
+func (m *closeAfterAdmissionStore) Update(ctx context.Context, fn func(*domain.State) error) error {
+	if err := m.memoryStore.Update(ctx, fn); err != nil {
+		return err
+	}
+	for _, b := range m.state.Builds {
+		if b.Status == "RECONCILIATION_REQUIRED" && b.FailureCode == "DISPATCH_UNCERTAIN" && m.afterAdmission != nil {
+			f := m.afterAdmission
+			m.afterAdmission = nil
+			f()
+			break
+		}
+	}
+	return nil
+}
+
+func TestCloseBuildBetweenAdmissionAndDispatch(t *testing.T) {
+	s, m, provider, _ := buildFixture(t)
+	b := queue(t, s, "one")
+	var closed domain.Build
+	hooked := false
+	s.store = &closeAfterAdmissionStore{memoryStore: m, afterAdmission: func() {
+		hooked = true
+		var err error
+		closed, err = s.CloseBuild(context.Background(), domain.CloseBuildRequest{
+			ProductID: b.ProductID, BuildID: b.ID, Reason: "abandoned by operator",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}}
+	tick(t, s)
+	if !hooked || provider.dispatches != 0 {
+		t.Fatalf("admission hook ran: %v, dispatch calls: %d", hooked, provider.dispatches)
+	}
+	got := getBuild(t, s, b)
+	if got.Status != "FAILED" || got.FailureCode != "OPERATOR_CLOSED" || !reflect.DeepEqual(got, closed) {
+		t.Fatalf("operator closure changed: %+v", got)
+	}
+}

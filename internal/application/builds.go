@@ -822,13 +822,20 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		delete(blockedPools, b.PoolID)
-		// Read the admitted CAS timestamp before contacting provider.
+		// Verify admission still holds before contacting the provider.
 		current, e := s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
 		if e != nil {
 			return e
 		}
+		if current.ID != n.ID || current.Status != n.Status || current.FailureCode != n.FailureCode ||
+			current.DispatchedAt == nil || !current.DispatchedAt.Equal(*n.DispatchedAt) {
+			continue
+		}
+		// advanceBuild assigns UpdatedAt when persisting the admitted intent.
+		// Keep that intent as the CAS base even if an operator closes it during dispatch.
+		n.UpdatedAt = current.UpdatedAt
 		r, e := a.provider.Dispatch(ctx, a.config.Connection(p.ConnectionID), p.Repository, p.Workflow, p.DispatchRef, b.SourceSHA, b.ID)
-		next := current
+		next := n
 		if e != nil {
 			var uncertain *forgejo.Uncertain
 			if errors.As(e, &uncertain) {
@@ -843,7 +850,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			next.RunStatus = r.Status
 			next.FailureCode = ""
 		}
-		if e = s.advanceBuild(ctx, current, next, false); e != nil {
+		if e = s.advanceBuild(ctx, n, next, false); e != nil {
 			return e
 		}
 	}
