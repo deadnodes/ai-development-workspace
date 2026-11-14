@@ -153,20 +153,39 @@ func run() error {
 			return fmt.Errorf("RCP_RUNTIME_OBSERVATION_RETENTION must be 0 or a duration of at least 24h")
 		}
 	}
+	operationRetention := 720 * time.Hour
+	if raw := os.Getenv("RCP_OPERATION_RETENTION"); raw != "" {
+		operationRetention, err = time.ParseDuration(raw)
+		if err != nil || operationRetention < 0 || operationRetention > 0 && operationRetention < 72*time.Hour {
+			return fmt.Errorf("RCP_OPERATION_RETENTION must be 0 or a duration of at least 72h")
+		}
+	}
+	refreshOperationRetention := 168 * time.Hour
+	if raw := os.Getenv("RCP_REFRESH_OPERATION_RETENTION"); raw != "" {
+		refreshOperationRetention, err = time.ParseDuration(raw)
+		if err != nil || refreshOperationRetention < 0 || refreshOperationRetention > 0 && refreshOperationRetention < 24*time.Hour {
+			return fmt.Errorf("RCP_REFRESH_OPERATION_RETENTION must be 0 or a duration of at least 24h")
+		}
+	}
 	// Retention also runs when observers are paused or not configured.
 	retentionDone := make(chan struct{})
 	go func() {
 		defer close(retentionDone)
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
+		timer := time.NewTimer(time.Hour)
+		defer timer.Stop()
 		for {
 			if err := service.PruneRuntimeObservations(ctx, time.Now().UTC(), runtimeRetention); err != nil && ctx.Err() == nil {
 				slog.Warn("runtime observation retention failed", "error", err)
 			}
+			deleted, pruneErr := service.PruneOperations(ctx, time.Now().UTC(), operationRetention, refreshOperationRetention)
+			if pruneErr != nil && ctx.Err() == nil {
+				slog.Warn("operation retention failed", "error", pruneErr)
+			}
+			timer.Reset(operationRetentionDelay(deleted))
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
 		}
 	}()
@@ -285,4 +304,12 @@ func bootstrapWorkspace(ctx context.Context, service *application.Service, root 
 	}
 	_, err = service.ScanWorkspace(ctx, product.ID, "system/workspace")
 	return err
+}
+
+// operationRetentionDelay bounds catch-up to one batch per minute.
+func operationRetentionDelay(deleted int) time.Duration {
+	if deleted >= application.OperationPruneLimit {
+		return time.Minute
+	}
+	return time.Hour
 }
