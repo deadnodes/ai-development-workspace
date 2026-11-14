@@ -48,6 +48,36 @@ func operationPriority(kind string) int {
 	}
 }
 
+// selectWorkerCandidate only borrows state; callers must reselect under the writer lock.
+func selectWorkerCandidate(st *domain.State, now time.Time, providerAvailable, runtimeAvailable, intelligenceAvailable bool) (int, bool) {
+	if !providerAvailable && !runtimeAvailable && !intelligenceAvailable {
+		return 0, false
+	}
+	var candidate *domain.ExternalOperation
+	index := 0
+	for i := range st.Operations {
+		v := &st.Operations[i]
+		if v.Kind == domain.WorkerOperationKind || v.Kind == domain.RegistryObserveOperationKind {
+			continue
+		}
+		if v.Kind == domain.IntelligenceOperationKind && !intelligenceAvailable {
+			continue
+		}
+		if !providerAvailable && v.Kind != "REFRESH_RUNTIME" && v.Kind != domain.IntelligenceOperationKind {
+			continue
+		}
+		if terminalOperation(v.Status) || v.NextAttemptAt.After(now) || v.LeaseUntil.After(now) {
+			continue
+		}
+		if candidate == nil || operationPriority(v.Kind) < operationPriority(candidate.Kind) ||
+			(operationPriority(v.Kind) == operationPriority(candidate.Kind) && (v.NextAttemptAt.Before(candidate.NextAttemptAt) || (v.NextAttemptAt.Equal(candidate.NextAttemptAt) && v.ID < candidate.ID))) {
+			candidate = v
+			index = i
+		}
+	}
+	return index, candidate != nil
+}
+
 // Tick claims one durable operation step. Network I/O happens outside the store
 // transaction. A persisted dispatch intent is never blindly dispatched again.
 func (s *Service) Tick(ctx context.Context) (bool, error) {
@@ -55,31 +85,27 @@ func (s *Service) Tick(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	now := time.Now().UTC()
+	var runnable bool
+	if err := s.view(ctx, func(st *domain.State) error {
+		_, runnable = selectWorkerCandidate(st, now, s.provider != nil, len(s.runtimeObservers) > 0, s.intelligence != nil)
+		return nil
+	}); err != nil || !runnable {
+		return false, err
+	}
+	update := s.store.Update
+	if scoped, ok := s.store.(interface {
+		UpdateScoped(context.Context, domain.StateMutationScope, func(*domain.State) error) error
+	}); ok {
+		update = func(ctx context.Context, fn func(*domain.State) error) error {
+			return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"operations"}}, fn)
+		}
+	}
 	var op *domain.ExternalOperation
 	token := id()
-	err := s.store.Update(ctx, func(st *domain.State) error {
-		var candidate *domain.ExternalOperation
-		for i := range st.Operations {
-			v := &st.Operations[i]
-			if v.Kind == domain.WorkerOperationKind || v.Kind == domain.RegistryObserveOperationKind {
-				continue
-			}
-			if v.Kind == domain.IntelligenceOperationKind && s.intelligence == nil {
-				continue
-			}
-			if s.provider == nil && v.Kind != "REFRESH_RUNTIME" && v.Kind != domain.IntelligenceOperationKind {
-				continue
-			}
-			if terminalOperation(v.Status) || v.NextAttemptAt.After(now) || v.LeaseUntil.After(now) {
-				continue
-			}
-			if candidate == nil || operationPriority(v.Kind) < operationPriority(candidate.Kind) ||
-				(operationPriority(v.Kind) == operationPriority(candidate.Kind) && (v.NextAttemptAt.Before(candidate.NextAttemptAt) || (v.NextAttemptAt.Equal(candidate.NextAttemptAt) && v.ID < candidate.ID))) {
-				candidate = v
-			}
-		}
-		if candidate != nil {
-			v := candidate
+	err := update(ctx, func(st *domain.State) error {
+		index, ok := selectWorkerCandidate(st, now, s.provider != nil, len(s.runtimeObservers) > 0, s.intelligence != nil)
+		if ok {
+			v := &st.Operations[index]
 			v.LeaseOwner = token
 			v.LeaseUntil = now.Add(45 * time.Second)
 			if v.Kind == domain.IntelligenceOperationKind && s.intelligence != nil {
