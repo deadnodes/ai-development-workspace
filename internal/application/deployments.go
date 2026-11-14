@@ -36,24 +36,28 @@ type DeploymentGitOps interface {
 	MergeDeployment(context.Context, buildconfig.GitOps, int, string) (string, error)
 }
 type deployRuntime struct {
+	runtime  DeploymentRuntime
 	source   DeploymentSource
 	registry DeploymentRegistry
 	gitops   DeploymentGitOps
 	mu       sync.Mutex
 }
 
-func (s *Service) ConfigureDeployments(source DeploymentSource, registry DeploymentRegistry, gitops DeploymentGitOps) error {
+func (s *Service) ConfigureDeployments(source DeploymentSource, registry DeploymentRegistry, gitops DeploymentGitOps, runtime ...DeploymentRuntime) error {
 	if s.builds == nil || source == nil || registry == nil || gitops == nil {
 		return invalid("deployment adapters and build authority required")
 	}
 	s.deployments = &deployRuntime{source: source, registry: registry, gitops: gitops}
+	if len(runtime) > 0 {
+		s.deployments.runtime = runtime[0]
+	}
 	return nil
 }
 func deploymentTerminal(d domain.Deployment) bool {
 	return d.Status == "SUCCEEDED" || d.Status == "FAILED"
 }
 func deploymentEvent(st *domain.State, d domain.Deployment, action string) {
-	st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: d.Actor, At: d.UpdatedAt, EntityID: d.ID, ProductID: d.ProductID, Data: domain.Command{Action: action, ProductID: d.ProductID, ID: d.ID, Actor: d.Actor, Data: map[string]any{"status": d.Status, "failure_code": d.FailureCode, "pr_url": d.PRURL, "merge_commit_sha": d.MergeCommitSHA}}})
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: d.Actor, At: d.UpdatedAt, EntityID: d.ID, ProductID: d.ProductID, Data: domain.Command{Action: action, ProductID: d.ProductID, ID: d.ID, Actor: d.Actor, Data: map[string]any{"status": d.Status, "failure_code": d.FailureCode, "rollout_verified": d.RolloutVerified, "rollout_failure": d.RolloutFailure, "rollout_deadline": d.RolloutDeadline, "merged_at": d.MergedAt, "pr_url": d.PRURL, "merge_commit_sha": d.MergeCommitSHA}}})
 }
 func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest) (domain.Deployment, error) {
 	var out domain.Deployment
@@ -440,11 +444,20 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 		return e
 	}
 	sort.SliceStable(st.Deployments, func(i, j int) bool {
+		if (st.Deployments[i].Status == "VERIFYING_ROLLOUT") != (st.Deployments[j].Status == "VERIFYING_ROLLOUT") {
+			return st.Deployments[j].Status == "VERIFYING_ROLLOUT"
+		}
 		if st.Deployments[i].CreatedAt.Equal(st.Deployments[j].CreatedAt) {
 			return st.Deployments[i].ID < st.Deployments[j].ID
 		}
 		return st.Deployments[i].CreatedAt.Before(st.Deployments[j].CreatedAt)
 	})
+	type verification struct {
+		deployment domain.Deployment
+		profile    buildconfig.Profile
+		next       domain.Deployment
+	}
+	var verifications []verification
 	for _, d := range st.Deployments {
 		if deploymentTerminal(d) {
 			continue
@@ -469,14 +482,49 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 			}
 			continue
 		}
+		if d.Status == "VERIFYING_ROLLOUT" {
+			verifications = append(verifications, verification{deployment: d, profile: p})
+			continue
+		}
 		if e = s.processDeployment(ctx, d, p, g); e != nil {
 			return e
 		}
 	}
-	return nil
+	// All observations share one pass budget, including time waiting for a worker.
+	checkCtx, cancel := context.WithTimeout(ctx, rolloutTickTimeout)
+	defer cancel()
+	var wg sync.WaitGroup
+	jobs := make(chan int)
+	for range min(4, len(verifications)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				v := &verifications[i]
+				v.next = s.observeDeploymentRollout(checkCtx, v.deployment, v.profile)
+			}
+		}()
+	}
+	for i := range verifications {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	// Use the caller context for persistence: an expired observation budget must
+	// neither discard results nor prevent the following build dispatch.
+	var verificationErrors []error
+	for _, v := range verifications {
+		if e := s.advanceDeployment(ctx, v.deployment, &v.next, false); e != nil {
+			verificationErrors = append(verificationErrors, e)
+		}
+	}
+	return errors.Join(verificationErrors...)
 }
 func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p buildconfig.Profile, g buildconfig.GitOps) error {
 	a := s.deployments
+	if d.Status == "VERIFYING_ROLLOUT" {
+		return s.verifyDeploymentRollout(ctx, d, p)
+	}
 	save := func(next domain.Deployment, claim bool) error {
 		e := s.advanceDeployment(ctx, d, &next, claim)
 		if e == nil {
@@ -553,7 +601,7 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		next.ProposalBaseSHA = proposal.BaseSHA
 		if proposal.AlreadyApplied {
 			next.AlreadyApplied = true
-			return save(succeededDeployment(next), false)
+			return save(s.mergedDeployment(next, p), false)
 		}
 		next.PRNumber = proposal.PR.Number
 		next.PRURL = proposal.PR.URL
@@ -597,7 +645,7 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 				}
 			}
 			next.MergeCommitSHA = pr.MergeSHA
-			return save(succeededDeployment(next), false)
+			return save(s.mergedDeployment(next, p), false)
 		}
 		// A lost merge response is read-only forever until merged evidence arrives.
 		if d.UncertainAction == "merge" {
@@ -627,7 +675,7 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		}
 		next := d
 		next.MergeCommitSHA = pr.MergeSHA
-		return save(succeededDeployment(next), false)
+		return save(s.mergedDeployment(next, p), false)
 	}
 	e = a.gitops.VerifyDeployment(ctx, g, deploymentPlan(d, p), pr)
 	if e == nil {
@@ -642,7 +690,7 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		if err == nil {
 			next = d
 			next.MergeCommitSHA = sha
-			return save(succeededDeployment(next), false)
+			return save(s.mergedDeployment(next, p), false)
 		}
 		if !mergeConflict(err) {
 			return nil

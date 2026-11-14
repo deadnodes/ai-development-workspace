@@ -60,7 +60,10 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	if p == nil || r == nil {
 		return invalid("build adapters required")
 	}
-	a := &buildRuntime{legacyGlobal: buildFingerprint(&copy), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
+	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
+		buildconfig.Config
+		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
+	}{Config: copy, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
 	// Build scope: every Profile field except Deployments and RequiredStatusContexts;
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,
 	// InsecureHTTP; global TimeoutSeconds and RunLookbackSeconds.
@@ -83,12 +86,13 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 		a.buildHashes[profile.ID] = hash
 		gitops, _ := copy.DevGitOps()
 		a.deploymentHashes[profile.ID] = buildFingerprint(struct {
+			Rollout                *buildconfig.RolloutConfig `json:",omitempty"`
 			BuildAuthority         string
 			RequiredStatusContexts []string
 			Dev                    buildconfig.DeploymentTarget
 			GitOps                 buildconfig.GitOps
 			Registry               buildconfig.Registry
-		}{hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
+		}{rolloutAuthority([]buildconfig.Profile{profile}, copy.Rollout), hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
 	}
 	s.builds = a
 	return nil
@@ -1009,4 +1013,17 @@ func buildReconciliationAttention(st domain.State, productID string, now time.Ti
 		items = append(items, map[string]any{"id": b.ID, "reason": "BUILD_RECONCILIATION_REQUIRED", "profile_id": b.ProfileID, "failure_code": b.FailureCode, "age_seconds": age})
 	}
 	return items
+}
+
+func rolloutAuthority(profiles []buildconfig.Profile, config buildconfig.RolloutConfig) *buildconfig.RolloutConfig {
+	for _, p := range profiles {
+		for _, target := range p.Deployments {
+			for _, f := range target.Files {
+				if f.Rollout != nil {
+					return &config
+				}
+			}
+		}
+	}
+	return nil
 }

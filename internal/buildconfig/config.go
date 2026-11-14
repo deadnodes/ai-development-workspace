@@ -47,13 +47,23 @@ type Environment struct {
 type DeploymentTarget struct {
 	Files []DeploymentFile `json:"files"`
 }
+type RolloutTarget struct {
+	Namespace    string   `json:"namespace"`
+	HelmReleases []string `json:"helm_releases,omitempty"`
+	Deployments  []string `json:"deployments,omitempty"`
+}
+type RolloutConfig struct {
+	InCluster      bool `json:"in_cluster"`
+	TimeoutSeconds int  `json:"timeout_seconds,omitempty"`
+}
 type DeploymentFile struct {
-	Format          string `json:"format,omitempty"`
-	Path            string `json:"path"`
-	ImageID         string `json:"image_id"`
-	ImageRepository string `json:"image_repository"`
-	TagFormat       string `json:"tag_format"`
-	MinMatches      int    `json:"min_matches"`
+	Rollout         *RolloutTarget `json:"rollout,omitempty"`
+	Format          string         `json:"format,omitempty"`
+	Path            string         `json:"path"`
+	ImageID         string         `json:"image_id"`
+	ImageRepository string         `json:"image_repository"`
+	TagFormat       string         `json:"tag_format"`
+	MinMatches      int            `json:"min_matches"`
 }
 type Profile struct {
 	RequiredStatusContexts []string                    `json:"required_status_contexts,omitempty"`
@@ -75,6 +85,7 @@ type Image struct {
 	Repository string `json:"repository"`
 }
 type Config struct {
+	Rollout            RolloutConfig `json:"rollout,omitempty"`
 	GitOps             []GitOps      `json:"gitops,omitempty"`
 	Environments       []Environment `json:"environments,omitempty"`
 	Connections        []Connection  `json:"connections"`
@@ -126,6 +137,14 @@ func Decode(r io.Reader) (*Config, error) {
 }
 func (c *Config) Validate() error {
 	bad := errors.New("invalid build configuration authority")
+	if c.Rollout.TimeoutSeconds == 0 {
+		c.Rollout.TimeoutSeconds = 900
+	}
+	if c.Rollout.TimeoutSeconds < 60 || c.Rollout.TimeoutSeconds > 3600 {
+		return bad
+	}
+	dns := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	name := func(v string) bool { return len(v) <= 63 && dns.MatchString(v) }
 	unique := func(ids []string) bool {
 		m := map[string]bool{}
 		for _, v := range ids {
@@ -232,6 +251,23 @@ func (c *Config) Validate() error {
 			}
 			seen := map[string]bool{}
 			for _, f := range target.Files {
+				if r := f.Rollout; r != nil {
+					if !name(r.Namespace) || (r.HelmReleases != nil) == (r.Deployments != nil) {
+						return bad
+					}
+					names := r.HelmReleases
+					if names == nil {
+						names = r.Deployments
+					}
+					if len(names) == 0 || len(names) > 20 || !unique(names) {
+						return bad
+					}
+					for _, workload := range names {
+						if !name(workload) {
+							return bad
+						}
+					}
+				}
 				imageRepo := ""
 				for _, image := range v.Images {
 					if image.ID == f.ImageID {

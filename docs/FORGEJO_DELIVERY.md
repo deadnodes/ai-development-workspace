@@ -4,7 +4,7 @@
 RCP verifies the source CI and immutable artifacts, proposes bounded GitOps image
 changes on GitHub and squash-merges its own PR with a server-side head SHA lock.
 Merging an application repository deploys nothing. Production is rejected by
-configuration and API. SUCCEEDED records GitOps completion, never runtime health.
+configuration and API. SUCCEEDED confirms runtime rollout when verification is configured; otherwise `rollout_verified: false` records GitOps completion only.
 
 ## Operator authority
 
@@ -66,7 +66,7 @@ List defaults to 25, maximum 100; cursors bind Product/environment/profile filte
 The authenticated principal supplies attribution. Records and request receipts
 persist in bbolt and PostgreSQL through the shared State document codec.
 
-`PENDING_CHECKS → PROPOSING → MERGING → SUCCEEDED | FAILED` runs in the existing
+`PENDING_CHECKS → PROPOSING → MERGING → VERIFYING_ROLLOUT (when configured) → SUCCEEDED | FAILED` runs in the existing
 15-second cancellable dispatcher. CI pending or missing required contexts polls
 until the configured build timeout deadline. Required context failure/error or
 pending expiry fails CI_NOT_GREEN. With no required contexts, combined state must
@@ -79,7 +79,7 @@ The renderer parses multi-document Flux HelmRelease YAML to locate matching
 It preserves quote style, indentation, comments and all other bytes, then reparses
 to check semantic scope. A selector below min_matches fails GITOPS_TARGET_MISSING.
 Anchored, multiline, ambiguous or unsupported targets fail closed. All exact
-values already present short-circuit with SUCCEEDED / already_applied and no PR.
+values already present short-circuit GitOps with already_applied (then verify rollout when configured) and no PR.
 
 For plain Kubernetes manifests, use an entry such as:
 
@@ -114,7 +114,7 @@ fails MERGE_CONFLICT and leaves the PR open. Runtime observers are optional.
 Only active (non-terminal) deployments deduplicate by Product/environment/profile
 and the sorted image digest set. Without a request key, or with a new key, an
 identity matching only terminal deployments creates a new Deployment. Rendering
-returns SUCCEEDED / already_applied without a PR if Flux already has the requested
+returns already_applied without a PR (then verifies rollout when configured) if Flux already has the requested
 values; otherwise it opens a PR, including when rolling back to a previous digest.
 Product-scoped request keys are durable receipts bound to Build and environment.
 Replay returns the original historical handle, including terminal deployments;
@@ -188,12 +188,11 @@ An unused override records none of these fields.
 Limitation: “current” is RCP deployment history for that profile only; manual Flux
 edits are not seen. GitOps completion does not prove runtime or functional health.
 
-## Closing a deployment before GitOps
+## Closing a deployment
 
 Instance admins may use `close_deployment` to release `DEPLOYMENT_IN_PROGRESS`
-held by a deployment stuck in `PENDING_CHECKS`. `PROPOSING` and later states are
-refused because a GitHub proposal may already be in flight. Never use it for a deployment with a PR
-or uncertain GitOps side effects. The trimmed reason must contain 8–500 runes.
+held by a deployment in `PENDING_CHECKS` or `VERIFYING_ROLLOUT`. Other active states are
+refused because a GitHub proposal or merge may be in flight. Rollout verification has no pending GitOps writes; closing it does not undo the merge. The trimmed reason must contain 8–500 runes.
 Closure records `FAILED` / `OPERATOR_CLOSED`, `close_reason`, timestamps and an
 append-only audit event. A matching request key replays without another event;
 reusing the key for another deployment or reason returns `REQUEST_KEY_CONFLICT`.
@@ -203,7 +202,61 @@ reusing the key for another deployment or reason returns `REQUEST_KEY_CONFLICT`.
 Build authority is scoped to each profile (excluding deployments and required status contexts), its connection,
 pool and registry, and global build timeout and run lookback. Deployment authority
 also includes that profile's required status contexts, dev deployment files and
-the dev GitOps authority.
+the dev GitOps authority and, for profiles with rollout targets, rollout configuration.
 Changes to unrelated profiles do not invalidate builds or deployments. A temporary
 legacy shim accepts the former global hash only while the complete configuration
 is unchanged. A restart is required for config changes.
+
+## Rollout verification
+
+Configure the optional top-level rollout verifier and a target on each deployment file:
+
+```json
+{
+  "rollout": {"in_cluster": true, "timeout_seconds": 900},
+  "profiles": [{
+    "deployments": {"dev": {"files": [{
+      "path": "clusters/dev/platform-control-api.yaml",
+      "image_id": "runtime",
+      "image_repository": "192.168.32.242:5000/deadnodes/platform-control-api/runtime",
+      "tag_format": "{tag}@{digest}",
+      "min_matches": 1,
+      "rollout": {"namespace": "lp-dev", "helm_releases": ["platform-control-api", "platform-control-api-command-consumer"]}
+    }]}}
+  }]
+}
+```
+
+This fragment extends the existing profile configuration. For raw container-image manifests,
+use `"format": "container_image"` and `"rollout": {"namespace": "meteroid-dev", "deployments": ["meteroid-api"]}`.
+Exactly one of `helm_releases` or `deployments` is required, with 1..20 unique
+DNS-1123 workload names. Namespaces must also be DNS-1123 labels. Singular fields are unsupported.
+Timeout defaults to 900 seconds and accepts 60..3600 seconds.
+
+After merge or `already_applied`, `VERIFYING_ROLLOUT` holds the deployment concurrency guard.
+`merged_at` and `rollout_deadline` preserve the verification window. Rollout observations run with concurrency bounded to four deployments and one shared 25-second budget per dispatcher pass, capped by each deployment’s remaining rollout window. Targets within a deployment run with concurrency bounded to four and a 10-second timeout per target. Other deployment work runs before rollout observations. Each dispatcher tick
+performs read-only Kubernetes checks outside the store lock. HelmRelease values must contain
+the rendered reference and both its observed generation and lastAttemptedGeneration must equal its generation before failures
+or readiness count; each condition must also have observedGeneration at least equal to metadata.generation. Ready=False with UpgradeFailed, InstallFailed, RetriesExceeded,
+ArtifactFailed or ReconciliationFailed, or Stalled=True, fails verification. Ready=True
+also requires, independently for each listed HelmRelease, at least one Helm-labelled Deployment matching the configured image repository.
+Every matching container must use the expected digest, and every matching Deployment must
+have observed its generation with total, updated, ready and available replicas equal to desired replicas and no unavailable replicas
+(zero replicas counts as complete). Raw Deployment targets use the same digest and replica checks;
+Progressing=False / ProgressDeadlineExceeded fails immediately.
+
+READY becomes SUCCEEDED with `rollout_verified: true`. Failure becomes FAILED /
+ROLLOUT_FAILED with `rollout_failure` (a controller reason token and a redacted message of up to 300 runes). `rollout_failure` stores the HelmRelease/Deployment condition reason and message after pattern-based credential redaction, visible to RCP readers of the product; this is the same text Kubernetes shows to anyone who can read the HelmRelease. Kubernetes GET errors remain pending;
+deadline expiry becomes FAILED / ROLLOUT_TIMEOUT with the last reason. Failed rollouts do
+not replace the latest SUCCEEDED deployment used by rollback checks. Fix forward with a new
+build after ROLLOUT_FAILED; do not redeploy the same build expecting a different result.
+
+The in-cluster ServiceAccount needs `get` and `list` on `helmreleases` in API group
+`helm.toolkit.fluxcd.io`, plus `get`/`list` on `apps` deployments, in every configured
+namespace. Namespaces may differ per deployment file.
+Apply this RBAC separately through Flux. No Kubernetes mutations are made.
+Without rollout targets or a verifier, success retains GitOps-only semantics and
+`rollout_verified: false`; targets without a verifier produce one startup WARN.
+This is point-in-time controller/spec rollout evidence, not pod imageID inspection,
+functional acceptance, automatic remediation or production approval. Only configured files
+are verified; unconfigured files retain GitOps-only coverage.

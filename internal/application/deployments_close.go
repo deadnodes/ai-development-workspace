@@ -9,7 +9,7 @@ import (
 	"releasecontrol/internal/domain"
 )
 
-// CloseDeployment records operator abandonment before any GitOps mutation.
+// CloseDeployment records operator abandonment where no GitOps writes remain in flight.
 func (s *Service) CloseDeployment(ctx context.Context, in domain.CloseDeploymentRequest) (domain.Deployment, error) {
 	var out domain.Deployment
 	if err := authorize(ctx, "admin", ""); err != nil {
@@ -51,12 +51,13 @@ func (s *Service) CloseDeployment(ctx context.Context, in domain.CloseDeployment
 			if deploymentTerminal(d) {
 				return invalid("only active deployments may be closed")
 			}
-			// Only PENDING_CHECKS is safe: the dispatcher CASes PENDING_CHECKS->PROPOSING
+			// PENDING_CHECKS is safe: the dispatcher CASes PENDING_CHECKS->PROPOSING
 			// before any GitHub write, while a PROPOSING deployment may have a proposal
-			// in flight that would be orphaned by a close.
+			// in flight that would be orphaned by a close. VERIFYING_ROLLOUT is read-only.
 			safe := d.Status == "PENDING_CHECKS" && d.PRNumber == 0 && d.UncertainAction == "" && d.HeadSHA == "" && d.BaseSHA == "" && d.ProposalBaseSHA == ""
+			safe = safe || d.Status == "VERIFYING_ROLLOUT"
 			if !safe {
-				return invalid("deployment has GitOps side effects; close only before a PR exists")
+				return invalid("deployment has GitOps side effects; close before a PR exists or while verifying rollout")
 			}
 			next := d
 			now := time.Now().UTC()
