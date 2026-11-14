@@ -69,3 +69,11 @@ type BuildImage struct {
 	ImageRef string `json:"image_ref"`
 	Digest   string `json:"digest"`
 }
+
+// CloseBuildRequest closes only the RCP handle; it never cancels provider execution.
+type CloseBuildRequest struct {
+	ProductID  string `json:"product_id"`
+	BuildID    string `json:"build_id"`
+	Reason     string `json:"reason"`
+	RequestKey string `json:"request_key,omitempty"`
+}

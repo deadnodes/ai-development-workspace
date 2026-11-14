@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -60,10 +59,9 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 	if e = s.ConfigureBuilds(c, transportForgejo{}, transportRegistry{}); e != nil {
 		t.Fatal(e)
 	}
-	server := httptest.NewServer(New(s, Options{Token: "test-token"}))
-	defer server.Close()
+	handler := New(s, Options{Token: "test-token"})
 	callHTTP := func(method, path, body string, authenticated bool) (int, []byte) {
-		req, e := http.NewRequest(method, server.URL+path, bytes.NewBufferString(body))
+		req, e := http.NewRequest(method, "http://localhost"+path, bytes.NewBufferString(body))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -71,13 +69,9 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 		if authenticated {
 			req.Header.Set("Authorization", "Bearer test-token")
 		}
-		res, e := http.DefaultClient.Do(req)
-		if e != nil {
-			t.Fatal(e)
-		}
-		defer res.Body.Close()
-		raw, _ := io.ReadAll(res.Body)
-		return res.StatusCode, raw
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code, w.Body.Bytes()
 	}
 	if status, _ := callHTTP("GET", "/api/builds?product_id=p", "", false); status != 401 {
 		t.Fatal(status)
@@ -88,7 +82,11 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 		t.Fatal(status, string(raw))
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "build-test", Version: "1"}, nil)
-	session, e := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp", HTTPClient: &http.Client{Transport: buildAuthTransport{}}}, nil)
+	authHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer test-token")
+		handler.ServeHTTP(w, r)
+	})
+	session, e := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: "http://localhost/mcp", HTTPClient: &http.Client{Transport: deploymentHandlerTransport{authHandler}}}, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -97,7 +95,7 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	required := map[string]bool{"queue_build": false, "get_build": false, "list_builds": false, "cancel_build": false, "list_build_profiles": false}
+	required := map[string]bool{"queue_build": false, "get_build": false, "list_builds": false, "cancel_build": false, "close_build": false, "list_build_profiles": false}
 	for _, tool := range tools.Tools {
 		if _, ok := required[tool.Name]; ok {
 			required[tool.Name] = true
@@ -141,6 +139,28 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 	if status != 200 || !bytes.Contains(raw, []byte("CANCELLED")) {
 		t.Fatal(status, string(raw))
 	}
+
+	// Exercise both transports against the same active durable handle.
+	if e := store.Update(ctx, func(st *domain.State) error {
+		st.Builds[0].Status = "RUNNING"
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	status, raw = callHTTP("POST", "/api/builds/"+b.ID+"/close", `{"product_id":"p","reason":"operator abandoned build","request_key":"close-http"}`, true)
+	if status != 200 || !bytes.Contains(raw, []byte("OPERATOR_CLOSED")) {
+		t.Fatal(status, string(raw))
+	}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "close_build", Arguments: map[string]any{
+		"product_id": "p", "build_id": b.ID, "reason": "operator abandoned build", "request_key": "close-http",
+	}})
+	if err != nil || result.IsError {
+		t.Fatal(result, err)
+	}
+	status, _ = callHTTP("POST", "/api/builds/"+b.ID+"/close", `{"product_id":"p","reason":"operator abandoned build","images":[]}`, true)
+	if status != 400 {
+		t.Fatal("artifact input accepted", status)
+	}
 	for _, body := range []string{`{"product_id":"p","profile_id":"app","target":"dev"}`, `{"product_id":"p","profile_id":"app","branch":"main","sha":"` + strings.Repeat("a", 40) + `"}`} {
 		if status, _ := callHTTP("POST", "/api/builds", body, true); status < 400 || status >= 500 {
 			t.Fatal("obsolete or ambiguous selector accepted", status)
@@ -165,7 +185,7 @@ func (buildAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestBuildToolSchemas(t *testing.T) {
-	for _, name := range []string{"queue_build", "get_build", "list_builds", "cancel_build", "list_build_profiles"} {
+	for _, name := range []string{"queue_build", "get_build", "list_builds", "cancel_build", "close_build", "list_build_profiles"} {
 		tool := buildTool(name, "description")
 		raw, _ := json.Marshal(tool.InputSchema)
 		var schema struct {
@@ -182,6 +202,11 @@ func TestBuildToolSchemas(t *testing.T) {
 			want = append(want, "profile_id")
 			if schema.Properties["target"] != nil || !bytes.Contains(raw, []byte(`"not":{"required":["branch","sha"]}`)) || schema.Properties["sha"]["pattern"] != "^[0-9a-f]{40}$" {
 				t.Fatal("SHA schema")
+			}
+		case "close_build":
+			want = append(want, "build_id", "reason")
+			if schema.Properties["reason"]["minLength"] != float64(8) || schema.Properties["reason"]["maxLength"] != float64(500) {
+				t.Fatal("reason bounds")
 			}
 		case "get_build", "cancel_build":
 			want = append(want, "build_id")

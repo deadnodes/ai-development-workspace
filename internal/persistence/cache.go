@@ -485,7 +485,7 @@ func recordString(v reflect.Value, name string) string {
 	return v.FieldByIndex(path).String()
 }
 
-const writeEventPredicate = `document->>'action' IN ('restore_backup','assemble_environment','reconcile_composition','update_environment_feature','worker_report','pin_artifact','release_artifact_pin') OR document->'data'->>'action'='release_artifact_pin' OR id IN (SELECT id FROM records WHERE kind IN ('artifact_pins','registry_inventories'))`
+const writeEventPredicate = `document->>'action' IN ('close_build','restore_backup','assemble_environment','reconcile_composition','update_environment_feature','worker_report','pin_artifact','release_artifact_pin') OR document->'data'->>'action'='release_artifact_pin' OR id IN (SELECT id FROM records WHERE kind IN ('artifact_pins','registry_inventories'))`
 
 func readWriteEvents(ctx context.Context, tx pgx.Tx, st *domain.State) error {
 	rows, err := tx.Query(ctx, "SELECT document FROM events WHERE "+writeEventPredicate+" ORDER BY sequence")

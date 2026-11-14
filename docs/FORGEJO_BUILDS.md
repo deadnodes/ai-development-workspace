@@ -279,3 +279,23 @@ The configuration supports `required_status_contexts` and Dev targets; see [Forg
 | pp-front | `pp-front dev / verify (push)` |
 | pp-back | `pp-back baseline / gate (push)` |
 | meteroid | `meteroid ci / gate (push)` |
+
+## Closing stuck builds
+
+Instance admins can use MCP `close_build {product_id, build_id, reason, request_key?}`
+or `POST /api/builds/{id}/close` with JSON `{product_id, reason, request_key?}`.
+Requires instance admin authorization, not Product write permission.
+Only DISPATCHED, RUNNING and RECONCILIATION_REQUIRED handles may be closed.
+Use `cancel_build` for QUEUED builds. Terminal handles reject closure except
+for an identical request-key replay.
+
+The reason is trimmed, must contain 8..500 characters, and is stored without
+further rewriting. Closure records FAILED / OPERATOR_CLOSED and a finish time,
+preserves all provider and artifact evidence, and journals the operator, reason,
+previous status/failure code and provider run ID. It never accepts artifacts
+or re-dispatches the handle and immediately frees RCP pool admission.
+
+**RCP does not cancel the Forgejo run.** Operators must cancel active runs in
+Forgejo. Provider-side active-run safety gates still apply to subsequent builds.
+Replay with the same optional request key and reason returns the closed build
+without another journal event.
