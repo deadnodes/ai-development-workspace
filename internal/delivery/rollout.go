@@ -34,6 +34,7 @@ var rolloutURLCredentials = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\
 
 // SafeRolloutReason allows a reason token and a bounded, credential-redacted message.
 func SafeRolloutReason(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
 	s = rolloutCredentials.ReplaceAllString(s, "${1}[REDACTED]")
 	s = rolloutBearer.ReplaceAllString(s, "[REDACTED]")
 	s = rolloutURLCredentials.ReplaceAllString(s, "${1}[REDACTED]@")
