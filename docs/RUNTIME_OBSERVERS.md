@@ -52,3 +52,6 @@ The existing runtime worker consumes the same evidence as externally recorded
 checks. A configured observer does not itself trigger builds, GitOps writes or
 releases. Before a successful Control Plane GitOps operation exists, it has no
 operation to attribute evidence to and writes nothing.
+
+Observers consider only legacy DEPLOY ExternalOperations with `GitOpsResult`,
+not Forgejo `Deployment` records created by `deploy_build`.
