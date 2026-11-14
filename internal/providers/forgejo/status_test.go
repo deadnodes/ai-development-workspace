@@ -23,7 +23,7 @@ func TestDeploymentCombinedStatusHTTP(t *testing.T) {
 	t.Setenv("RCP_SECRET_DIR", dir)
 	os.WriteFile(filepath.Join(dir, "token"), []byte("private-token"), 0600)
 	sha := strings.Repeat("a", 40)
-	for _, body := range []string{`{"state":"success","statuses":[{"context":"verify","status":"success"}]}`, `{"state":"pending","statuses":[]}`, `{"state":"failure","statuses":[{"context":"verify","status":"failure"}]}`} {
+	for _, body := range []string{`{"state":"success","statuses":[{"context":"verify","status":"success"}]}`, `{"state":"failure","statuses":[{"context":"verify","status":"failure","description":"Has been cancelled"}]}`, `{"state":"pending","statuses":[]}`, `{"state":"failure","statuses":[{"context":"verify","status":"failure"}]}`} {
 		c := NewWithClient(&http.Client{Transport: statusTransport(func(r *http.Request) (*http.Response, error) {
 			if r.Method != "GET" || r.URL.Path != "/api/v1/repos/o/r/commits/"+sha+"/status" || r.Header.Get("Authorization") != "token private-token" {
 				t.Fatal(r)
@@ -33,6 +33,9 @@ func TestDeploymentCombinedStatusHTTP(t *testing.T) {
 		status, e := c.CommitStatus(context.Background(), buildconfig.Connection{APIURL: "https://forgejo.example", TokenRef: "token"}, "o/r", sha)
 		if e != nil || status.State == "" {
 			t.Fatal(status, e)
+		}
+		if strings.Contains(body, "Has been cancelled") && status.Statuses[0].Description != "Has been cancelled" {
+			t.Fatal("cancellation description lost", status)
 		}
 	}
 }
@@ -85,13 +88,13 @@ func TestDeploymentStatusPagination(t *testing.T) {
 
 func TestStatusProducerParsing(t *testing.T) {
 	c, cn := treeTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"state":"success","total_count":2,"statuses":[{"id":2,"context":"verify","status":"success","creator":{"login":"alice"},"target_url":"/o/r/actions/runs/47/jobs/0"},{"id":1,"context":"verify","status":"failure","creator":null,"target_url":"/o/r/actions/runs/46/jobs/0"}]}`))
+		_, _ = w.Write([]byte(`{"state":"success","total_count":2,"statuses":[{"id":2,"context":"verify","status":"success","creator":{"login":"alice"},"target_url":"/o/r/actions/runs/47/jobs/0"},{"id":1,"context":"verify","status":"failure","description":"Has been cancelled","creator":null,"target_url":"/o/r/actions/runs/46/jobs/0"}]}`))
 	})
 	v, err := c.CommitStatus(context.Background(), cn, "o/r", strings.Repeat("a", 40))
 	if err != nil || len(v.Statuses) != 2 {
 		t.Fatal(v, err)
 	}
-	if v.Statuses[0].Creator == nil || v.Statuses[0].Creator.Login != "alice" || v.Statuses[1].Creator != nil || v.Statuses[1].TargetURL != "/o/r/actions/runs/46/jobs/0" || v.Statuses[0].ID != 2 {
+	if v.Statuses[0].Creator == nil || v.Statuses[0].Creator.Login != "alice" || v.Statuses[1].Creator != nil || v.Statuses[1].TargetURL != "/o/r/actions/runs/46/jobs/0" || v.Statuses[0].ID != 2 || v.Statuses[1].Description != "Has been cancelled" {
 		t.Fatal(v)
 	}
 }

@@ -63,6 +63,14 @@ func (s *Service) acceptPRTree(ctx context.Context, d *domain.Deployment, p buil
 	return nil
 }
 
+// ciContextState recognizes only Forgejo's exact cancellation marker.
+func ciContextState(s forgejo.StatusContext) string {
+	if s.Status == "failure" && s.Description == "Has been cancelled" {
+		return "cancelled"
+	}
+	return s.Status
+}
+
 // trustedCIStatus filters before context deduplication, preserving the newest
 // trusted observation even if a newer user status shadows that context.
 func trustedCIStatus(v forgejo.CommitStatus, p buildconfig.Profile) forgejo.CommitStatus {
@@ -94,11 +102,11 @@ func trustedCIStatus(v forgejo.CommitStatus, p buildconfig.Profile) forgejo.Comm
 				continue
 			}
 			seen[status.Context] = true
-			if status.Status == "failure" || status.Status == "error" {
+			if ciContextState(status) == "failure" || ciContextState(status) == "error" {
 				out.State = "failure"
 				break
 			}
-			if status.Status != "success" {
+			if ciContextState(status) != "success" {
 				out.State = "pending"
 			}
 		}
@@ -151,7 +159,7 @@ func (s *Service) watchMainCI(ctx context.Context) error {
 			break
 		}
 		now := time.Now().UTC()
-		if d.CIEvidence != "pr_tree" || d.MergedAt == nil || !now.Before(d.MergedAt.Add(3*time.Hour)) || d.MainCIState == "success" || d.MainCIState == "failure" || d.MainCICheckedAt != nil && now.Sub(*d.MainCICheckedAt) < time.Minute {
+		if d.CIEvidence != "pr_tree" || d.MergedAt == nil || !now.Before(d.MergedAt.Add(3*time.Hour)) || d.MainCIState == "success" || d.MainCIState == "failure" || d.MainCIState == "cancelled" || d.MainCICheckedAt != nil && now.Sub(*d.MainCICheckedAt) < time.Minute {
 			<-slots
 			continue
 		}
@@ -206,6 +214,13 @@ func (s *Service) watchMainCI(ctx context.Context) error {
 			state = "failure"
 		} else if green {
 			state = "success"
+		} else {
+			for key, value := range contexts {
+				if value == "cancelled" && (len(p.RequiredStatusContexts) == 0 || slices.Contains(p.RequiredStatusContexts, key)) {
+					state = "cancelled"
+					break
+				}
+			}
 		}
 		err = s.store.Update(ctx, func(st *domain.State) error {
 			for i := range st.Deployments {

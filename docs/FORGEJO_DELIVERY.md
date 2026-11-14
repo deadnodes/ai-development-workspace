@@ -315,3 +315,5 @@ The main-CI safety net schedules the oldest `main_ci_checked_at` first
 (unchecked deployments first), uses at most four concurrent status requests,
 and limits each request to 10 seconds within the existing 25-second pass budget.
 It reserves poll timestamps before I/O so retries remain bounded across passes.
+
+A trusted `failure` status with description exactly `Has been cancelled` is cancelled: main waits or uses PR-tree evidence, a cancelled PR head is never green, and the main-CI safety net records terminal `main_ci_state: "cancelled"` without failure events or attention.

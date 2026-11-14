@@ -365,10 +365,20 @@ func ciVerdict(v forgejo.CommitStatus, required []string) (green, failed bool, c
 	contexts = map[string]string{}
 	for _, s := range v.Statuses {
 		if _, exists := contexts[s.Context]; !exists {
-			contexts[s.Context] = s.Status
+			contexts[s.Context] = ciContextState(s)
 		}
 	}
 	if len(required) == 0 {
+		// Forgejo's combined state reports cancelled Actions jobs as failures.
+		// Recompute from latest contexts when cancellation is present.
+		if slices.ContainsFunc(v.Statuses, func(s forgejo.StatusContext) bool { return contexts[s.Context] == "cancelled" }) {
+			green = len(contexts) > 0
+			for _, state := range contexts {
+				green = green && state == "success"
+				failed = failed || state == "failure" || state == "error"
+			}
+			return
+		}
 		return v.State == "success", v.State == "failure" || v.State == "error", contexts
 	}
 	green = true

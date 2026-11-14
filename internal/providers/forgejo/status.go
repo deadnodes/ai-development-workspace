@@ -22,11 +22,12 @@ type StatusCreator struct {
 }
 
 type StatusContext struct {
-	Creator   *StatusCreator `json:"creator"`
-	TargetURL string         `json:"target_url"`
-	ID        int64          `json:"id"`
-	Context   string         `json:"context"`
-	Status    string         `json:"status"`
+	Description string         `json:"description"`
+	Creator     *StatusCreator `json:"creator"`
+	TargetURL   string         `json:"target_url"`
+	ID          int64          `json:"id"`
+	Context     string         `json:"context"`
+	Status      string         `json:"status"`
 }
 
 func (c *Client) CommitStatus(ctx context.Context, cn buildconfig.Connection, repo, sha string) (CommitStatus, error) {

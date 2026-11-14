@@ -60,6 +60,16 @@ func TestPRTreeGate(t *testing.T) {
 		change           func(*Service, *treeGateFake)
 		status, evidence string
 	}{
+		{"main cancelled", func(_ *Service, f *treeGateFake) {
+			f.status = cancelledCIStatus()
+		}, "SUCCEEDED", "pr_tree"},
+		{"main cancelled without PR", func(_ *Service, f *treeGateFake) {
+			f.status = cancelledCIStatus()
+			f.found = false
+		}, "PENDING_CHECKS", ""},
+		{"head cancelled", func(_ *Service, f *treeGateFake) {
+			f.headStatus = cancelledCIStatus()
+		}, "PENDING_CHECKS", ""},
 		{"main green", func(_ *Service, f *treeGateFake) { f.status = f.headStatus }, "SUCCEEDED", "main"},
 		{"equal", func(*Service, *treeGateFake) {}, "SUCCEEDED", "pr_tree"},
 		{"different", func(_ *Service, f *treeGateFake) { f.equal = false }, "PENDING_CHECKS", ""},
@@ -108,7 +118,7 @@ func TestPRTreeGate(t *testing.T) {
 }
 
 func TestMainCISafetyNet(t *testing.T) {
-	for _, state := range []string{"pending", "success", "failure"} {
+	for _, state := range []string{"pending", "success", "failure", "cancelled"} {
 		t.Run(state, func(t *testing.T) {
 			s, m, f, in := treeGateFixture(t)
 			if _, err := s.DeployBuild(context.Background(), in); err != nil {
@@ -118,6 +128,9 @@ func TestMainCISafetyNet(t *testing.T) {
 			old := time.Now().Add(-2 * time.Minute)
 			m.state.Deployments[0].MainCICheckedAt = &old
 			f.status = forgejo.CommitStatus{State: state, Statuses: []forgejo.StatusContext{{Context: "verify", Status: state}, {Context: "unrelated", Status: "failure"}}}
+			if state == "cancelled" {
+				f.status = cancelledCIStatus()
+			}
 			before := f.calls
 			deployTick(t, s)
 			d := m.state.Deployments[0]
@@ -369,5 +382,53 @@ func TestMainCISafetyNetHangingFirstAcrossPasses(t *testing.T) {
 		if !seen[d.SourceSHA] {
 			t.Fatalf("starved %s", d.SourceSHA)
 		}
+	}
+}
+
+func cancelledCIStatus() forgejo.CommitStatus {
+	return forgejo.CommitStatus{State: "failure", Statuses: []forgejo.StatusContext{{Context: "verify", Status: "failure", Description: "Has been cancelled", TargetURL: "/o/r/actions/runs/1/jobs/0"}}}
+}
+
+func TestCancelledCIVerdict(t *testing.T) {
+	for _, required := range [][]string{nil, {"verify"}} {
+		for _, producer := range []string{"forgejo_actions", "any"} {
+			p := buildconfig.Profile{Repository: "o/r", CIGate: &buildconfig.CIGate{TrustedProducers: producer}}
+			v := cancelledCIStatus()
+			green, failed, contexts := ciVerdict(trustedCIStatus(v, p), required)
+			if green || failed || contexts["verify"] != "cancelled" {
+				t.Fatalf("%s %v: %v %v %v", producer, required, green, failed, contexts)
+			}
+			for _, description := range []string{"Has failed", "Has been cancelled ", "has been cancelled", ""} {
+				v.Statuses[0].Description = description
+				green, failed, _ = ciVerdict(trustedCIStatus(v, p), required)
+				if green || !failed {
+					t.Fatalf("misclassified %q", description)
+				}
+			}
+			v = cancelledCIStatus()
+			v.Statuses = append(v.Statuses, forgejo.StatusContext{Context: "other", Status: "failure", TargetURL: "/o/r/actions/runs/1/jobs/1"})
+			_, failed, _ = ciVerdict(trustedCIStatus(v, p), nil)
+			if !failed {
+				t.Fatal("cancellation masked real failure")
+			}
+		}
+	}
+}
+
+func TestCancelledMainCIWaitsUntilDeadline(t *testing.T) {
+	s, m, f, in := treeGateFixture(t)
+	f.status = cancelledCIStatus()
+	f.found = false
+	if _, err := s.DeployBuild(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	deployTick(t, s)
+	if m.state.Deployments[0].Status != "PENDING_CHECKS" {
+		t.Fatal(m.state.Deployments[0])
+	}
+	m.state.Deployments[0].Deadline = time.Now().Add(-time.Second)
+	deployTick(t, s)
+	if d := m.state.Deployments[0]; d.Status != "FAILED" || d.FailureCode != "CI_NOT_GREEN" {
+		t.Fatal(d)
 	}
 }
