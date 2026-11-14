@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"strings"
@@ -64,7 +65,7 @@ func TestObservedDeploymentEnvironmentAndAttention(t *testing.T) {
 		t.Fatal(e)
 	}
 	result := value.(map[string]any)
-	if strings.Contains(result["reconciliation"].(string), "no direct Flux observer") || len(result["runtime_observations"].([]domain.RuntimeObservation)) != 1 {
+	if strings.Contains(result["reconciliation"].(string), "no direct Flux observer") || len(result["runtime_observations"].([]runtimeObservationView)) != 1 {
 		t.Fatal("observer evidence misrepresented")
 	}
 	value, e = s.Query(context.Background(), "list_attention", "p")
@@ -132,7 +133,7 @@ func TestRuntimeObserverIndexedSelectionAndDedupe(t *testing.T) {
 		want    int
 	}{
 		{"recent", 10 * time.Second, true, "same", 0},
-		{"expired", 2 * time.Minute, true, "same", 1},
+		{"expired", 2 * time.Minute, true, "same", 0},
 		{"health changed", 10 * time.Second, false, "same", 1},
 		{"details changed", 10 * time.Second, true, "different", 1},
 	} {
@@ -157,7 +158,7 @@ func TestRuntimeObserverIndexedSelectionAndDedupe(t *testing.T) {
 			noGitOps.GitOpsResult = nil
 			store.state.Operations = []domain.ExternalOperation{makeOp("old", now.Add(-time.Hour)), latest, other, env, app, failed, missing, noGitOps, makeOp("tie", now)}
 			store.state.RuntimeObservations = []domain.RuntimeObservation{
-				{Meta: domain.Meta{CreatedAt: now.Add(-tc.age)}, OperationID: "latest", Healthy: tc.healthy, Details: tc.details},
+				{Meta: domain.Meta{CreatedAt: now.Add(-tc.age)}, OperationID: "latest", GitOpsCommit: "latest", ArtifactDigest: "latest-digest", Healthy: tc.healthy, Details: tc.details},
 				{Meta: domain.Meta{CreatedAt: now.Add(-time.Hour)}, OperationID: "latest", Healthy: false, Details: "older"},
 				{Meta: domain.Meta{CreatedAt: now.Add(time.Hour)}, OperationID: "old", Healthy: false, Details: "unrelated"},
 			}
@@ -177,6 +178,85 @@ func TestRuntimeObserverIndexedSelectionAndDedupe(t *testing.T) {
 				if r.OperationID != "latest" || r.Actor != "system/runtime-observer" || !r.Healthy || len(store.state.Events) == 0 {
 					t.Fatalf("command evidence/events missing: %+v", r)
 				}
+			}
+		})
+	}
+}
+
+// Serialize the competing writer at the two race windows: while polling, and
+// after the poll's command commits but before its freshness touch.
+type racingFreshnessStore struct {
+	memoryStore
+	afterUpdate func()
+	fresh       domain.RuntimeFreshness
+}
+
+func (m *racingFreshnessStore) Update(ctx context.Context, fn func(*domain.State) error) error {
+	if err := m.memoryStore.Update(ctx, fn); err != nil {
+		return err
+	}
+	if m.afterUpdate != nil {
+		m.afterUpdate()
+	}
+	return nil
+}
+func (m *racingFreshnessStore) TouchRuntimeFreshness(_ context.Context, _, observationID string, at time.Time, healthy bool) error {
+	m.fresh = domain.RuntimeFreshness{ObservationID: observationID, ObservedAt: at, Healthy: healthy}
+	return nil
+}
+func (m *racingFreshnessStore) RuntimeFreshness(context.Context, []string) (map[string]domain.RuntimeFreshness, error) {
+	return map[string]domain.RuntimeFreshness{"op": m.fresh}, nil
+}
+
+type racingRuntimeObserver struct {
+	fakeRuntimeObserver
+	duringPoll func()
+}
+
+func (o *racingRuntimeObserver) Observe(ctx context.Context, commit, digest string) delivery.RuntimeEvidence {
+	if o.duringPoll != nil {
+		o.duringPoll()
+	}
+	return o.fakeRuntimeObserver.Observe(ctx, commit, digest)
+}
+
+func TestRuntimeObserverFreshnessRace(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed=%t", changed), func(t *testing.T) {
+			now := time.Now().UTC()
+			m := &racingFreshnessStore{memoryStore: memoryStore{state: domain.EmptyState()}}
+			m.state.Operations = []domain.ExternalOperation{{Meta: domain.Meta{ID: "op", ProductID: "p", CreatedAt: now}, Status: "SUCCEEDED", EnvironmentID: "env", ApplicationID: "app", GitOpsResult: &delivery.GitOpsResult{CommitSHA: "commit"}, Artifact: &delivery.ArtifactResult{Digest: "digest"}}}
+			previous := domain.RuntimeObservation{Meta: domain.Meta{ID: "previous", ProductID: "p", CreatedAt: now.Add(-time.Hour)}, OperationID: "op", EnvironmentID: "env", GitOpsCommit: "commit", ArtifactDigest: "digest", Healthy: true, Details: "same"}
+			m.state.RuntimeObservations = []domain.RuntimeObservation{previous}
+			wantID := previous.ID
+			compete := func() {
+				// Channel synchronization makes the interleaving deterministic and
+				// keeps the fixture itself safe under the Go race detector.
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					wantID = m.state.RuntimeObservations[len(m.state.RuntimeObservations)-1].ID
+					other := previous
+					other.ID, other.Details, other.CreatedAt = "concurrent", "different details", now.Add(time.Hour)
+					m.state.RuntimeObservations = append(m.state.RuntimeObservations, other)
+				}()
+				<-done
+			}
+			o := &racingRuntimeObserver{fakeRuntimeObserver: fakeRuntimeObserver{target: delivery.RuntimeTarget{ProductID: "p", EnvironmentID: "env", ApplicationID: "app"}, evidence: delivery.RuntimeEvidence{Healthy: true, Details: "same"}}}
+			if changed {
+				o.evidence.Details = "changed by poll"
+				m.afterUpdate = compete
+			} else {
+				o.duringPoll = compete
+			}
+			if err := New(m).ObserveRuntimeOnce(context.Background(), []delivery.RuntimeObserver{o}); err != nil {
+				t.Fatal(err)
+			}
+			if m.fresh.ObservationID != wantID || m.fresh.ObservedAt.IsZero() {
+				t.Fatalf("freshness attached to %q, want poll evidence %q", m.fresh.ObservationID, wantID)
+			}
+			if bound := domain.BindRuntimeFreshness(m.state.RuntimeObservations, map[string]domain.RuntimeFreshness{"op": m.fresh}); !bound["concurrent"].IsZero() {
+				t.Fatal("concurrent evidence received this poll's freshness")
 			}
 		})
 	}

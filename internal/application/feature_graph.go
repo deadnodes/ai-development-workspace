@@ -60,20 +60,20 @@ type GraphDeploymentSource struct {
 	BaseCommit   string `json:"base_commit"`
 }
 type GraphDeployment struct {
-	RepositoryID        string                      `json:"repository_id"`
-	IntegrationIDs      []string                    `json:"integration_ids"`
-	Sources             []GraphDeploymentSource     `json:"sources"`
-	CreatedAt           time.Time                   `json:"created_at"`
-	UpdatedAt           time.Time                   `json:"updated_at"`
-	OperationID         string                      `json:"operation_id"`
-	EnvironmentID       string                      `json:"environment_id"`
-	ApplicationID       string                      `json:"application_id"`
-	Status              string                      `json:"status"`
-	DeploymentState     string                      `json:"deployment_state"`
-	SourceCommit        string                      `json:"source_commit"`
-	Digest              string                      `json:"digest"`
-	GitOpsCommit        string                      `json:"gitops_commit"`
-	RuntimeObservations []domain.RuntimeObservation `json:"runtime_observations"`
+	RepositoryID        string                   `json:"repository_id"`
+	IntegrationIDs      []string                 `json:"integration_ids"`
+	Sources             []GraphDeploymentSource  `json:"sources"`
+	CreatedAt           time.Time                `json:"created_at"`
+	UpdatedAt           time.Time                `json:"updated_at"`
+	OperationID         string                   `json:"operation_id"`
+	EnvironmentID       string                   `json:"environment_id"`
+	ApplicationID       string                   `json:"application_id"`
+	Status              string                   `json:"status"`
+	DeploymentState     string                   `json:"deployment_state"`
+	SourceCommit        string                   `json:"source_commit"`
+	Digest              string                   `json:"digest"`
+	GitOpsCommit        string                   `json:"gitops_commit"`
+	RuntimeObservations []runtimeObservationView `json:"runtime_observations"`
 }
 type GraphReportedComponent struct {
 	RepositoryID string `json:"repository_id"`
@@ -259,7 +259,7 @@ func featureGraph(st domain.State, id string) (*FeatureGraph, error) {
 		if o.EnvironmentID == "" {
 			continue
 		}
-		d := GraphDeployment{IntegrationIDs: []string{}, Sources: []GraphDeploymentSource{}, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, OperationID: o.ID, EnvironmentID: o.EnvironmentID, ApplicationID: o.ApplicationID, Status: o.Status, DeploymentState: o.DeploymentState, Digest: o.ExpectedDigest, RuntimeObservations: []domain.RuntimeObservation{}}
+		d := GraphDeployment{IntegrationIDs: []string{}, Sources: []GraphDeploymentSource{}, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, OperationID: o.ID, EnvironmentID: o.EnvironmentID, ApplicationID: o.ApplicationID, Status: o.Status, DeploymentState: o.DeploymentState, Digest: o.ExpectedDigest, RuntimeObservations: []runtimeObservationView{}}
 		if ins[o.IntegrationID] {
 			d.IntegrationIDs = append(d.IntegrationIDs, o.IntegrationID)
 		}
@@ -305,7 +305,7 @@ func featureGraph(st domain.State, id string) (*FeatureGraph, error) {
 		}
 		for _, v := range st.RuntimeObservations {
 			if v.ProductID == f.ProductID && v.OperationID == o.ID && v.EnvironmentID == o.EnvironmentID {
-				d.RuntimeObservations = append(d.RuntimeObservations, v)
+				d.RuntimeObservations = append(d.RuntimeObservations, runtimeObservationView{RuntimeObservation: v, ObservedAt: v.CreatedAt})
 			}
 		}
 		if d.RepositoryID == "" && len(d.Sources) == 1 {

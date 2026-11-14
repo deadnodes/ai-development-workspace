@@ -44,8 +44,11 @@ func (s *Service) registryAuthorities(st *domain.State, now time.Time) []domain.
 	}
 	return all
 }
-func (s *Service) evaluateRetention(st domain.State, product string, now time.Time) domain.RetentionReport {
-	return domain.EvaluateRetention(st, product, now, s.registryAuthorities(&st, now))
+func (s *Service) evaluateRetention(st domain.State, product string, now time.Time, freshness ...map[string]time.Time) domain.RetentionReport {
+	if len(freshness) == 0 {
+		freshness = append(freshness, s.runtimeFreshnessSnapshot)
+	}
+	return domain.EvaluateRetention(st, product, now, s.registryAuthorities(&st, now), freshness...)
 }
 func (s *Service) registryConfigMatches(j *domain.WorkerJob) bool {
 	if s.externalWorkers == nil || j == nil || j.Inputs.Registry == nil {

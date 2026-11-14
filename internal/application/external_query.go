@@ -23,16 +23,33 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	freshness, e := s.runtimeFreshness(ctx, &st)
+	if e != nil {
+		return nil, e
+	}
+	request := *s
+	request.runtimeFreshnessSnapshot = freshness
+	s = &request
 	switch name {
 	case "get_intelligence_task":
 		return s.intelligenceQuery(&st, id)
 	case "get_feature_graph":
-		return featureGraph(st, id)
+		graph, err := featureGraph(st, id)
+		if err != nil {
+			return nil, err
+		}
+		for i := range graph.Deployments {
+			for j := range graph.Deployments[i].RuntimeObservations {
+				r := &graph.Deployments[i].RuntimeObservations[j]
+				r.ObservedAt = domain.RuntimeObservedAt(r.RuntimeObservation, freshness)
+			}
+		}
+		return graph, nil
 	case "get_artifact_retention":
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		return s.evaluateRetention(st, id, time.Now().UTC()), nil
+		return s.evaluateRetention(st, id, time.Now().UTC(), freshness), nil
 	case "get_product_configuration":
 		return productConfiguration(st, id)
 	case "test_connection", "discover_repositories":
@@ -205,7 +222,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		for k, v := range s.baselineQuery(&st, id) {
 			out[k] = v
 		}
-		for k, v := range map[string]any{"dev_reservation": ReservationState(&st, id), "runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observations, "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."} {
+		for k, v := range map[string]any{"dev_reservation": ReservationState(&st, id), "runtime_targets": s.runtimeTargets(env.ProductID, id), "runtime_snapshots": snapshots, "environment": env, "bindings": bindings, "operations": operations, "desired_composition": compositionByID(&st, env.DesiredCompositionID), "runtime_observations": observationViews(observations, freshness), "reconciliation": "Runtime evidence is recorded by the configured read-only Flux/Kubernetes observer or an external executor. Inspect each observation actor, timestamp and details; only exact matching healthy commit/digest evidence confirms reconciliation."} {
 			out[k] = v
 		}
 		return out, nil
@@ -264,7 +281,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				for k, v := range s.baselineQuery(&st, op.EnvironmentID) {
 					out[k] = v
 				}
-				for k, v := range map[string]any{"operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)} {
+				for k, v := range map[string]any{"runtime_observations": observationViews(operationObservations(&st, op.ID), freshness), "operation": op, "steps": steps, "children": children, "feature_contexts": contexts, "dev_reservation": ReservationState(&st, op.EnvironmentID)} {
 					out[k] = v
 				}
 				if action := operationConflictAction(&st, op, time.Now().UTC()); action != nil {
@@ -280,7 +297,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
 		}
-		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC()))
+		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC(), freshness))
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
 		for _, finding := range st.Findings {

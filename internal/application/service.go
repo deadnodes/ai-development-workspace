@@ -26,9 +26,10 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
-	builds       *buildRuntime
-	deployments  *deployRuntime
-	intelligence IntelligenceProvider
+	runtimeFreshnessSnapshot map[string]time.Time
+	builds                   *buildRuntime
+	deployments              *deployRuntime
+	intelligence             IntelligenceProvider
 	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
 	nativeAuthorityNow func() time.Time
 	// Restoration proposal deadline decisions only; read/proof/unlock clocks stay real.
@@ -89,6 +90,13 @@ func decode(data map[string]any, v any) error {
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	c.Actor = attributedActor(ctx, c.Actor)
 	request := *s
+	if c.Action == "queue_intelligence_task" {
+		freshness, err := s.loadRuntimeFreshness(ctx)
+		if err != nil {
+			return nil, err
+		}
+		request.runtimeFreshnessSnapshot = freshness
+	}
 	request.store = commandAuthorizationStore{Store: s.store, command: c}
 	if _, authenticated := auth.FromContext(ctx); authenticated {
 		if err := request.store.(commandAuthorizationStore).authorizePreflight(ctx); err != nil {

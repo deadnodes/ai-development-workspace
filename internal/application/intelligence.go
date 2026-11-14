@@ -309,7 +309,7 @@ func (s *Service) releaseNotesContext(st *domain.State, product string, in intel
 	if e := s.flowGuard(st, *candidate); e != nil {
 		return v, invalid("candidate configuration or authority changed; prepare a new candidate")
 	}
-	baselines, previousSources, e := notesBaselines(st, product, candidate.EnvironmentID, in)
+	baselines, previousSources, e := notesBaselines(st, product, candidate.EnvironmentID, in, s.runtimeFreshnessSnapshot)
 	if e != nil {
 		return v, e
 	}
@@ -434,11 +434,19 @@ func (s *Service) taskInput(st *domain.State, op domain.ExternalOperation) (inte
 }
 
 func (s *Service) tickIntelligence(ctx context.Context, op domain.ExternalOperation, token string) error {
+	freshness, err := s.loadRuntimeFreshness(ctx)
+	if err != nil {
+		return err
+	}
+	request := *s
+	request.runtimeFreshnessSnapshot = freshness
+	s = &request
+
 	var input intelligenceInput
 	admitted := false
 	// Persist intent before any I/O. An expired lease after this point is an
 	// uncertain paid call, never an automatic request replay.
-	err := s.store.Update(ctx, func(st *domain.State) error {
+	err = s.store.Update(ctx, func(st *domain.State) error {
 		current := operationByID(st, op.ID)
 		if current == nil || current.LeaseOwner != token || current.Status != "RUNNING" {
 			return invalid("intelligence lease changed")
@@ -697,7 +705,7 @@ func releaseNotesIntentHash(st *domain.State, c domain.Composition) string {
 	}
 	return workerconfig.Fingerprint(intents)
 }
-func notesBaselines(st *domain.State, product, environment string, in intelligenceRequest) (map[string]domain.Release, map[string]string, error) {
+func notesBaselines(st *domain.State, product, environment string, in intelligenceRequest, freshness ...map[string]time.Time) (map[string]domain.Release, map[string]string, error) {
 	baselines := map[string]domain.Release{}
 	sources := map[string]string{}
 	latest := map[string]domain.RuntimeObservation{}
@@ -740,7 +748,11 @@ func notesBaselines(st *domain.State, product, environment string, in intelligen
 		}
 		r := *baseline
 		op := operationByID(st, o.OperationID)
-		if !o.Healthy || time.Since(o.CreatedAt) > 15*time.Minute || o.CreatedAt.After(time.Now().Add(time.Minute)) || !artifactPinDigest.MatchString(r.ArtifactDigests[app]) || o.ArtifactDigest != r.ArtifactDigests[app] || r.GitOpsCommits[app] == "" || o.GitOpsCommit != r.GitOpsCommits[app] || op == nil || op.Snapshot == nil || op.Snapshot.Application.ID != app || op.Snapshot.Application.ProductID != product || r.ExecutionOperationID != "" && op.ParentID != r.ExecutionOperationID {
+		at := o.CreatedAt
+		if len(freshness) > 0 {
+			at = domain.RuntimeObservedAt(o, freshness[0])
+		}
+		if !o.Healthy || time.Since(at) > 15*time.Minute || at.After(time.Now().Add(time.Minute)) || !artifactPinDigest.MatchString(r.ArtifactDigests[app]) || o.ArtifactDigest != r.ArtifactDigests[app] || r.GitOpsCommits[app] == "" || o.GitOpsCommit != r.GitOpsCommits[app] || op == nil || op.Snapshot == nil || op.Snapshot.Application.ID != app || op.Snapshot.Application.ProductID != product || r.ExecutionOperationID != "" && op.ParentID != r.ExecutionOperationID {
 			return nil, nil, invalid("release baseline does not match current recorded environment; reobserve or adopt actual release")
 		}
 		repo := op.Snapshot.Revision.RepositoryID

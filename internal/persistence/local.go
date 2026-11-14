@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -123,6 +124,12 @@ func (s *LocalStore) Read(ctx context.Context) (domain.State, error) {
 	return st, err
 }
 func (s *LocalStore) Update(ctx context.Context, fn func(*domain.State) error) error {
+	return s.update(ctx, nil, fn)
+}
+func (s *LocalStore) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
+	return s.update(ctx, &scope, fn)
+}
+func (s *LocalStore) update(ctx context.Context, scope *domain.StateMutationScope, fn func(*domain.State) error) error {
 	select {
 	case s.writer <- struct{}{}:
 		defer func() { <-s.writer }()
@@ -151,6 +158,32 @@ func (s *LocalStore) Update(ctx context.Context, fn func(*domain.State) error) e
 		if err != nil {
 			return err
 		}
+		if scope != nil && scope.RequireEmptyJournal && len(st.Events) > 0 {
+			return domain.ErrJournalNotEmpty
+		}
+		if scope != nil && len(scope.RequireAbsentIDs) > 0 {
+			records := map[string]bool{}
+			for _, rows := range before {
+				for _, raw := range rows {
+					var v struct {
+						ID string `json:"id"`
+					}
+					if err := json.Unmarshal(raw, &v); err != nil {
+						return err
+					}
+					records[v.ID] = true
+				}
+			}
+			reserved := map[string]bool{}
+			for _, v := range st.Events {
+				reserved[v.ID] = true
+			}
+			for _, id := range scope.RequireAbsentIDs {
+				if records[id] && !scope.AllowExistingRecords || reserved[id] && (!scope.AllowExistingRecords || !records[id]) {
+					return domain.ErrIdentityExists
+				}
+			}
+		}
 		if err = fn(&st); err != nil {
 			return err
 		}
@@ -173,6 +206,25 @@ func (s *LocalStore) Update(ctx context.Context, fn func(*domain.State) error) e
 		after, err := documents(st)
 		if err != nil {
 			return err
+		}
+		if scope != nil && !scope.AllCollections {
+			for kind, old := range before {
+				if slices.Contains(scope.MutableCollections, kind) {
+					continue
+				}
+				cur := after[kind]
+				if slices.Contains(scope.AppendCollections, kind) {
+					if len(cur) < len(old) {
+						return errors.New("append collection truncated")
+					}
+					cur = cur[:len(old)]
+				}
+				a, _ := json.Marshal(old)
+				b, _ := json.Marshal(cur)
+				if !bytes.Equal(a, b) {
+					return fmt.Errorf("collection outside mutation scope: %s", kind)
+				}
+			}
 		}
 		ids := map[string]string{}
 		for kind, records := range after {
@@ -201,7 +253,7 @@ func (s *LocalStore) Update(ctx context.Context, fn func(*domain.State) error) e
 				if err = json.Unmarshal(raw, &meta); err != nil {
 					return err
 				}
-				if ids[meta.ID] != kind && !productRecordRemoved(before, after, kind, raw) {
+				if ids[meta.ID] != kind && !(scope != nil && !scope.AllCollections && kind == "runtime_observations" && slices.Contains(scope.MutableCollections, kind)) && !productRecordRemoved(before, after, kind, raw) {
 					return errors.New("existing records cannot be removed or change kind")
 				}
 			}

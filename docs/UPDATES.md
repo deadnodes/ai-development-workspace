@@ -187,3 +187,9 @@ is reused. Only `dev` with `allow_auto_merge:true` and Flux branch `main` are
 accepted. Review paths, image repositories, min_matches, required contexts and
 App permissions before restarting. Changes to authority stop old deployment intent
 from executing under new configuration. See [delivery](FORGEJO_DELIVERY.md).
+
+Runtime-observation storage: migration `008_runtime_observation_freshness.sql`
+adds lightweight observer liveness outside State. It is applied at normal startup;
+this change does not itself authorize an installation update. See
+[RUNTIME_OBSERVERS.md](RUNTIME_OBSERVERS.md#recording-freshness-and-retention) for
+change-only recording and `RCP_RUNTIME_OBSERVATION_RETENTION` (default `168h`).
