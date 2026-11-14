@@ -332,3 +332,30 @@ Superseded handles retain provenance and request-key replay, carry failure code
 `SUPERSEDED` and `superseded_by`, and emit `supersede_build` or
 `supersede_deployment` with `superseded_by`, `source_sha`, and `new_source_sha`.
 Follow the replacement handle rather than re-queueing the superseded work.
+
+## Automatic delivery
+
+An operator-owned profile with `"auto_deploy_dev": true` automatically requests
+Dev delivery of its newest SUCCEEDED build matching the current `default_branch`
+head (normally `main`). The auto-build poller must have successfully observed
+that head within two minutes, including for deploy-only profiles and startup.
+Without a fresh observation or a successful build of that exact SHA, no request
+is made; historical successful builds are never a fallback. Configuration loading
+rejects opted-in profiles whose `dispatch_ref` differs from `default_branch`. Existing
+successful Dev SHA/ancestry and request receipts prevent duplicate delivery or
+rollback. Requests use `auto-deploy:<build id>`, actor `system/auto-deploy`,
+and expose `trigger: "auto"` on newly created deployments.
+
+Every existing deployment guard, CI gate (including PR-tree evidence), supersede
+rule, registry check and rollout verification still applies. An ancestor of the
+latest successful Dev deployment is refused and logged at INFO without retry.
+An overlapping deployment in progress defers the request to a later tick while
+the build remains the newest successful build of the freshly observed default-branch head. Automatic
+delivery never supplies `allow_rollback` and never deploys production.
+
+Both automation flags default to false. `RCP_AUTO_DELIVERY=off` disables automatic
+build and Dev requests without canceling existing work. Follow
+`list_builds` / `get_build` and `list_deployments` / `get_deployment` for results;
+a requested deployment is not proof of a healthy rollout. Agents should let
+opted-in profiles progress after merge, using explicit commands only for branch
+builds or an explicitly requested redeploy.

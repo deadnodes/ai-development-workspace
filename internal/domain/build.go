@@ -4,6 +4,7 @@ import "time"
 
 // Build is its own durable asynchronous handle, independent of delivery Operations.
 type Build struct {
+	Trigger             string `json:"trigger"`
 	SupersededBy        string `json:"superseded_by,omitempty"`
 	LastError           string `json:"last_error,omitempty"`
 	ProviderUnavailable bool   `json:"provider_unavailable,omitempty"`

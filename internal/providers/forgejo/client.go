@@ -247,3 +247,18 @@ func (r Run) EffectiveEvent() string {
 	}
 	return r.TriggerEvent
 }
+
+// CommitTime observes the source commit timestamp for bounded restart recovery.
+func (c *Client) CommitTime(ctx context.Context, cn buildconfig.Connection, repo, sha string) (time.Time, error) {
+	var v struct {
+		SHA       string `json:"sha"`
+		Committer struct {
+			Date time.Time `json:"date"`
+		} `json:"committer"`
+	}
+	e := c.request(ctx, cn, "GET", repoPath(repo)+"/git/commits/"+url.PathEscape(sha), nil, &v)
+	if e == nil && v.SHA != sha {
+		e = errors.New("invalid Forgejo commit")
+	}
+	return v.Committer.Date, e
+}
