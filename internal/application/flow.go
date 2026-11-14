@@ -148,6 +148,7 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 		return *created, created.Meta, nil
 	case "record_runtime_observation":
 		var in struct {
+			Target         string `json:"target"`
 			EnvironmentID  string `json:"environment_id"`
 			GitOpsCommit   string `json:"gitops_commit"`
 			ArtifactDigest string `json:"artifact_digest"`
@@ -156,6 +157,9 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 		}
 		if err := decode(c.Data, &in); err != nil {
 			return nil, m, err
+		}
+		if len([]rune(in.Target)) > 300 {
+			return nil, m, invalid("target must be at most 300 characters")
 		}
 		op := operationByID(st, c.ID)
 		if op == nil || op.Status != "SUCCEEDED" || op.GitOpsResult == nil || op.Artifact == nil || op.EnvironmentID != in.EnvironmentID || op.GitOpsResult.CommitSHA != in.GitOpsCommit || op.Artifact.Digest != in.ArtifactDigest || strings.TrimSpace(in.Details) == "" {
@@ -168,7 +172,7 @@ func applyFlow(st *domain.State, c domain.Command, m domain.Meta, authority *wor
 		m.ID = id()
 		m.ProductID = op.ProductID
 		m.FeatureID = op.FeatureID
-		v := domain.RuntimeObservation{Meta: m, OperationID: op.ID, EnvironmentID: in.EnvironmentID, GitOpsCommit: in.GitOpsCommit, ArtifactDigest: in.ArtifactDigest, Healthy: in.Healthy, Details: in.Details}
+		v := domain.RuntimeObservation{Meta: m, Target: in.Target, OperationID: op.ID, EnvironmentID: in.EnvironmentID, GitOpsCommit: in.GitOpsCommit, ArtifactDigest: in.ArtifactDigest, Healthy: in.Healthy, Details: in.Details}
 		st.RuntimeObservations = append(st.RuntimeObservations, v)
 		return v, m, nil
 	case "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate":

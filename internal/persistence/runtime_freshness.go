@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/domain"
+	"strings"
 	"time"
 )
 
 // Freshness deliberately bypasses the state transaction, revision and caches.
-func (s *Store) TouchRuntimeFreshness(ctx context.Context, operationID string, observationID string, observedAt time.Time, healthy bool) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO runtime_observation_freshness(operation_id, observation_id, observed_at, healthy) VALUES($1,$2,$3,$4) ON CONFLICT (operation_id) DO UPDATE SET observation_id=EXCLUDED.observation_id, observed_at=EXCLUDED.observed_at, healthy=EXCLUDED.healthy WHERE runtime_observation_freshness.observed_at <= EXCLUDED.observed_at`, operationID, observationID, observedAt, healthy)
+func (s *Store) TouchRuntimeFreshness(ctx context.Context, operationID string, target string, observationID string, observedAt time.Time, healthy bool) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO runtime_observation_freshness(operation_id, target, observation_id, observed_at, healthy) VALUES($1,$2,$3,$4,$5) ON CONFLICT (operation_id, target) DO UPDATE SET observation_id=EXCLUDED.observation_id, observed_at=EXCLUDED.observed_at, healthy=EXCLUDED.healthy WHERE runtime_observation_freshness.observed_at <= EXCLUDED.observed_at`, operationID, target, observationID, observedAt, healthy)
 	return err
 }
 func (s *Store) RuntimeFreshness(ctx context.Context, ids []string) (map[string]domain.RuntimeFreshness, error) {
@@ -18,18 +19,22 @@ func (s *Store) RuntimeFreshness(ctx context.Context, ids []string) (map[string]
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT operation_id, observation_id, observed_at, healthy FROM runtime_observation_freshness WHERE operation_id=ANY($1)`, ids)
+	operations, targets := make([]string, len(ids)), make([]string, len(ids))
+	for i, key := range ids {
+		operations[i], targets[i], _ = strings.Cut(key, "\x00")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT f.operation_id, f.target, f.observation_id, f.observed_at, f.healthy FROM runtime_observation_freshness f JOIN unnest($1::text[], $2::text[]) AS wanted(operation_id, target) USING (operation_id, target)`, operations, targets)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id string
+		var id, target string
 		var f domain.RuntimeFreshness
-		if err = rows.Scan(&id, &f.ObservationID, &f.ObservedAt, &f.Healthy); err != nil {
+		if err = rows.Scan(&id, &target, &f.ObservationID, &f.ObservedAt, &f.Healthy); err != nil {
 			return nil, err
 		}
-		out[id] = f
+		out[domain.RuntimeObservationKey(id, target)] = f
 	}
 	return out, rows.Err()
 }
@@ -42,7 +47,7 @@ type localRuntimeFreshness struct {
 	Healthy       bool      `json:"healthy"`
 }
 
-func (s *LocalStore) TouchRuntimeFreshness(ctx context.Context, operationID string, observationID string, observedAt time.Time, healthy bool) error {
+func (s *LocalStore) TouchRuntimeFreshness(ctx context.Context, operationID string, target string, observationID string, observedAt time.Time, healthy bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -57,7 +62,7 @@ func (s *LocalStore) TouchRuntimeFreshness(ctx context.Context, operationID stri
 			return err
 		}
 		var old localRuntimeFreshness
-		if raw := b.Get([]byte(operationID)); raw != nil {
+		if raw := b.Get([]byte(domain.RuntimeObservationKey(operationID, target))); raw != nil {
 			if err = json.Unmarshal(raw, &old); err != nil {
 				return err
 			}
@@ -69,7 +74,7 @@ func (s *LocalStore) TouchRuntimeFreshness(ctx context.Context, operationID stri
 		if err != nil {
 			return err
 		}
-		return b.Put([]byte(operationID), raw)
+		return b.Put([]byte(domain.RuntimeObservationKey(operationID, target)), raw)
 	})
 }
 func (s *LocalStore) RuntimeFreshness(ctx context.Context, ids []string) (map[string]domain.RuntimeFreshness, error) {

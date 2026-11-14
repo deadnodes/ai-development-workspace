@@ -19,12 +19,20 @@ type RuntimeFreshness struct {
 	Healthy       bool      `json:"healthy"`
 }
 
+// RuntimeObservationKey scopes internal freshness keys; empty targets retain the legacy key.
+func RuntimeObservationKey(operationID, target string) string {
+	if target == "" {
+		return operationID
+	}
+	return operationID + "\x00" + target
+}
+
 func BindRuntimeFreshness(rows []RuntimeObservation, freshness map[string]RuntimeFreshness) map[string]time.Time {
 	latest := map[string]RuntimeObservation{}
 	for _, r := range rows {
-		old, ok := latest[r.OperationID]
+		old, ok := latest[RuntimeObservationKey(r.OperationID, r.Target)]
 		if !ok || r.CreatedAt.After(old.CreatedAt) || r.CreatedAt.Equal(old.CreatedAt) && r.ID > old.ID {
-			latest[r.OperationID] = r
+			latest[RuntimeObservationKey(r.OperationID, r.Target)] = r
 		}
 	}
 	out := map[string]time.Time{}
@@ -59,7 +67,7 @@ func runtimeObservationRoots(st *State) runtimeObservationIndex {
 	for _, r := range st.RuntimeObservations {
 		rows[r.ID] = r
 		op := ops[r.OperationID]
-		keys := []string{"operation\x00" + r.OperationID, "target\x00" + r.ProductID + "\x00" + r.EnvironmentID + "\x00" + op.ApplicationID}
+		keys := []string{"operation\x00" + RuntimeObservationKey(r.OperationID, r.Target), "target\x00" + r.ProductID + "\x00" + r.EnvironmentID + "\x00" + op.ApplicationID}
 		for _, key := range keys {
 			old, ok := latest[key]
 			if !ok || newer(r, old) {
@@ -73,7 +81,7 @@ func runtimeObservationRoots(st *State) runtimeObservationIndex {
 			earliest[key] = r
 		}
 		if runtimeReconciliationWitness(r, op) {
-			key = "reconciled\x00" + r.OperationID
+			key = "reconciled\x00" + RuntimeObservationKey(r.OperationID, r.Target)
 			old, ok := earliest[key]
 			if !ok || newer(old, r) {
 				earliest[key] = r
@@ -88,13 +96,13 @@ func runtimeObservationRoots(st *State) runtimeObservationIndex {
 	}
 	// Index healthy witnesses once. A release only needs the earliest matching
 	// witness: if it is newer than the release, no matching witness existed yet.
-	type witnessKey struct{ product, environment, operation, digest, commit string }
+	type witnessKey struct{ product, environment, operation, target, digest, commit string }
 	witnesses := map[witnessKey]RuntimeObservation{}
 	for _, r := range st.RuntimeObservations {
 		if !r.Healthy || r.CreatedAt.IsZero() {
 			continue
 		}
-		k := witnessKey{r.ProductID, r.EnvironmentID, r.OperationID, r.ArtifactDigest, r.GitOpsCommit}
+		k := witnessKey{r.ProductID, r.EnvironmentID, r.OperationID, r.Target, r.ArtifactDigest, r.GitOpsCommit}
 		if old, ok := witnesses[k]; !ok || newer(old, r) {
 			witnesses[k] = r
 		}

@@ -278,7 +278,22 @@ func (o *Observer) Observe(ctx context.Context, commit, digest string) Result {
 }
 
 func (o *Observer) TargetIdentity() delivery.RuntimeTarget {
-	return delivery.RuntimeTarget{ProductID: o.Target.ProductID, EnvironmentID: o.Target.EnvironmentID, ApplicationID: o.Target.ApplicationID}
+	t := o.Target
+	cluster := ""
+	if t.InCluster {
+		cluster = "in-cluster"
+	} else {
+		if u, err := url.Parse(t.APIURL); err == nil {
+			cluster = u.Host
+		}
+	}
+	key := cluster + "|" + t.FluxNamespace + "/" + t.Kustomization + "|" + t.Namespace + "/" + t.Deployment + "/" + t.Container
+	runes := []rune(key)
+	if len(runes) > 300 {
+		sum := sha256.Sum256([]byte(string(runes[235:])))
+		key = string(runes[:235]) + "|" + hex.EncodeToString(sum[:])
+	}
+	return delivery.RuntimeTarget{ProductID: t.ProductID, EnvironmentID: t.EnvironmentID, ApplicationID: t.ApplicationID, Target: key}
 }
 
 var _ delivery.RuntimeVerificationObserver = (*Observer)(nil)

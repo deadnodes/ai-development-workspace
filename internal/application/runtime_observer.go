@@ -40,14 +40,14 @@ func (s *Service) ObserveRuntimeOnce(ctx context.Context, observers []delivery.R
 		previous := make(map[string]*domain.RuntimeObservation)
 		for i := range st.RuntimeObservations {
 			r := &st.RuntimeObservations[i]
-			if old := previous[r.OperationID]; old == nil || r.CreatedAt.After(old.CreatedAt) {
-				previous[r.OperationID] = r
+			if old := previous[domain.RuntimeObservationKey(r.OperationID, r.Target)]; old == nil || r.CreatedAt.After(old.CreatedAt) || r.CreatedAt.Equal(old.CreatedAt) && r.ID > old.ID {
+				previous[domain.RuntimeObservationKey(r.OperationID, r.Target)] = r
 			}
 		}
 		for i, target := range targets {
-			if o := latest[target]; o != nil {
+			if o := latest[delivery.RuntimeTarget{ProductID: target.ProductID, EnvironmentID: target.EnvironmentID, ApplicationID: target.ApplicationID}]; o != nil {
 				inputs[i] = input{operationID: o.ID, commit: o.GitOpsResult.CommitSHA, digest: o.Artifact.Digest}
-				if r := previous[o.ID]; r != nil {
+				if r := previous[domain.RuntimeObservationKey(o.ID, target.Target)]; r != nil {
 					inputs[i].hasPrevious = true
 					inputs[i].previousID = r.ID
 					inputs[i].previousHealthy, inputs[i].previousDetails = r.Healthy, r.Details
@@ -71,12 +71,12 @@ func (s *Service) ObserveRuntimeOnce(ctx context.Context, observers []delivery.R
 		}
 		// Poll liveness is separate from append-only change evidence.
 		if in.hasPrevious && in.previousHealthy == result.Healthy && in.previousDetails == result.Details && in.previousCommit == in.commit && in.previousDigest == in.digest {
-			if err := s.touchRuntimeFreshness(ctx, in.operationID, in.previousID, result.Healthy); err != nil {
+			if err := s.touchRuntimeFreshness(ctx, in.operationID, t.Target, in.previousID, result.Healthy); err != nil {
 				return err
 			}
 			continue
 		}
-		recorded, err := s.Execute(ctx, domain.Command{Action: "record_runtime_observation", Actor: "system/runtime-observer", ID: in.operationID, Data: map[string]any{"environment_id": t.EnvironmentID, "gitops_commit": in.commit, "artifact_digest": in.digest, "healthy": result.Healthy, "details": result.Details}})
+		recorded, err := s.Execute(ctx, domain.Command{Action: "record_runtime_observation", Actor: "system/runtime-observer", ID: in.operationID, Data: map[string]any{"target": t.Target, "environment_id": t.EnvironmentID, "gitops_commit": in.commit, "artifact_digest": in.digest, "healthy": result.Healthy, "details": result.Details}})
 		if err != nil {
 			return err
 		}
@@ -84,7 +84,7 @@ func (s *Service) ObserveRuntimeOnce(ctx context.Context, observers []delivery.R
 		if !ok {
 			continue
 		}
-		if err := s.touchRuntimeFreshness(ctx, in.operationID, observation.ID, result.Healthy); err != nil {
+		if err := s.touchRuntimeFreshness(ctx, in.operationID, t.Target, observation.ID, result.Healthy); err != nil {
 			return err
 		}
 	}
@@ -93,18 +93,19 @@ func (s *Service) ObserveRuntimeOnce(ctx context.Context, observers []delivery.R
 
 // RuntimeFreshnessStore is optional; lightweight liveness is never domain State.
 type RuntimeFreshnessStore interface {
-	TouchRuntimeFreshness(context.Context, string, string, time.Time, bool) error
+	TouchRuntimeFreshness(context.Context, string, string, string, time.Time, bool) error
+	// RuntimeFreshness takes and returns RuntimeObservationKey(operationID, target) keys.
 	RuntimeFreshness(context.Context, []string) (map[string]domain.RuntimeFreshness, error)
 }
 
 // The ID belongs to the evidence this poll compared or recorded. Never reselect
 // the latest row here: another observer may have appended different evidence.
-func (s *Service) touchRuntimeFreshness(ctx context.Context, operationID, observationID string, healthy bool) error {
+func (s *Service) touchRuntimeFreshness(ctx context.Context, operationID, target, observationID string, healthy bool) error {
 	if observationID == "" {
 		return nil
 	}
 	if store, ok := s.store.(RuntimeFreshnessStore); ok {
-		return store.TouchRuntimeFreshness(ctx, operationID, observationID, time.Now().UTC(), healthy)
+		return store.TouchRuntimeFreshness(ctx, operationID, target, observationID, time.Now().UTC(), healthy)
 	}
 	return nil
 }
@@ -116,9 +117,10 @@ func (s *Service) runtimeFreshness(ctx context.Context, st *domain.State) (map[s
 	ids := []string{}
 	seen := map[string]bool{}
 	for _, r := range st.RuntimeObservations {
-		if !seen[r.OperationID] {
-			seen[r.OperationID] = true
-			ids = append(ids, r.OperationID)
+		key := domain.RuntimeObservationKey(r.OperationID, r.Target)
+		if !seen[key] {
+			seen[key] = true
+			ids = append(ids, key)
 		}
 	}
 	freshness, err := store.RuntimeFreshness(ctx, ids)

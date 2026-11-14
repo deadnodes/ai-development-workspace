@@ -41,6 +41,7 @@ func resolveAuthentication(t *Target, getenv func(string) string, directory stri
 	t.CAFile = filepath.Join(directory, "ca.crt")
 	t.TokenFile = filepath.Join(directory, "token")
 	t.Context = "in-cluster"
+	t.InCluster = true
 	// get reads the projected token file on each request to honor kubelet rotation.
 	return kubeMaterial{}, nil
 }

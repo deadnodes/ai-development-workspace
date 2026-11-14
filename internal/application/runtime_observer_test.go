@@ -200,7 +200,7 @@ func (m *racingFreshnessStore) Update(ctx context.Context, fn func(*domain.State
 	}
 	return nil
 }
-func (m *racingFreshnessStore) TouchRuntimeFreshness(_ context.Context, _, observationID string, at time.Time, healthy bool) error {
+func (m *racingFreshnessStore) TouchRuntimeFreshness(_ context.Context, _, _, observationID string, at time.Time, healthy bool) error {
 	m.fresh = domain.RuntimeFreshness{ObservationID: observationID, ObservedAt: at, Healthy: healthy}
 	return nil
 }
