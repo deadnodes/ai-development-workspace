@@ -191,7 +191,7 @@ func (s *Service) observeGit(ctx context.Context, op domain.ExternalOperation, t
 		now := time.Now().UTC()
 		observations = append(observations, domain.GitObservation{Commits: comparison.Commits, Meta: domain.Meta{ID: id(), ProductID: in.ProductID, FeatureID: in.FeatureID, Actor: "worker", CreatedAt: now, UpdatedAt: now}, IntegrationID: in.ID, RepositoryID: b.RepositoryID, Branch: b.Name, HeadCommit: head, MainCommit: main, Ahead: comparison.Ahead, Behind: comparison.Behind, Status: comparison.Status, ObservedAt: now})
 	}
-	e = s.store.Update(ctx, func(st *domain.State) error {
+	e = s.updateWorkerScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"integration_revisions", "memories", "git_observations"}}, func(st *domain.State) error {
 		current := operationByID(st, op.ID)
 		if current == nil || current.LeaseOwner != token {
 			return invalid("operation lease lost")

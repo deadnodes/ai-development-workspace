@@ -72,7 +72,7 @@ func (s *Service) observeRepositoryGit(ctx context.Context, op domain.ExternalOp
 		meta := domain.Meta{ID: id(), ProductID: op.ProductID, FeatureID: featureID, Actor: "worker/git-inventory", CreatedAt: now, UpdatedAt: now}
 		observations = append(observations, domain.GitObservation{Meta: meta, IntegrationID: integrationID, RepositoryID: op.RepositoryID, Branch: branch.Name, HeadCommit: branch.SHA, MainCommit: base.SHA, Ahead: comparison.Ahead, Behind: comparison.Behind, Status: comparison.Status, Commits: comparison.Commits, ObservedAt: now})
 	}
-	if err := s.store.Update(ctx, func(current *domain.State) error {
+	if err := s.updateWorkerScoped(ctx, domain.StateMutationScope{AppendCollections: []string{"git_observations"}}, func(current *domain.State) error {
 		lease := operationByID(current, op.ID)
 		if lease == nil || lease.LeaseOwner != token {
 			return invalid("operation lease lost")
