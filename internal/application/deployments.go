@@ -18,9 +18,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type DeploymentSource interface {
+	IsAncestor(context.Context, buildconfig.Connection, string, string, string) (bool, error)
 	CommitStatus(context.Context, buildconfig.Connection, string, string) (forgejo.CommitStatus, error)
 }
 type DeploymentRegistry interface {
@@ -64,7 +66,14 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 	if s.builds == nil || s.deployments == nil {
 		return out, invalid("deployments not configured")
 	}
-	e := s.store.Update(ctx, func(st *domain.State) error {
+	// Preflight borrows state only; provider I/O happens after the view is released.
+	preflight := true
+	var current domain.Deployment
+	var profile buildconfig.Profile
+	var sourceSHA, rollbackCheck string
+	var checkErr error
+	var ancestor bool
+	evaluate := func(st *domain.State) error {
 		for _, r := range st.DeploymentReceipts {
 			if in.RequestKey != "" && r.ProductID == in.ProductID && r.RequestKey == in.RequestKey {
 				if r.BuildID != in.BuildID || r.EnvironmentID != in.EnvironmentID {
@@ -78,6 +87,14 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 				}
 				return invalid("deployment receipt missing handle")
 			}
+		}
+		if in.AllowRollback {
+			n := utf8.RuneCountInString(strings.TrimSpace(in.Reason))
+			if n < 8 || n > 500 {
+				return invalid("allow_rollback requires reason (8–500 trimmed runes)")
+			}
+		} else if in.Reason != "" {
+			return invalid("reason requires allow_rollback")
 		}
 		var b domain.Build
 		for _, v := range st.Builds {
@@ -118,7 +135,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		sort.Strings(identities)
 		identity := buildFingerprint(identities)
 		bind := func(d domain.Deployment) {
-			if in.RequestKey != "" {
+			if !preflight && in.RequestKey != "" {
 				st.DeploymentReceipts = append(st.DeploymentReceipts, domain.DeploymentReceipt{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: time.Now().UTC()}, RequestKey: in.RequestKey, BuildID: in.BuildID, EnvironmentID: in.EnvironmentID, DeploymentID: d.ID})
 			}
 		}
@@ -127,6 +144,39 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 				out = d
 				bind(d)
 				return nil
+			}
+		}
+		candidate := domain.Deployment{EnvironmentID: in.EnvironmentID, ProfileID: p.ID, GitOpsRepository: gitopsAuthority.Repository}
+		for _, f := range p.Deployments["dev"].Files {
+			candidate.TargetFiles = append(candidate.TargetFiles, f.Path)
+		}
+		for _, d := range st.Deployments {
+			if !deploymentTerminal(d) && d.EnvironmentID == in.EnvironmentID && d.Identity != identity && (d.ProfileID == p.ID || deploymentOverlap(s.builds.config, candidate, d)) {
+				if d.ProductID != in.ProductID {
+					return invalid("DEPLOYMENT_IN_PROGRESS: another product's deployment holds overlapping target files")
+				}
+				return invalid("DEPLOYMENT_IN_PROGRESS: deployment %s build %s status %s", d.ID, d.BuildID, d.Status)
+			}
+		}
+		latest := latestDevDeployment(st, in.ProductID, p.ID)
+		if preflight {
+			current, profile, sourceSHA = copyDeployment(latest), p, b.SourceSHA
+			return nil
+		}
+		if latest.ID != current.ID {
+			return invalid("DEPLOYMENT_STATE_CHANGED: retry deploy_build")
+		}
+		if current.ID != "" && current.SourceSHA != b.SourceSHA {
+			if checkErr != nil {
+				if !in.AllowRollback {
+					return invalid("ROLLBACK_CHECK_UNAVAILABLE: %v", checkErr)
+				}
+				rollbackCheck = "unavailable"
+			} else if ancestor {
+				if !in.AllowRollback {
+					return invalid("ROLLBACK_REFUSED: build %.12s is an ancestor of deployed %.12s (deployment %s); pass allow_rollback=true with reason to override", b.SourceSHA, current.SourceSHA, current.ID)
+				}
+				rollbackCheck = "ancestor"
 			}
 		}
 		now := time.Now().UTC()
@@ -138,13 +188,48 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			}
 		}
 		sort.Strings(out.TargetFiles)
+		if rollbackCheck != "" {
+			out.RollbackFromSHA, out.RollbackFromDeploymentID, out.OverrideReason = current.SourceSHA, current.ID, strings.TrimSpace(in.Reason)
+		}
 		out.Branch = "rcp/deploy/" + out.ID
 		st.Deployments = append(st.Deployments, out)
 		bind(out)
 		deploymentEvent(st, out, "deploy_build")
+		if rollbackCheck != "" {
+			data := st.Events[len(st.Events)-1].Data.Data
+			data["allow_rollback"], data["reason"] = true, out.OverrideReason
+			data["rollback_from_sha"], data["rollback_from_deployment_id"], data["rollback_check"] = out.RollbackFromSHA, out.RollbackFromDeploymentID, rollbackCheck
+		}
 		return nil
-	})
-	return out, e
+	}
+	if err := s.view(ctx, evaluate); err != nil {
+		return domain.Deployment{}, err
+	}
+	if out.ID == "" && current.ID != "" && current.SourceSHA != sourceSHA {
+		checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		ancestor, checkErr = s.deployments.source.IsAncestor(checkCtx, s.builds.config.Connection(profile.ConnectionID), profile.Repository, sourceSHA, current.SourceSHA)
+		cancel()
+	}
+	preflight = false
+	out = domain.Deployment{}
+	err := s.store.Update(ctx, evaluate)
+	return out, err
+}
+
+func latestDevDeployment(st *domain.State, product, profile string) domain.Deployment {
+	var latest domain.Deployment
+	stamp := func(d domain.Deployment) time.Time {
+		if d.FinishedAt != nil {
+			return *d.FinishedAt
+		}
+		return d.UpdatedAt
+	}
+	for _, d := range st.Deployments {
+		if d.ProductID == product && d.ProfileID == profile && d.EnvironmentID == "dev" && d.Status == "SUCCEEDED" && (latest.ID == "" || stamp(d).After(stamp(latest)) || stamp(d).Equal(stamp(latest)) && d.ID > latest.ID) {
+			latest = d
+		}
+	}
+	return latest
 }
 func deployDigest(s string) bool {
 	if len(s) != 71 || !strings.HasPrefix(s, "sha256:") {
@@ -233,6 +318,9 @@ func (s *Service) advanceDeployment(ctx context.Context, old domain.Deployment, 
 		for i, current := range st.Deployments {
 			if current.ID != old.ID {
 				continue
+			}
+			if deploymentTerminal(current) {
+				return invalid("only active deployments may be advanced")
 			}
 			if buildFingerprint(current) != buildFingerprint(old) {
 				return invalid("deployment changed")

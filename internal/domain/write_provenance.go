@@ -8,7 +8,7 @@ package domain
 // Keep persistence's indexed SQL predicate in sync (covered by PostgreSQL tests).
 func IsWriteProvenanceEvent(e Event) bool {
 	switch e.Action {
-	case "close_build", "restore_backup", "assemble_environment", "reconcile_composition", "update_environment_feature", "worker_report", "pin_artifact", "release_artifact_pin":
+	case "close_deployment", "close_build", "restore_backup", "assemble_environment", "reconcile_composition", "update_environment_feature", "worker_report", "pin_artifact", "release_artifact_pin":
 		return true
 	}
 	return e.Data.Action == "release_artifact_pin"

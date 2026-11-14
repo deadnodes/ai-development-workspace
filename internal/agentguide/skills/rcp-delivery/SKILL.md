@@ -173,7 +173,7 @@ dispatches normally. Build images results list each id, image_ref and digest.
 ## Finished Forgejo build delivery to Dev
 
 For a configured Dev target, an explicitly requested `deploy_build` takes
-`{product_id, build_id, environment_id:"dev", request_key?}`. RCP verifies the
+`{product_id, build_id, environment_id:"dev", request_key?, allow_rollback?, reason?}`. RCP verifies the
 SUCCEEDED Build, fresh Forgejo source-SHA CI contexts (or combined success when
 none are configured), and fresh registry HEAD evidence for every image digest.
 It renders only configured HelmRelease image tag scalars, preserving other bytes,
@@ -192,3 +192,23 @@ matches create a new deployment without a key or with a fresh request_key; exist
 request_key replay returns its historical handle and rebinding conflicts. SUCCEEDED means GitOps merged (or already_applied), not Flux
 reconciliation, runtime health, functional acceptance or production approval.
 See docs/FORGEJO_DELIVERY.md for operator configuration and recovery limits.
+
+
+Rollback and concurrency guards apply to `deploy_build`. Never pass
+`allow_rollback` without owner/coordinator intent; it requires an 8–500 trimmed-rune
+`reason`. On `DEPLOYMENT_IN_PROGRESS`, wait for the named deployment using
+`get_deployment` instead of retry-looping. On `ROLLBACK_REFUSED`, do not deploy;
+report the refusal to the owner/coordinator. `ROLLBACK_CHECK_UNAVAILABLE` fails
+closed; do not infer override intent from a provider failure. A changed current
+handle returns `DEPLOYMENT_STATE_CHANGED: retry deploy_build` and requires a fresh
+state check. Only an actually used override records rollback provenance and reason.
+
+An instance admin may use `close_deployment {product_id, deployment_id, reason, request_key?}`
+when `DEPLOYMENT_IN_PROGRESS` is held by a deployment stuck in `PENDING_CHECKS`.
+Provide an audit reason of 8–500 trimmed characters. This closes the handle as
+`FAILED` / `OPERATOR_CLOSED`; never use it for deployments with a PR or uncertain
+GitOps effects. `PROPOSING` and later states are refused because a GitHub proposal may be in flight.
+
+An instance admin may use `close_build {product_id, build_id, reason, request_key?}`
+to close a stuck active build with a reason. This operator action is admin only
+and does not cancel the Forgejo run.

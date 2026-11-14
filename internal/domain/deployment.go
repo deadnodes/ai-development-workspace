@@ -4,8 +4,11 @@ import "time"
 
 // Deployment records GitOps completion only, never runtime health.
 type Deployment struct {
-	GitOpsRepository string   `json:"gitops_repository"`
-	TargetFiles      []string `json:"target_files"`
+	RollbackFromSHA          string   `json:"rollback_from_sha,omitempty"`
+	RollbackFromDeploymentID string   `json:"rollback_from_deployment_id,omitempty"`
+	OverrideReason           string   `json:"override_reason,omitempty"`
+	GitOpsRepository         string   `json:"gitops_repository"`
+	TargetFiles              []string `json:"target_files"`
 	Meta
 	BuildID           string            `json:"build_id"`
 	ProfileID         string            `json:"profile_id"`
@@ -14,6 +17,7 @@ type Deployment struct {
 	AuthorityHash     string            `json:"authority_hash"`
 	Identity          string            `json:"identity"`
 	Status            string            `json:"status"`
+	CloseReason       string            `json:"close_reason,omitempty"`
 	FailureCode       string            `json:"failure_code,omitempty"`
 	Images            []BuildImage      `json:"images"`
 	SourceSHA         string            `json:"source_sha"`
@@ -36,6 +40,8 @@ type Deployment struct {
 	FinishedAt        *time.Time        `json:"finished_at,omitempty"`
 }
 type DeployBuildRequest struct {
+	AllowRollback bool   `json:"allow_rollback,omitempty"`
+	Reason        string `json:"reason,omitempty"`
 	ProductID     string `json:"product_id"`
 	BuildID       string `json:"build_id"`
 	EnvironmentID string `json:"environment_id"`
@@ -62,4 +68,12 @@ type DeploymentReceipt struct {
 	BuildID       string `json:"build_id"`
 	EnvironmentID string `json:"environment_id"`
 	DeploymentID  string `json:"deployment_id"`
+}
+
+// CloseDeploymentRequest abandons only a deployment with no GitOps side effects.
+type CloseDeploymentRequest struct {
+	ProductID    string `json:"product_id"`
+	DeploymentID string `json:"deployment_id"`
+	Reason       string `json:"reason"`
+	RequestKey   string `json:"request_key,omitempty"`
 }
