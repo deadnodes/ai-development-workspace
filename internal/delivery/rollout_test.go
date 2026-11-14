@@ -21,3 +21,14 @@ func TestSafeRolloutReason(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSafeRolloutReasonWhitespace(t *testing.T) {
+	got := SafeRolloutReason("InstallFailed:\n\t hook failed   password=\nprivate-value\t BackoffLimitExceeded")
+	if want := "InstallFailed: hook failed password= [REDACTED] BackoffLimitExceeded"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = SafeRolloutReason("InstallFailed: " + strings.Repeat(" \n\t", 400) + "BackoffLimitExceeded")
+	if got != "InstallFailed: BackoffLimitExceeded" {
+		t.Fatal(got)
+	}
+}

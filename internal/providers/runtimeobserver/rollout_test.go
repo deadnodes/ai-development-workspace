@@ -62,7 +62,14 @@ func TestRolloutKubernetesAPI(t *testing.T) {
 					if strings.HasPrefix(tc.name, "condition old") {
 						condition["observedGeneration"] = 1
 					}
-					json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"generation": 2}, "spec": map[string]any{"values": map[string]any{"image": map[string]any{"tag": applied}}}, "status": map[string]any{"observedGeneration": observed, "lastAttemptedGeneration": attempted, "conditions": []any{condition}}})
+					conditions := []any{condition}
+					if tc.name == "failed" {
+						conditions = []any{
+							map[string]any{"type": "Stalled", "status": "True", "observedGeneration": 2, "reason": "RetriesExceeded", "message": "Failed to install after 1 attempt(s)"},
+							map[string]any{"type": "Ready", "status": "False", "observedGeneration": 2, "reason": "InstallFailed", "message": "Helm install failed for release lp-dev/x with chart backend@0.3.2: failed pre-install: 1 error occurred:\n\t* job x-backend-migrations failed: BackoffLimitExceeded"},
+						}
+					}
+					json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"generation": 2}, "spec": map[string]any{"values": map[string]any{"image": map[string]any{"tag": applied}}}, "status": map[string]any{"observedGeneration": observed, "lastAttemptedGeneration": attempted, "conditions": conditions}})
 					return
 				}
 				replicas, updated := 2, 2
@@ -128,7 +135,7 @@ func TestRolloutKubernetesAPI(t *testing.T) {
 			if err != nil || result.Phase != tc.want || len(result.Targets) != 1 {
 				t.Fatal(result, err)
 			}
-			if tc.name == "failed" && !strings.Contains(result.Reason, "BackoffLimitExceeded") {
+			if tc.name == "failed" && (!strings.Contains(result.Reason, "InstallFailed") || !strings.Contains(result.Reason, "BackoffLimitExceeded") || strings.ContainsAny(result.Reason, "\n\t")) {
 				t.Fatal(result)
 			}
 			if strings.HasPrefix(tc.name, "stale ") && result.Reason != "HelmRelease has not attempted the deployed generation" {

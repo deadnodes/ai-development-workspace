@@ -114,17 +114,37 @@ func (v *RolloutVerifier) target(ctx context.Context, t delivery.RolloutTarget) 
 		return "PENDING", "HelmRelease has not attempted the deployed generation"
 	}
 	ready := false
+	failureReason := ""
+	failed := false
 	for _, c := range hr.Status.Conditions {
 		if c.ObservedGeneration < hr.Metadata.Generation {
 			continue
 		}
 		failure := c.Reason == "UpgradeFailed" || c.Reason == "InstallFailed" || c.Reason == "RetriesExceeded" || c.Reason == "ArtifactFailed" || c.Reason == "ReconciliationFailed"
 		if c.Type == "Stalled" && c.Status == "True" || c.Type == "Ready" && c.Status == "False" && failure {
-			return "FAILED", shortReason(c.Reason + ": " + c.Message)
+			if !failed {
+				failureReason = c.Reason + ": " + c.Message
+			}
+			failed = true
 		}
 		if c.Type == "Ready" && c.Status == "True" {
 			ready = true
 		}
+	}
+	if failed {
+		// Choose the most actionable current-generation diagnostic independently
+		// of the conditions that establish failure.
+		for _, kind := range []string{"Ready", "Released", "Stalled"} {
+			for _, c := range hr.Status.Conditions {
+				if c.ObservedGeneration != hr.Metadata.Generation || c.Type != kind {
+					continue
+				}
+				if kind == "Stalled" && c.Status == "True" || kind != "Stalled" && c.Status == "False" {
+					return "FAILED", shortReason(c.Reason + ": " + c.Message)
+				}
+			}
+		}
+		return "FAILED", shortReason(failureReason)
 	}
 	if !ready {
 		return "PENDING", "HelmRelease is not Ready"
