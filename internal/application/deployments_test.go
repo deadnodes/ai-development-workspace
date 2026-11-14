@@ -128,7 +128,7 @@ func deploymentFixture(t *testing.T) (*Service, *memoryStore, *deploymentFake, d
 		t.Fatal(e)
 	}
 	digest := "sha256:" + strings.Repeat("a", 64)
-	m.state.Builds = []domain.Build{{Meta: domain.Meta{ID: "build", ProductID: "p"}, Status: "SUCCEEDED", AuthorityHash: s.builds.hash, ProfileID: "app", SourceSHA: strings.Repeat("a", 40), Images: []domain.BuildImage{{ID: "app", Digest: digest, ImageRef: "registry.example/o/r:main-aaaaaaaa@" + digest}}}}
+	m.state.Builds = []domain.Build{{Meta: domain.Meta{ID: "build", ProductID: "p"}, Status: "SUCCEEDED", AuthorityHash: s.builds.buildHashes["app"], ProfileID: "app", SourceSHA: strings.Repeat("a", 40), Images: []domain.BuildImage{{ID: "app", Digest: digest, ImageRef: "registry.example/o/r:main-aaaaaaaa@" + digest}}}}
 	return s, m, f, domain.DeployBuildRequest{ProductID: "p", BuildID: "build", EnvironmentID: "dev"}
 }
 func deployTick(t *testing.T, s *Service) {
@@ -363,7 +363,7 @@ func TestDeployAuthorityChangeStopsIntent(t *testing.T) {
 		if active {
 			deployTick(t, s)
 		}
-		s.builds.hash = "changed"
+		s.builds.deploymentHashes["app"] = "changed"
 		deployTick(t, s)
 		d := m.state.Deployments[0]
 		if d.FailureCode != "DEPLOYMENT_AUTHORITY_CHANGED" {

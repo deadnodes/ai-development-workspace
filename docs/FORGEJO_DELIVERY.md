@@ -197,3 +197,13 @@ or uncertain GitOps side effects. The trimmed reason must contain 8–500 runes.
 Closure records `FAILED` / `OPERATOR_CLOSED`, `close_reason`, timestamps and an
 append-only audit event. A matching request key replays without another event;
 reusing the key for another deployment or reason returns `REQUEST_KEY_CONFLICT`.
+
+### Authority scope
+
+Build authority is scoped to each profile (excluding deployments and required status contexts), its connection,
+pool and registry, and global build timeout and run lookback. Deployment authority
+also includes that profile's required status contexts, dev deployment files and
+the dev GitOps authority.
+Changes to unrelated profiles do not invalidate builds or deployments. A temporary
+legacy shim accepts the former global hash only while the complete configuration
+is unchanged. A restart is required for config changes.

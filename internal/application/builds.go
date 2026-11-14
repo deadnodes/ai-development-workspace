@@ -35,11 +35,13 @@ type BuildRegistry interface {
 	Resolve(context.Context, buildconfig.Registry, string, string) (buildregistry.Artifact, error)
 }
 type buildRuntime struct {
-	hash     string
-	config   *buildconfig.Config
-	provider ForgejoBuildProvider
-	registry BuildRegistry
-	mu       sync.Mutex
+	legacyGlobal     string
+	buildHashes      map[string]string
+	deploymentHashes map[string]string
+	config           *buildconfig.Config
+	provider         ForgejoBuildProvider
+	registry         BuildRegistry
+	mu               sync.Mutex
 }
 
 // ConfigureBuilds is startup operator authority, never a client command.
@@ -58,9 +60,51 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	if p == nil || r == nil {
 		return invalid("build adapters required")
 	}
-	s.builds = &buildRuntime{hash: buildFingerprint(&copy), config: &copy, provider: p, registry: r}
+	a := &buildRuntime{legacyGlobal: buildFingerprint(&copy), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
+	// Build scope: every Profile field except Deployments and RequiredStatusContexts;
+	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,
+	// InsecureHTTP; global TimeoutSeconds and RunLookbackSeconds.
+	// Deployment scope adds RequiredStatusContexts, the profile's dev target,
+	// and DevGitOps (all fields) and registry. Unrelated profiles and unreferenced
+	// resources are excluded.
+	for _, profile := range copy.Profiles {
+		buildProfile := profile
+		buildProfile.Deployments = nil
+		buildProfile.RequiredStatusContexts = nil
+		pool := buildconfig.Pool{ID: profile.PoolID, MaxInFlight: copy.Capacity(profile.PoolID)}
+		registry := copy.Registry(profile.RegistryID)
+		hash := buildFingerprint(struct {
+			Profile                            buildconfig.Profile
+			Connection                         buildconfig.Connection
+			Pool                               buildconfig.Pool
+			Registry                           buildconfig.Registry
+			TimeoutSeconds, RunLookbackSeconds int
+		}{buildProfile, copy.Connection(profile.ConnectionID), pool, registry, copy.TimeoutSeconds, copy.RunLookbackSeconds})
+		a.buildHashes[profile.ID] = hash
+		gitops, _ := copy.DevGitOps()
+		a.deploymentHashes[profile.ID] = buildFingerprint(struct {
+			BuildAuthority         string
+			RequiredStatusContexts []string
+			Dev                    buildconfig.DeploymentTarget
+			GitOps                 buildconfig.GitOps
+			Registry               buildconfig.Registry
+		}{hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
+	}
+	s.builds = a
 	return nil
 }
+
+// Legacy global hashes remain valid only while the complete config is unchanged.
+// This compatibility shim can be dropped once pre-profile-authority records expire.
+func (a *buildRuntime) buildAuthorityMatches(profileID, hash string) bool {
+	current := a.buildHashes[profileID]
+	return current != "" && (hash == current || hash == a.legacyGlobal)
+}
+func (a *buildRuntime) deploymentAuthorityMatches(profileID, hash string) bool {
+	current := a.deploymentHashes[profileID]
+	return current != "" && (hash == current || hash == a.legacyGlobal)
+}
+
 func buildActive(b domain.Build) bool {
 	return !b.RestoreQuarantined && (b.Status == "DISPATCHED" || b.Status == "RUNNING" || b.Status == "RECONCILIATION_REQUIRED")
 }
@@ -168,7 +212,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		var previous *domain.Build
 		for i := range st.Builds {
 			b := &st.Builds[i]
-			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow && b.AuthorityHash == a.hash {
+			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow && a.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
 				if !b.RestoreQuarantined && b.Status != "FAILED" && b.Status != "CANCELLED" {
 					out = *b
 					bind(out)
@@ -182,7 +226,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 		now := time.Now().UTC()
 		actor := attributedActor(ctx, "agent")
-		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.hash, ConnectionID: p.ConnectionID, ConnectionAPIURL: a.config.Connection(p.ConnectionID).APIURL, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
+		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.buildHashes[p.ID], ConnectionID: p.ConnectionID, ConnectionAPIURL: a.config.Connection(p.ConnectionID).APIURL, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
 		bind(out)
 		st.Builds = append(st.Builds, out)
 		buildEvent(st, out, "queue_build")
@@ -635,7 +679,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			continue
 		}
 		p, ok := a.config.Profile(b.ProfileID)
-		if !ok || p.ProductID != b.ProductID || p.Repository != b.Repository || p.Workflow != b.Workflow || p.PoolID != b.PoolID || b.AuthorityHash != a.hash {
+		if !ok || p.ProductID != b.ProductID || p.Repository != b.Repository || p.Workflow != b.Workflow || p.PoolID != b.PoolID || !a.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
 			if b.Status == "QUEUED" {
 				if e = s.advanceBuild(ctx, b, failedBuild(b, "BUILD_AUTHORITY_CHANGED"), false); e != nil {
 					return e
@@ -796,7 +840,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				owned := false
 				for _, owner := range fresh.Builds {
 					ownerProfile, configured := a.config.Profile(owner.ProfileID)
-					if configured && owner.AuthorityHash == a.hash && ownerProfile.ConnectionID == p.ConnectionID && owner.Repository == b.Repository && owner.PoolID == b.PoolID && owner.Workflow == b.Workflow && owner.ProviderRunID == r.ID && buildActive(owner) {
+					if configured && a.buildAuthorityMatches(owner.ProfileID, owner.AuthorityHash) && ownerProfile.ConnectionID == p.ConnectionID && owner.Repository == b.Repository && owner.PoolID == b.PoolID && owner.Workflow == b.Workflow && owner.ProviderRunID == r.ID && buildActive(owner) {
 						owned = true
 						break
 					}
