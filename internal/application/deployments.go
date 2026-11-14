@@ -111,7 +111,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		if !ok || p.ProductID != in.ProductID || len(p.Deployments["dev"].Files) == 0 || !gitopsOK {
 			return invalid("Dev target not configured")
 		}
-		if !buildconfig.SHA.MatchString(b.SourceSHA) || b.Status != "SUCCEEDED" || b.RestoreQuarantined || b.AuthorityHash != s.builds.hash || len(b.Images) != len(p.Images) {
+		if !buildconfig.SHA.MatchString(b.SourceSHA) || b.Status != "SUCCEEDED" || b.RestoreQuarantined || !s.builds.buildAuthorityMatches(p.ID, b.AuthorityHash) || len(b.Images) != len(p.Images) {
 			return invalid("successful build with current authority required")
 		}
 		origin, _ := url.Parse(s.builds.config.Registry(p.RegistryID).Origin)
@@ -140,7 +140,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			}
 		}
 		for _, d := range st.Deployments {
-			if d.ProductID == in.ProductID && d.EnvironmentID == "dev" && d.ProfileID == p.ID && d.Identity == identity && !deploymentTerminal(d) {
+			if d.ProductID == in.ProductID && d.EnvironmentID == "dev" && d.ProfileID == p.ID && d.Identity == identity && s.builds.deploymentAuthorityMatches(d.ProfileID, d.AuthorityHash) && !deploymentTerminal(d) {
 				out = d
 				bind(d)
 				return nil
@@ -151,7 +151,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			candidate.TargetFiles = append(candidate.TargetFiles, f.Path)
 		}
 		for _, d := range st.Deployments {
-			if !deploymentTerminal(d) && d.EnvironmentID == in.EnvironmentID && d.Identity != identity && (d.ProfileID == p.ID || deploymentOverlap(s.builds.config, candidate, d)) {
+			if !deploymentTerminal(d) && d.EnvironmentID == in.EnvironmentID && (d.Identity != identity || !s.builds.deploymentAuthorityMatches(d.ProfileID, d.AuthorityHash)) && (d.ProfileID == p.ID || deploymentOverlap(s.builds.config, candidate, d)) {
 				if d.ProductID != in.ProductID {
 					return invalid("DEPLOYMENT_IN_PROGRESS: another product's deployment holds overlapping target files")
 				}
@@ -180,7 +180,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			}
 		}
 		now := time.Now().UTC()
-		out = domain.Deployment{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: now, UpdatedAt: now}, BuildID: b.ID, ProfileID: p.ID, EnvironmentID: "dev", RequestKey: in.RequestKey, AuthorityHash: s.builds.hash, Identity: identity, Status: "PENDING_CHECKS", Images: append([]domain.BuildImage(nil), b.Images...), SourceSHA: b.SourceSHA, RunURL: b.RunURL, Deadline: now.Add(time.Duration(s.builds.config.TimeoutSeconds) * time.Second)}
+		out = domain.Deployment{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: now, UpdatedAt: now}, BuildID: b.ID, ProfileID: p.ID, EnvironmentID: "dev", RequestKey: in.RequestKey, AuthorityHash: s.builds.deploymentHashes[p.ID], Identity: identity, Status: "PENDING_CHECKS", Images: append([]domain.BuildImage(nil), b.Images...), SourceSHA: b.SourceSHA, RunURL: b.RunURL, Deadline: now.Add(time.Duration(s.builds.config.TimeoutSeconds) * time.Second)}
 		out.GitOpsRepository = gitopsAuthority.Repository
 		for _, f := range p.Deployments["dev"].Files {
 			if !slices.Contains(out.TargetFiles, f.Path) {
@@ -454,7 +454,7 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 		}
 		p, ok := s.builds.config.Profile(d.ProfileID)
 		g, gok := s.builds.config.DevGitOps()
-		if !ok || !gok || d.AuthorityHash != s.builds.hash || p.ProductID != d.ProductID || d.EnvironmentID != "dev" {
+		if !ok || !gok || !s.builds.deploymentAuthorityMatches(d.ProfileID, d.AuthorityHash) || p.ProductID != d.ProductID || d.EnvironmentID != "dev" {
 			if d.FailureCode != "DEPLOYMENT_AUTHORITY_CHANGED" {
 				next := d
 				if d.Status == "PENDING_CHECKS" {

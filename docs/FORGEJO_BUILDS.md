@@ -299,3 +299,13 @@ or re-dispatches the handle and immediately frees RCP pool admission.
 Forgejo. Provider-side active-run safety gates still apply to subsequent builds.
 Replay with the same optional request key and reason returns the closed build
 without another journal event.
+
+### Authority scope
+
+Build authority is scoped to each profile (excluding deployments and required status contexts), its connection,
+pool and registry, and global build timeout and run lookback. Deployment authority
+also includes that profile's required status contexts, dev deployment files and
+the dev GitOps authority.
+Changes to unrelated profiles do not invalidate builds or deployments. A temporary
+legacy shim accepts the former global hash only while the complete configuration
+is unchanged. A restart is required for config changes.
