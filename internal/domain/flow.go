@@ -38,6 +38,7 @@ type FlowSource struct {
 }
 type RuntimeObservation struct {
 	Meta
+	Target         string `json:"target"`
 	OperationID    string `json:"operation_id"`
 	EnvironmentID  string `json:"environment_id"`
 	GitOpsCommit   string `json:"gitops_commit"`

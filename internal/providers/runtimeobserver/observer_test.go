@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -67,5 +69,74 @@ func TestConfigRequiresTLSAndCompleteTarget(t *testing.T) {
 	}
 	if _, e := New(Target{APIURL: "https://localhost"}); e == nil {
 		t.Fatal("accepted incomplete target")
+	}
+}
+
+func TestTargetIdentityWorkloadKey(t *testing.T) {
+	o := &Observer{Target: Target{ProductID: "p", EnvironmentID: "e", ApplicationID: "a", Namespace: "ns", Deployment: "deployment", Container: "container"}}
+	got := o.TargetIdentity()
+	if got.Target != "|/|ns/deployment/container" || got.ProductID != "p" || got.EnvironmentID != "e" || got.ApplicationID != "a" {
+		t.Fatalf("wrong target identity: %+v", got)
+	}
+}
+
+func TestTargetIdentityClusterFluxAndLength(t *testing.T) {
+	base := Target{APIURL: "https://cluster-a:6443", Namespace: "ns", Deployment: "app", Container: "web", FluxNamespace: "flux", Kustomization: "app"}
+	key := func(t Target) string { return (&Observer{Target: t}).TargetIdentity().Target }
+	if key(base) != "cluster-a:6443|flux/app|ns/app/web" {
+		t.Fatal(key(base))
+	}
+	variants := []Target{base, base, base, base}
+	variants[0].APIURL = "https://cluster-b:6443"
+	variants[1].APIURL = "https://cluster-a:7443"
+	variants[2].InCluster = true
+	variants[3].Kustomization = "other"
+	for _, v := range variants {
+		if key(v) == key(base) {
+			t.Fatal("target collision")
+		}
+	}
+	renamed := base
+	renamed.Context = "context-b"
+	if key(renamed) != key(base) {
+		t.Fatal("context alias changed cluster identity")
+	}
+	base.Deployment = strings.Repeat("x", 310)
+	a := key(base)
+	base.Container = "other"
+	b := key(base)
+	if len([]rune(a)) > 300 || a == b || b != key(base) {
+		t.Fatal("invalid bounded key")
+	}
+}
+
+func TestTargetIdentityResolvedKubeconfigCluster(t *testing.T) {
+	var keys []string
+	for _, host := range []string{"cluster-a:6443", "cluster-b:6443", "cluster-a:7443"} {
+		path := filepath.Join(t.TempDir(), "config")
+		config := fmt.Sprintf(`clusters:
+- name: cluster
+  cluster: {server: "https://%s"}
+contexts:
+- name: shared
+  context: {cluster: cluster}
+`, host)
+		if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+			t.Fatal(err)
+		}
+		o, err := New(Target{Kubeconfig: path, Context: "shared", ProductID: "p", EnvironmentID: "e", ApplicationID: "a", Namespace: "ns", Deployment: "app", Container: "web"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := o.TargetIdentity().Target
+		if got != host+"|/|ns/app/web" {
+			t.Fatalf("unresolved cluster identity: %s", got)
+		}
+		for _, key := range keys {
+			if got == key {
+				t.Fatal("different resolved clusters collided")
+			}
+		}
+		keys = append(keys, got)
 	}
 }

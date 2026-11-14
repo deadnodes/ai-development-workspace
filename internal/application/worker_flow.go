@@ -248,18 +248,17 @@ func (s *Service) tickFlow(ctx context.Context, op domain.ExternalOperation, tok
 			if child == nil || child.GitOpsResult == nil || child.Artifact == nil {
 				return s.finish(ctx, op, token, "FAILED", "deployment output missing", nil)
 			}
-			var latest *domain.RuntimeObservation
-			for i := range st.RuntimeObservations {
-				r := &st.RuntimeObservations[i]
-				if r.OperationID == childID && (latest == nil || !r.CreatedAt.Before(latest.CreatedAt)) {
-					latest = r
+			latest := latestRuntimeTargets(st.RuntimeObservations, childID)
+			if len(latest) == 0 {
+				return s.retry(ctx, op, token, "waiting for runtime evidence")
+			}
+			for _, r := range latest {
+				if r.EnvironmentID != op.EnvironmentID || r.GitOpsCommit != child.GitOpsResult.CommitSHA || r.ArtifactDigest != child.Artifact.Digest {
+					return s.retry(ctx, op, token, "waiting for healthy runtime evidence matching each GitOps commit and image digest")
 				}
-			}
-			if latest != nil && !latest.Healthy && latest.EnvironmentID == op.EnvironmentID && latest.GitOpsCommit == child.GitOpsResult.CommitSHA && latest.ArtifactDigest == child.Artifact.Digest {
-				return s.finish(ctx, op, token, "FAILED", "runtime unhealthy: "+latest.Details, map[string]string{"operation_id": childID})
-			}
-			if latest == nil || latest.EnvironmentID != op.EnvironmentID || latest.GitOpsCommit != child.GitOpsResult.CommitSHA || latest.ArtifactDigest != child.Artifact.Digest {
-				return s.retry(ctx, op, token, "waiting for healthy runtime evidence matching each GitOps commit and image digest")
+				if !r.Healthy {
+					return s.finish(ctx, op, token, "FAILED", "runtime unhealthy: "+r.Details, map[string]string{"operation_id": childID})
+				}
 			}
 		}
 		if op.Kind == "RELEASE_PROMOTION" {
@@ -453,15 +452,14 @@ func (s *Service) finishFlowRelease(ctx context.Context, op domain.ExternalOpera
 			if child == nil || child.Snapshot == nil || child.Artifact == nil || child.GitOpsResult == nil {
 				return invalid("release component outputs missing")
 			}
-			var latest *domain.RuntimeObservation
-			for i := range st.RuntimeObservations {
-				r := &st.RuntimeObservations[i]
-				if r.OperationID == childID && (latest == nil || !r.CreatedAt.Before(latest.CreatedAt)) {
-					latest = r
-				}
-			}
-			if latest == nil || !latest.Healthy || latest.GitOpsCommit != child.GitOpsResult.CommitSHA || latest.ArtifactDigest != child.Artifact.Digest {
+			latest := latestRuntimeTargets(st.RuntimeObservations, childID)
+			if len(latest) == 0 {
 				return invalid("runtime evidence changed")
+			}
+			for _, r := range latest {
+				if !r.Healthy || r.EnvironmentID != op.EnvironmentID || r.GitOpsCommit != child.GitOpsResult.CommitSHA || r.ArtifactDigest != child.Artifact.Digest {
+					return invalid("runtime evidence changed")
+				}
 			}
 			app := child.ApplicationID
 			record.SourceCommits[app] = child.Snapshot.Revision.HeadCommit

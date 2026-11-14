@@ -5,7 +5,10 @@ import (
 	"time"
 )
 
-type RuntimeTarget struct{ ProductID, EnvironmentID, ApplicationID string }
+type RuntimeTarget struct {
+	ProductID, EnvironmentID, ApplicationID string
+	Target                                  string // Stable cluster/Flux/workload identity; empty for legacy observers.
+}
 type RuntimeEvidence struct {
 	Healthy bool
 	Details string

@@ -15,7 +15,7 @@ func TestRuntimeFreshnessStores(t *testing.T) {
 		t.Run(backend, func(t *testing.T) {
 			ctx := context.Background()
 			var store interface {
-				TouchRuntimeFreshness(context.Context, string, string, time.Time, bool) error
+				TouchRuntimeFreshness(context.Context, string, string, string, time.Time, bool) error
 				RuntimeFreshness(context.Context, []string) (map[string]domain.RuntimeFreshness, error)
 				Read(context.Context) (domain.State, error)
 			}
@@ -44,13 +44,21 @@ func TestRuntimeFreshnessStores(t *testing.T) {
 				at      time.Time
 				healthy bool
 			}{{at, true}, {at.Add(time.Minute), false}, {at, false}} {
-				if e = store.TouchRuntimeFreshness(ctx, "op", "observation", v.at, v.healthy); e != nil {
+				if e = store.TouchRuntimeFreshness(ctx, "op", "", "observation", v.at, v.healthy); e != nil {
 					t.Fatal(e)
 				}
 			}
 			got, e := store.RuntimeFreshness(ctx, []string{"op", "missing"})
 			if e != nil || len(got) != 1 || got["op"].ObservationID != "observation" || got["op"].Healthy || !got["op"].ObservedAt.Equal(at.Add(time.Minute)) {
 				t.Fatalf("freshness %v %v", got, e)
+			}
+			targetKey := domain.RuntimeObservationKey("op", "ns/deployment/container")
+			if e = store.TouchRuntimeFreshness(ctx, "op", "ns/deployment/container", "targeted", at, true); e != nil {
+				t.Fatal(e)
+			}
+			targeted, e := store.RuntimeFreshness(ctx, []string{"op", targetKey})
+			if e != nil || len(targeted) != 2 || targeted[targetKey].ObservationID != "targeted" || targeted["op"].ObservationID != "observation" {
+				t.Fatalf("target collision: %v %v", targeted, e)
 			}
 			after, e := store.Read(ctx)
 			if e != nil || !reflect.DeepEqual(before, after) {
@@ -62,7 +70,7 @@ func TestRuntimeFreshnessStores(t *testing.T) {
 				if e = s.pool.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1").Scan(&next); e != nil || next != revision {
 					t.Fatalf("revision changed %v", e)
 				}
-				if e = s.pool.QueryRow(ctx, "SELECT healthy FROM runtime_observation_freshness WHERE operation_id='op'").Scan(&healthy); e != nil || healthy {
+				if e = s.pool.QueryRow(ctx, "SELECT healthy FROM runtime_observation_freshness WHERE operation_id='op' AND target=''").Scan(&healthy); e != nil || healthy {
 					t.Fatalf("health upsert %v", e)
 				}
 				var applied bool
@@ -122,5 +130,17 @@ func TestRuntimeObservationScopedDeletionStores(t *testing.T) {
 				t.Fatalf("deletion not persisted: %+v %v", got.RuntimeObservations, e)
 			}
 		})
+	}
+}
+
+func TestRuntimeFreshnessTargetMigration(t *testing.T) {
+	sql, err := migrations.ReadFile("migrations/009_runtime_observation_freshness_target.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ADD COLUMN IF NOT EXISTS target text NOT NULL DEFAULT ''", "DROP CONSTRAINT IF EXISTS runtime_observation_freshness_pkey", "ADD CONSTRAINT runtime_observation_freshness_pkey PRIMARY KEY (operation_id, target)"} {
+		if !strings.Contains(string(sql), want) {
+			t.Fatal(want)
+		}
 	}
 }

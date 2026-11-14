@@ -350,11 +350,10 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 					reason = "ARTIFACT_MISSING"
 				}
 				if op.DeploymentState == "GITOPS_APPLIED" {
-					observed := false
-					for _, r := range st.RuntimeObservations {
-						if r.OperationID == op.ID {
-							observed = r.Healthy && op.Artifact != nil && op.GitOpsResult != nil && r.ArtifactDigest == op.Artifact.Digest && r.GitOpsCommit == op.GitOpsResult.CommitSHA
-						}
+					latest := latestRuntimeTargets(st.RuntimeObservations, op.ID)
+					observed := len(latest) > 0
+					for _, r := range latest {
+						observed = observed && r.Healthy && r.EnvironmentID == op.EnvironmentID && op.Artifact != nil && op.GitOpsResult != nil && r.ArtifactDigest == op.Artifact.Digest && r.GitOpsCommit == op.GitOpsResult.CommitSHA
 					}
 					if observed {
 						continue

@@ -17,11 +17,11 @@ type freshnessMemoryStore struct {
 	touches int
 }
 
-func (m *freshnessMemoryStore) TouchRuntimeFreshness(_ context.Context, id string, observationID string, at time.Time, healthy bool) error {
+func (m *freshnessMemoryStore) TouchRuntimeFreshness(_ context.Context, id string, target string, observationID string, at time.Time, healthy bool) error {
 	if m.fresh == nil {
 		m.fresh = map[string]domain.RuntimeFreshness{}
 	}
-	m.fresh[id] = domain.RuntimeFreshness{ObservationID: observationID, ObservedAt: at, Healthy: healthy}
+	m.fresh[domain.RuntimeObservationKey(id, target)] = domain.RuntimeFreshness{ObservationID: observationID, ObservedAt: at, Healthy: healthy}
 	m.touches++
 	return nil
 }
@@ -166,5 +166,46 @@ func TestRuntimeRetentionDoesNotExpandBorrowedBatch(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("writer expanded borrowed candidate batch")
+	}
+}
+
+func TestRuntimeMultipleTargetsChangeOnly(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	m := &freshnessMemoryStore{workerScopedCountingStore: &workerScopedCountingStore{workerCountingStore: &workerCountingStore{borrowedQueryStore: borrowedQueryStore{state: domain.EmptyState()}}}}
+	m.state.Operations = []domain.ExternalOperation{{Meta: domain.Meta{ID: "op", ProductID: "p", CreatedAt: now}, Status: "SUCCEEDED", EnvironmentID: "env", ApplicationID: "app", GitOpsResult: &delivery.GitOpsResult{CommitSHA: "commit"}, Artifact: &delivery.ArtifactResult{Digest: "digest"}}}
+	// Even matching legacy evidence must not suppress a target's first observation.
+	m.state.RuntimeObservations = []domain.RuntimeObservation{{Meta: domain.Meta{ID: "legacy", ProductID: "p", CreatedAt: now.Add(-time.Hour)}, OperationID: "op", EnvironmentID: "env", GitOpsCommit: "commit", ArtifactDigest: "digest", Healthy: true, Details: "details-0"}}
+	observers := make([]delivery.RuntimeObserver, 14)
+	for i := range observers {
+		observers[i] = &fakeRuntimeObserver{target: delivery.RuntimeTarget{ProductID: "p", EnvironmentID: "env", ApplicationID: "app", Target: fmt.Sprintf("ns/deployment-%d/container", i)}, evidence: delivery.RuntimeEvidence{Healthy: true, Details: fmt.Sprintf("details-%d", i)}}
+	}
+	s := New(m)
+	for pass, want := range []int{15, 15, 16} {
+		if pass == 2 {
+			observers[6].(*fakeRuntimeObserver).evidence.Details = "changed"
+		}
+		if err := s.ObserveRuntimeOnce(ctx, observers); err != nil {
+			t.Fatal(err)
+		}
+		if len(m.state.RuntimeObservations) != want {
+			t.Fatalf("pass %d: got %d want %d", pass, len(m.state.RuntimeObservations), want)
+		}
+		bound, err := s.runtimeFreshness(ctx, &m.state)
+		if err != nil || len(bound) != 14 {
+			t.Fatalf("target freshness: %v %v", bound, err)
+		}
+		if !bound["legacy"].IsZero() {
+			t.Fatal("target freshness attached to legacy evidence")
+		}
+	}
+	if len(m.fresh) != 14 {
+		t.Fatal("freshness targets collided")
+	}
+	// Target length is validated before any append.
+	before := len(m.state.RuntimeObservations)
+	_, err := s.Execute(ctx, domain.Command{Action: "record_runtime_observation", ID: "op", Data: map[string]any{"target": string(make([]byte, 301)), "environment_id": "env", "gitops_commit": "commit", "artifact_digest": "digest", "healthy": true, "details": "manual"}})
+	if err == nil || len(m.state.RuntimeObservations) != before {
+		t.Fatal("oversized target accepted")
 	}
 }

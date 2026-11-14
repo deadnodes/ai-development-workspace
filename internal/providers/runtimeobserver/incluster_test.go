@@ -26,8 +26,11 @@ func TestInClusterResolution(t *testing.T) {
 	if _, err := resolveAuthentication(&target, env, "/service-account"); err != nil {
 		t.Fatal(err)
 	}
-	if target.APIURL != "https://[fd00::1]:443" || target.Context != "in-cluster" || target.TokenFile != "/service-account/token" {
+	if target.APIURL != "https://[fd00::1]:443" || target.Context != "in-cluster" || !target.InCluster || target.TokenFile != "/service-account/token" {
 		t.Fatalf("%+v", target)
+	}
+	if got := (&Observer{Target: target}).TargetIdentity().Target; !strings.HasPrefix(got, "in-cluster|") {
+		t.Fatalf("auto-detected in-cluster identity: %s", got)
 	}
 	target = Target{APIURL: "https://explicit.example"}
 	if _, err := resolveAuthentication(&target, env, "/service-account"); err != nil || target.Context != "" {

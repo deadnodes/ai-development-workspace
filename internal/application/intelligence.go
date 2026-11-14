@@ -708,7 +708,7 @@ func releaseNotesIntentHash(st *domain.State, c domain.Composition) string {
 func notesBaselines(st *domain.State, product, environment string, in intelligenceRequest, freshness ...map[string]time.Time) (map[string]domain.Release, map[string]string, error) {
 	baselines := map[string]domain.Release{}
 	sources := map[string]string{}
-	latest := map[string]domain.RuntimeObservation{}
+	latest := map[string]map[string]domain.RuntimeObservation{}
 	if in.PreviousReleaseID != "" && len(in.PreviousReleaseIDs) > 0 {
 		return nil, nil, invalid("choose a single baseline or per-component release IDs")
 	}
@@ -720,9 +720,12 @@ func notesBaselines(st *domain.State, product, environment string, in intelligen
 		if op == nil || op.ProductID != product || op.ApplicationID == "" {
 			return nil, nil, invalid("runtime baseline has unknown component identity")
 		}
-		old, ok := latest[op.ApplicationID]
+		if latest[op.ApplicationID] == nil {
+			latest[op.ApplicationID] = map[string]domain.RuntimeObservation{}
+		}
+		old, ok := latest[op.ApplicationID][o.Target]
 		if !ok || o.CreatedAt.After(old.CreatedAt) || o.CreatedAt.Equal(old.CreatedAt) && o.ID > old.ID {
-			latest[op.ApplicationID] = o
+			latest[op.ApplicationID][o.Target] = o
 		}
 	}
 	if len(latest) == 0 || len(latest) > 20 {
@@ -731,40 +734,42 @@ func notesBaselines(st *domain.State, product, environment string, in intelligen
 	if len(in.PreviousReleaseIDs) > 0 && len(in.PreviousReleaseIDs) != len(latest) {
 		return nil, nil, invalid("per-component baseline must cover all currently observed components")
 	}
-	for app, o := range latest {
-		rid := in.PreviousReleaseID
-		if len(in.PreviousReleaseIDs) > 0 {
-			rid = in.PreviousReleaseIDs[app]
-		}
-		var baseline *domain.Release
-		for i := range st.Releases {
-			r := &st.Releases[i]
-			if r.ID == rid && r.ProductID == product && r.EnvironmentID == environment && r.Status == "released" {
-				baseline = r
+	for app, targets := range latest {
+		for _, o := range targets {
+			rid := in.PreviousReleaseID
+			if len(in.PreviousReleaseIDs) > 0 {
+				rid = in.PreviousReleaseIDs[app]
 			}
+			var baseline *domain.Release
+			for i := range st.Releases {
+				r := &st.Releases[i]
+				if r.ID == rid && r.ProductID == product && r.EnvironmentID == environment && r.Status == "released" {
+					baseline = r
+				}
+			}
+			if baseline == nil {
+				return nil, nil, invalid("recorded delivered baseline required for every component")
+			}
+			r := *baseline
+			op := operationByID(st, o.OperationID)
+			at := o.CreatedAt
+			if len(freshness) > 0 {
+				at = domain.RuntimeObservedAt(o, freshness[0])
+			}
+			if !o.Healthy || time.Since(at) > 15*time.Minute || at.After(time.Now().Add(time.Minute)) || !artifactPinDigest.MatchString(r.ArtifactDigests[app]) || o.ArtifactDigest != r.ArtifactDigests[app] || r.GitOpsCommits[app] == "" || o.GitOpsCommit != r.GitOpsCommits[app] || op == nil || op.Snapshot == nil || op.Snapshot.Application.ID != app || op.Snapshot.Application.ProductID != product || r.ExecutionOperationID != "" && op.ParentID != r.ExecutionOperationID {
+				return nil, nil, invalid("release baseline does not match current recorded environment; reobserve or adopt actual release")
+			}
+			repo := op.Snapshot.Revision.RepositoryID
+			sha := r.SourceCommits[app]
+			if sha == "" {
+				sha = r.SourceCommits[repo]
+			}
+			if !fullSHA.MatchString(sha) || op.Snapshot.Revision.HeadCommit != sha {
+				return nil, nil, invalid("baseline source provenance missing or mismatched")
+			}
+			sources[app] = sha
+			baselines[app] = r
 		}
-		if baseline == nil {
-			return nil, nil, invalid("recorded delivered baseline required for every component")
-		}
-		r := *baseline
-		op := operationByID(st, o.OperationID)
-		at := o.CreatedAt
-		if len(freshness) > 0 {
-			at = domain.RuntimeObservedAt(o, freshness[0])
-		}
-		if !o.Healthy || time.Since(at) > 15*time.Minute || at.After(time.Now().Add(time.Minute)) || !artifactPinDigest.MatchString(r.ArtifactDigests[app]) || o.ArtifactDigest != r.ArtifactDigests[app] || r.GitOpsCommits[app] == "" || o.GitOpsCommit != r.GitOpsCommits[app] || op == nil || op.Snapshot == nil || op.Snapshot.Application.ID != app || op.Snapshot.Application.ProductID != product || r.ExecutionOperationID != "" && op.ParentID != r.ExecutionOperationID {
-			return nil, nil, invalid("release baseline does not match current recorded environment; reobserve or adopt actual release")
-		}
-		repo := op.Snapshot.Revision.RepositoryID
-		sha := r.SourceCommits[app]
-		if sha == "" {
-			sha = r.SourceCommits[repo]
-		}
-		if !fullSHA.MatchString(sha) || op.Snapshot.Revision.HeadCommit != sha {
-			return nil, nil, invalid("baseline source provenance missing or mismatched")
-		}
-		sources[app] = sha
-		baselines[app] = r
 	}
 	return baselines, sources, nil
 }

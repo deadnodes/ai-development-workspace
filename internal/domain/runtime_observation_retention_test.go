@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"releasecontrol/internal/delivery"
 	"slices"
 	"testing"
@@ -99,5 +100,74 @@ func TestRuntimeFreshnessRejectsSupersededIdentity(t *testing.T) {
 		if !RuntimeObservedAt(r, bound).Equal(r.CreatedAt) {
 			t.Fatal("superseded heartbeat reused")
 		}
+	}
+}
+
+func TestRuntimeRetentionAndFreshnessPerTarget(t *testing.T) {
+	now := time.Now().UTC()
+	st := EmptyState()
+	for i, target := range []string{"", "ns/a/c", "ns/b/c"} {
+		for j := 0; j < 3; j++ {
+			st.RuntimeObservations = append(st.RuntimeObservations, RuntimeObservation{Meta: Meta{ID: fmt.Sprintf("%d-%d", i, j), CreatedAt: now.Add(time.Duration(j-100) * time.Hour)}, OperationID: "op", Target: target, ArtifactDigest: "digest"})
+		}
+	}
+	prunable := PrunableRuntimeObservations(&st, now, 100)
+	for _, id := range []string{"0-2", "1-2", "2-2"} {
+		if prunable[id] {
+			t.Fatalf("latest target pruned: %s", id)
+		}
+	}
+	if !prunable["1-1"] || !prunable["2-1"] {
+		t.Fatal("superseded rows not prunable")
+	}
+	fresh := map[string]RuntimeFreshness{
+		RuntimeObservationKey("op", "ns/a/c"): {ObservationID: "1-2", ObservedAt: now},
+		RuntimeObservationKey("op", "ns/b/c"): {ObservationID: "2-1", ObservedAt: now},
+	}
+	bound := BindRuntimeFreshness(st.RuntimeObservations, fresh)
+	if len(bound) != 1 || !bound["1-2"].Equal(now) {
+		t.Fatalf("incorrect target/observation binding: %v", bound)
+	}
+}
+
+func TestRuntimeWitnessRetentionPerTarget(t *testing.T) {
+	for _, kind := range []string{"reconciliation", "release"} {
+		t.Run(kind, func(t *testing.T) {
+			now := time.Now().UTC()
+			old := now.Add(-10 * 24 * time.Hour)
+			st := EmptyState()
+			op := ExternalOperation{Meta: Meta{ID: "op", ProductID: "p", UpdatedAt: old}, ApplicationID: "app", EnvironmentID: "env", GitOpsResult: &delivery.GitOpsResult{CommitSHA: "commit"}}
+			if kind == "reconciliation" {
+				op.Artifact = &delivery.ArtifactResult{Digest: "digest"}
+			}
+			st.Operations = []ExternalOperation{op}
+			for i, target := range []string{"A", "B"} {
+				for j, name := range []string{"root", "proof", "duplicate", "latest"} {
+					st.RuntimeObservations = append(st.RuntimeObservations, RuntimeObservation{Meta: Meta{ID: target + "-" + name, ProductID: "p", CreatedAt: old.Add(time.Duration(j*10+i) * time.Minute)}, Target: target, OperationID: "op", EnvironmentID: "env", ArtifactDigest: "digest", GitOpsCommit: "commit", Healthy: j > 0})
+				}
+			}
+			if kind == "release" {
+				st.Releases = []Release{{Meta: Meta{ID: "release", ProductID: "p", CreatedAt: old.Add(15 * time.Minute)}, EnvironmentID: "env", ArtifactDigests: map[string]string{"app": "digest"}}}
+			}
+			cutoff := now.Add(-7 * 24 * time.Hour)
+			prunable := PrunableRuntimeObservations(&st, cutoff, 100)
+			candidates := map[string]bool{}
+			for _, target := range []string{"A", "B"} {
+				proof := target + "-proof"
+				if prunable[proof] {
+					t.Fatalf("%s witness pruned: %s", kind, proof)
+				}
+				candidates[proof] = true
+				duplicate := target + "-duplicate"
+				if !prunable[duplicate] {
+					t.Fatalf("superseded evidence retained: %s", duplicate)
+				}
+				candidates[duplicate] = true
+			}
+			revalidated := RevalidateRuntimeObservationCandidates(&st, candidates, cutoff)
+			if len(revalidated) != 2 || !revalidated["A-duplicate"] || !revalidated["B-duplicate"] {
+				t.Fatalf("witness revalidation: %v", revalidated)
+			}
+		})
 	}
 }
