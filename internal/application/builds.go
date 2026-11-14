@@ -380,11 +380,12 @@ func buildFingerprint(p any) string {
 }
 
 var errBuildPoolFull = invalid("build pool full")
+var errBuildTerminal = invalid("build is terminal")
 
 // advanceBuild uses CAS so cancellation/concurrent pollers cannot overwrite newer evidence.
 func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admit bool) (err error) {
 	defer func() {
-		if err != nil && !errors.Is(err, errBuildPoolFull) {
+		if err != nil && !errors.Is(err, errBuildPoolFull) && !errors.Is(err, errBuildTerminal) {
 			slog.Warn("build transition failed", "build_id", old.ID, "from_status", old.Status, "to_status", next.Status, "error", err.Error())
 		}
 	}()
@@ -395,6 +396,10 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 		for i, b := range st.Builds {
 			if b.ID != old.ID {
 				continue
+			}
+			// Terminal evidence is immutable, even when a caller re-read it as its CAS base.
+			if b.Status == "SUCCEEDED" || b.Status == "FAILED" || b.Status == "CANCELLED" {
+				return errBuildTerminal
 			}
 			if b.Status != old.Status || !b.UpdatedAt.Equal(old.UpdatedAt) {
 				return invalid("build changed")
@@ -692,9 +697,13 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 				if e = s.advanceBuild(ctx, b, n, false); e != nil {
 					return e
 				}
+				previousStatus := b.Status
 				b, e = s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
 				if e != nil {
 					return e
+				}
+				if !buildActive(b) || b.Status != previousStatus {
+					continue
 				}
 			}
 			for _, r := range runs {
@@ -763,9 +772,13 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			if e = s.advanceBuild(ctx, b, n, false); e != nil {
 				return e
 			}
+			previousStatus := b.Status
 			b, e = s.GetBuild(ctx, domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
 			if e != nil {
 				return e
+			}
+			if b.RestoreQuarantined || b.Status != previousStatus || b.Status != "QUEUED" {
+				continue
 			}
 		}
 		fresh, err := s.buildSnapshot(ctx)
@@ -827,7 +840,7 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		if current.ID != n.ID || current.Status != n.Status || current.FailureCode != n.FailureCode ||
+		if !buildActive(current) || current.ID != n.ID || current.Status != n.Status || current.FailureCode != n.FailureCode ||
 			current.DispatchedAt == nil || !current.DispatchedAt.Equal(*n.DispatchedAt) {
 			continue
 		}

@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"releasecontrol/internal/providers/forgejo"
 	"strings"
 	"testing"
 	"time"
@@ -219,5 +221,115 @@ func TestCloseBuildBetweenAdmissionAndDispatch(t *testing.T) {
 	got := getBuild(t, s, b)
 	if got.Status != "FAILED" || got.FailureCode != "OPERATOR_CLOSED" || !reflect.DeepEqual(got, closed) {
 		t.Fatalf("operator closure changed: %+v", got)
+	}
+}
+
+// Run an operator action immediately after the error-clear transaction or its re-read.
+type closeAfterErrorClearStore struct {
+	*memoryStore
+	afterClear func()
+	afterRead  func()
+	cleared    bool
+}
+
+func (m *closeAfterErrorClearStore) Update(ctx context.Context, fn func(*domain.State) error) error {
+	hadError := m.state.Builds[0].LastError != ""
+	if err := m.memoryStore.Update(ctx, fn); err != nil {
+		return err
+	}
+	if hadError && m.state.Builds[0].LastError == "" {
+		m.cleared = true
+		if f := m.afterClear; f != nil {
+			m.afterClear = nil
+			f()
+		}
+	}
+	return nil
+}
+
+func (m *closeAfterErrorClearStore) Read(ctx context.Context) (domain.State, error) {
+	st, err := m.memoryStore.Read(ctx)
+	if m.cleared && m.afterRead != nil {
+		f := m.afterRead
+		m.afterRead = nil
+		f()
+	}
+	return st, err
+}
+
+func TestCloseBuildDuringDispatchErrorClear(t *testing.T) {
+	for _, status := range []string{"RECONCILIATION_REQUIRED", "QUEUED"} {
+		for _, timing := range []string{"before_read", "after_read"} {
+			t.Run(status+"/"+timing, func(t *testing.T) {
+				s, m, provider, _ := buildFixture(t)
+				b := queue(t, s, "one")
+				b.Status, b.LastError, b.ProviderUnavailable = status, "unavailable", true
+				m.state.Builds[0] = b
+				provider.runs = []forgejo.Run{{ID: 42, Status: "running", SHA: b.SourceSHA, Branch: "main", Workflow: b.Workflow, Event: "workflow_dispatch", EventPayload: dispatchPayload(b.SourceSHA, b.ID), Created: time.Now().UTC()}}
+				var closed domain.Build
+				hooked := false
+				closeBuild := func() {
+					hooked = true
+					// CloseBuild intentionally rejects QUEUED; model an operator close
+					// racing a queued snapshot after another worker admitted it.
+					if m.state.Builds[0].Status == "QUEUED" {
+						m.state.Builds[0].Status = "DISPATCHED"
+					}
+					var err error
+					closed, err = s.CloseBuild(context.Background(), domain.CloseBuildRequest{ProductID: b.ProductID, BuildID: b.ID, Reason: "abandoned by operator"})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				hook := &closeAfterErrorClearStore{memoryStore: m}
+				if timing == "before_read" {
+					hook.afterClear = closeBuild
+				} else {
+					hook.afterRead = closeBuild
+				}
+				s.store = hook
+				// A close after the re-read may be rejected by the central guard/CAS.
+				err := s.DispatchBuildsOnce(context.Background())
+				if status == "RECONCILIATION_REQUIRED" && timing == "after_read" {
+					if !errors.Is(err, errBuildTerminal) {
+						t.Fatalf("expected terminal rejection, got %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if !hooked || provider.dispatches != 0 {
+					t.Fatalf("hook=%v dispatches=%d", hooked, provider.dispatches)
+				}
+				if got := getBuild(t, s, b); got.Status != "FAILED" || got.FailureCode != "OPERATOR_CLOSED" || !reflect.DeepEqual(got, closed) {
+					t.Fatalf("closure changed: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestBuildAdvanceTerminalImmutable(t *testing.T) {
+	for _, status := range []string{"SUCCEEDED", "FAILED", "CANCELLED"} {
+		t.Run(status, func(t *testing.T) {
+			s, m, _, _ := buildFixture(t)
+			b := queue(t, s, "one")
+			b.Status = status
+			m.state.Builds[0] = b
+			events := len(m.state.Events)
+			for _, target := range []string{"QUEUED", "DISPATCHED", "RUNNING", "RECONCILIATION_REQUIRED", "SUCCEEDED", "FAILED", "CANCELLED"} {
+				next := b
+				next.Status, next.LastError = target, "changed"
+				if err := s.advanceBuild(context.Background(), b, next, true); !errors.Is(err, errBuildTerminal) {
+					t.Fatalf("target %s: %v", target, err)
+				}
+			}
+			if err := s.advanceBuild(context.Background(), b, b, false); err != nil {
+				t.Fatal(err)
+			}
+			tick(t, s)
+			if !reflect.DeepEqual(getBuild(t, s, b), b) || len(m.state.Events) != events {
+				t.Fatal("terminal evidence changed")
+			}
+		})
 	}
 }
