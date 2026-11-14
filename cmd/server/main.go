@@ -99,7 +99,24 @@ func run() error {
 		if e = service.ConfigureBuilds(config, forgejoProvider, registryReader); e != nil {
 			return e
 		}
-		if e = service.ConfigureDeployments(forgejoProvider, registryReader, githubProvider); e != nil {
+		var runtime application.DeploymentRuntime
+		if config.Rollout.InCluster {
+			runtime, e = runtimeobserver.NewRolloutVerifier()
+			if e != nil {
+				return fmt.Errorf("configure deployment rollout verifier: %w", e)
+			}
+		} else {
+			configured := false
+			for _, profile := range config.Profiles {
+				for _, file := range profile.Deployments["dev"].Files {
+					configured = configured || file.Rollout != nil
+				}
+			}
+			if configured {
+				slog.Warn("rollout targets configured without a verifier; deployments will succeed without runtime verification")
+			}
+		}
+		if e = service.ConfigureDeployments(forgejoProvider, registryReader, githubProvider, runtime); e != nil {
 			return e
 		}
 		done := make(chan struct{})

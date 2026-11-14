@@ -100,7 +100,7 @@ func registerDeploymentRoutes(mux *http.ServeMux, service Service) {
 }
 func registerDeploymentTools(server *mcp.Server, service Service) {
 	unavailable := errors.New("deployment service unavailable")
-	mcp.AddTool(server, deploymentTool("deploy_build", "Deploy a finished build to Dev only after CI and registry verification. RCP opens and squash-merges its GitHub Flux PR with a SHA lock. Concurrent overlapping deployments are refused; older builds require allow_rollback with reason after an ancestry check. Production rejected. Only active deployments deduplicate by environment, profile and image digests; terminal matches create a new Deployment, already_applied without a PR when Flux has the values. Existing request_key replay returns its historical handle; rebinding conflicts. Returns a durable Deployment; uncertainty reconciles without blindly merging again."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.DeployBuildRequest) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, deploymentTool("deploy_build", "Deploy a finished build to Dev only after CI and registry verification. RCP opens and squash-merges its GitHub Flux PR with a SHA lock. Concurrent overlapping deployments are refused; older builds require allow_rollback with reason after an ancestry check. Production rejected. Only active deployments deduplicate by environment, profile and image digests; terminal matches create a new Deployment, already_applied without a PR when Flux has the values. Existing request_key replay returns its historical handle; rebinding conflicts. SUCCEEDED means runtime rollout completed when rollout verification is configured; otherwise rollout_verified is false and only GitOps completion is confirmed. Returns a durable Deployment; uncertainty reconciles without blindly merging again."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.DeployBuildRequest) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(deploymentService)
 		if !ok {
 			return nil, nil, unavailable
@@ -108,7 +108,7 @@ func registerDeploymentTools(server *mcp.Server, service Service) {
 		v, e := s.DeployBuild(ctx, in)
 		return nil, v, e
 	})
-	mcp.AddTool(server, deploymentTool("close_deployment", "Admin only: close a pending Dev deployment before any GitOps proposal side effects, with an audit reason. Never use for deployments with a PR."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.CloseDeploymentRequest) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, deploymentTool("close_deployment", "Admin only: close a Dev deployment before GitOps proposal side effects or in VERIFYING_ROLLOUT, with an audit reason."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.CloseDeploymentRequest) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(deploymentService)
 		if !ok {
 			return nil, nil, unavailable

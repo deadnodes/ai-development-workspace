@@ -81,7 +81,7 @@ func TestDeliveryCloseDeploymentGuidance(t *testing.T) {
 	if !ok {
 		t.Fatal("missing delivery skill")
 	}
-	for _, text := range []string{"close_deployment", "DEPLOYMENT_IN_PROGRESS", "PENDING_CHECKS", "never use it for deployments with a PR"} {
+	for _, text := range []string{"close_deployment", "DEPLOYMENT_IN_PROGRESS", "PENDING_CHECKS", "VERIFYING_ROLLOUT"} {
 		if !strings.Contains(skill.Content, text) {
 			t.Fatalf("missing close deployment guidance %q", text)
 		}

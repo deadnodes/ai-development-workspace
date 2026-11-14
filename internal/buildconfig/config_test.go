@@ -3,6 +3,7 @@ package buildconfig
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,68 @@ func TestDeploymentFormats(t *testing.T) {
 		_, err := Decode(strings.NewReader(string(raw)))
 		if (err != nil) != (format == "unknown") {
 			t.Fatalf("format %q: %v", format, err)
+		}
+	}
+}
+
+func TestRolloutConfiguration(t *testing.T) {
+	twenty := make([]string, 20)
+	for i := range twenty {
+		twenty[i] = "app-" + strconv.Itoa(i)
+	}
+	for _, tc := range []struct {
+		r     *RolloutTarget
+		valid bool
+	}{
+		{nil, true},
+		{&RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{"api", "consumer"}}, true},
+		{&RolloutTarget{Namespace: "meteroid-dev", Deployments: twenty}, true},
+		{&RolloutTarget{Namespace: "lp-dev"}, false},
+		{&RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", Deployments: []string{}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{"a"}, Deployments: []string{"b"}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{"a"}, Deployments: []string{}}, false},
+		{&RolloutTarget{Namespace: "LP-dev", Deployments: []string{"a"}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{"a", "a"}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", Deployments: []string{"a", "a"}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{"a", "../escape"}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", Deployments: []string{strings.Repeat("a", 64)}}, false},
+		{&RolloutTarget{Namespace: "lp-dev", Deployments: append(append([]string{}, twenty...), "extra")}, false},
+	} {
+		c := deliveryConfig()
+		c.Profiles[0].Deployments["dev"].Files[0].Rollout = tc.r
+		err := c.Validate()
+		if (err == nil) != tc.valid {
+			t.Fatalf("%+v: %v", tc.r, err)
+		}
+		if err == nil && c.Rollout.TimeoutSeconds != 900 {
+			t.Fatal(c.Rollout)
+		}
+	}
+	for _, seconds := range []int{-1, 59, 60, 900, 3600, 3601} {
+		c := valid()
+		c.Rollout = RolloutConfig{InCluster: true, TimeoutSeconds: seconds}
+		err := c.Validate()
+		if (err == nil) != (seconds >= 60 && seconds <= 3600) {
+			t.Fatal(seconds, err)
+		}
+	}
+	c := deliveryConfig()
+	raw, _ := json.Marshal(c)
+	raw = []byte(strings.Replace(string(raw), `"rollout":{`, `"rollout":{"unknown":true,`, 1))
+	if _, err := Decode(strings.NewReader(string(raw))); err == nil {
+		t.Fatal("unknown rollout field accepted")
+	}
+}
+
+func TestRejectSingularRolloutFields(t *testing.T) {
+	for _, field := range []string{"helm_release", "deployment"} {
+		c := deliveryConfig()
+		c.Profiles[0].Deployments["dev"].Files[0].Rollout = &RolloutTarget{Namespace: "lp-dev", HelmReleases: []string{"api"}}
+		raw, _ := json.Marshal(c)
+		raw = []byte(strings.Replace(string(raw), `"helm_releases":["api"]`, `"`+field+`":"api"`, 1))
+		if _, err := Decode(strings.NewReader(string(raw))); err == nil {
+			t.Fatal("accepted", field)
 		}
 	}
 }

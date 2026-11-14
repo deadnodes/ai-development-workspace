@@ -2,13 +2,17 @@ package domain
 
 import "time"
 
-// Deployment records GitOps completion only, never runtime health.
+// Deployment records GitOps completion and optional read-only runtime rollout verification.
 type Deployment struct {
-	RollbackFromSHA          string   `json:"rollback_from_sha,omitempty"`
-	RollbackFromDeploymentID string   `json:"rollback_from_deployment_id,omitempty"`
-	OverrideReason           string   `json:"override_reason,omitempty"`
-	GitOpsRepository         string   `json:"gitops_repository"`
-	TargetFiles              []string `json:"target_files"`
+	RolloutVerified          bool       `json:"rollout_verified"`
+	RolloutFailure           string     `json:"rollout_failure,omitempty"`
+	RolloutDeadline          *time.Time `json:"rollout_deadline,omitempty"`
+	MergedAt                 *time.Time `json:"merged_at,omitempty"`
+	RollbackFromSHA          string     `json:"rollback_from_sha,omitempty"`
+	RollbackFromDeploymentID string     `json:"rollback_from_deployment_id,omitempty"`
+	OverrideReason           string     `json:"override_reason,omitempty"`
+	GitOpsRepository         string     `json:"gitops_repository"`
+	TargetFiles              []string   `json:"target_files"`
 	Meta
 	BuildID           string            `json:"build_id"`
 	ProfileID         string            `json:"profile_id"`

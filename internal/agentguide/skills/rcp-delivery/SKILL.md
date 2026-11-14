@@ -184,13 +184,12 @@ merge deploys anything. Production targets are rejected by config and API.
 
 Follow `get_deployment {product_id,deployment_id}` or bounded `list_deployments`
 (default 25/max 100, scope-bound cursor). Deployments are independent of Operations.
-States: PENDING_CHECKS → PROPOSING → MERGING → SUCCEEDED/FAILED; uncertain writes
+States: PENDING_CHECKS → PROPOSING → MERGING → VERIFYING_ROLLOUT (when configured) → SUCCEEDED/FAILED; uncertain writes
 use RECONCILIATION_REQUIRED. Never submit a replacement to resolve uncertainty.
 A lost merge response reconciles read-only and never sends another merge request.
 Only active (environment, profile, image digests) deployments deduplicate. Terminal
 matches create a new deployment without a key or with a fresh request_key; existing
-request_key replay returns its historical handle and rebinding conflicts. SUCCEEDED means GitOps merged (or already_applied), not Flux
-reconciliation, runtime health, functional acceptance or production approval.
+request_key replay returns its historical handle and rebinding conflicts. SUCCEEDED means rolled out when rollout targets and a verifier are configured (`rollout_verified: true`). Otherwise it confirms GitOps merged (or already_applied) with `rollout_verified: false`. It never implies functional acceptance or production approval. On ROLLOUT_FAILED, read `rollout_failure`, fix forward with a new build; do not redeploy the same build expecting a different result.
 See docs/FORGEJO_DELIVERY.md for operator configuration and recovery limits.
 
 
@@ -204,10 +203,9 @@ handle returns `DEPLOYMENT_STATE_CHANGED: retry deploy_build` and requires a fre
 state check. Only an actually used override records rollback provenance and reason.
 
 An instance admin may use `close_deployment {product_id, deployment_id, reason, request_key?}`
-when `DEPLOYMENT_IN_PROGRESS` is held by a deployment stuck in `PENDING_CHECKS`.
+when `DEPLOYMENT_IN_PROGRESS` is held by a deployment in `PENDING_CHECKS` or `VERIFYING_ROLLOUT`.
 Provide an audit reason of 8–500 trimmed characters. This closes the handle as
-`FAILED` / `OPERATOR_CLOSED`; never use it for deployments with a PR or uncertain
-GitOps effects. `PROPOSING` and later states are refused because a GitHub proposal may be in flight.
+`FAILED` / `OPERATOR_CLOSED`; never use it for deployments with a PR unless already in `VERIFYING_ROLLOUT`, where no GitOps writes remain pending. Other active states are refused because a GitHub proposal or merge may be in flight.
 
 An instance admin may use `close_build {product_id, build_id, reason, request_key?}`
 to close a stuck active build with a reason. This operator action is admin only

@@ -8,6 +8,7 @@ Discover the complete current catalog and transition graph with `GET /api/status
 | --- | --- |
 | Feature | planned, active, blocked, completed, archived |
 | Integration | planned, working, implemented, verifying, ready, released |
+| Deployment | PENDING_CHECKS, PROPOSING, MERGING, VERIFYING_ROLLOUT, SUCCEEDED, FAILED, RECONCILIATION_REQUIRED |
 
 A Feature’s completed state describes implementation scope; it does not imply production delivery. An Integration’s ready state means readiness checks passed; it does not mean released. `start_integration`, `transition_integration` and `complete_integration` retain their application guards. Clients cannot assign released through plan edits or generic transitions: successful release execution records it. The graph describes potential transitions, not permission to bypass dependencies, blockers or verification.
 
