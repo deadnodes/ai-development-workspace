@@ -573,7 +573,14 @@ func (s *Service) save(ctx context.Context, op domain.ExternalOperation, token, 
 	if len(detail) > 1000 {
 		detail = detail[:1000]
 	}
-	return s.store.Update(ctx, func(st *domain.State) error {
+	scope := domain.StateMutationScope{MutableCollections: []string{"operations"}, AppendCollections: []string{"operation_steps"}}
+	if op.Run != nil {
+		scope.AppendCollections = append(scope.AppendCollections, "delivery_build_runs")
+	}
+	if op.Artifact != nil && op.Snapshot != nil && op.Snapshot.Build.Mode != "NATIVE" {
+		scope.AppendCollections = append(scope.AppendCollections, "delivery_artifacts")
+	}
+	return s.updateWorkerScoped(ctx, scope, func(st *domain.State) error {
 		current := operationByID(st, op.ID)
 		if current == nil || current.LeaseOwner != token {
 			return fmt.Errorf("operation lease lost")
@@ -789,4 +796,16 @@ func confirmedSourceMutation(before, after domain.ExternalOperation, phase strin
 		acknowledged++
 	}
 	return acknowledged == 1
+}
+
+// Cold paths still use full Update: deployment preparation in Tick,
+// recordArtifactObservation, flow release/children and external worker execution.
+// Keep their broader conditional mutations for a separate scope audit.
+func (s *Service) updateWorkerScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
+	if scoped, ok := s.store.(interface {
+		UpdateScoped(context.Context, domain.StateMutationScope, func(*domain.State) error) error
+	}); ok {
+		return scoped.UpdateScoped(ctx, scope, fn)
+	}
+	return s.store.Update(ctx, fn)
 }
