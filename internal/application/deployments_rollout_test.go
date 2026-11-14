@@ -302,6 +302,10 @@ func TestRolloutHangingRuntimeBound(t *testing.T) {
 
 func TestDeploymentHashWithoutRolloutMatchesOriginMain(t *testing.T) {
 	s, _, _, _ := deploymentFixture(t)
+	s.builds.config.Profiles[0].CIGate = nil
+	if err := s.ConfigureBuilds(s.builds.config, s.builds.provider, s.builds.registry); err != nil {
+		t.Fatal(err)
+	}
 	c := s.builds.config
 	p := c.Profiles[0]
 	g, _ := c.DevGitOps()

@@ -210,3 +210,13 @@ Provide an audit reason of 8–500 trimmed characters. This closes the handle as
 An instance admin may use `close_build {product_id, build_id, reason, request_key?}`
 to close a stuck active build with a reason. This operator action is admin only
 and does not cancel the Forgejo run.
+
+The Forgejo deployment CI gate may accept green merged-PR head CI when its full
+Git tree equals the main SourceSHA tree (`ci_evidence: pr_tree`, `ci_pr_number`,
+`ci_pr_head_sha`); failed required main contexts always refuse. Only trailing
+` (push)` contexts map to ` (pull_request)`. Profiles can disable this default
+shortcut with `ci_gate.accept_pr_tree: false`. After GitOps merge, inspect
+`main_ci_state` and `main_ci_checked_at`: bounded polling continues for up to
+three hours, including after rollout. `main_ci_failed` / `MAIN_CI_FAILED` attention
+requires investigation and explicit operator action; RCP never rolls back
+implicitly. Up-to-date branch protection makes tree equivalence more frequent.

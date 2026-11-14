@@ -32,6 +32,11 @@ func TestProfileAuthorityScope(t *testing.T) {
 	}{
 		{"other build", func(c *buildconfig.Config) { c.Profiles[1].DispatchRef = "other" }, false, false},
 		{"other deployment", func(c *buildconfig.Config) { c.Profiles[1].Deployments["dev"].Files[0].Path = "other.yaml" }, false, false},
+		{"trusted producers", func(c *buildconfig.Config) {
+			c.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: true, TrustedProducers: "forgejo_actions"}
+		}, false, true},
+		{"ci gate enabled", func(c *buildconfig.Config) { c.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: true} }, false, true},
+		{"ci gate disabled", func(c *buildconfig.Config) { c.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: false} }, false, true},
 		{"required status contexts", func(c *buildconfig.Config) { c.Profiles[0].RequiredStatusContexts = []string{"other-check"} }, false, true},
 		{"own build", func(c *buildconfig.Config) { c.Profiles[0].DispatchRef = "other" }, true, true},
 		{"own deployment", func(c *buildconfig.Config) { c.Profiles[0].Deployments["dev"].Files[0].Path = "other.yaml" }, false, true},

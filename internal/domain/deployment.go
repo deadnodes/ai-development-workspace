@@ -4,6 +4,11 @@ import "time"
 
 // Deployment records GitOps completion and optional read-only runtime rollout verification.
 type Deployment struct {
+	CIEvidence               string     `json:"ci_evidence,omitempty"`
+	CIPRNumber               int        `json:"ci_pr_number,omitempty"`
+	CIPRHeadSHA              string     `json:"ci_pr_head_sha,omitempty"`
+	MainCIState              string     `json:"main_ci_state,omitempty"`
+	MainCICheckedAt          *time.Time `json:"main_ci_checked_at,omitempty"`
 	RolloutVerified          bool       `json:"rollout_verified"`
 	RolloutFailure           string     `json:"rollout_failure,omitempty"`
 	RolloutDeadline          *time.Time `json:"rollout_deadline,omitempty"`
