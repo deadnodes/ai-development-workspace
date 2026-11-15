@@ -324,3 +324,29 @@ Superseded handles retain provenance and request-key replay, carry failure code
 `SUPERSEDED` and `superseded_by`, and emit `supersede_build` or
 `supersede_deployment` with `superseded_by`, `source_sha`, and `new_source_sha`.
 Follow the replacement handle rather than re-queueing the superseded work.
+
+## Automatic delivery
+
+Profiles may opt in with `"auto_build": true` and `"auto_deploy_dev": true`.
+Both default to false. Omitted flags preserve existing authority hashes; an
+explicit `auto_build` value participates in build authority and an explicit
+`auto_deploy_dev` value in deployment authority.
+
+The builds worker checks the configured `default_branch` (normally `main`) on its
+15-second cadence, at most once per 20 seconds per profile, with four concurrent
+profile observations. Changed heads use `auto-build:<profile>:<sha>` request keys.
+Startup establishes current heads without backfilling old commits; an unbuilt
+head committed within the past 15 minutes is recovered. Observation/queue errors
+are logged once per head and retried on later polls.
+
+Successful default-branch builds can automatically deploy to Dev; see
+[Forgejo delivery](FORGEJO_DELIVERY.md#automatic-delivery). Set
+`RCP_AUTO_DELIVERY=off` to disable both automations (default on). This does not
+cancel already queued builds or deployments. Upstream image publishing does not
+enable this behavior: operator-owned profiles must explicitly opt in.
+
+Use `list_builds` / `get_build` and `list_deployments` / `get_deployment`
+to inspect handles. Automatically created handles expose `trigger: "auto"`;
+events attribute actions to `system/auto-build` or `system/auto-deploy`.
+
+Opted-in profiles require `dispatch_ref == default_branch`; mismatches fail configuration loading. Auto-build deduplication includes the source branch; explicit queue requests retain SHA-based deduplication.

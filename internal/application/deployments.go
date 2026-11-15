@@ -113,6 +113,22 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			return missing("build", in.BuildID)
 		}
 		p, ok := s.builds.config.Profile(b.ProfileID)
+		if automatic, _ := ctx.Value(autoDeployKey{}).(bool); automatic {
+			if !ok || b.Branch != p.DefaultBranch {
+				return invalid("automatic delivery requires default branch")
+			}
+			h := s.builds.autoHeadSnapshot(p.ID)
+			if h == nil || h.seen != b.SourceSHA || h.observed.IsZero() || time.Since(h.observed) > 2*time.Minute || time.Now().Before(h.observed) {
+				return invalid("automatic delivery requires fresh default branch head")
+			}
+			// Revalidate the newest successful handle both before and after external
+			// ancestry I/O; a concurrently completed build takes precedence.
+			for _, newer := range st.Builds {
+				if newer.ProductID == b.ProductID && newer.ProfileID == b.ProfileID && newer.Branch == b.Branch && newer.SourceSHA == b.SourceSHA && newer.Status == "SUCCEEDED" && !newer.RestoreQuarantined && newerAutoBuild(newer, b) {
+					return invalid("AUTO_DEPLOY_SUPERSEDED: newer successful build exists")
+				}
+			}
+		}
 		gitopsAuthority, gitopsOK := s.builds.config.DevGitOps()
 		if !ok || p.ProductID != in.ProductID || len(p.Deployments["dev"].Files) == 0 || !gitopsOK {
 			return invalid("Dev target not configured")
@@ -196,6 +212,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		}
 		now := time.Now().UTC()
 		out = domain.Deployment{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: attributedActor(ctx, "agent"), CreatedAt: now, UpdatedAt: now}, BuildID: b.ID, ProfileID: p.ID, EnvironmentID: "dev", RequestKey: in.RequestKey, AuthorityHash: s.builds.deploymentHashes[p.ID], Identity: identity, Status: "PENDING_CHECKS", Images: append([]domain.BuildImage(nil), b.Images...), SourceSHA: b.SourceSHA, RunURL: b.RunURL, Deadline: now.Add(time.Duration(s.builds.config.TimeoutSeconds) * time.Second)}
+		out.Trigger = autoTrigger(out.Actor)
 		out.GitOpsRepository = gitopsAuthority.Repository
 		for _, f := range p.Deployments["dev"].Files {
 			if !slices.Contains(out.TargetFiles, f.Path) {

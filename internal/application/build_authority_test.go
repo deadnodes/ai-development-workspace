@@ -30,6 +30,10 @@ func TestProfileAuthorityScope(t *testing.T) {
 		change                      func(*buildconfig.Config)
 		buildChanged, deployChanged bool
 	}{
+		{"auto build enabled", func(c *buildconfig.Config) { c.Profiles[0].AutoBuild = autoBool(true) }, true, true},
+		{"auto build explicit false", func(c *buildconfig.Config) { c.Profiles[0].AutoBuild = autoBool(false) }, true, true},
+		{"auto deploy enabled", func(c *buildconfig.Config) { c.Profiles[0].AutoDeployDev = autoBool(true) }, false, true},
+		{"auto deploy explicit false", func(c *buildconfig.Config) { c.Profiles[0].AutoDeployDev = autoBool(false) }, false, true},
 		{"other build", func(c *buildconfig.Config) { c.Profiles[1].DispatchRef = "other" }, false, false},
 		{"other deployment", func(c *buildconfig.Config) { c.Profiles[1].Deployments["dev"].Files[0].Path = "other.yaml" }, false, false},
 		{"trusted producers", func(c *buildconfig.Config) {

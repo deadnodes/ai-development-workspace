@@ -4,6 +4,7 @@ package buildconfig
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -71,6 +72,8 @@ type CIGate struct {
 }
 
 type Profile struct {
+	AutoBuild              *bool                       `json:"auto_build,omitempty"`
+	AutoDeployDev          *bool                       `json:"auto_deploy_dev,omitempty"`
 	CIGate                 *CIGate                     `json:"ci_gate,omitempty"`
 	RequiredStatusContexts []string                    `json:"required_status_contexts,omitempty"`
 	Deployments            map[string]DeploymentTarget `json:"deployments,omitempty"`
@@ -226,6 +229,9 @@ func (c *Config) Validate() error {
 	for _, v := range c.Profiles {
 		if v.CIGate != nil && v.CIGate.TrustedProducers != "" && v.CIGate.TrustedProducers != "forgejo_actions" && v.CIGate.TrustedProducers != "any" {
 			return errors.New("ci_gate.trusted_producers must be forgejo_actions or any")
+		}
+		if ((v.AutoBuild != nil && *v.AutoBuild) || (v.AutoDeployDev != nil && *v.AutoDeployDev)) && v.DispatchRef != v.DefaultBranch {
+			return fmt.Errorf("profile %s: auto_build/auto_deploy_dev require dispatch_ref to equal default_branch", v.ID)
 		}
 		ids = append(ids, v.ID)
 		cn, ok := con[v.ConnectionID]

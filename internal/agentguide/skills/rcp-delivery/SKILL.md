@@ -231,3 +231,19 @@ are `FAILED` / `SUPERSEDED`; follow their replacement. Request-key replays
 retain the original handle. Active builds and deployments beyond pending checks
 are never automatically superseded; ancestry errors or diverged SHAs leave
 existing handles unchanged, and rollback protection still applies.
+
+## Automatic delivery profiles
+
+For profiles with `auto_build: true`, do not call `queue_build` after a merge to
+the configured default branch (normally main). For profiles with
+`auto_deploy_dev: true`, do not call `deploy_build` after that merge. The server
+owns these automatic requests; manual commands are for branch work or explicit
+redeploys. Do not enable profile flags or bypass the operator kill switch merely
+to deliver work.
+
+Inspect `list_builds` / `get_build` and `list_deployments` / `get_deployment`,
+filtered by Product/profile. Newly created automatic handles carry
+`trigger: "auto"`; events use `system/auto-build` and `system/auto-deploy`.
+Follow the existing handle and its CI/rollout evidence, rather than creating a
+replacement request because it is pending. Report a disabled kill switch,
+observation failure or delivery guard as the actual blocker.

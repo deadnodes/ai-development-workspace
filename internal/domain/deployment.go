@@ -4,6 +4,7 @@ import "time"
 
 // Deployment records GitOps completion and optional read-only runtime rollout verification.
 type Deployment struct {
+	Trigger                  string     `json:"trigger"`
 	SupersededBy             string     `json:"superseded_by,omitempty"`
 	CIEvidence               string     `json:"ci_evidence,omitempty"`
 	CIPRNumber               int        `json:"ci_pr_number,omitempty"`

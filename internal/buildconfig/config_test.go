@@ -215,3 +215,28 @@ func TestRejectSingularRolloutFields(t *testing.T) {
 		}
 	}
 }
+
+func TestAutomationRequiresDefaultDispatchBranch(t *testing.T) {
+	for _, flag := range []string{"build", "deploy", "neither"} {
+		c := valid()
+		c.Profiles[0].DispatchRef = "workflow"
+		yes := true
+		if flag == "build" {
+			c.Profiles[0].AutoBuild = &yes
+		}
+		if flag == "deploy" {
+			c.Profiles[0].AutoDeployDev = &yes
+		}
+		raw, _ := json.Marshal(c)
+		_, err := Decode(strings.NewReader(string(raw)))
+		if flag == "neither" {
+			if err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "dispatch_ref to equal default_branch") {
+			t.Fatalf("%v", err)
+		}
+	}
+}

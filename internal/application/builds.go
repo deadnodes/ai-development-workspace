@@ -36,6 +36,9 @@ type BuildRegistry interface {
 	Resolve(context.Context, buildconfig.Registry, string, string) (buildregistry.Artifact, error)
 }
 type buildRuntime struct {
+	autoHeadsMu      sync.RWMutex
+	autoHeads        map[string]*autoHead
+	autoDone         map[string]bool
 	legacyGlobal     string
 	buildHashes      map[string]string
 	deploymentHashes map[string]string
@@ -65,7 +68,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
 	}{Config: copy, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
-	// Build scope: every Profile field except Deployments, RequiredStatusContexts and CIGate;
+	// Build scope: every Profile field except Deployments, RequiredStatusContexts, CIGate and AutoDeployDev;
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,
 	// InsecureHTTP; global TimeoutSeconds and RunLookbackSeconds.
 	// Deployment scope adds optional CIGate, RequiredStatusContexts, the profile's dev target,
@@ -73,6 +76,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	// resources are excluded.
 	for _, profile := range copy.Profiles {
 		buildProfile := profile
+		buildProfile.AutoDeployDev = nil
 		buildProfile.CIGate = nil
 		buildProfile.Deployments = nil
 		buildProfile.RequiredStatusContexts = nil
@@ -88,6 +92,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 		a.buildHashes[profile.ID] = hash
 		gitops, _ := copy.DevGitOps()
 		a.deploymentHashes[profile.ID] = buildFingerprint(struct {
+			AutoDeployDev          *bool                      `json:",omitempty"`
 			CIGate                 *buildconfig.CIGate        `json:",omitempty"`
 			Rollout                *buildconfig.RolloutConfig `json:",omitempty"`
 			BuildAuthority         string
@@ -95,7 +100,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 			Dev                    buildconfig.DeploymentTarget
 			GitOps                 buildconfig.GitOps
 			Registry               buildconfig.Registry
-		}{profile.CIGate, rolloutAuthority([]buildconfig.Profile{profile}, copy.Rollout), hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
+		}{profile.AutoDeployDev, profile.CIGate, rolloutAuthority([]buildconfig.Profile{profile}, copy.Rollout), hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
 	}
 	s.builds = a
 	return nil
@@ -139,7 +144,8 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 	if in.Branch != "" && in.SHA != "" {
 		return out, invalid("branch and sha are mutually exclusive")
 	}
-	if len(in.RequestKey) > 128 {
+	_, automatic := ctx.Value(autoHeadKey{}).(autoHeadObservation)
+	if len(in.RequestKey) > 128 && (!automatic || len(in.RequestKey) > 256) {
 		return out, invalid("invalid request_key")
 	}
 	if in.SHA != "" {
@@ -194,7 +200,11 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 			return out, invalid("commit observation failed")
 		}
 	} else {
-		head, e = a.provider.BranchHead(ctx, a.config.Connection(p.ConnectionID), p.Repository, in.Branch)
+		if observed, ok := ctx.Value(autoHeadKey{}).(autoHeadObservation); ok && observed.profile == p.ID && observed.branch == in.Branch {
+			head = observed.sha
+		} else {
+			head, e = a.provider.BranchHead(ctx, a.config.Connection(p.ConnectionID), p.Repository, in.Branch)
+		}
 		if e != nil {
 			return out, errors.New("build branch observation failed")
 		}
@@ -232,7 +242,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		var previous *domain.Build
 		for i := range st.Builds {
 			b := &st.Builds[i]
-			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && b.Workflow == p.Workflow && a.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
+			if b.ProfileID == p.ID && b.ProductID == in.ProductID && b.SourceSHA == head && (!automatic || b.Branch == in.Branch) && b.Workflow == p.Workflow && a.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
 				if !b.RestoreQuarantined && b.Status != "FAILED" && b.Status != "CANCELLED" {
 					out = *b
 					bind(out)
@@ -247,6 +257,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		now := time.Now().UTC()
 		actor := attributedActor(ctx, "agent")
 		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.buildHashes[p.ID], ConnectionID: p.ConnectionID, ConnectionAPIURL: a.config.Connection(p.ConnectionID).APIURL, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
+		out.Trigger = autoTrigger(actor)
 		bind(out)
 		for i := range st.Builds {
 			b := &st.Builds[i]
@@ -692,6 +703,8 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		return nil
 	}
 	defer a.mu.Unlock()
+	s.pollAutoBuilds(ctx, time.Now().UTC())
+	defer s.autoDeployBuilds(ctx)
 	st, e := s.buildSnapshot(ctx)
 	if e != nil {
 		return e
