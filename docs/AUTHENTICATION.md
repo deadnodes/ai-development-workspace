@@ -129,3 +129,35 @@ audience, nonce, state, expiry, role and PKCE rejection, concurrent redemption,
 recovery, revocation, logout independence, CSRF and encrypted restart persistence.
 `TEST_DATABASE_URL` enables a real PostgreSQL encrypted-store restart test in an
 isolated temporary schema. A skipped PostgreSQL test is not database evidence.
+
+## Production runtime reporter credential
+
+`RCP_RUNTIME_REPORTER_TOKEN_FILE` enables a separate bearer credential, read once
+at startup. Unset, missing, or empty files disable it; other read errors fail
+startup. The token is compared in constant time and authenticates as
+`service/prod-runtime-reporter` in both local and OIDC modes. Its only allowed
+request is `POST /api/runtime-reports`, and its payload must match an exact
+`product_id:environment_id:cluster` entry in `RCP_RUNTIME_REPORTER_SCOPE`. Startup rejects more than one entry
+for the single token file. A second cluster requires future per-scope tokens
+(out of scope for this version).
+Every other path/method with this credential returns 403, including report reads,
+MCP, commands, and auth routes. Empty scope grants no writes. Host and origin
+checks still apply. Use a distinct token; existing `RC_TOKEN` behavior is
+unchanged. Reporter auth does not create an OIDC session or general agent token.
+See [production reporter setup](PROD_RUNTIME_REPORTER.md) for secret provisioning,
+namespace RBAC, tailnet ACL direction, and the read-only verification tool.
+
+Runtime reporter scope entries must include an exact cluster; startup rejects malformed
+entries or entries without a cluster. Other clusters receive HTTP 403. Accepted
+reports are separated by at least 20 seconds across the entire product/environment
+scope, including configured clusters sharing that scope (HTTP 429 on violation).
+Absent workloads expire seven days after the server first observes absence.
+Each cluster stores at most 2000 workloads, evicting oldest absent entries first;
+reports that still exceed this cap are rejected atomically with HTTP 413.
+
+`GET /api/runtime-reports` and MCP `get_runtime_report` accept `limit` (default
+500, maximum 1000) and `cursor`. Pages count workload records (an empty cluster
+counts as one item). Follow `pagination.next_cursor` while `has_more` is true,
+keeping product, environment and cluster filters unchanged. Pagination is a live
+keyset view, not a frozen snapshot; cluster workload counts describe the full
+current snapshot, while `workload_records` contains only the current page.

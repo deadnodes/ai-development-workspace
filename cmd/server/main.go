@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"releasecontrol/internal/runtimereport"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +47,10 @@ func run() error {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {
 		return agentconnect.Run(context.Background(), os.Args[2:], os.Stdout)
+	}
+	reporterToken, err := runtimeReporterConfig()
+	if err != nil {
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -253,7 +258,7 @@ func run() error {
 		}
 	}()
 	defer func() { stop(); <-workerDone }()
-	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{Auth: authManager, Workers: workers, Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{RuntimeReporterToken: reporterToken, RuntimeReporterScope: os.Getenv("RCP_RUNTIME_REPORTER_SCOPE"), Auth: authManager, Workers: workers, Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan error, 1)
 	go func() { slog.Info("release-control listening", "address", addr); done <- server.ListenAndServe() }()
 	select {
@@ -267,6 +272,27 @@ func run() error {
 		defer cancel()
 		return server.Shutdown(shutdown)
 	}
+}
+
+// runtimeReporterConfig binds the single reporter credential to at most one scope.
+func runtimeReporterConfig() (string, error) {
+	rawScope := os.Getenv("RCP_RUNTIME_REPORTER_SCOPE")
+	if _, err := runtimereport.ParseScopes(rawScope); err != nil {
+		return "", fmt.Errorf("RCP_RUNTIME_REPORTER_SCOPE: %w", err)
+	}
+	if strings.Contains(rawScope, ",") {
+		return "", fmt.Errorf("RCP_RUNTIME_REPORTER_SCOPE must contain exactly one product:environment:cluster entry for the single RCP_RUNTIME_REPORTER_TOKEN_FILE; additional clusters require future per-scope tokens")
+	}
+	reporterToken := ""
+	if path := os.Getenv("RCP_RUNTIME_REPORTER_TOKEN_FILE"); path != "" {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			reporterToken = strings.TrimSpace(string(b))
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("runtime reporter token file unreadable: %w", err)
+		}
+	}
+	return reporterToken, nil
 }
 
 // Bootstrap is local-only and runs once. A failed scan retains the Product so a

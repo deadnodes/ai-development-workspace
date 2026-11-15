@@ -29,10 +29,12 @@ type Service interface {
 }
 
 type Options struct {
-	Auth         *auth.Manager
-	Workers      *workerconfig.Authority
-	Token        string
-	AllowedHosts []string
+	Auth                 *auth.Manager
+	Workers              *workerconfig.Authority
+	RuntimeReporterToken string
+	RuntimeReporterScope string
+	Token                string
+	AllowedHosts         []string
 }
 
 func New(service Service, options Options) http.Handler {
@@ -88,6 +90,7 @@ func New(service Service, options Options) http.Handler {
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
+	registerRuntimeReports(mux, server, service, options)
 	registerStateNavigationTool(server, service)
 	registerRetrieval(mux, server, service)
 	registerBuildTools(server, service)
@@ -136,6 +139,10 @@ func New(service Service, options Options) http.Handler {
 		control = options.Auth.Wrap(control)
 	}
 	return protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isRuntimeReporter(r, options) {
+			runtimeReportPost(service, options).ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-runtime-reporter", Kind: "service"})))
+			return
+		}
 		if workerEndpoint(r.URL.Path) {
 			workerMux.ServeHTTP(w, r)
 			return
@@ -202,13 +209,17 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 403, map[string]string{"error": "Cross-site requests are not allowed"})
 			return
 		}
+		if isRuntimeReporter(r, o) && (r.Method != http.MethodPost || r.URL.Path != "/api/runtime-reports") {
+			write(w, 403, map[string]string{"error": "reporter credential restricted to runtime reports"})
+			return
+		}
 		if o.Workers != nil && o.Workers.IsWorkerToken(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) && !workerEndpoint(r.URL.Path) {
 			write(w, 401, map[string]string{"error": "worker credential restricted to worker channel"})
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			w.Header().Set("Cache-Control", "no-store")
-			if !workerEndpoint(r.URL.Path) && (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
+			if !isRuntimeReporter(r, o) && !workerEndpoint(r.URL.Path) && (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
 				write(w, 401, map[string]string{"error": "Bearer token required"})
 				return
 			}
@@ -223,4 +234,8 @@ func defaultActor(actor string) string {
 		return "agent"
 	}
 	return actor
+}
+
+func isRuntimeReporter(r *http.Request, o Options) bool {
+	return o.RuntimeReporterToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.RuntimeReporterToken)) == 1
 }
