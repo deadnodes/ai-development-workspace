@@ -309,3 +309,18 @@ the dev GitOps authority.
 Changes to unrelated profiles do not invalidate builds or deployments. A temporary
 legacy shim accepts the former global hash only while the complete configuration
 is unchanged. A restart is required for config changes.
+
+## Superseded
+
+A new build cancels older `QUEUED` builds of the same product, profile and
+branch only when the source provider confirms their SHA is an ancestor of the
+new SHA. Active builds are unchanged. Cancelled builds leave the dispatch queue.
+A new Dev deployment similarly replaces ancestor `PENDING_CHECKS` deployments
+of the same product, profile and environment; other active states still block.
+Diverged SHAs and ancestry lookup errors never cause superseding. Rollback
+protection still applies.
+
+Superseded handles retain provenance and request-key replay, carry failure code
+`SUPERSEDED` and `superseded_by`, and emit `supersede_build` or
+`supersede_deployment` with `superseded_by`, `source_sha`, and `new_source_sha`.
+Follow the replacement handle rather than re-queueing the superseded work.

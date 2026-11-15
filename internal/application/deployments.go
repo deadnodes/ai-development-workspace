@@ -77,6 +77,8 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 	var sourceSHA, rollbackCheck string
 	var checkErr error
 	var ancestor bool
+	candidates := map[string]string{}
+	superseded := map[string]string{}
 	evaluate := func(st *domain.State) error {
 		for _, r := range st.DeploymentReceipts {
 			if in.RequestKey != "" && r.ProductID == in.ProductID && r.RequestKey == in.RequestKey {
@@ -156,6 +158,15 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		}
 		for _, d := range st.Deployments {
 			if !deploymentTerminal(d) && d.EnvironmentID == in.EnvironmentID && (d.Identity != identity || !s.builds.deploymentAuthorityMatches(d.ProfileID, d.AuthorityHash)) && (d.ProfileID == p.ID || deploymentOverlap(s.builds.config, candidate, d)) {
+				if d.ProductID == in.ProductID && d.ProfileID == p.ID && d.Status == "PENDING_CHECKS" {
+					if preflight {
+						candidates[d.ID] = d.SourceSHA
+						continue
+					}
+					if d.SourceSHA != "" && superseded[d.ID] == d.SourceSHA {
+						continue
+					}
+				}
 				if d.ProductID != in.ProductID {
 					return invalid("DEPLOYMENT_IN_PROGRESS: another product's deployment holds overlapping target files")
 				}
@@ -167,7 +178,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			current, profile, sourceSHA = copyDeployment(latest), p, b.SourceSHA
 			return nil
 		}
-		if latest.ID != current.ID {
+		if latest.ID != current.ID || b.SourceSHA != sourceSHA || p.ID != profile.ID {
 			return invalid("DEPLOYMENT_STATE_CHANGED: retry deploy_build")
 		}
 		if current.ID != "" && current.SourceSHA != b.SourceSHA {
@@ -196,6 +207,18 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			out.RollbackFromSHA, out.RollbackFromDeploymentID, out.OverrideReason = current.SourceSHA, current.ID, strings.TrimSpace(in.Reason)
 		}
 		out.Branch = "rcp/deploy/" + out.ID
+		for i := range st.Deployments {
+			d := &st.Deployments[i]
+			if d.ProductID != in.ProductID || d.ProfileID != p.ID || d.EnvironmentID != in.EnvironmentID || d.Status != "PENDING_CHECKS" || d.SourceSHA == "" || superseded[d.ID] != d.SourceSHA {
+				continue
+			}
+			d.Status, d.FailureCode, d.SupersededBy = "FAILED", "SUPERSEDED", out.ID
+			d.UpdatedAt, d.FinishedAt = now, &now
+			audit := *d
+			audit.Actor = out.Actor
+			deploymentEvent(st, audit, "supersede_deployment")
+			supersedeEventData(st, d.SupersededBy, d.SourceSHA, out.SourceSHA)
+		}
 		st.Deployments = append(st.Deployments, out)
 		bind(out)
 		deploymentEvent(st, out, "deploy_build")
@@ -213,6 +236,9 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		ancestor, checkErr = s.deployments.source.IsAncestor(checkCtx, s.builds.config.Connection(profile.ConnectionID), profile.Repository, sourceSHA, current.SourceSHA)
 		cancel()
+	}
+	if out.ID == "" {
+		superseded = checkSuperseded(ctx, s.deployments.source, s.builds.config.Connection(profile.ConnectionID), profile.Repository, sourceSHA, candidates)
 	}
 	preflight = false
 	out = domain.Deployment{}

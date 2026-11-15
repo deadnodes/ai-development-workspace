@@ -18,17 +18,24 @@ import (
 )
 
 type fakeForgejo struct {
-	head        string
-	runs        []forgejo.Run
-	dispatches  int
-	uncertain   bool
-	branchCalls int
-	branchError error
-	runCalls    int
-	listError   string
-	filters     []forgejo.Filter
+	ancestorFunc func(context.Context, string, string) (bool, error)
+	head         string
+	runs         []forgejo.Run
+	dispatches   int
+	uncertain    bool
+	branchCalls  int
+	branchError  error
+	runCalls     int
+	listError    string
+	filters      []forgejo.Filter
 }
 
+func (f *fakeForgejo) IsAncestor(ctx context.Context, _ buildconfig.Connection, _, ancestor, descendant string) (bool, error) {
+	if f.ancestorFunc != nil {
+		return f.ancestorFunc(ctx, ancestor, descendant)
+	}
+	return false, nil
+}
 func (f *fakeForgejo) BranchHead(context.Context, buildconfig.Connection, string, string) (string, error) {
 	f.branchCalls++
 	return f.head, f.branchError

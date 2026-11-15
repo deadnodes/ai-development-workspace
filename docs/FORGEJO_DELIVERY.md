@@ -317,3 +317,18 @@ and limits each request to 10 seconds within the existing 25-second pass budget.
 It reserves poll timestamps before I/O so retries remain bounded across passes.
 
 A trusted `failure` status with description exactly `Has been cancelled` is cancelled: main waits or uses PR-tree evidence, a cancelled PR head is never green, and the main-CI safety net records terminal `main_ci_state: "cancelled"` without failure events or attention.
+
+## Superseded
+
+A new build cancels older `QUEUED` builds of the same product, profile and
+branch only when the source provider confirms their SHA is an ancestor of the
+new SHA. Active builds are unchanged. Cancelled builds leave the dispatch queue.
+A new Dev deployment similarly replaces ancestor `PENDING_CHECKS` deployments
+of the same product, profile and environment; other active states still block.
+Diverged SHAs and ancestry lookup errors never cause superseding. Rollback
+protection still applies.
+
+Superseded handles retain provenance and request-key replay, carry failure code
+`SUPERSEDED` and `superseded_by`, and emit `supersede_build` or
+`supersede_deployment` with `superseded_by`, `source_sha`, and `new_source_sha`.
+Follow the replacement handle rather than re-queueing the superseded work.

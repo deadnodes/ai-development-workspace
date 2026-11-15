@@ -25,6 +25,7 @@ import (
 
 // ForgejoBuildProvider keeps provider execution replaceable without duplicating policy.
 type ForgejoBuildProvider interface {
+	IsAncestor(context.Context, buildconfig.Connection, string, string, string) (bool, error)
 	BranchHead(context.Context, buildconfig.Connection, string, string) (string, error)
 	CommitExists(context.Context, buildconfig.Connection, string, string) error
 	Dispatch(context.Context, buildconfig.Connection, string, string, string, string, string) (forgejo.Run, error)
@@ -201,6 +202,19 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 			return out, invalid("invalid provider HEAD")
 		}
 	}
+	// Copy candidates under the view, then perform provider I/O without store locks.
+	candidates := map[string]string{}
+	if e = s.view(ctx, func(st *domain.State) error {
+		for _, b := range st.Builds {
+			if b.ProductID == in.ProductID && b.ProfileID == p.ID && b.Branch == in.Branch && b.Status == "QUEUED" {
+				candidates[b.ID] = b.SourceSHA
+			}
+		}
+		return nil
+	}); e != nil {
+		return out, e
+	}
+	superseded := checkSuperseded(ctx, a.provider, a.config.Connection(p.ConnectionID), p.Repository, head, candidates)
 	e = s.store.Update(ctx, func(st *domain.State) error {
 		if !productExists(st, in.ProductID) {
 			return missing("product", in.ProductID)
@@ -234,6 +248,18 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		actor := attributedActor(ctx, "agent")
 		out = domain.Build{Meta: domain.Meta{ID: id(), ProductID: in.ProductID, Actor: actor, CreatedAt: now, UpdatedAt: now}, AuthorityHash: a.buildHashes[p.ID], ConnectionID: p.ConnectionID, ConnectionAPIURL: a.config.Connection(p.ConnectionID).APIURL, ProfileID: p.ID, PoolID: p.PoolID, Repository: p.Repository, Workflow: p.Workflow, Branch: in.Branch, SourceSHA: head, RequestKey: in.RequestKey, Status: "QUEUED", QueuedAt: now}
 		bind(out)
+		for i := range st.Builds {
+			b := &st.Builds[i]
+			if b.ProductID != in.ProductID || b.ProfileID != p.ID || b.Branch != in.Branch || b.Status != "QUEUED" || superseded[b.ID] != b.SourceSHA || b.SourceSHA == "" {
+				continue
+			}
+			b.Status, b.FailureCode, b.SupersededBy = "CANCELLED", "SUPERSEDED", out.ID
+			b.UpdatedAt, b.FinishedAt = now, &now
+			audit := *b
+			audit.Actor = actor
+			buildEvent(st, audit, "supersede_build")
+			supersedeEventData(st, b.SupersededBy, b.SourceSHA, head)
+		}
 		st.Builds = append(st.Builds, out)
 		buildEvent(st, out, "queue_build")
 		return nil

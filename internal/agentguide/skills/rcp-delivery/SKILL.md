@@ -220,3 +220,14 @@ shortcut with `ci_gate.accept_pr_tree: false`. After GitOps merge, inspect
 three hours, including after rollout. `main_ci_failed` / `MAIN_CI_FAILED` attention
 requires investigation and explicit operator action; RCP never rolls back
 implicitly. Up-to-date branch protection makes tree equivalence more frequent.
+
+### Superseded
+
+Do not re-queue builds marked `CANCELLED` / `SUPERSEDED`. Follow `superseded_by`
+to the newer build instead. A newer source SHA can supersede queued ancestor
+builds of the same product/profile/branch and `PENDING_CHECKS` ancestor
+deployments of the same product/profile/environment. Superseded deployments
+are `FAILED` / `SUPERSEDED`; follow their replacement. Request-key replays
+retain the original handle. Active builds and deployments beyond pending checks
+are never automatically superseded; ancestry errors or diverged SHAs leave
+existing handles unchanged, and rollback protection still applies.

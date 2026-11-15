@@ -20,6 +20,9 @@ import (
 
 type transportForgejo struct{}
 
+func (transportForgejo) IsAncestor(context.Context, buildconfig.Connection, string, string, string) (bool, error) {
+	return false, nil
+}
 func (transportForgejo) BranchHead(context.Context, buildconfig.Connection, string, string) (string, error) {
 	return strings.Repeat("a", 40), nil
 }
