@@ -95,6 +95,9 @@ func run() error {
 	}
 	githubProvider := github.New()
 	service := application.NewWithProvider(store, githubProvider)
+	if err := service.CheckConnectionSecrets(boot); err != nil {
+		return err
+	}
 	if path := os.Getenv("RCP_BUILDS_FILE"); path != "" {
 		config, e := buildconfig.Load(path)
 		if e != nil {

@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
+	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/providers/forgejo"
 	"releasecontrol/internal/providers/github"
@@ -531,6 +533,7 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 					next.FailureCode = "DEPLOYMENT_AUTHORITY_CHANGED"
 				}
 				if e = s.advanceDeployment(ctx, d, &next, false); e != nil {
+					slog.Warn("deployment observation failed", "deployment_id", d.ID, "error", delivery.SafeRolloutReason(e.Error()))
 					return e
 				}
 			}
@@ -541,6 +544,7 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 			continue
 		}
 		if e = s.processDeployment(ctx, d, p, g); e != nil {
+			slog.Warn("deployment observation failed", "deployment_id", d.ID, "error", delivery.SafeRolloutReason(e.Error()))
 			return e
 		}
 	}
@@ -569,6 +573,7 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 	var verificationErrors []error
 	for _, v := range verifications {
 		if e := s.advanceDeployment(ctx, v.deployment, &v.next, false); e != nil {
+			slog.Warn("deployment observation failed", "deployment_id", v.deployment.ID, "error", delivery.SafeRolloutReason(e.Error()))
 			verificationErrors = append(verificationErrors, e)
 		}
 	}
@@ -647,12 +652,13 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		}
 	}
 	if d.Status == "PROPOSING" {
-		d.SignatureVerified = s.deploymentSignatures(ctx, d, p)
-		if s.builds.config.Signing != nil && s.builds.config.Signing.RequireSignatureForDeploy && !d.SignatureVerified {
-			return save(failedDeployment(d, "SIGNATURE_MISSING"), false)
+		verified := s.deploymentSignatures(ctx, d, p)
+		next := d
+		next.SignatureVerified = verified
+		if s.builds.config.Signing != nil && s.builds.config.Signing.RequireSignatureForDeploy && !verified {
+			return save(failedDeployment(next, "SIGNATURE_MISSING"), false)
 		}
 		// Persist uncertainty before every mutating compound request.
-		next := d
 		next.Status = "RECONCILIATION_REQUIRED"
 		next.UncertainAction = "propose"
 		next.FailureCode = "PR_UNCERTAIN"
