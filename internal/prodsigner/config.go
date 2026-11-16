@@ -1,0 +1,90 @@
+// Package prodsigner reconciles production Flux intent against independently signed build evidence.
+package prodsigner
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/url"
+	"path"
+	"path/filepath"
+	"releasecontrol/internal/buildconfig"
+	"strings"
+)
+
+type Config struct {
+	FluxArtifact struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+	} `json:"flux_artifact"`
+	Paths            []string `json:"paths"`
+	OwnImagePrefixes []string `json:"own_image_prefixes"`
+	Registry         struct {
+		Origin          string            `json:"origin"`
+		InsecureHTTP    bool              `json:"insecure_http"`
+		CredentialsFile string            `json:"credentials_file"`
+		Rewrite         map[string]string `json:"rewrite"`
+	} `json:"registry"`
+	SignaturesRepository string                 `json:"signatures_repository"`
+	DevPublicKeyPEM      string                 `json:"dev_public_key_pem"`
+	ProdKey              buildconfig.SigningKey `json:"prod_key"`
+	BuilderIDs           []string               `json:"builder_ids"`
+	BackfillFile         string                 `json:"backfill_file"`
+	MetricsFile          string                 `json:"metrics_file"`
+}
+
+func Decode(r io.Reader) (Config, error) {
+	var c Config
+	d := json.NewDecoder(io.LimitReader(r, 1<<20))
+	d.DisallowUnknownFields()
+	if d.Decode(&c) != nil || d.Decode(new(any)) != io.EOF {
+		return c, errors.New("invalid config")
+	}
+	return c, c.Validate()
+}
+func safePath(p string) bool {
+	return p != "" && !strings.HasPrefix(p, "/") && !strings.Contains(p, "\\") && path.Clean(p) == strings.TrimSuffix(p, "/") && p != "." && !strings.HasPrefix(p, "../")
+}
+func origin(s string, httpOK bool) bool {
+	u, e := url.Parse(s)
+	return e == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/") && (u.Scheme == "https" || httpOK && u.Scheme == "http")
+}
+func (c Config) Validate() error {
+	bad := errors.New("invalid config")
+	if c.FluxArtifact.Kind != "GitRepository" || c.FluxArtifact.Namespace == "" || c.FluxArtifact.Name == "" || strings.ContainsAny(c.FluxArtifact.Namespace+c.FluxArtifact.Name, "/ ?#") || len(c.Paths) == 0 || len(c.OwnImagePrefixes) == 0 || len(c.BuilderIDs) == 0 {
+		return bad
+	}
+	for _, p := range c.Paths {
+		if !safePath(p) || !strings.HasSuffix(p, "/") {
+			return bad
+		}
+	}
+	if c.BackfillFile != "" && !safePath(c.BackfillFile) {
+		return bad
+	}
+	for _, p := range c.OwnImagePrefixes {
+		if !strings.HasSuffix(p, "/") {
+			return bad
+		}
+	}
+	if !origin(c.Registry.Origin, c.Registry.InsecureHTTP) || !safePath(c.SignaturesRepository) || strings.Contains(c.SignaturesRepository, ":") || !filepath.IsAbs(c.Registry.CredentialsFile) {
+		return bad
+	}
+	if _, e := buildconfig.PublicKey(c.DevPublicKeyPEM); e != nil {
+		return bad
+	}
+	if _, e := buildconfig.PublicKey(c.ProdKey.PublicKeyPEM); e != nil {
+		return bad
+	}
+	k := c.ProdKey
+	if !origin(k.VaultAddr, true) || k.Auth.Method != "kubernetes" || !filepath.IsAbs(k.Auth.TokenFile) {
+		return bad
+	}
+	for _, s := range []string{k.TransitMount, k.KeyName, k.Auth.Mount, k.Auth.Role} {
+		if s == "" || strings.ContainsAny(s, "/ ?#") {
+			return bad
+		}
+	}
+	return nil
+}

@@ -157,3 +157,7 @@ cap for every HTTP status/content type as well as the SSE event cap. Declared
 oversize is rejected before body reads; unknown/chunked/lying lengths are bounded
 and oversize is an error, never silent JSON truncation. Explicit Product selection
 keeps the scoped HTTP context path and 2-MiB response cap, with identity readback.
+
+## Image signature evidence
+
+Build adds `signing_status` (empty when disabled; PENDING/SIGNED/PARTIAL/FAILED/SKIPPED) and `signatures[]` with image_id, image_ref, digest, key_id, key_version, key_fingerprint, signature_tag, attestations, status, signed_at, failure_code and last_error. Build.status retains its existing meaning. Deployment adds boolean `signature_verified`. State adds `artifact_signatures` for asynchronous explicit request receipts and evidence. Product-scoped MCP `sign_artifact` / POST `/api/signatures` and `list_signatures` / GET `/api/signatures` share application policy and authorization; see [image signing](IMAGE_SIGNING.md) for input, retry, pagination and trust semantics.

@@ -175,5 +175,45 @@
       "gitops_id": "github-flux",
       "allow_auto_merge": true
     }
-  ]
+  ],
+  "signing": {
+    "builder_id": "https://rcp.example.invalid/builders/forgejo/v1",
+    "require_signature_for_deploy": false,
+    "keys": [
+      {
+        "id": "dev",
+        "vault_addr": "https://vault.example.invalid:8200",
+        "transit_mount": "transit",
+        "key_name": "cosign-dev",
+        "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEa36WRw/FwWo3ZsrRKlpQHYgymbwt\nSBndbAbNBP9mQQOklAcE2rN5LG6b7ef2/lXabKLJol6Q+Zyy4tcuxFqawg==\n-----END PUBLIC KEY-----\n",
+        "auth": {
+          "method": "kubernetes",
+          "mount": "kubernetes",
+          "role": "rcp-cosign-dev",
+          "token_file": "/var/run/secrets/rcp-vault/dev/token"
+        },
+        "allow_backfill": false
+      }
+    ],
+    "rules": [
+      {
+        "key_id": "dev",
+        "tag_prefixes": [
+          "main-",
+          "br-"
+        ]
+      }
+    ],
+    "deploy_keys": {
+      "dev": [
+        "dev"
+      ]
+    },
+    "registry_credentials": {
+      "dev-zot": "zot-rcp-signer.json"
+    },
+    "backfill_repositories": [
+      "deadnodes/legacy/"
+    ]
+  }
 }

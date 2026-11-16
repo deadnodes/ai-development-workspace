@@ -17,6 +17,7 @@ import (
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/imagesigning"
 	"releasecontrol/internal/providers/forgejo"
 	"sort"
 	"sync"
@@ -36,6 +37,8 @@ type BuildRegistry interface {
 	Resolve(context.Context, buildconfig.Registry, string, string) (buildregistry.Artifact, error)
 }
 type buildRuntime struct {
+	signer           *imagesigning.Client
+	signingMu        sync.Mutex
 	autoHeadsMu      sync.RWMutex
 	autoHeads        map[string]*autoHead
 	autoDone         map[string]bool
@@ -64,10 +67,12 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	if p == nil || r == nil {
 		return invalid("build adapters required")
 	}
+	hashConfig := copy
+	hashConfig.Signing = nil
 	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
-	}{Config: copy, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
+	}{Config: hashConfig, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
 	// Build scope: every Profile field except Deployments, RequiredStatusContexts, CIGate and AutoDeployDev;
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,
 	// InsecureHTTP; global TimeoutSeconds and RunLookbackSeconds.
@@ -102,6 +107,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 			Registry               buildconfig.Registry
 		}{profile.AutoDeployDev, profile.CIGate, rolloutAuthority([]buildconfig.Profile{profile}, copy.Rollout), hash, profile.RequiredStatusContexts, profile.Deployments["dev"], gitops, registry})
 	}
+	a.signer = imagesigning.New()
 	s.builds = a
 	return nil
 }
@@ -501,6 +507,10 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 				if n >= s.builds.config.Capacity(old.PoolID) {
 					return errBuildPoolFull
 				}
+			}
+			if next.Status == "SUCCEEDED" && s.builds.config.Signing != nil {
+				next.SigningStatus = "PENDING"
+				next.SigningStartedAt = time.Now().UTC()
 			}
 			next.UpdatedAt = time.Now().UTC()
 			st.Builds[i] = next
@@ -969,6 +979,9 @@ func (s *Service) RunBuilds(ctx context.Context) {
 		}
 		if err := s.DispatchBuildsOnce(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("build queue observation failed")
+		}
+		if err := s.SignBuildsOnce(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("signing observation failed")
 		}
 		select {
 		case <-ctx.Done():

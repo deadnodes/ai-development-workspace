@@ -359,3 +359,7 @@ build and Dev requests without canceling existing work. Follow
 a requested deployment is not proof of a healthy rollout. Agents should let
 opted-in profiles progress after merge, using explicit commands only for branch
 builds or an explicitly requested redeploy.
+
+## Image signature gate
+
+With `signing.require_signature_for_deploy`, Dev proposals require every image to have durable SIGNED evidence under a key in `signing.deploy_keys[environment]` and a freshly verified classic cosign layer for that exact digest. Missing signatures fail `SIGNATURE_MISSING`. With the gate disabled, delivery persists `signature_verified` without failing. See [image signing](IMAGE_SIGNING.md).

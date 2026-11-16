@@ -94,6 +94,7 @@ type Image struct {
 	Repository string `json:"repository"`
 }
 type Config struct {
+	Signing            *Signing      `json:"signing,omitempty"`
 	Rollout            RolloutConfig `json:"rollout,omitempty"`
 	GitOps             []GitOps      `json:"gitops,omitempty"`
 	Environments       []Environment `json:"environments,omitempty"`
@@ -145,6 +146,9 @@ func Decode(r io.Reader) (*Config, error) {
 	return &c, nil
 }
 func (c *Config) Validate() error {
+	if err := c.validateSigning(); err != nil {
+		return err
+	}
 	bad := errors.New("invalid build configuration authority")
 	if c.Rollout.TimeoutSeconds == 0 {
 		c.Rollout.TimeoutSeconds = 900

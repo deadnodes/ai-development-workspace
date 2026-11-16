@@ -4,12 +4,17 @@ import "time"
 
 // Build is its own durable asynchronous handle, independent of delivery Operations.
 type Build struct {
-	Trigger             string `json:"trigger"`
-	SupersededBy        string `json:"superseded_by,omitempty"`
-	LastError           string `json:"last_error,omitempty"`
-	ProviderUnavailable bool   `json:"provider_unavailable,omitempty"`
-	RestoreQuarantined  bool   `json:"restore_quarantined,omitempty"`
-	AuthorityHash       string `json:"authority_hash"`
+	SigningStatus        string           `json:"signing_status"`
+	Signatures           []BuildSignature `json:"signatures,omitempty"`
+	SigningAttempts      int              `json:"signing_attempts,omitempty"`
+	SigningStartedAt     time.Time        `json:"signing_started_at,omitempty"`
+	SigningNextAttemptAt time.Time        `json:"signing_next_attempt_at,omitempty"`
+	Trigger              string           `json:"trigger"`
+	SupersededBy         string           `json:"superseded_by,omitempty"`
+	LastError            string           `json:"last_error,omitempty"`
+	ProviderUnavailable  bool             `json:"provider_unavailable,omitempty"`
+	RestoreQuarantined   bool             `json:"restore_quarantined,omitempty"`
+	AuthorityHash        string           `json:"authority_hash"`
 	Meta
 	ConnectionID     string       `json:"connection_id"`
 	ConnectionAPIURL string       `json:"connection_api_url,omitempty"`
