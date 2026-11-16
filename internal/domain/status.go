@@ -6,6 +6,7 @@ import "slices"
 func StatusCatalog() map[string][]string {
 	return map[string][]string{
 		"deployment":           {"VERIFYING_ROLLOUT", "PENDING_CHECKS", "PROPOSING", "MERGING", "SUCCEEDED", "FAILED", "RECONCILIATION_REQUIRED"},
+		"signing":              {"PENDING", "SIGNED", "PARTIAL", "FAILED", "SKIPPED"},
 		"build":                {"QUEUED", "DISPATCHED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "RECONCILIATION_REQUIRED"},
 		"worker_job":           {"QUEUED", "CLAIMED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "DEADLINE_EXCEEDED", "RECONCILIATION_REQUIRED"},
 		"worker_attempt":       {"CLAIMED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "EXPIRED", "RECONCILIATION_REQUIRED"},

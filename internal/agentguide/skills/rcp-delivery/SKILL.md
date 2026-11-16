@@ -247,3 +247,7 @@ filtered by Product/profile. Newly created automatic handles carry
 Follow the existing handle and its CI/rollout evidence, rather than creating a
 replacement request because it is pending. Report a disabled kill switch,
 observation failure or delivery guard as the actual blocker.
+
+## Image signing
+
+When configured, RCP signs newly successful Forgejo images through pinned Vault Transit keys. Inspect `get_build.signing_status` and `signatures`; SUCCEEDED alone does not mean signed. Signing is separate from release approval. Dev delivery can require allowed pinned signatures and records `signature_verified`; `SIGNATURE_MISSING` requires fixing signing evidence before retrying delivery. Explicit backfill uses `sign_artifact {product_id, profile_id, image_id, image_ref, key_ids, reason, request_key}` with a digest-only reference and operator-authorized scope. Poll `list_signatures {product_id, digest?, limit?, cursor?}` for the durable handle. Reuse a request key only to read its historical result; a new retry requires a fresh key. Never supply credentials or private keys. Signing never grants production promotion, Flux merge, or trust-policy changes. See docs/IMAGE_SIGNING.md.

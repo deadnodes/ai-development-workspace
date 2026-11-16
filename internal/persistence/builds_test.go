@@ -74,6 +74,9 @@ func TestBuildPersistenceBothStores(t *testing.T) {
 			e = s.Update(ctx, func(st *domain.State) error {
 				st.Products = append(st.Products, domain.Product{Meta: domain.Meta{ID: "p"}})
 				st.Builds = append(st.Builds, domain.Build{Meta: domain.Meta{ID: "build", ProductID: "p", Actor: "agent", CreatedAt: now, UpdatedAt: now}, ProfileID: "app", Status: "RECONCILIATION_REQUIRED", ProviderRunID: 42, SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workflow: "build.yml", Images: []domain.BuildImage{{ID: "app", ImageRef: "http://registry/o/r:br-aaaaaaaa@sha256:abc", Digest: "sha256:abc"}, {ID: "web", ImageRef: "http://registry/o/web:br-aaaaaaaa@sha256:def", Digest: "sha256:def"}}, Reused: "run", QueuedAt: now, DispatchedAt: &now})
+				st.Builds[len(st.Builds)-1].SigningStatus = "SIGNED"
+				st.Builds[len(st.Builds)-1].Signatures = []domain.BuildSignature{{ImageID: "app", KeyID: "dev", KeyVersion: 1, KeyFingerprint: "spki", Status: "SIGNED", Attestations: []string{"https://slsa.dev/provenance/v1"}, SignedAt: &now}}
+				st.ArtifactSignatures = append(st.ArtifactSignatures, domain.ArtifactSignature{Meta: domain.Meta{ID: "signature", ProductID: "p"}, Status: "SIGNED", Request: domain.SignArtifactRequest{ProductID: "p", RequestKey: "sign"}, Signatures: st.Builds[len(st.Builds)-1].Signatures})
 				st.BuildReceipts = append(st.BuildReceipts, domain.BuildReceipt{Meta: domain.Meta{ID: "receipt", ProductID: "p"}, BuildID: "build", RequestKey: "key", ProfileID: "app", Workflow: "build.yml", SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
 				return nil
 			})
@@ -87,6 +90,9 @@ func TestBuildPersistenceBothStores(t *testing.T) {
 			}
 			defer s.Close()
 			st, e := s.Read(ctx)
+			if len(st.ArtifactSignatures) != 1 || st.ArtifactSignatures[0].Status != "SIGNED" || len(st.Builds[0].Signatures) != 1 || st.Builds[0].SigningStatus != "SIGNED" {
+				t.Fatal("signing evidence lost")
+			}
 			if e != nil || len(st.Builds) != 1 || st.Builds[0].ProviderRunID != 42 || st.Builds[0].Status != "RECONCILIATION_REQUIRED" || len(st.BuildReceipts) != 1 || st.Builds[0].Workflow != "build.yml" || st.Builds[0].Reused != "run" || len(st.Builds[0].Images) != 2 || st.Builds[0].Images[1].ID != "web" || st.Builds[0].Images[1].Digest != "sha256:def" || st.Builds[0].Images[0].Digest != "sha256:abc" || st.BuildReceipts[0].Workflow != "build.yml" || st.BuildReceipts[0].SourceSHA != st.Builds[0].SourceSHA {
 				t.Fatal(st.Builds, e)
 			}

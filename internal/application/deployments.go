@@ -647,6 +647,10 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		}
 	}
 	if d.Status == "PROPOSING" {
+		d.SignatureVerified = s.deploymentSignatures(ctx, d, p)
+		if s.builds.config.Signing != nil && s.builds.config.Signing.RequireSignatureForDeploy && !d.SignatureVerified {
+			return save(failedDeployment(d, "SIGNATURE_MISSING"), false)
+		}
 		// Persist uncertainty before every mutating compound request.
 		next := d
 		next.Status = "RECONCILIATION_REQUIRED"

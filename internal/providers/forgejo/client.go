@@ -10,9 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"releasecontrol/internal/buildconfig"
+	"releasecontrol/internal/secretfile"
 	"strconv"
 	"strings"
 	"time"
@@ -63,28 +63,7 @@ func token(ref string) (string, error) {
 	if filepath.Base(ref) != ref || ref == "." || ref == ".." {
 		return "", bad
 	}
-	root := os.Getenv("RCP_SECRET_DIR")
-	if root == "" {
-		root = "/run/secrets"
-	}
-	root, e := filepath.EvalSymlinks(root)
-	if e != nil {
-		return "", bad
-	}
-	p, e := filepath.EvalSymlinks(filepath.Join(root, ref))
-	if e != nil {
-		return "", bad
-	}
-	rel, e := filepath.Rel(root, p)
-	if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", bad
-	}
-	f, e := os.Open(p)
-	if e != nil {
-		return "", bad
-	}
-	defer f.Close()
-	b, e := io.ReadAll(io.LimitReader(f, 65537))
+	b, e := secretfile.Read(ref)
 	s := strings.TrimSpace(string(b))
 	if e != nil || len(b) > 65536 || s == "" || strings.ContainsAny(s, "\r\n") {
 		return "", bad

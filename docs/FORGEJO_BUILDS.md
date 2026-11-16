@@ -350,3 +350,7 @@ to inspect handles. Automatically created handles expose `trigger: "auto"`;
 events attribute actions to `system/auto-build` or `system/auto-deploy`.
 
 Opted-in profiles require `dispatch_ref == default_branch`; mismatches fail configuration loading. Auto-build deduplication includes the source branch; explicit queue requests retain SHA-based deduplication.
+
+## Image signing
+
+Optional operator-owned `signing` configuration signs newly successful builds through Vault Transit and publishes classic cosign signatures and SLSA provenance. Signing status and per-key evidence are separate from Build.status. Historical successes are not automatically backfilled. See [image signing](IMAGE_SIGNING.md) for configuration, formats and explicit backfill.

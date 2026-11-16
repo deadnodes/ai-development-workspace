@@ -80,6 +80,7 @@ func New(service Service, options Options) http.Handler {
 	workerMux := http.NewServeMux()
 	registerWorkerRoutes(workerMux, service, options)
 	registerBuildRoutes(mux, service)
+	registerSignatureRoutes(mux, service)
 	registerDeploymentRoutes(mux, service)
 	registerWorkerHistoryRoutes(mux, service)
 	registerQueryRoutes(mux, service)
@@ -94,6 +95,7 @@ func New(service Service, options Options) http.Handler {
 	registerStateNavigationTool(server, service)
 	registerRetrieval(mux, server, service)
 	registerBuildTools(server, service)
+	registerSignatureTools(server, service)
 	registerDeploymentTools(server, service)
 	registerWorkerHistoryTool(server, service)
 	mcp.AddTool(server, &mcp.Tool{Name: "resume", Description: "Bounded feature summary and recent memory excerpts (32 KiB maximum). Use graph/text search for relevant evidence; full operator history stays at the HTTP feature context endpoint."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

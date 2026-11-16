@@ -36,7 +36,15 @@ func ValidateStateStatuses(st State) error {
 			return err
 		}
 	}
+	for _, v := range st.ArtifactSignatures {
+		if err := check("signing", v.ID, v.Status, false); err != nil {
+			return err
+		}
+	}
 	for _, v := range st.Builds {
+		if err := check("signing", v.ID, v.SigningStatus, true); err != nil {
+			return err
+		}
 		if err := check("build", v.ID, v.Status, false); err != nil {
 			return err
 		}
