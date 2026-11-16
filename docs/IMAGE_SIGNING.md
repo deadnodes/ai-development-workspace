@@ -5,6 +5,11 @@ This is optional operator authority in `RCP_BUILDS_FILE`; omission of `signing`
 keeps signing disabled. Signing never changes Build.status or authorizes a release.
 Signing configuration is excluded from build authority hashes. Restart to reload.
 
+RCP signs only within its own contour, using cosign-dev. Never grant the dev
+server access to production Vault or production signing credentials. Production
+approval belongs to the separate [prod-signer](PROD_SIGNER.md) in the prod cluster.
+The generic multi-key adapter does not establish a cross-contour trust boundary.
+
 ## Configuration
 
 See `examples/forgejo-builds.json` for a complete configuration with public-only
@@ -93,7 +98,7 @@ updates. Layer count is bounded to 256 and existing malformed artifacts fail clo
 `imagesigning.Predicate` is the extension point for a later CycloneDX predicate;
 fetching SBOM referrers is not implemented.
 
-## Explicit backfill
+## Explicit dev backfill
 
 MCP `sign_artifact` or `POST /api/signatures` takes:
 
@@ -103,7 +108,7 @@ MCP `sign_artifact` or `POST /api/signatures` takes:
   "profile_id": "service",
   "image_id": "web",
   "image_ref": "registry.example.invalid/team/service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "key_ids": ["prod"],
+  "key_ids": ["dev"],
   "reason": "Operator approved legacy artifact provenance",
   "request_key": "backfill-001"
 }
@@ -111,7 +116,7 @@ MCP `sign_artifact` or `POST /api/signatures` takes:
 
 Requires Product write permission, a configured image ID, an exact digest in that
 profile's registry, and either the configured image repository or an allowlisted
-backfill prefix. Each key must allow backfill or be a configured rule key.
+backfill prefix. Dev keys only: each key must allow backfill or be a configured rule key.
 HEAD verifies existence, then digest-checked image/index/config reads extract a
 revision label if present. Backfill provenance uses buildType
 `https://deadnodes.dev/rcp/backfill/v1`, reason, actor and observed revision.

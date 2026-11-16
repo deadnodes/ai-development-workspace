@@ -337,6 +337,12 @@ func Statement(repo, digest string, p Predicate) []byte {
 // Publish serializes read/append/write within this installation. Registry tags have no CAS;
 // separate writers must use separate signing authority or coordinate externally.
 func (c *Client) Publish(ctx context.Context, reg buildconfig.Registry, repo, credential string, k buildconfig.SigningKey, digest, buildID, sha string, p Predicate) (int, error) {
+	u, _ := url.Parse(reg.Origin)
+	return c.PublishIdentity(ctx, reg, repo, credential, k, digest, buildID, sha, u.Host+"/"+repo, p)
+}
+
+// PublishIdentity stores artifacts separately while preserving the signed source identity.
+func (c *Client) PublishIdentity(ctx context.Context, reg buildconfig.Registry, repo, credential string, k buildconfig.SigningKey, digest, buildID, sha, identity string, p Predicate) (int, error) {
 	c.writes.Lock()
 	defer c.writes.Unlock()
 	if !DigestPattern.MatchString(digest) {
@@ -346,8 +352,7 @@ func (c *Client) Publish(ctx context.Context, reg buildconfig.Registry, repo, cr
 	if e != nil {
 		return 0, e
 	}
-	u, _ := url.Parse(reg.Origin)
-	payload := Payload(u.Host+"/"+repo, digest, buildID, sha, k.ID)
+	payload := Payload(identity, digest, buildID, sha, k.ID)
 	sig, version, e := c.Sign(ctx, k, payload)
 	if e != nil {
 		return 0, e
@@ -355,7 +360,7 @@ func (c *Client) Publish(ctx context.Context, reg buildconfig.Registry, repo, cr
 	if e = r.append(ctx, Tag(digest, "sig"), payload, SignatureType, map[string]string{SignatureAnnotation: base64.StdEncoding.EncodeToString(sig)}, k); e != nil {
 		return version, e
 	}
-	statement := Statement(u.Host+"/"+repo, digest, p)
+	statement := Statement(identity, digest, p)
 	sig, v, e := c.Sign(ctx, k, PAE(PayloadType, statement))
 	if e != nil {
 		return version, e
