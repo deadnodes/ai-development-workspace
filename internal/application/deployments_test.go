@@ -1,11 +1,13 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -821,5 +823,32 @@ func TestDeployBuildCrossProductInProgressRedactsHandle(t *testing.T) {
 	}
 	if got.ID != "" || len(m.state.Deployments) != 1 || len(m.state.Events) != eventsBefore || f.ancestorCalls != 0 {
 		t.Fatalf("refusal changed state or checked ancestry: %+v", got)
+	}
+}
+
+type deploymentUpdateFailureStore struct{ *memoryStore }
+
+func (m deploymentUpdateFailureStore) Update(context.Context, func(*domain.State) error) error {
+	return errors.New("deployment changed: token=never-log-this")
+}
+
+func TestDeployObservationErrorLogging(t *testing.T) {
+	s, m, _, in := deploymentFixture(t)
+	d, err := s.DeployBuild(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.state.Deployments[0].Status = "PROPOSING"
+	s.store = deploymentUpdateFailureStore{m}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	if err := s.DispatchDeploymentsOnce(context.Background()); err == nil {
+		t.Fatal("expected failed update")
+	}
+	got := logs.String()
+	if !strings.Contains(got, "deployment_id="+d.ID) || !strings.Contains(got, "deployment changed") || strings.Contains(got, "never-log-this") {
+		t.Fatal(got)
 	}
 }

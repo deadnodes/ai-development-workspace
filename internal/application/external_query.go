@@ -298,6 +298,16 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, missing("product", id)
 		}
 		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC(), freshness))
+		var secretWarnings []map[string]any
+		var secretRefreshFailures map[string]bool
+		if err := s.view(ctx, func(raw *domain.State) error {
+			secretWarnings = connectionSecretWarnings(raw, id)
+			secretRefreshFailures = connectionSecretRefreshFailures(raw, id, secretWarnings)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		items = append(items, secretWarnings...)
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
 		items = append(items, mainCIAttention(st, id)...)
@@ -311,6 +321,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 		}
 		for _, op := range st.Operations {
+			if secretRefreshFailures[op.ID] {
+				continue
+			}
 			if op.ProductID == id && (op.Status == "FAILED" || op.DeploymentState == "GITOPS_APPLIED") {
 				if op.Kind == "REFRESH_GIT" && op.Status == "FAILED" {
 					// A feature branch commonly disappears after its PR is merged.

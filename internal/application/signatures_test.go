@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/buildconfig"
@@ -266,5 +267,54 @@ func TestSigningProvenanceShape(t *testing.T) {
 	byproduct := details["byproducts"].([]any)[0].(map[string]any)
 	if byproduct["annotations"].(map[string]any)["observed"].(map[string]string)["ci"] != "success" {
 		t.Fatal(byproduct)
+	}
+}
+
+func TestDeployProposingSignatureSnapshot(t *testing.T) {
+	for _, signed := range []bool{true, false} {
+		t.Run(fmt.Sprint("signed=", signed), func(t *testing.T) {
+			s, m, fake, in := deploymentFixture(t)
+			fixture := signingtest.New(t)
+			s.builds.config.Registries = []buildconfig.Registry{fixture.RegistryConfig()}
+			s.builds.config.Signing = fixture.Config()
+			s.builds.config.Signing.RequireSignatureForDeploy = true
+			s.builds.config.Signing.DeployKeys = map[string][]string{"dev": {"dev"}}
+			s.builds.signer = imagesigning.NewWithClient(fixture.Client())
+			b := &m.state.Builds[0]
+			digest := fixture.Image(b.SourceSHA)
+			b.Images = []domain.BuildImage{{ID: "app", Digest: digest, ImageRef: "registry.test/o/r:main-aaaaaaaa@" + digest}}
+			b.SigningStatus = "PENDING"
+			b.SigningStartedAt = time.Now().UTC()
+			ctx := context.Background()
+			if signed {
+				if err := s.SignBuildsOnce(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if m.state.Builds[0].SigningStatus != "SIGNED" {
+					t.Fatal(m.state.Builds[0])
+				}
+			}
+			d, err := s.DeployBuild(ctx, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Update(ctx, func(st *domain.State) error { st.Deployments[0].Status = "PROPOSING"; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			// Keep the PR awaiting verification so the MERGING checkpoint is visible.
+			fake.verifyErr = errors.New("checks pending")
+			deployTick(t, s)
+			got := m.state.Deployments[0]
+			if got.ID != d.ID {
+				t.Fatal(got)
+			}
+			if signed {
+				if got.Status != "MERGING" || !got.SignatureVerified || fake.proposals != 1 {
+					t.Fatal(got, fake.proposals)
+				}
+			} else if got.Status != "FAILED" || got.FailureCode != "SIGNATURE_MISSING" || got.SignatureVerified || fake.proposals != 0 {
+				t.Fatal(got, fake.proposals)
+			}
+		})
 	}
 }

@@ -16,6 +16,7 @@ import (
 
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
+	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/imagesigning"
 	"releasecontrol/internal/providers/forgejo"
@@ -975,7 +976,7 @@ func (s *Service) RunBuilds(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := s.DispatchDeploymentsOnce(ctx); err != nil && ctx.Err() == nil {
-			slog.Warn("deployment observation failed")
+			slog.Warn("deployment observation failed", "error", delivery.SafeRolloutReason(err.Error()))
 		}
 		if err := s.DispatchBuildsOnce(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("build queue observation failed")
