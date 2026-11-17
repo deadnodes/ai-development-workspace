@@ -16,12 +16,14 @@ import (
 const ApprovalType = "https://deadnodes.dev/attestations/prod-approval/v1"
 
 type Summary struct {
-	Revision      string `json:"revision"`
-	Total         int    `json:"total"`
-	AlreadySigned int    `json:"already_signed"`
-	Signed        int    `json:"signed"`
-	Unapproved    int    `json:"unapproved"`
-	Errors        int    `json:"errors"`
+	Revision        string `json:"revision"`
+	Total           int    `json:"total"`
+	AlreadySigned   int    `json:"already_signed"`
+	Signed          int    `json:"signed"`
+	Unapproved      int    `json:"unapproved"`
+	Errors          int    `json:"errors"`
+	Intents         int    `json:"intents"`
+	RejectedIntents int    `json:"rejected_intents"`
 }
 type provenance struct {
 	Type          string `json:"_type"`
@@ -119,6 +121,7 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 	if e != nil {
 		return fail()
 	}
+	collectIntents(c, files, refs, &s, log)
 	reg := buildconfig.Registry{Origin: c.Registry.Origin, InsecureHTTP: c.Registry.InsecureHTTP}
 	credential := filepath.Base(c.Registry.CredentialsFile)
 	keys := []string{}
@@ -132,6 +135,11 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 		r := refs[k]
 		if v := byDigest[r.Digest]; v != nil {
 			v.Paths = append(v.Paths, r.Paths...)
+			if r.Intent {
+				v.Intent = true
+				v.IntentApprovedIn = r.IntentApprovedIn
+				v.Feature = r.Feature
+			}
 			if r.Reason != "" {
 				v.Reason = r.Reason
 				v.ApprovedIn = r.ApprovedIn
@@ -171,6 +179,13 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 			continue
 		}
 		predicate := map[string]any{"flux_revision": a.Revision, "flux_artifact_digest": a.Digest, "file_paths": r.Paths, "image_ref": r.Image}
+		if r.Intent {
+			predicate["release_intent"] = true
+			predicate["intent_approved_in"] = r.IntentApprovedIn
+			if r.Feature != "" {
+				predicate["intent_feature"] = r.Feature
+			}
+		}
 		buildID, sha := "", ""
 		infrastructureFailure := false
 		valid := r.Reason != ""
@@ -254,7 +269,7 @@ func WriteMetrics(filename string, s Summary) error {
 		return e
 	}
 	defer os.Remove(f.Name())
-	_, e = fmt.Fprintf(f, "prod_signer_total %d\nprod_signer_already_signed %d\nprod_signer_signed %d\nprod_signer_unapproved %d\nprod_signer_errors %d\n", s.Total, s.AlreadySigned, s.Signed, s.Unapproved, s.Errors)
+	_, e = fmt.Fprintf(f, "prod_signer_total %d\nprod_signer_already_signed %d\nprod_signer_signed %d\nprod_signer_unapproved %d\nprod_signer_errors %d\nprod_signer_intents %d\nprod_signer_rejected_intents %d\n", s.Total, s.AlreadySigned, s.Signed, s.Unapproved, s.Errors, s.Intents, s.RejectedIntents)
 	if closeErr := f.Close(); e == nil {
 		e = closeErr
 	}

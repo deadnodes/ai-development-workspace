@@ -180,3 +180,35 @@ write failures exit nonzero. Optional metrics_file atomically replaces a
 Prometheus textfile containing prod_signer_* counts; mount a writable directory
 if enabling it. Live Vault, registry, RBAC and admission-policy acceptance are
 operator checks, separate from fake-service tests.
+
+## Release intents: sign before deploying
+
+To sign a new image before changing its production image pin, merge an intent
+into the same Flux artifact first, then wait for its production signature before
+merging the image pin. `release_intents_file` optionally selects the file. When
+omitted, it defaults to `release-intents.yaml` beside `backfill_file`; if neither
+path is configured, intents are disabled. The file is retained even outside `paths`.
+
+```yaml
+intents:
+- repository: ghcr.io/deadnodes/pp-back
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  approved_in: https://github.com/deadnodes/flux/pull/123
+  feature: optional-feature-id
+  notes: optional explanation
+```
+
+Repositories must match `own_image_prefixes` and contain neither tag nor digest;
+`approved_in` must be an absolute HTTPS URL. Intent approval does not bypass dev
+signature, provenance, or source revision verification. Backfill approval keeps
+its existing precedence when the same digest also has a backfill entry.
+The approval predicate records `release_intent`, `intent_approved_in`, and optional
+`intent_feature`; paths merge and each digest is processed (and signed) once.
+
+Absent, empty, comment-only files and `intents: []` are no-ops. Malformed YAML,
+unknown fields, and additional YAML documents invalidate the whole intents file:
+one `release_intents_invalid` JSON line is logged and other signing continues.
+Invalid entries produce `rejected_intent` JSON lines without incrementing errors.
+Summary fields `intents` (valid entries) and `rejected_intents` are also exposed as
+`prod_signer_intents` and `prod_signer_rejected_intents` metrics. Protect release
+intent changes with the same review controls as production Flux changes.
