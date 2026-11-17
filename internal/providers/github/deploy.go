@@ -238,10 +238,22 @@ func (p *Provider) FindDeployment(ctx context.Context, g buildconfig.GitOps, bra
 	if e = p.request(ctx, c, "GET", "/repos/"+g.Repository+"/pulls?"+q.Encode(), nil, &list); e != nil {
 		return out, e
 	}
+	if len(list) == 0 {
+		return out, ErrNotFound
+	}
 	if len(list) != 1 || list[0].Head.Ref != branch || list[0].Head.Repo.FullName != g.Repository || list[0].Base.Ref != "main" || list[0].Base.Repo.FullName != g.Repository {
 		return out, ErrConflict
 	}
 	return p.ReadDeployment(ctx, g, list[0].Number)
+}
+
+// DeploymentBranchHead returns the current head of a deployment branch.
+func (p *Provider) DeploymentBranchHead(ctx context.Context, g buildconfig.GitOps, branch string) (string, error) {
+	c, e := deployConnection(g)
+	if e != nil {
+		return "", e
+	}
+	return p.deployHead(ctx, c, g.Repository, branch)
 }
 func (p *Provider) ReadDeployment(ctx context.Context, g buildconfig.GitOps, n int) (DeployPR, error) {
 	var out DeployPR

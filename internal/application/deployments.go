@@ -33,6 +33,7 @@ type DeploymentRegistry interface {
 type DeploymentGitOps interface {
 	ProposeDeployment(context.Context, buildconfig.GitOps, github.DeployPlan) (github.DeployProposal, error)
 	FindDeployment(context.Context, buildconfig.GitOps, string) (github.DeployPR, error)
+	DeploymentBranchHead(context.Context, buildconfig.GitOps, string) (string, error)
 	ReadDeployment(context.Context, buildconfig.GitOps, int) (github.DeployPR, error)
 	VerifyDeployment(context.Context, buildconfig.GitOps, github.DeployPlan, github.DeployPR) error
 	MergeDeployment(context.Context, buildconfig.GitOps, int, string) (string, error)
@@ -695,13 +696,37 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		}
 		pr, e := a.gitops.FindDeployment(ctx, g, d.Branch)
 		if e != nil {
+			if errors.Is(e, github.ErrNotFound) && d.UncertainAction == "propose" {
+				_, headErr := a.gitops.DeploymentBranchHead(ctx, g, d.Branch)
+				if headErr != nil && !errors.Is(headErr, github.ErrNotFound) {
+					return nil
+				}
+				if errors.Is(headErr, github.ErrNotFound) {
+					if time.Now().Before(d.Deadline) && d.RetryCount < 2 {
+						next := d
+						next.Status, next.UncertainAction, next.FailureCode = "PROPOSING", "", ""
+						next.RetryCount++
+						return save(next, false)
+					}
+					return save(failedDeployment(d, "PR_NOT_CREATED"), false)
+				}
+				if !time.Now().Before(d.Deadline) {
+					return save(failedDeployment(d, "PR_NOT_CREATED"), false)
+				}
+				return nil
+			}
 			return nil
 		}
 		if pr.Head.Ref != d.Branch || pr.Base.Ref != "main" || pr.Head.Repo.FullName != g.Repository || pr.Base.Repo.FullName != g.Repository {
+			if d.UncertainAction == "propose" && !time.Now().Before(d.Deadline) {
+				return save(failedDeployment(d, "GITOPS_SCOPE_CHANGED"), false)
+			}
 			return nil
 		}
 		if d.HeadSHA == "" {
-			// A lost proposal response cannot establish which commit we created.
+			if !time.Now().Before(d.Deadline) {
+				return save(failedDeployment(d, "PR_UNCERTAIN_EXPIRED"), false)
+			}
 			return nil
 		}
 		if pr.Head.SHA != d.HeadSHA {
@@ -712,6 +737,9 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		next.PRURL = pr.URL
 		if pr.Merged {
 			if !buildconfig.SHA.MatchString(pr.MergeSHA) {
+				if !time.Now().Before(d.Deadline) {
+					return save(failedDeployment(d, "PR_NOT_CREATED"), false)
+				}
 				return nil
 			}
 			next.HeadSHA = pr.Head.SHA
