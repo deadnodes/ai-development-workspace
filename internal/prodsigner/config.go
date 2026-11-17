@@ -30,6 +30,7 @@ type Config struct {
 	DevPublicKeyPEM      string                 `json:"dev_public_key_pem"`
 	ProdKey              buildconfig.SigningKey `json:"prod_key"`
 	BuilderIDs           []string               `json:"builder_ids"`
+	ReleaseIntentsFile   string                 `json:"release_intents_file"`
 	BackfillFile         string                 `json:"backfill_file"`
 	MetricsFile          string                 `json:"metrics_file"`
 }
@@ -60,6 +61,9 @@ func (c Config) Validate() error {
 			return bad
 		}
 	}
+	if c.ReleaseIntentsFile != "" && !safePath(c.ReleaseIntentsFile) {
+		return bad
+	}
 	if c.BackfillFile != "" && !safePath(c.BackfillFile) {
 		return bad
 	}
@@ -87,4 +91,15 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// IntentsFile resolves the optional release intent artifact path.
+func (c Config) IntentsFile() string {
+	if c.ReleaseIntentsFile != "" {
+		return c.ReleaseIntentsFile
+	}
+	if c.BackfillFile != "" {
+		return path.Join(path.Dir(c.BackfillFile), "release-intents.yaml")
+	}
+	return ""
 }

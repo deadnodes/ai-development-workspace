@@ -128,7 +128,7 @@ func extract(b []byte, c Config) (map[string][]byte, error) {
 		if size > maxArtifact || h.Size < 0 {
 			return nil, errInput
 		}
-		keep := name == c.BackfillFile
+		keep := name == c.BackfillFile || name == c.IntentsFile()
 		for _, p := range c.Paths {
 			keep = keep || strings.HasPrefix(name, p)
 		}
@@ -148,9 +148,11 @@ func extract(b []byte, c Config) (map[string][]byte, error) {
 }
 
 type Ref struct {
-	Image, Repo, Digest string
-	Paths               []string
-	Reason, ApprovedIn  string
+	Image, Repo, Digest       string
+	Paths                     []string
+	Reason, ApprovedIn        string
+	Intent                    bool
+	IntentApprovedIn, Feature string
 }
 
 func parseRef(s string) (Ref, bool) {
@@ -191,6 +193,9 @@ func collect(c Config, files map[string][]byte) (map[string]*Ref, error) {
 		}
 	}
 	for p, b := range files {
+		if p == c.IntentsFile() {
+			continue
+		}
 		if p == c.BackfillFile {
 			var v struct {
 				Digests []struct {
