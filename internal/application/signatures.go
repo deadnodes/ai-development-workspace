@@ -119,22 +119,18 @@ func (s *Service) signingCI(ctx context.Context, b domain.Build, p buildconfig.P
 		CommitStatus(context.Context, buildconfig.Connection, string, string) ( /* shared provider response */ forgejo.CommitStatus, error)
 	})
 	if !ok {
-		return false, false, nil
+		return false, false, map[string]string{}
 	}
 	v, e := source.CommitStatus(ctx, s.builds.config.Connection(p.ConnectionID), p.Repository, b.SourceSHA)
 	if e != nil {
-		return false, false, nil
+		return false, false, map[string]string{}
 	}
-	green, failed, contexts := ciVerdict(trustedCIStatus(v, p), p.RequiredStatusContexts)
-	if !green && !failed && s.deployments != nil {
-		d := domain.Deployment{SourceSHA: b.SourceSHA}
-		if s.acceptPRTree(ctx, &d, p) == nil && d.CIEvidence == "pr_tree" {
-			return true, false, d.CIContexts
-		}
-	}
-	return green, failed, contexts
+	return ciVerdict(trustedCIStatus(v, p), p.RequiredStatusContexts)
 }
 func (s *Service) buildPredicate(b domain.Build, p buildconfig.Profile, contexts map[string]string) imagesigning.Predicate {
+	if contexts == nil {
+		contexts = map[string]string{}
+	}
 	cn := s.builds.config.Connection(p.ConnectionID)
 	branch := b.Branch
 	if branch == "" {

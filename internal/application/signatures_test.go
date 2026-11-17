@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -18,11 +20,18 @@ import (
 
 type signingForgejo struct {
 	*fakeForgejo
-	state string
+	state       string
+	contextName string
+	shas        []string
 }
 
-func (f *signingForgejo) CommitStatus(context.Context, buildconfig.Connection, string, string) (forgejo.CommitStatus, error) {
-	return forgejo.CommitStatus{State: f.state, Statuses: []forgejo.StatusContext{{Context: "ci", Status: f.state, TargetURL: "/o/r/actions/runs/1/jobs/1"}}}, nil
+func (f *signingForgejo) CommitStatus(_ context.Context, _ buildconfig.Connection, _ string, sha string) (forgejo.CommitStatus, error) {
+	f.shas = append(f.shas, sha)
+	name := f.contextName
+	if name == "" {
+		name = "ci"
+	}
+	return forgejo.CommitStatus{State: f.state, Statuses: []forgejo.StatusContext{{Context: name, Status: f.state, TargetURL: "/o/r/actions/runs/1/jobs/1"}}}, nil
 }
 func signingFixture(t *testing.T) (*Service, *memoryStore, *signingtest.Fixture, *signingForgejo, domain.Build) {
 	t.Helper()
@@ -31,7 +40,7 @@ func signingFixture(t *testing.T) (*Service, *memoryStore, *signingtest.Fixture,
 	cfg := buildConfig()
 	cfg.Registries = []buildconfig.Registry{f.RegistryConfig()}
 	cfg.Signing = f.Config()
-	provider := &signingForgejo{base, "success"}
+	provider := &signingForgejo{fakeForgejo: base, state: "success"}
 	if e := s.ConfigureBuilds(cfg, provider, r); e != nil {
 		t.Fatal(e)
 	}
@@ -316,5 +325,120 @@ func TestDeployProposingSignatureSnapshot(t *testing.T) {
 				t.Fatal(got, fake.proposals)
 			}
 		})
+	}
+}
+
+// Read the actual published DSSE statement, including JSON map/null encoding.
+func signingObserved(t *testing.T, f *signingtest.Fixture, b domain.Build) map[string]string {
+	t.Helper()
+	var manifest imagesigning.Manifest
+	if err := json.Unmarshal(f.Manifests[imagesigning.Tag(b.Images[0].Digest, "att")], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Layers) != 1 {
+		t.Fatal(manifest)
+	}
+	var envelope imagesigning.Envelope
+	if err := json.Unmarshal(f.Blobs[manifest.Layers[0].Digest], &envelope); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := base64.StdEncoding.DecodeString(envelope.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statement struct {
+		Predicate struct {
+			RunDetails struct {
+				Byproducts []struct {
+					Name        string
+					Annotations struct {
+						Required []string
+						Observed map[string]string
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(payload, &statement); err != nil {
+		t.Fatal(err)
+	}
+	products := statement.Predicate.RunDetails.Byproducts
+	if len(products) != 1 || products[0].Name != "required_status_contexts" || len(products[0].Annotations.Required) != 1 || products[0].Annotations.Required[0] != "ci (push)" {
+		t.Fatalf("unexpected byproducts: %+v", products)
+	}
+	observed := products[0].Annotations.Observed
+	if observed == nil {
+		t.Fatal("observed serialized as null")
+	}
+	return observed
+}
+
+func TestSigningRequiresMainPushEvidence(t *testing.T) {
+	for _, state := range []string{"pending", "success", "failure"} {
+		t.Run(state, func(t *testing.T) {
+			s, _, f, provider, b := signingFixture(t)
+			provider.state, provider.contextName = state, "ci (push)"
+			s.builds.config.Signing.Rules[0].RequireStatusContexts = true
+			s.builds.config.Profiles[0].RequiredStatusContexts = []string{"ci (push)"}
+			// This evidence would have let the former signing PR-tree fallback sign.
+			_, _, tree, _ := treeGateFixture(t)
+			tree.headStatus = forgejo.CommitStatus{State: "success", Statuses: []forgejo.StatusContext{{Context: "ci (pull_request)", Status: "success", TargetURL: "/o/r/actions/runs/2/jobs/1"}}}
+			if err := s.ConfigureDeployments(tree, tree, tree); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SignBuildsOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.GetBuild(context.Background(), domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{"pending": "PENDING", "success": "SIGNED", "failure": "SKIPPED"}[state]
+			if got.SigningStatus != want {
+				t.Fatal(got)
+			}
+			if len(provider.shas) != 1 || provider.shas[0] != b.SourceSHA {
+				t.Fatal(provider.shas)
+			}
+			if tree.calls != 0 || tree.prCalls != 0 || tree.treeCalls != 0 {
+				t.Fatal("signing consulted PR evidence")
+			}
+			switch state {
+			case "pending":
+				if len(got.Signatures) != 0 || f.Signs != 0 || f.Writes != 0 || !got.SigningNextAttemptAt.After(time.Now()) {
+					t.Fatal(got)
+				}
+			case "failure":
+				if len(got.Signatures) != 1 || got.Signatures[0].Status != "SKIPPED" || got.Signatures[0].FailureCode != "CI_NOT_GREEN" || f.Signs != 0 || f.Writes != 0 {
+					t.Fatal(got)
+				}
+			case "success":
+				if len(got.Signatures) != 1 || got.Signatures[0].Status != "SIGNED" || f.Signs == 0 {
+					t.Fatal(got)
+				}
+				observed := signingObserved(t, f, got)
+				if len(observed) != 1 || observed["ci (push)"] != "success" {
+					t.Fatal(observed)
+				}
+			}
+		})
+	}
+}
+
+func TestSigningUnconsultedCIObservedEmptyObject(t *testing.T) {
+	s, _, f, provider, b := signingFixture(t)
+	s.builds.config.Profiles[0].RequiredStatusContexts = []string{"ci (push)"}
+	if err := s.SignBuildsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetBuild(context.Background(), domain.BuildLookup{ProductID: b.ProductID, BuildID: b.ID})
+	if err != nil || got.SigningStatus != "SIGNED" {
+		t.Fatal(got, err)
+	}
+	if len(provider.shas) != 0 {
+		t.Fatal("CI consulted for rule without CI requirement")
+	}
+	if observed := signingObserved(t, f, got); len(observed) != 0 {
+		t.Fatal(observed)
 	}
 }
