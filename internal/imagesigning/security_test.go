@@ -51,7 +51,7 @@ func TestSecurityEvidenceReferrers(t *testing.T) {
 			sbomManifest, _ := json.Marshal(s.Manifest{SchemaVersion: 2, MediaType: s.ManifestType, ArtifactType: s.SBOMArtifactType, Subject: &s.Descriptor{Digest: subject}, Layers: []s.Descriptor{{MediaType: s.SBOMArtifactType, Digest: s.Hash(sbom), Size: len(sbom)}}})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
-				case strings.Contains(r.URL.Path, "/referrers/") && strings.Contains(r.URL.RawQuery, s.SecurityArtifactType):
+				case strings.Contains(r.URL.Path, "/referrers/") && r.URL.Query().Get("artifactType") == s.SecurityArtifactType:
 					if tc.mode == "none" {
 						_, _ = w.Write([]byte(`{"manifests":[]}`))
 						return

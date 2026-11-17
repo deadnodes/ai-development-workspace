@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/imagesigning"
 	"strings"
@@ -102,6 +103,7 @@ func TestSigningSecurityGateOutcomesAndByproduct(t *testing.T) {
 				secondDigest := fixture.Image(strings.Repeat("8", 40))
 				b.Images = append(b.Images, domain.BuildImage{ID: "other", Digest: secondDigest, ImageRef: "registry.test/o/other:main-bbbbbbbb@" + secondDigest})
 				m.state.Builds[0].Images = b.Images
+				s.builds.config.Profiles[0].Images = append(s.builds.config.Profiles[0].Images, buildconfig.Image{ID: "other", Repository: s.builds.config.Profiles[0].Images[0].Repository})
 				ev2 := ev
 				ev2.Digest = secondDigest
 				ev2.SummaryDigest = "sha256:" + strings.Repeat("3", 64)
