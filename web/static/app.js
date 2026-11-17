@@ -52,11 +52,11 @@ async function loadIdentity(){
   }
  }catch(error){notice('Unable to check your session. Retry with Refresh.',true);}
 }
-async function request(path, body) {
+async function request(path, body, options={}) {
  const finish=body&&typeof beginLiveMutation==='function'?beginLiveMutation():()=>{};
  try {
   const token = browserToken();
-  const response = await fetch(path,{credentials:'same-origin',method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',...(authCSRF?{'X-CSRF-Token':authCSRF}:{})}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  const response = await fetch(path,{credentials:'same-origin',method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',...(authCSRF?{'X-CSRF-Token':authCSRF}:{})}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{}),...options});
   if(response.status===401&&authMode==='oidc'){requireSignIn();throw new Error('Sign in to continue.');}
   const data = await response.json();
   if(!response.ok) throw new Error(data.error?.message || data.error || data.message || `Request failed (${response.status})`);
@@ -67,7 +67,7 @@ function notice(message,error=false){$('#notice').textContent=message;$('#notice
 let statusMetadata={catalog:{},transitions:{}};
 let refreshInFlight=0;
 let refreshAllInFlight=false;
-function uiStateURL(){const q=new URLSearchParams();if(productID)q.set("product_id",productID);const f=featureID();if(f&&!["configuration","delivery","operations","main"].includes(f))q.set("feature_id",f);return "/api/ui-state?"+q.toString();}
+function uiStateURL(){const q=new URLSearchParams();if(productID)q.set("product_id",productID);const f=featureID();if(f&&!["configuration","delivery","operations","main","pipelines"].includes(f))q.set("feature_id",f);return "/api/ui-state?"+q.toString();}
 async function refresh(){
  if(authExpired){await loadIdentity();if(authExpired)return;}
  if(typeof invalidateLive==='function')invalidateLive();
@@ -122,9 +122,10 @@ function render(preserve=false){
  const paint=(node,html)=>{if(preserve&&typeof patchLiveHTML==='function')patchLiveHTML(node,html);else node.innerHTML=html;};
  if(document.activeElement!==$('#product')){paint($('#product'),list(state.products).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')||'<option>No products yet</option>');$('#product').value=productID;}
  paint($('#feature-nav'),sortedFeatures().map(f=>`<a href="#${encodeURIComponent(f.id)}" class="${f.id===featureID()?'active':''}">${esc(f.title)}</a>`).join(''));
- const f=selectedFeature(), route=featureID();$('#breadcrumb').textContent=route==='configuration'?'Product configuration':route==='operations'?'Operations':route==='delivery'?'Environments & delivery':f?.title||'Overview';$('.nav-overview').classList.toggle('active',!f&&!['operations','delivery','configuration'].includes(route));$('.nav-delivery').classList.toggle('active',route==='delivery');$('.nav-operations').classList.toggle('active',route==='operations');
+ const f=selectedFeature(), route=featureID();$('#breadcrumb').textContent=route==='configuration'?'Product configuration':route==='operations'?'Operations':route==='delivery'?'Environments & delivery':route==='pipelines'?'Pipelines':f?.title||'Overview';$('.nav-overview').classList.toggle('active',!f&&!['operations','delivery','configuration','pipelines'].includes(route));$('.nav-pipelines')?.classList.toggle('active',route==='pipelines');$('.nav-delivery').classList.toggle('active',route==='delivery');$('.nav-operations').classList.toggle('active',route==='operations');
+ if(route!=='pipelines'&&typeof stopPipelines==='function')stopPipelines();
  $('.nav-configuration')?.classList.toggle('active',route==='configuration');
- paint($('#main'),route==='configuration'?productConfiguration():route==='delivery'&&typeof deliveryView==='function'?deliveryView():featureID()==='operations'&&typeof operationsView==='function'?operationsView():f?featureView(f):overview());
+ paint($('#main'),route==='pipelines'&&typeof pipelineView==='function'?pipelineView():route==='configuration'?productConfiguration():route==='delivery'&&typeof deliveryView==='function'?deliveryView():featureID()==='operations'&&typeof operationsView==='function'?operationsView():f?featureView(f):overview());
  if(state.projection){const hint=document.createElement('p');hint.className='muted projection-note';hint.textContent='Recent browser view and history excerpts · full history is retained in storage. '+(list(state.projection.truncated).length?'Some lists are limited; use scoped search/context for older records.':'');$('#main').prepend(hint);}
  if(typeof syncWorkerHistory==='function')syncWorkerHistory();
  if(route==='operations'&&!state.projection&&typeof loadAttention==='function'&&!attentionResults.has(productID)&&!attentionAttempts.has(productID)) queueMicrotask(loadAttention);
@@ -225,7 +226,7 @@ $('#command-form').onsubmit=async e=>{e.preventDefault();if(!currentForm)return;
  $('#save').disabled=true;$('#save').textContent='Saving…';const result=await request('/api/commands',command);closeDialog();if(action==='create_product'){productID=result.id;persistProductRoute(true,'');}if(action==='delete_product'){productID='';persistProductRoute(true,'');}
  if(action==='create_feature')location.hash=encodeURIComponent(result.id);await refresh();notice('Saved. Shared context and activity history are up to date.');
  }catch(error){$('#form-error').textContent=error.message;}finally{$('#save').disabled=false;$('#save').textContent=forms[action].label;}};
-$('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['configuration','delivery','operations'].includes(featureID())?location.hash:'');render();refresh();};
+$('#product').onchange=e=>{productID=e.target.value;persistProductRoute(true,['configuration','delivery','operations','pipelines'].includes(featureID())?location.hash:'');render();refresh();};
 $('#refresh').onclick=refreshEverything;
 $('.skip').onclick=e=>{e.preventDefault();$('#main').focus();};
 async function showAccount(){
