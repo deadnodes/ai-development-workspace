@@ -76,6 +76,9 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 		handler.ServeHTTP(w, req)
 		return w.Code, w.Body.Bytes()
 	}
+	if status, _ := callHTTP("GET", "/api/pipelines?product_id=p", "", false); status != 401 {
+		t.Fatal("pipelines read unexpectedly public", status)
+	}
 	if status, _ := callHTTP("GET", "/api/builds?product_id=p", "", false); status != 401 {
 		t.Fatal(status)
 	}
@@ -98,7 +101,7 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	required := map[string]bool{"queue_build": false, "get_build": false, "list_builds": false, "cancel_build": false, "close_build": false, "list_build_profiles": false}
+	required := map[string]bool{"queue_build": false, "get_build": false, "list_builds": false, "list_pipelines": false, "cancel_build": false, "close_build": false, "list_build_profiles": false}
 	for _, tool := range tools.Tools {
 		if _, ok := required[tool.Name]; ok {
 			required[tool.Name] = true
@@ -115,13 +118,14 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 			t.Fatal("missing tool", name)
 		}
 	}
-	for _, name := range []string{"queue_build", "get_build", "list_builds", "list_build_profiles", "cancel_build"} {
+	for _, name := range []string{"queue_build", "get_build", "list_builds", "list_pipelines", "list_build_profiles", "cancel_build"} {
 		args := map[string]any{"product_id": "p"}
 		switch name {
 		case "queue_build":
 			args["profile_id"] = "app"
 		case "get_build", "cancel_build":
 			args["build_id"] = b.ID
+		case "list_pipelines":
 		}
 		res, e := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 		if e != nil || res.IsError {
@@ -130,6 +134,9 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 		j, _ := json.Marshal(res.StructuredContent)
 		if bytes.Contains(j, []byte("secret-ref")) {
 			t.Fatal("credential reference leaked")
+		}
+		if name == "list_pipelines" && !bytes.Contains(j, []byte("items")) {
+			t.Fatal("pipeline page missing")
 		}
 		if name == "queue_build" || name == "get_build" {
 			var got domain.Build
@@ -169,7 +176,10 @@ func TestBuildHTTPMCPContract(t *testing.T) {
 			t.Fatal("obsolete or ambiguous selector accepted", status)
 		}
 	}
-	for _, path := range []string{"/api/builds?product_id=p&limit=101", "/api/builds?product_id=p&unknown=1", "/api/builds?product_id=p&product_id=x"} {
+	if status, raw := callHTTP("GET", "/api/pipelines?product_id=p", "", true); status != 200 || !bytes.Contains(raw, []byte("profiles")) {
+		t.Fatal("pipeline page", status, string(raw))
+	}
+	for _, path := range []string{"/api/pipelines?product_id=p&limit=101", "/api/pipelines?product_id=p&unknown=1", "/api/builds?product_id=p&limit=101", "/api/builds?product_id=p&unknown=1", "/api/builds?product_id=p&product_id=x"} {
 		if status, _ := callHTTP("GET", path, "", true); status < 400 {
 			t.Fatal("invalid query accepted", path)
 		}

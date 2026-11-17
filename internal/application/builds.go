@@ -317,7 +317,7 @@ func (s *Service) CancelBuild(ctx context.Context, in domain.BuildLookup) (domai
 			if b.ID != in.BuildID || b.ProductID != in.ProductID {
 				continue
 			}
-			if b.Status != "QUEUED" {
+			if !buildCanCancel(*b) {
 				return invalid("only QUEUED builds may be cancelled")
 			}
 			now := time.Now().UTC()
@@ -333,6 +333,11 @@ func (s *Service) CancelBuild(ctx context.Context, in domain.BuildLookup) (domai
 		return missing("build", in.BuildID)
 	})
 	return out, e
+}
+
+func buildCanCancel(b domain.Build) bool { return b.Status == "QUEUED" }
+func buildCanClose(b domain.Build) bool {
+	return b.Status == "DISPATCHED" || b.Status == "RUNNING" || b.Status == "RECONCILIATION_REQUIRED"
 }
 
 // CloseBuild abandons an active handle without changing any provider evidence.
@@ -377,11 +382,10 @@ func (s *Service) CloseBuild(ctx context.Context, in domain.CloseBuildRequest) (
 			if b.Status != old.Status || !b.UpdatedAt.Equal(old.UpdatedAt) {
 				return invalid("build changed")
 			}
-			switch b.Status {
-			case "QUEUED":
+			if b.Status == "QUEUED" {
 				return invalid("use cancel_build for QUEUED builds")
-			case "DISPATCHED", "RUNNING", "RECONCILIATION_REQUIRED":
-			default:
+			}
+			if !buildCanClose(b) {
 				return invalid("only active builds may be closed")
 			}
 			now := time.Now().UTC()

@@ -23,6 +23,7 @@ check:
 	node --check web/static/graph.js
 	node --check web/static/runtime.js
 	node --check web/static/worker-history.js
+	node --check web/static/pipelines.js
 	node --check scripts/export-configuration.mjs
 	node --check scripts/backup.mjs
 	node web/check.mjs
@@ -33,6 +34,7 @@ check:
 	node web/graph-check.mjs
 	node web/runtime-check.mjs
 	node web/worker-history-check.mjs
+	node web/pipelines-check.mjs
 	node web/intelligence-check.mjs
 	python3 -m unittest discover -s examples/github-actions -p 'test_*.py'
 	python3 -m unittest discover -s scripts -p 'test_*.py'

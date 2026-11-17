@@ -363,3 +363,16 @@ builds or an explicitly requested redeploy.
 ## Image signature gate
 
 With `signing.require_signature_for_deploy`, Dev proposals require every image to have durable SIGNED evidence under a key in `signing.deploy_keys[environment]` and a freshly verified classic cosign layer for that exact digest. Missing signatures fail `SIGNATURE_MISSING`. With the gate disabled, delivery persists `signature_verified` without failing. See [image signing](IMAGE_SIGNING.md).
+
+## Pipelines page
+
+The `#pipelines` page presents Product builds in descending queue time with the
+latest deployment per environment, signature and deploy stage indicators, and
+a detail view for build/deployment evidence. Filters are shareable URL parameters.
+The authenticated `GET /api/pipelines` endpoint and MCP `list_pipelines` query
+use the same Product-scoped read model and time-keyset cursor. Status categories
+are `success`, `running`, `pending`, `failed`, `cancelled`, `superseded`,
+`attention`, and `skipped`. Attention hints explain uncertain provider state and
+failure codes, including `PR_UNCERTAIN`; verify the recorded provider evidence
+before taking another delivery action. Closing remains restricted to
+administrators and deployments without an in-flight GitOps write.
