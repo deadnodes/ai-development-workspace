@@ -34,6 +34,8 @@ type deploymentFake struct {
 	statusErr                        error
 	proposals, merges, heads         int
 	proposalErr, mergeErr, verifyErr error
+	findErr, branchHeadErr           error
+	branchHead                       string
 	pr                               github.DeployPR
 	already                          bool
 	plan                             github.DeployPlan
@@ -86,7 +88,10 @@ func (f *deploymentFake) ProposeDeployment(_ context.Context, g buildconfig.GitO
 	return github.DeployProposal{PR: f.pr, BaseSHA: f.pr.Base.SHA, HeadSHA: f.pr.Head.SHA, AlreadyApplied: f.already}, f.proposalErr
 }
 func (f *deploymentFake) FindDeployment(context.Context, buildconfig.GitOps, string) (github.DeployPR, error) {
-	return f.pr, nil
+	return f.pr, f.findErr
+}
+func (f *deploymentFake) DeploymentBranchHead(context.Context, buildconfig.GitOps, string) (string, error) {
+	return f.branchHead, f.branchHeadErr
 }
 func (f *deploymentFake) ReadDeployment(context.Context, buildconfig.GitOps, int) (github.DeployPR, error) {
 	if f.advanceBase {
@@ -299,6 +304,95 @@ func TestDeployLostResponsesRestart(t *testing.T) {
 		})
 	}
 }
+
+func TestDeployUncertainProposalReconciliation(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		branchErr  error
+		branchHead string
+		retries    int
+		expired    bool
+		want       string
+	}{
+		{name: "missing branch retries", branchErr: github.ErrNotFound, want: "PROPOSING"},
+		{name: "retry limit fails", branchErr: github.ErrNotFound, retries: 2, want: "FAILED"},
+		{name: "deadline fails", branchErr: github.ErrNotFound, expired: true, want: "FAILED"},
+		{name: "orphan branch waits", branchHead: strings.Repeat("c", 40), want: "RECONCILIATION_REQUIRED"},
+		{name: "orphan branch expires", branchHead: strings.Repeat("c", 40), expired: true, want: "FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, m, f, in := deploymentFixture(t)
+			d, err := s.DeployBuild(context.Background(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.state.Deployments[0].Status = "RECONCILIATION_REQUIRED"
+			m.state.Deployments[0].UncertainAction = "propose"
+			m.state.Deployments[0].FailureCode = "PR_UNCERTAIN"
+			m.state.Deployments[0].RetryCount = tc.retries
+			if tc.expired {
+				m.state.Deployments[0].Deadline = time.Now().Add(-time.Second)
+			}
+			f.findErr = github.ErrNotFound
+			f.branchHead, f.branchHeadErr = tc.branchHead, tc.branchErr
+			deployTick(t, s)
+			got := m.state.Deployments[0]
+			if got.Status != tc.want {
+				t.Fatalf("got %+v", got)
+			}
+			if got.Status == "PROPOSING" && (got.UncertainAction != "" || got.FailureCode != "" || got.RetryCount != tc.retries+1) {
+				t.Fatalf("retry state not reset: %+v", got)
+			}
+			if got.Status == "FAILED" && got.FailureCode != "PR_NOT_CREATED" {
+				t.Fatalf("wrong failure: %+v", got)
+			}
+			if got.Status == "FAILED" {
+				b := m.state.Builds[0]
+				b.ID = "next-build"
+				b.Images = append([]domain.BuildImage(nil), b.Images...)
+				b.Images[0].Digest = "sha256:" + strings.Repeat("e", 64)
+				b.Images[0].ImageRef = "registry.example/o/r:main-aaaaaaaa@" + b.Images[0].Digest
+				m.state.Builds = append(m.state.Builds, b)
+				in.BuildID = b.ID
+				if _, err = s.DeployBuild(context.Background(), in); err != nil {
+					t.Fatalf("FAILED deployment retained admission lock: %v", err)
+				}
+			}
+			_ = d
+		})
+	}
+}
+
+func TestDeployUncertainProposalWithUnknownHeadWaitsThenExpires(t *testing.T) {
+	s, m, f, in := deploymentFixture(t)
+	if _, err := s.DeployBuild(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	d := &m.state.Deployments[0]
+	d.Status, d.UncertainAction, d.FailureCode = "RECONCILIATION_REQUIRED", "propose", "PR_UNCERTAIN"
+	d.HeadSHA, d.ProposalBaseSHA = "", ""
+	d.Deadline = time.Now().Add(time.Hour)
+	f.pr.Head.SHA = strings.Repeat("b", 40)
+	f.pr.Head.Ref = d.Branch
+	f.pr.Head.Repo.FullName = "o/flux"
+	f.pr.Base.Ref = "main"
+	f.pr.Base.SHA = strings.Repeat("a", 40)
+	f.pr.Base.Repo.FullName = "o/flux"
+	f.pr.State = "open"
+	deployTick(t, s)
+	if got := m.state.Deployments[0]; got.Status != "RECONCILIATION_REQUIRED" || got.HeadSHA != "" || f.merges != 0 {
+		t.Fatalf("unknown proposal head was adopted: %+v merges=%d", got, f.merges)
+	}
+	m.state.Deployments[0].Deadline = time.Now().Add(-time.Second)
+	deployTick(t, s)
+	if got := m.state.Deployments[0]; got.Status != "FAILED" || got.FailureCode != "PR_UNCERTAIN_EXPIRED" || f.merges != 0 {
+		t.Fatalf("uncertain proposal did not expire: %+v merges=%d", got, f.merges)
+	}
+	if _, err := s.DeployBuild(context.Background(), in); err != nil {
+		t.Fatalf("new deploy for expired build/profile was not admitted: %v", err)
+	}
+}
+
 func TestDeployFileSerializationAndDeadline(t *testing.T) {
 	s, m, f, in := deploymentFixture(t)
 	f.mergeErr = errors.New("unknown")
