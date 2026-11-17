@@ -4,17 +4,19 @@ import "time"
 
 // Build is its own durable asynchronous handle, independent of delivery Operations.
 type Build struct {
-	SigningStatus        string           `json:"signing_status"`
-	Signatures           []BuildSignature `json:"signatures,omitempty"`
-	SigningAttempts      int              `json:"signing_attempts,omitempty"`
-	SigningStartedAt     time.Time        `json:"signing_started_at,omitempty"`
-	SigningNextAttemptAt time.Time        `json:"signing_next_attempt_at,omitempty"`
-	Trigger              string           `json:"trigger"`
-	SupersededBy         string           `json:"superseded_by,omitempty"`
-	LastError            string           `json:"last_error,omitempty"`
-	ProviderUnavailable  bool             `json:"provider_unavailable,omitempty"`
-	RestoreQuarantined   bool             `json:"restore_quarantined,omitempty"`
-	AuthorityHash        string           `json:"authority_hash"`
+	SecurityStatus       string               `json:"security_status,omitempty"`
+	Security             []BuildImageSecurity `json:"security,omitempty"`
+	SigningStatus        string               `json:"signing_status"`
+	Signatures           []BuildSignature     `json:"signatures,omitempty"`
+	SigningAttempts      int                  `json:"signing_attempts,omitempty"`
+	SigningStartedAt     time.Time            `json:"signing_started_at,omitempty"`
+	SigningNextAttemptAt time.Time            `json:"signing_next_attempt_at,omitempty"`
+	Trigger              string               `json:"trigger"`
+	SupersededBy         string               `json:"superseded_by,omitempty"`
+	LastError            string               `json:"last_error,omitempty"`
+	ProviderUnavailable  bool                 `json:"provider_unavailable,omitempty"`
+	RestoreQuarantined   bool                 `json:"restore_quarantined,omitempty"`
+	AuthorityHash        string               `json:"authority_hash"`
 	Meta
 	ConnectionID     string       `json:"connection_id"`
 	ConnectionAPIURL string       `json:"connection_api_url,omitempty"`
@@ -37,6 +39,22 @@ type Build struct {
 	DispatchedAt     *time.Time   `json:"dispatched_at,omitempty"`
 	StartedAt        *time.Time   `json:"started_at,omitempty"`
 	FinishedAt       *time.Time   `json:"finished_at,omitempty"`
+}
+type BuildImageSecurity struct {
+	ImageID          string    `json:"image_id"`
+	Digest           string    `json:"digest"`
+	Verdict          string    `json:"verdict"`
+	SummaryDigest    string    `json:"summary_digest,omitempty"`
+	SBOMDigest       string    `json:"sbom_digest,omitempty"`
+	SourceSHA        string    `json:"source_sha,omitempty"`
+	GitleaksFindings int       `json:"gitleaks_findings,omitempty"`
+	Critical         int       `json:"critical,omitempty"`
+	HighFixable      int       `json:"high_fixable,omitempty"`
+	Blocking         int       `json:"blocking,omitempty"`
+	BlockingIDs      []string  `json:"blocking_ids,omitempty"`
+	Reasons          []string  `json:"reasons,omitempty"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
+	ObservedAt       time.Time `json:"observed_at,omitempty"`
 }
 type QueueBuildRequest struct {
 	ProductID  string `json:"product_id"`

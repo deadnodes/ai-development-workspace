@@ -25,6 +25,16 @@ type signingForgejo struct {
 	shas        []string
 }
 
+type securityEvidenceSigner struct {
+	*imagesigning.Client
+	evidence map[string]imagesigning.SecurityEvidence
+	errors   map[string]error
+}
+
+func (f *securityEvidenceSigner) SecurityEvidence(_ context.Context, _ buildconfig.Registry, _ string, _ string, digest string) (imagesigning.SecurityEvidence, error) {
+	return f.evidence[digest], f.errors[digest]
+}
+
 func (f *signingForgejo) CommitStatus(_ context.Context, _ buildconfig.Connection, _ string, sha string) (forgejo.CommitStatus, error) {
 	f.shas = append(f.shas, sha)
 	name := f.contextName
@@ -57,6 +67,32 @@ func signingFixture(t *testing.T) (*Service, *memoryStore, *signingtest.Fixture,
 		t.Fatal(e)
 	}
 	return s, m, f, provider, b
+}
+
+func gatedSigningFixture(t *testing.T) (*Service, *memoryStore, *signingtest.Fixture, domain.Build) {
+	t.Helper()
+	s, m, base, r := buildFixture(t)
+	f := signingtest.New(t)
+	cfg := buildConfig()
+	cfg.Profiles[0].RequireSecurityGate = true
+	cfg.Registries = []buildconfig.Registry{f.RegistryConfig()}
+	cfg.Signing = f.Config()
+	if err := s.ConfigureBuilds(cfg, base, r); err != nil {
+		t.Fatal(err)
+	}
+	s.builds.signer = imagesigning.NewWithClient(f.Client())
+	b := queue(t, s, "sign")
+	digest := f.Image(b.SourceSHA)
+	u, _ := url.Parse(f.Registry.URL)
+	images := []domain.BuildImage{{ID: "app", Digest: digest, ImageRef: u.Host + "/o/r:main-aaaaaaaa@" + digest}}
+	if err := s.advanceBuild(context.Background(), b, artifactBuild(b, images), false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.GetBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: b.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, m, f, b
 }
 func TestSigningDispatcherAndDeployVerification(t *testing.T) {
 	s, _, f, _, b := signingFixture(t)
@@ -254,7 +290,7 @@ func TestSigningMismatchAndDefaultBranchRule(t *testing.T) {
 func TestSigningProvenanceShape(t *testing.T) {
 	s, _, _, _, b := signingFixture(t)
 	p, _ := s.builds.config.Profile("app")
-	predicate := s.buildPredicate(b, p, map[string]string{"ci": "success"})
+	predicate := s.buildPredicate(b, p, map[string]string{"ci": "success"}, "")
 	body := predicate.Body.(map[string]any)
 	definition := body["buildDefinition"].(map[string]any)
 	if predicate.Type != imagesigning.ProvenanceType || definition["buildType"] != "https://deadnodes.dev/rcp/forgejo-build/v1" {

@@ -224,6 +224,15 @@ func (s *Service) autoDeployBuilds(ctx context.Context) {
 		if newest.ID == "" || a.autoDone[newest.ID] {
 			continue
 		}
+		// The security gate decides asynchronously after the build: wait for PASS, never
+		// propose a deployment that the gate has refused.
+		if p.RequireSecurityGate && newest.SecurityStatus != "PASS" {
+			if newest.SecurityStatus == "FAIL" || newest.SecurityStatus == "ERROR" || newest.SecurityStatus == "MISSING" {
+				a.autoDone[newest.ID] = true
+				slog.Info("automatic deployment refused by security gate", "build", newest.ID, "security_status", newest.SecurityStatus)
+			}
+			continue
+		}
 		deployed := false
 		for _, d := range st.Deployments {
 			if d.ProductID == p.ProductID && d.EnvironmentID == "dev" && d.BuildID == newest.ID {

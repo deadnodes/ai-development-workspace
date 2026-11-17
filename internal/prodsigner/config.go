@@ -13,7 +13,8 @@ import (
 )
 
 type Config struct {
-	FluxArtifact struct {
+	RequireSecurityScan bool `json:"require_security_scan,omitempty"`
+	FluxArtifact        struct {
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
 		Kind      string `json:"kind"`

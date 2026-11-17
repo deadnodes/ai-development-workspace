@@ -354,3 +354,5 @@ Opted-in profiles require `dispatch_ref == default_branch`; mismatches fail conf
 ## Image signing
 
 Optional operator-owned `signing` configuration signs newly successful builds through Vault Transit and publishes classic cosign signatures and SLSA provenance. Signing status and per-key evidence are separate from Build.status. Historical successes are not automatically backfilled. See [image signing](IMAGE_SIGNING.md) for configuration, formats and explicit backfill.
+# Build security evidence and RCP enforcement are documented in [SECURITY_GATE.md](SECURITY_GATE.md).
+

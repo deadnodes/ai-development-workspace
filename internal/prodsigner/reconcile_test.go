@@ -146,3 +146,27 @@ func TestStrictConfig(t *testing.T) {
 		t.Fatal("unknown field accepted")
 	}
 }
+
+func TestApprovedSecurityScanByproduct(t *testing.T) {
+	ref := &Ref{Digest: "sha256:" + strings.Repeat("a", 64)}
+	base := map[string]any{"_type": "https://in-toto.io/Statement/v0.1", "predicateType": imagesigning.ProvenanceType, "subject": []any{map[string]any{"name": "x", "digest": map[string]string{"sha256": strings.Repeat("a", 64)}}}, "predicate": map[string]any{"buildDefinition": map[string]any{"buildType": "https://deadnodes.dev/rcp/forgejo-build/v1", "externalParameters": map[string]string{"tag": "main-abc", "source_sha": "abc"}, "internalParameters": map[string]string{"build_id": "b"}}, "runDetails": map[string]any{"builder": map[string]string{"id": "builder"}, "byproducts": []any{}}}}
+	c := Config{BuilderIDs: []string{"builder"}}
+	check := func(t *testing.T, require bool, byproducts []any, want bool) {
+		t.Helper()
+		c.RequireSecurityScan = require
+		pred := base["predicate"].(map[string]any)
+		run := pred["runDetails"].(map[string]any)
+		run["byproducts"] = byproducts
+		raw, _ := json.Marshal(base)
+		_, _, ok := approved(raw, ref, c)
+		if ok != want {
+			t.Fatalf("approved=%v want %v", ok, want)
+		}
+	}
+	check(t, false, nil, true)
+	check(t, true, nil, false)
+	pass := map[string]any{"name": "security_scan", "annotations": map[string]any{"verdict": "PASS", "blocking": 0, "gitleaks_findings": 0}}
+	check(t, true, []any{pass}, true)
+	fail := map[string]any{"name": "security_scan", "annotations": map[string]any{"verdict": "FAIL", "blocking": 0, "gitleaks_findings": 0}}
+	check(t, true, []any{fail}, false)
+}
