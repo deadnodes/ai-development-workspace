@@ -1,5 +1,7 @@
 # Инструкция для агента
 
+Agent-side TypeScript batching: [Code mode](CODE_MODE.md); discover it with MCP `get_code_api`.
+
 Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
 
 Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](DOCKER_LOCAL.md).

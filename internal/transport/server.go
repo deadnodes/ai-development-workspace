@@ -134,7 +134,9 @@ func New(service Service, options Options) http.Handler {
 	registerWorkspaceTools(server, service)
 	registerLocalGitTools(server, service)
 	registerAgentGuideTools(server)
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20}))
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20})
+	registerCodeMode(mux, server, mcpHandler)
+	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 	var control http.Handler = mux
 	if options.Auth != nil {

@@ -1,5 +1,7 @@
 # AI Development Workspace
 
+Agent-side TypeScript batching: [Code mode](docs/CODE_MODE.md).
+
 ## Shared authenticated installations
 
 Use [authentication and independent agent enrollment](docs/AUTHENTICATION.md)
