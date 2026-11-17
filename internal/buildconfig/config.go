@@ -72,6 +72,7 @@ type CIGate struct {
 }
 
 type Profile struct {
+	RequireSecurityGate    bool                        `json:"require_security_gate,omitempty"`
 	AutoBuild              *bool                       `json:"auto_build,omitempty"`
 	AutoDeployDev          *bool                       `json:"auto_deploy_dev,omitempty"`
 	CIGate                 *CIGate                     `json:"ci_gate,omitempty"`

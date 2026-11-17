@@ -116,6 +116,13 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			return missing("build", in.BuildID)
 		}
 		p, ok := s.builds.config.Profile(b.ProfileID)
+		if ok && p.RequireSecurityGate && b.SecurityStatus != "PASS" {
+			status := b.SecurityStatus
+			if status == "" {
+				status = "PENDING"
+			}
+			return invalid("SECURITY_GATE_NOT_PASSED: build security_status=%s", status)
+		}
 		if automatic, _ := ctx.Value(autoDeployKey{}).(bool); automatic {
 			if !ok || b.Branch != p.DefaultBranch {
 				return invalid("automatic delivery requires default branch")
@@ -653,6 +660,21 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		}
 	}
 	if d.Status == "PROPOSING" {
+		if p.RequireSecurityGate {
+			passed := false
+			_ = s.view(ctx, func(st *domain.State) error {
+				for _, build := range st.Builds {
+					if build.ID == d.BuildID && build.ProductID == d.ProductID {
+						passed = build.SecurityStatus == "PASS"
+						break
+					}
+				}
+				return nil
+			})
+			if !passed {
+				return save(failedDeployment(d, "SECURITY_GATE_NOT_PASSED"), false)
+			}
+		}
 		verified := s.deploymentSignatures(ctx, d, p)
 		next := d
 		next.SignatureVerified = verified

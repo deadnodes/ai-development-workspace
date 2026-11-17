@@ -48,8 +48,11 @@ type provenance struct {
 			Byproducts []struct {
 				Name        string `json:"name"`
 				Annotations struct {
-					Required []string          `json:"required"`
-					Observed map[string]string `json:"observed"`
+					Verdict          string            `json:"verdict"`
+					Blocking         int               `json:"blocking"`
+					GitleaksFindings int               `json:"gitleaks_findings"`
+					Required         []string          `json:"required"`
+					Observed         map[string]string `json:"observed"`
 				} `json:"annotations"`
 			} `json:"byproducts"`
 		} `json:"runDetails"`
@@ -74,6 +77,9 @@ func approved(b []byte, r *Ref, c Config) (string, string, bool) {
 		return "", "", false
 	}
 	for _, b := range p.Predicate.RunDetails.Byproducts {
+		if c.RequireSecurityScan && b.Name == "security_scan" && (b.Annotations.Verdict != "PASS" || b.Annotations.Blocking != 0 || b.Annotations.GitleaksFindings != 0) {
+			return "", "", false
+		}
 		if b.Name != "required_status_contexts" {
 			continue
 		}
@@ -86,6 +92,15 @@ func approved(b []byte, r *Ref, c Config) (string, string, bool) {
 			if state != "success" {
 				return "", "", false
 			}
+		}
+	}
+	if c.RequireSecurityScan {
+		found := false
+		for _, b := range p.Predicate.RunDetails.Byproducts {
+			found = found || b.Name == "security_scan"
+		}
+		if !found {
+			return "", "", false
 		}
 	}
 	return d.Internal.BuildID, d.External.SHA, true

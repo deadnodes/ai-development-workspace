@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,133 @@ import (
 	"releasecontrol/internal/secretfile"
 	"strings"
 )
+
+const SecurityArtifactType = "application/vnd.deadnodes.security-gate.v1+json"
+const SBOMArtifactType = "application/vnd.cyclonedx+json"
+
+var ErrEvidenceNotFound = errors.New("security evidence not found")
+
+type SecurityEvidence struct {
+	Schema    string   `json:"schema"`
+	Verdict   string   `json:"verdict"`
+	Digest    string   `json:"digest"`
+	SHA       string   `json:"sha"`
+	CreatedAt string   `json:"created_at"`
+	Reasons   []string `json:"reasons"`
+	Gitleaks  struct {
+		Findings int `json:"findings"`
+	} `json:"gitleaks"`
+	Trivy struct {
+		Critical    int      `json:"critical"`
+		HighFixable int      `json:"high_fixable"`
+		Blocking    int      `json:"blocking"`
+		BlockingIDs []string `json:"blocking_ids"`
+	} `json:"trivy"`
+	SBOM struct {
+		Digest string `json:"digest"`
+	} `json:"sbom"`
+	SummaryDigest string `json:"-"`
+}
+
+func (c *Client) SecurityEvidence(ctx context.Context, cfg buildconfig.Registry, repo, credential, digest string) (SecurityEvidence, error) {
+	var out SecurityEvidence
+	if !DigestPattern.MatchString(digest) {
+		return out, ErrUnavailable
+	}
+	r, err := c.registry(cfg, repo, credential)
+	if err != nil {
+		return out, err
+	}
+	b, _, code, err := r.request(ctx, "GET", r.base()+"/referrers/"+digest+"?artifactType="+url.QueryEscape(SecurityArtifactType), "", nil)
+	if err == nil && code == 404 {
+		return out, ErrEvidenceNotFound
+	}
+	if err != nil || code != 200 {
+		if err == nil {
+			err = ErrUnavailable
+		}
+		return out, err
+	}
+	var idx struct {
+		Manifests []struct {
+			MediaType    string            `json:"mediaType"`
+			ArtifactType string            `json:"artifactType"`
+			Digest       string            `json:"digest"`
+			Annotations  map[string]string `json:"annotations"`
+		} `json:"manifests"`
+	}
+	if json.Unmarshal(b, &idx) != nil {
+		return out, ErrUnavailable
+	}
+	var selected *struct {
+		MediaType    string            `json:"mediaType"`
+		ArtifactType string            `json:"artifactType"`
+		Digest       string            `json:"digest"`
+		Annotations  map[string]string `json:"annotations"`
+	}
+	for i := range idx.Manifests {
+		d := &idx.Manifests[i]
+		if d.ArtifactType != SecurityArtifactType || !DigestPattern.MatchString(d.Digest) {
+			continue
+		}
+		if selected == nil || d.Annotations["org.opencontainers.image.created"] > selected.Annotations["org.opencontainers.image.created"] {
+			selected = d
+		}
+	}
+	if selected == nil {
+		return out, ErrEvidenceNotFound
+	}
+	out.SummaryDigest = selected.Digest
+	m, err := r.manifest(ctx, selected.Digest)
+	if err != nil {
+		out.Verdict = "ERROR"
+		out.Reasons = []string{"summary manifest unavailable"}
+		return out, nil
+	}
+	if m.ArtifactType != SecurityArtifactType || m.Subject == nil || m.Subject.Digest != digest {
+		out.Verdict = "ERROR"
+		out.Reasons = []string{"summary subject or artifact type mismatch"}
+		return out, nil
+	}
+	if len(m.Layers) != 1 || m.Layers[0].Size > 1<<20 {
+		out.Verdict = "ERROR"
+		out.Reasons = []string{"invalid summary layer"}
+		return out, nil
+	}
+	body, err := r.readBlob(ctx, m.Layers[0])
+	if err != nil || json.Unmarshal(body, &out) != nil || out.Schema != "deadnodes.security-gate/v1" || out.Digest != digest || (out.Verdict != "PASS" && out.Verdict != "FAIL" && out.Verdict != "ERROR") {
+		out = SecurityEvidence{Verdict: "ERROR", SummaryDigest: selected.Digest, Reasons: []string{"invalid security summary"}}
+		return out, nil
+	}
+	out.SummaryDigest = selected.Digest
+	sbomFound := false
+	if DigestPattern.MatchString(out.SBOM.Digest) {
+		sb, _, sc, se := r.request(ctx, "GET", r.base()+"/referrers/"+digest+"?artifactType="+url.QueryEscape(SBOMArtifactType), "", nil)
+		if se == nil && sc == 200 {
+			var si struct {
+				Manifests []struct {
+					ArtifactType string `json:"artifactType"`
+					Digest       string `json:"digest"`
+				} `json:"manifests"`
+			}
+			if json.Unmarshal(sb, &si) == nil {
+				for _, x := range si.Manifests {
+					if x.ArtifactType == SBOMArtifactType && x.Digest == out.SBOM.Digest {
+						sbm, me := r.manifest(ctx, x.Digest)
+						if me == nil && sbm.ArtifactType == SBOMArtifactType && sbm.Subject != nil && sbm.Subject.Digest == digest {
+							sbomFound = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if !sbomFound {
+		out.Verdict = "ERROR"
+		out.Reasons = append(out.Reasons, "SBOM referrer missing")
+	}
+	return out, nil
+}
 
 const ManifestType = "application/vnd.oci.image.manifest.v1+json"
 const ConfigType = "application/vnd.oci.image.config.v1+json"
@@ -41,6 +169,8 @@ type Descriptor struct {
 type Manifest struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	MediaType     string            `json:"mediaType"`
+	ArtifactType  string            `json:"artifactType,omitempty"`
+	Subject       *Descriptor       `json:"subject,omitempty"`
 	Config        Descriptor        `json:"config"`
 	Layers        []Descriptor      `json:"layers"`
 	Annotations   map[string]string `json:"annotations,omitempty"`

@@ -37,8 +37,14 @@ type ForgejoBuildProvider interface {
 type BuildRegistry interface {
 	Resolve(context.Context, buildconfig.Registry, string, string) (buildregistry.Artifact, error)
 }
+type imageSigner interface {
+	Publish(context.Context, buildconfig.Registry, string, string, buildconfig.SigningKey, string, string, string, imagesigning.Predicate) (int, error)
+	Verify(context.Context, buildconfig.Registry, string, string, string, buildconfig.SigningKey) bool
+	Inspect(context.Context, buildconfig.Registry, string, string, string) (string, error)
+	SecurityEvidence(context.Context, buildconfig.Registry, string, string, string) (imagesigning.SecurityEvidence, error)
+}
 type buildRuntime struct {
-	signer           *imagesigning.Client
+	signer           imageSigner
 	signingMu        sync.Mutex
 	autoHeadsMu      sync.RWMutex
 	autoHeads        map[string]*autoHead
@@ -74,7 +80,8 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
 	}{Config: hashConfig, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
-	// Build scope: every Profile field except Deployments, RequiredStatusContexts, CIGate and AutoDeployDev;
+	// Build scope: every Profile field except Deployments, RequiredStatusContexts, CIGate, AutoDeployDev
+	// and RequireSecurityGate (enabling the gate must not orphan builds made before it);
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,
 	// InsecureHTTP; global TimeoutSeconds and RunLookbackSeconds.
 	// Deployment scope adds optional CIGate, RequiredStatusContexts, the profile's dev target,
@@ -83,6 +90,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	for _, profile := range copy.Profiles {
 		buildProfile := profile
 		buildProfile.AutoDeployDev = nil
+		buildProfile.RequireSecurityGate = false
 		buildProfile.CIGate = nil
 		buildProfile.Deployments = nil
 		buildProfile.RequiredStatusContexts = nil

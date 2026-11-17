@@ -31,6 +31,11 @@ func copyTime(t *time.Time) *time.Time {
 func copyBuild(b domain.Build) domain.Build {
 	b.Images = slices.Clone(b.Images)
 	b.Signatures = cloneSigning(b.Signatures)
+	b.Security = slices.Clone(b.Security)
+	for i := range b.Security {
+		b.Security[i].BlockingIDs = slices.Clone(b.Security[i].BlockingIDs)
+		b.Security[i].Reasons = slices.Clone(b.Security[i].Reasons)
+	}
 	b.DispatchedAt = copyTime(b.DispatchedAt)
 	b.StartedAt = copyTime(b.StartedAt)
 	b.FinishedAt = copyTime(b.FinishedAt)

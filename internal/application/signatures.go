@@ -127,7 +127,7 @@ func (s *Service) signingCI(ctx context.Context, b domain.Build, p buildconfig.P
 	}
 	return ciVerdict(trustedCIStatus(v, p), p.RequiredStatusContexts)
 }
-func (s *Service) buildPredicate(b domain.Build, p buildconfig.Profile, contexts map[string]string) imagesigning.Predicate {
+func (s *Service) buildPredicate(b domain.Build, p buildconfig.Profile, contexts map[string]string, imageID string) imagesigning.Predicate {
 	if contexts == nil {
 		contexts = map[string]string{}
 	}
@@ -144,13 +144,28 @@ func (s *Service) buildPredicate(b domain.Build, p buildconfig.Profile, contexts
 	if start == nil {
 		start = &b.QueuedAt
 	}
-	return imagesigning.Predicate{Type: imagesigning.ProvenanceType, Body: map[string]any{"buildDefinition": map[string]any{"buildType": "https://deadnodes.dev/rcp/forgejo-build/v1", "externalParameters": map[string]string{"repository": p.Repository, "workflow": p.Workflow, "dispatch_ref": p.DispatchRef, "source_sha": b.SourceSHA, "tag": chosenTag(b)}, "internalParameters": map[string]string{"profile_id": p.ID, "build_id": b.ID}, "resolvedDependencies": []any{map[string]any{"uri": "git+" + strings.TrimRight(cn.APIURL, "/") + "/" + p.Repository + "@refs/heads/" + branch, "digest": map[string]string{"gitCommit": b.SourceSHA}}}}, "runDetails": map[string]any{"builder": map[string]string{"id": s.builds.config.Signing.BuilderID}, "metadata": map[string]any{"invocationId": invocation, "startedOn": start, "finishedOn": b.FinishedAt}, "byproducts": []any{map[string]any{"name": "required_status_contexts", "annotations": map[string]any{"required": p.RequiredStatusContexts, "observed": contexts}}}}}}
+	byproducts := []any{map[string]any{"name": "required_status_contexts", "annotations": map[string]any{"required": p.RequiredStatusContexts, "observed": contexts}}}
+	if p.RequireSecurityGate {
+		for _, sec := range b.Security {
+			if sec.ImageID == imageID {
+				byproducts = append(byproducts, map[string]any{"name": "security_scan", "digest": map[string]string{"sha256": strings.TrimPrefix(sec.SummaryDigest, "sha256:")}, "annotations": map[string]any{"schema": "deadnodes.security-gate/v1", "verdict": "PASS", "summary_digest": sec.SummaryDigest, "sbom_digest": sec.SBOMDigest, "gitleaks_findings": 0, "critical": sec.Critical, "high_fixable": sec.HighFixable, "blocking": 0}})
+				break
+			}
+		}
+	}
+	return imagesigning.Predicate{Type: imagesigning.ProvenanceType, Body: map[string]any{"buildDefinition": map[string]any{"buildType": "https://deadnodes.dev/rcp/forgejo-build/v1", "externalParameters": map[string]string{"repository": p.Repository, "workflow": p.Workflow, "dispatch_ref": p.DispatchRef, "source_sha": b.SourceSHA, "tag": chosenTag(b)}, "internalParameters": map[string]string{"profile_id": p.ID, "build_id": b.ID}, "resolvedDependencies": []any{map[string]any{"uri": "git+" + strings.TrimRight(cn.APIURL, "/") + "/" + p.Repository + "@refs/heads/" + branch, "digest": map[string]string{"gitCommit": b.SourceSHA}}}}, "runDetails": map[string]any{"builder": map[string]string{"id": s.builds.config.Signing.BuilderID}, "metadata": map[string]any{"invocationId": invocation, "startedOn": start, "finishedOn": b.FinishedAt}, "byproducts": byproducts}}}
 }
 
 // SignBuildsOnce admits only durable PENDING records, never historical unsigned successes.
 func (s *Service) SignBuildsOnce(ctx context.Context) error {
 	a := s.builds
-	if a == nil || a.config.Signing == nil {
+	if a == nil {
+		return nil
+	}
+	if err := s.observeBuildSecurity(ctx); err != nil {
+		return err
+	}
+	if a.config.Signing == nil {
 		return nil
 	}
 	if !a.signingMu.TryLock() {
@@ -170,6 +185,9 @@ func (s *Service) SignBuildsOnce(ctx context.Context) error {
 		}
 		p, ok := a.config.Profile(b.ProfileID)
 		if !ok || p.ProductID != b.ProductID || !a.buildAuthorityMatches(p.ID, b.AuthorityHash) {
+			continue
+		}
+		if p.RequireSecurityGate && (b.SecurityStatus == "" || b.SecurityStatus == "PENDING") {
 			continue
 		}
 		next := copyBuild(b)
@@ -207,14 +225,21 @@ func (s *Service) SignBuildsOnce(ctx context.Context) error {
 					continue
 				}
 				entry := signingEntry(image, k)
-				if failed {
+				if p.RequireSecurityGate && (b.SecurityStatus == "FAIL" || b.SecurityStatus == "ERROR" || b.SecurityStatus == "MISSING") {
+					entry.Status = "SKIPPED"
+					if b.SecurityStatus == "MISSING" {
+						entry.FailureCode = "SECURITY_GATE_MISSING"
+					} else {
+						entry.FailureCode = "SECURITY_GATE_FAILED"
+					}
+				} else if failed {
 					entry.Status = "SKIPPED"
 					entry.FailureCode = "CI_NOT_GREEN"
 				} else if !green {
 					pending = true
 					continue
 				} else {
-					version, err := a.signer.Publish(ctx, a.config.Registry(p.RegistryID), signingRepository(p, image.ID), a.config.Signing.RegistryCredentials[p.RegistryID], k, image.Digest, b.ID, b.SourceSHA, s.buildPredicate(b, p, contexts))
+					version, err := a.signer.Publish(ctx, a.config.Registry(p.RegistryID), signingRepository(p, image.ID), a.config.Signing.RegistryCredentials[p.RegistryID], k, image.Digest, b.ID, b.SourceSHA, s.buildPredicate(b, p, contexts, image.ID))
 					entry.KeyVersion = version
 					if err != nil {
 						signingFailure(&entry, err)
