@@ -46,6 +46,24 @@ func TestPipelineStageMappings(t *testing.T) {
 	}
 }
 
+func TestPipelineFailureHints(t *testing.T) {
+	codes := []string{"MAIN_CI_FAILED", "ROLLOUT_FAILED", "ROLLOUT_TIMEOUT", "PR_UNCERTAIN", "MERGE_UNCERTAIN", "CI_NOT_GREEN", "CI_UNAVAILABLE", "SIGNATURE_MISSING", "REGISTRY_UNAVAILABLE", "ARTIFACT_MISSING", "ARTIFACT_UNAVAILABLE", "MERGE_CONFLICT", "GITOPS_SCOPE_CHANGED", "GITOPS_TARGET_MISSING", "DEPLOYMENT_AUTHORITY_CHANGED", "SUPERSEDED", "OPERATOR_CLOSED", "REQUEST_KEY_CONFLICT", "PR_NOT_CREATED", "PR_UNCERTAIN_EXPIRED", "RECONCILIATION_TIMEOUT", "ARTIFACT_REVISION_MISMATCH", "BUILD_AUTHORITY_CHANGED", "BUILD_RESTORED", "BUILD_TIMEOUT", "DISPATCH_REJECTED", "DISPATCH_UNCERTAIN", "INVALID_BUILD_SOURCE", "RUN_FAILED", "RUN_SOURCE_MISMATCH", "RUN_STATUS_UNKNOWN", "SIGNING_AUTHORITY_CHANGED", "SIGNING_KEY_MISMATCH", "SIGNING_UNAVAILABLE", "DEPLOYMENT_RESTORED", "SECURITY_GATE_MISSING", "SECURITY_GATE_FAILED", "SECURITY_GATE_NOT_PASSED"}
+	for _, code := range codes {
+		h := failureHint(code)
+		if h == "" || strings.Contains(h, "Operation failed with "+code) || strings.Contains(h, "Deployment failed with "+code) {
+			t.Errorf("%s has no dedicated hint: %q", code, h)
+		}
+	}
+	b := domain.Build{Status: "FAILED", FailureCode: "RUN_FAILED", FailureMessage: "  provider says no  "}
+	if got := buildPipelineStage(b, false, false).Hint; !strings.HasSuffix(got, "Details: provider says no") {
+		t.Fatalf("build hint details missing/unclean: %q", got)
+	}
+	b.FailureCode, b.FailureMessage = "FUTURE_CODE", ""
+	if got := buildPipelineStage(b, false, false).Hint; !strings.Contains(got, "FUTURE_CODE") || strings.Contains(got, "Deployment") {
+		t.Fatalf("unexpected generic build hint: %q", got)
+	}
+}
+
 func TestPipelineOrderingAndSearchHelpers(t *testing.T) {
 	a := domain.Build{Meta: domain.Meta{ID: "z"}, QueuedAt: mustPipelineTime("2026-01-02T00:00:00Z")}
 	b := domain.Build{Meta: domain.Meta{ID: "a"}, QueuedAt: a.QueuedAt}
@@ -119,5 +137,16 @@ func TestListPipelinesTimeCursorAndFilters(t *testing.T) {
 		if e != nil || len(page.Items) != tc.count {
 			t.Fatalf("filter %#v: got %d err %v", tc.in, len(page.Items), e)
 		}
+	}
+}
+
+func TestPipelineBuildReconciliationHintWithoutCode(t *testing.T) {
+	s := buildPipelineStage(domain.Build{Meta: domain.Meta{ID: "b"}, Status: "RECONCILIATION_REQUIRED"}, false, false)
+	if !strings.Contains(s.Hint, "reconciling by trigger_event") {
+		t.Fatalf("reconciliation hint lost: %q", s.Hint)
+	}
+	s = buildPipelineStage(domain.Build{Meta: domain.Meta{ID: "b"}, Status: "RECONCILIATION_REQUIRED", FailureCode: "DISPATCH_UNCERTAIN"}, false, false)
+	if !strings.Contains(s.Hint, "accepted the dispatch") {
+		t.Fatalf("code hint missing: %q", s.Hint)
 	}
 }
