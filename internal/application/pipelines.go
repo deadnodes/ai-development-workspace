@@ -38,13 +38,15 @@ func buildPipelineStage(b domain.Build, canClose, canCancel bool) domain.Pipelin
 	case "FAILED":
 		s.Status = "failed"
 		s.Label = "Failed"
-		switch {
-		case b.FailureCode != "" && b.FailureMessage != "":
-			s.Hint = b.FailureCode + ": " + b.FailureMessage
-		case b.FailureCode != "" || b.FailureMessage != "":
-			s.Hint = b.FailureCode + b.FailureMessage
-		default:
-			s.Hint = "Build failed; review the provider run for details."
+		s.Hint = failureHint(b.FailureCode)
+		if b.FailureMessage != "" {
+			msg := strings.TrimSpace(b.FailureMessage)
+			if r := []rune(msg); len(r) > 300 {
+				msg = string(r[:300])
+			}
+			if msg != "" {
+				s.Hint += " Details: " + msg
+			}
 		}
 	case "CANCELLED":
 		if b.SupersededBy != "" {
@@ -58,7 +60,13 @@ func buildPipelineStage(b domain.Build, canClose, canCancel bool) domain.Pipelin
 	case "RECONCILIATION_REQUIRED":
 		s.Status = "attention"
 		s.Label = "Needs attention"
-		s.Hint = "Provider run state is uncertain; RCP is reconciling by trigger_event. If it stays, an admin may close the build with a reason."
+		s.Hint = ""
+		if b.FailureCode != "" {
+			s.Hint = failureHint(b.FailureCode)
+		}
+		if s.Hint == "" {
+			s.Hint = "Provider run state is uncertain; RCP is reconciling by trigger_event. If it stays, an admin may close the build with a reason."
+		}
 		if b.ProviderUnavailable {
 			s.Hint += " Forgejo provider is unavailable."
 		}
@@ -126,6 +134,26 @@ func deploymentPipelineStage(d domain.Deployment, canClose bool) domain.Pipeline
 func failureHint(code string) string {
 	hints := map[string]string{
 		"MAIN_CI_FAILED":               "Source CI failed. Review the failed workflow and fix or rerun its checks before deploying.",
+		"PR_NOT_CREATED":               "RCP could not confirm a Flux PR for this deployment before its deadline (no deploy branch or PR after retries, or no valid merge commit), so it was marked failed. Check the GitOps repository for a leftover branch or PR, then retry with deploy_build.",
+		"PR_UNCERTAIN_EXPIRED":         "Reconciliation found no unique Flux PR or deploy branch before the uncertainty window expired, so no GitOps change was accepted. Review provider evidence, then retry with deploy_build.",
+		"RECONCILIATION_TIMEOUT":       "The Forgejo run could not be resolved before the reconciliation deadline. Check the run in Forgejo; an admin can close the build if it is no longer actionable.",
+		"ARTIFACT_REVISION_MISMATCH":   "The registry artifact does not match the build's recorded source revision. Rebuild and publish from the intended revision, then queue_build.",
+		"BUILD_AUTHORITY_CHANGED":      "Build provider authority changed while the run was active; RCP will not accept its artifacts. Review configuration and Forgejo evidence, then have an admin close the build if needed.",
+		"BUILD_RESTORED":               "This build was restored from backup and its in-flight provider outcome is quarantined. Check Forgejo, then have an admin close it if appropriate; create a fresh build with queue_build.",
+		"BUILD_TIMEOUT":                "The build exceeded its configured timeout. Check the Forgejo run and logs, then queue_build after correcting or cancelling the run.",
+		"DISPATCH_REJECTED":            "Forgejo rejected the build dispatch. Review provider configuration and run evidence, then retry with queue_build.",
+		"DISPATCH_UNCERTAIN":           "RCP could not determine whether Forgejo accepted the dispatch. Wait for auto-reconcile by trigger_event; an admin can close the build if it stays unresolved.",
+		"INVALID_BUILD_SOURCE":         "The requested source revision is invalid or unavailable to the configured Forgejo repository. Correct the source and queue_build.",
+		"RUN_FAILED":                   "The Forgejo run ended in failure, cancellation, skip or blocked status. Inspect the run and logs, fix the cause, then queue_build.",
+		"RUN_SOURCE_MISMATCH":          "The observed Forgejo run does not match the build's recorded source. Check the run and trigger_event; wait for auto-reconcile or ask an admin to close the build.",
+		"RUN_STATUS_UNKNOWN":           "Forgejo returned an unrecognized run status. Check the run in Forgejo and wait for auto-reconcile; an admin can close the build if needed.",
+		"SIGNING_AUTHORITY_CHANGED":    "Signing authority changed while signing was in progress, so the signature was rejected. Review signing configuration and request signing again.",
+		"SIGNING_KEY_MISMATCH":         "The signer used a key different from the requested key. Correct the key configuration and request signing again.",
+		"SIGNING_UNAVAILABLE":          "The signing provider is unavailable. Restore signer access and retry signing the artifact.",
+		"DEPLOYMENT_RESTORED":          "This deployment was restored from backup and its in-flight GitOps outcome is quarantined. Inspect the PR and branch; an admin can close it after review.",
+		"SECURITY_GATE_MISSING":        "A required security gate is not configured for this artifact. Configure the gate before signing or deploying.",
+		"SECURITY_GATE_FAILED":         "A required security gate failed. Review its results, resolve the findings and retry.",
+		"SECURITY_GATE_NOT_PASSED":     "The required security gate has not passed. Review gate results and retry after it passes.",
 		"ROLLOUT_FAILED":               "GitOps applied the change, but runtime verification reported a failed rollout. Inspect the workload and controller evidence before retrying.",
 		"ROLLOUT_TIMEOUT":              "Runtime rollout did not complete before its deadline. Inspect workload health and controller events before retrying.",
 		"PR_UNCERTAIN":                 "RCP could not confirm whether the Flux PR was created. It reconciles the deploy branch and PR automatically; a new deploy for this profile is blocked until this one is resolved.",
@@ -147,7 +175,7 @@ func failureHint(code string) string {
 	if code == "" {
 		return "Review the failure details and correct the underlying issue before retrying."
 	}
-	return "Deployment failed with " + code + ". Review provider evidence and correct the cause before retrying."
+	return "Operation failed with " + code + ". Review provider evidence and correct the cause before retrying."
 }
 func pipelineTime(b domain.Build) time.Time {
 	if !b.QueuedAt.IsZero() {
