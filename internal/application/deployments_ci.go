@@ -366,7 +366,8 @@ func (s *Service) watchBuildCI(ctx context.Context) error {
 			continue
 		}
 		p, ok := s.builds.config.Profile(b.ProfileID)
-		if !ok || p.ProductID != b.ProductID || !s.builds.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
+		// Required (push) contexts exist only for the default branch; other branches would stay pending.
+		if !ok || p.ProductID != b.ProductID || b.Branch != p.DefaultBranch || !s.builds.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
 			continue
 		}
 		select {

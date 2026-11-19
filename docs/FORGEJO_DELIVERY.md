@@ -135,8 +135,14 @@ rebinding rejects REQUEST_KEY_CONFLICT.
 ## Recovery and verification
 
 Intent is persisted before provider mutation. Lost proposal/merge responses become
-RECONCILIATION_REQUIRED. Reconciliation looks up the exact branch and PR; an
-uncertain merge only reads until merged evidence appears, and never re-merges.
+RECONCILIATION_REQUIRED. Reconciliation looks up the exact branch and PR. For an
+uncertain merge, RCP waits two minutes after the last state update for the provider
+to reflect a merge that may have succeeded. It then verifies the still-open PR and
+may make at most three SHA-locked retries against the recorded head SHA. A changed
+head is never retried; a closed unmerged PR fails MERGE_CONFLICT. If all retries
+are exhausted and the deployment deadline passes, it fails
+MERGE_UNCERTAIN_EXPIRED and releases the profile lock. A merge that succeeded with
+a lost response is recognized from the PR's merged state without another merge.
 When a proposal never reached PR creation (or no unique PR is observable), the
 handle stays uncertain for operator investigation. Do not blindly create a new
 request. Uncertain handles retain exclusive ownership of overlapping Dev files.

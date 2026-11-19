@@ -49,6 +49,23 @@ func TestWatchBuildCIPendingFailureRecoveryAndRateLimit(t *testing.T) {
 	m.state.Builds[0].Branch = "topic"
 	m.state.Builds[0].QueuedAt = time.Now().UTC()
 	m.state.Builds[0].FinishedAt = copyTime(&m.state.Builds[0].QueuedAt)
+	// Required (push) contexts exist only on the default branch: other branches are not observed.
+	if err := s.watchBuildCI(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if m.state.Builds[0].CIState != "" || m.state.Builds[0].CICheckedAt != nil {
+		t.Fatalf("non-default branch observed: %+v", m.state.Builds[0])
+	}
+	page, err := s.ListPipelines(context.Background(), domain.ListPipelinesRequest{ProductID: "p"})
+	if err != nil || len(page.Items) == 0 {
+		t.Fatal(page, err)
+	}
+	for _, st := range page.Items[0].Stages {
+		if st.Kind == "checks" && st.Status != "skipped" {
+			t.Fatalf("non-default branch checks stage %+v", st)
+		}
+	}
+	m.state.Builds[0].Branch = "main"
 	if err := s.watchBuildCI(context.Background()); err != nil {
 		t.Fatal(err)
 	}

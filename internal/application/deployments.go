@@ -786,12 +786,39 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 			next.MergeCommitSHA = pr.MergeSHA
 			return save(s.mergedDeployment(next, p), false)
 		}
-		// A lost merge response is read-only forever until merged evidence arrives.
-		if d.UncertainAction == "merge" {
-			return nil
-		}
 		if pr.State != "open" {
+			if d.UncertainAction == "merge" {
+				return save(failedDeployment(next, "MERGE_CONFLICT"), false)
+			}
 			return save(failedDeployment(next, "MERGE_CONFLICT"), false)
+		}
+		if d.UncertainAction == "merge" {
+			if time.Since(d.UpdatedAt) < 2*time.Minute {
+				return nil
+			}
+			if d.RetryCount >= 3 {
+				if !time.Now().Before(d.Deadline) {
+					return save(failedDeployment(next, "MERGE_UNCERTAIN_EXPIRED"), false)
+				}
+				return nil
+			}
+			if e := a.gitops.VerifyDeployment(ctx, g, deploymentPlan(next, p), pr); e != nil {
+				return nil
+			}
+			next.RetryCount++
+			if e = save(next, false); e != nil {
+				return e
+			}
+			sha, err := a.gitops.MergeDeployment(ctx, g, d.PRNumber, d.HeadSHA)
+			if err == nil {
+				next = d
+				next.MergeCommitSHA = sha
+				return save(s.mergedDeployment(next, p), false)
+			}
+			if mergeConflict(err) {
+				return save(failedDeployment(d, "MERGE_CONFLICT"), false)
+			}
+			return nil
 		}
 		next.HeadSHA = pr.Head.SHA
 		next.Status = "MERGING"
