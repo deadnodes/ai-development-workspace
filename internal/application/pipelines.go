@@ -202,6 +202,7 @@ func failureHint(code string) string {
 		"ARTIFACT_MISSING":             "The expected image digest is absent from the registry. Publish or rebuild the artifact before deploying.",
 		"ARTIFACT_UNAVAILABLE":         "RCP could not verify the image in the registry. Check registry access and retry.",
 		"MERGE_CONFLICT":               "The Flux change conflicts with the target branch. Resolve the conflict and submit a fresh deployment request.",
+		"MERGE_UNCERTAIN_EXPIRED":      "RCP could not confirm the Flux merge after three SHA-locked retries before the deployment deadline. Review the PR and submit a fresh deployment request if it remains needed.",
 		"GITOPS_SCOPE_CHANGED":         "The GitOps target changed while RCP was preparing the update. Review the current target and retry.",
 		"GITOPS_TARGET_MISSING":        "The configured image target was not found. Correct the GitOps file selector and retry.",
 		"DEPLOYMENT_AUTHORITY_CHANGED": "Deployment authority changed during this request. An administrator must review the configuration and reconcile this deployment.",
@@ -336,7 +337,14 @@ func (s *Service) ListPipelines(ctx context.Context, in domain.ListPipelinesRequ
 				continue
 			}
 			stages := []domain.PipelineStage{buildPipelineStage(b, canClose, canCancel)}
-			stages = append(stages, buildChecksStage(b))
+			checks := buildChecksStage(b)
+			if s.builds != nil {
+				// Required (push) contexts exist only for the profile default branch.
+				if prof, ok := s.builds.config.Profile(b.ProfileID); ok && b.Branch != "" && b.Branch != prof.DefaultBranch {
+					checks.Status, checks.Label, checks.Hint = "skipped", "Not observed", "Checks are observed for the default branch only."
+				}
+			}
+			stages = append(stages, checks)
 			if b.Status == "SUCCEEDED" || b.SigningStatus != "" {
 				ss := domain.PipelineStage{Kind: "sign", EntityID: b.ID, RawStatus: b.SigningStatus, Status: "skipped", Label: "Not required"}
 				switch b.SigningStatus {

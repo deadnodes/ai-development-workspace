@@ -305,6 +305,101 @@ func TestDeployLostResponsesRestart(t *testing.T) {
 	}
 }
 
+func TestDeployUncertainMergeBoundedRetry(t *testing.T) {
+	t.Run("settle then retry succeeds", func(t *testing.T) {
+		s, m, f, in := deploymentFixture(t)
+		f.mergeErr = errors.New("network flap")
+		if _, err := s.DeployBuild(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+		deployTick(t, s)
+		if got := m.state.Deployments[0]; got.Status != "RECONCILIATION_REQUIRED" || got.UncertainAction != "merge" || f.merges != 1 {
+			t.Fatalf("%+v merges=%d", got, f.merges)
+		}
+		deployTick(t, s)
+		if f.merges != 1 {
+			t.Fatal("retried before settle window")
+		}
+		m.state.Deployments[0].UpdatedAt = time.Now().Add(-3 * time.Minute)
+		f.mergeErr = nil
+		deployTick(t, s)
+		got := m.state.Deployments[0]
+		if got.Status != "SUCCEEDED" || got.RetryCount != 1 || got.MergeCommitSHA != strings.Repeat("d", 40) || f.merges != 2 {
+			t.Fatalf("%+v merges=%d", got, f.merges)
+		}
+	})
+	t.Run("retry cap expires and releases lock", func(t *testing.T) {
+		s, m, f, in := deploymentFixture(t)
+		f.mergeErr = errors.New("network flap")
+		if _, err := s.DeployBuild(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+		deployTick(t, s)
+		d := &m.state.Deployments[0]
+		d.Status, d.UncertainAction, d.FailureCode = "RECONCILIATION_REQUIRED", "merge", "MERGE_UNCERTAIN"
+		d.RetryCount, d.UpdatedAt, d.Deadline = 3, time.Now().Add(-3*time.Minute), time.Now().Add(-time.Second)
+		f.pr.Head.SHA, f.pr.Head.Ref, f.pr.Head.Repo.FullName = d.HeadSHA, d.Branch, "o/flux"
+		f.pr.Base.Ref, f.pr.Base.Repo.FullName, f.pr.State = "main", "o/flux", "open"
+		deployTick(t, s)
+		if got := m.state.Deployments[0]; got.Status != "FAILED" || got.FailureCode != "MERGE_UNCERTAIN_EXPIRED" {
+			t.Fatalf("%+v", got)
+		}
+		b := m.state.Builds[0]
+		b.ID = "next-build"
+		b.Images = append([]domain.BuildImage(nil), b.Images...)
+		b.Images[0].Digest = "sha256:" + strings.Repeat("e", 64)
+		b.Images[0].ImageRef = "registry.example/o/r:main-eeeeeeee@" + b.Images[0].Digest
+		m.state.Builds = append(m.state.Builds, b)
+		in.BuildID = b.ID
+		if _, err := s.DeployBuild(context.Background(), in); err != nil {
+			t.Fatalf("failed deployment retained lock: %v", err)
+		}
+	})
+	t.Run("closed, changed head, verify failure", func(t *testing.T) {
+		for _, tc := range []struct {
+			name                string
+			state               string
+			changed, verifyFail bool
+			want                string
+			merges              int
+		}{
+			{"closed", "closed", false, false, "MERGE_CONFLICT", 1},
+			{"changed head", "open", true, false, "GITOPS_SCOPE_CHANGED", 1},
+			{"verification fails", "open", false, true, "MERGE_UNCERTAIN", 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s, m, f, in := deploymentFixture(t)
+				f.mergeErr = errors.New("network flap")
+				if _, err := s.DeployBuild(context.Background(), in); err != nil {
+					t.Fatal(err)
+				}
+				deployTick(t, s)
+				d := &m.state.Deployments[0]
+				d.UpdatedAt = time.Now().Add(-3 * time.Minute)
+				f.pr.State = tc.state
+				if tc.changed {
+					f.pr.Head.SHA = strings.Repeat("e", 40)
+				}
+				if tc.verifyFail {
+					f.verifyErr = errors.New("verify failed")
+				}
+				deployTick(t, s)
+				got := m.state.Deployments[0]
+				if tc.want == "MERGE_UNCERTAIN" {
+					if got.Status != "RECONCILIATION_REQUIRED" {
+						t.Fatal(got)
+					}
+				} else if got.Status != "FAILED" || got.FailureCode != tc.want {
+					t.Fatal(got)
+				}
+				if f.merges != tc.merges {
+					t.Fatalf("merge calls=%d", f.merges)
+				}
+			})
+		}
+	})
+}
+
 func TestDeployUncertainProposalReconciliation(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
