@@ -69,6 +69,7 @@ type DeploymentFile struct {
 type CIGate struct {
 	TrustedProducers string `json:"trusted_producers,omitempty"`
 	AcceptPRTree     bool   `json:"accept_pr_tree"`
+	DevMode          string `json:"dev_mode,omitempty"`
 }
 
 type Profile struct {
@@ -232,6 +233,9 @@ func (c *Config) Validate() error {
 	}
 	ids = nil
 	for _, v := range c.Profiles {
+		if v.CIGate != nil && v.CIGate.DevMode != "" && v.CIGate.DevMode != "observe" && v.CIGate.DevMode != "block" {
+			return errors.New("ci_gate.dev_mode must be observe or block")
+		}
 		if v.CIGate != nil && v.CIGate.TrustedProducers != "" && v.CIGate.TrustedProducers != "forgejo_actions" && v.CIGate.TrustedProducers != "any" {
 			return errors.New("ci_gate.trusted_producers must be forgejo_actions or any")
 		}

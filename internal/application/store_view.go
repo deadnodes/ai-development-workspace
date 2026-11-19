@@ -36,9 +36,13 @@ func copyBuild(b domain.Build) domain.Build {
 		b.Security[i].BlockingIDs = slices.Clone(b.Security[i].BlockingIDs)
 		b.Security[i].Reasons = slices.Clone(b.Security[i].Reasons)
 	}
+	b.CIContexts = maps.Clone(b.CIContexts)
+	b.CIFailingContexts = maps.Clone(b.CIFailingContexts)
 	b.DispatchedAt = copyTime(b.DispatchedAt)
 	b.StartedAt = copyTime(b.StartedAt)
 	b.FinishedAt = copyTime(b.FinishedAt)
+	b.CICheckedAt = copyTime(b.CICheckedAt)
+	b.CIFailedAt = copyTime(b.CIFailedAt)
 	return b
 }
 func copyDeployment(d domain.Deployment) domain.Deployment {

@@ -26,7 +26,12 @@ func buildPipelineStage(b domain.Build, canClose, canCancel bool) domain.Pipelin
 	s := domain.PipelineStage{Kind: "build", EntityID: b.ID, RawStatus: b.Status, FailureCode: b.FailureCode, Status: "pending", Label: "Queued"}
 	switch b.Status {
 	case "QUEUED":
-		s.Label = "Queued"
+		if b.WaitingForBuildID != "" {
+			s.Label = "Waiting for the running build of this branch"
+			s.Hint = "Waiting for build " + b.WaitingForBuildID + "; newer merges replace this build while it waits."
+		} else {
+			s.Label = "Queued"
+		}
 	case "DISPATCHED":
 		s.Label = "Dispatched to runner"
 	case "RUNNING":
@@ -79,6 +84,38 @@ func buildPipelineStage(b domain.Build, canClose, canCancel bool) domain.Pipelin
 	}
 	if canCancel && buildCanCancel(b) {
 		s.AllowedActions = append(s.AllowedActions, "cancel_build")
+	}
+	return s
+}
+func buildChecksStage(b domain.Build) domain.PipelineStage {
+	s := domain.PipelineStage{Kind: "checks", EntityID: b.ID, RawStatus: b.CIState, Status: "pending", Label: "Checks pending"}
+	switch b.CIState {
+	case "success":
+		s.Status = "success"
+		s.Label = "Checks passed"
+	case "pending":
+		s.Status = "running"
+		s.Label = "Checks running"
+	case "failure":
+		s.Status = "failed"
+		s.Label = "Checks failed"
+		keys := make([]string, 0, len(b.CIFailingContexts))
+		for k := range b.CIFailingContexts {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		s.Hint = strings.Join(keys, ", ")
+	case "cancelled":
+		s.Status = "cancelled"
+		s.Label = "Checks cancelled"
+	case "":
+		if b.Status == "FAILED" || b.Status == "CANCELLED" {
+			s.Status = "skipped"
+			s.Label = "Not observed"
+		} else {
+			s.Status = "pending"
+			s.Label = "Waiting for checks"
+		}
 	}
 	return s
 }
@@ -200,6 +237,9 @@ func pipelineCommitURL(b domain.Build) string {
 }
 func overallPipeline(build domain.Build, stages []domain.PipelineStage) string {
 	for _, s := range stages {
+		if s.Kind == "checks" && s.Status == "failed" {
+			return "attention"
+		}
 		if s.Status == "attention" {
 			return "attention"
 		}
@@ -269,6 +309,7 @@ func (s *Service) ListPipelines(ctx context.Context, in domain.ListPipelinesRequ
 				continue
 			}
 			b := copyBuild(raw)
+			b.WaitingForBuildID = waitingBuildID(st.Builds, raw)
 			profiles[b.ProfileID] = true
 			ds := byBuild[b.ID]
 			sort.Slice(ds, func(i, j int) bool {
@@ -295,6 +336,7 @@ func (s *Service) ListPipelines(ctx context.Context, in domain.ListPipelinesRequ
 				continue
 			}
 			stages := []domain.PipelineStage{buildPipelineStage(b, canClose, canCancel)}
+			stages = append(stages, buildChecksStage(b))
 			if b.Status == "SUCCEEDED" || b.SigningStatus != "" {
 				ss := domain.PipelineStage{Kind: "sign", EntityID: b.ID, RawStatus: b.SigningStatus, Status: "skipped", Label: "Not required"}
 				switch b.SigningStatus {

@@ -66,13 +66,25 @@ List defaults to 25, maximum 100; cursors bind Product/environment/profile filte
 The authenticated principal supplies attribution. Records and request receipts
 persist in bbolt and PostgreSQL through the shared State document codec.
 
-`PENDING_CHECKS → PROPOSING → MERGING → VERIFYING_ROLLOUT (when configured) → SUCCEEDED | FAILED` runs in the existing
-15-second cancellable dispatcher. CI pending or missing required contexts polls
-until the configured build timeout deadline. Required context failure/error or
-pending expiry fails CI_NOT_GREEN. With no required contexts, combined state must
-be success. Incomplete/unavailable provider evidence defers execution. Every
-configured build image requires a fresh HEAD of its exact registry digest;
-404 fails ARTIFACT_MISSING. CI and registry timestamps/evidence are persisted.
+Dev `ci_gate.dev_mode` defaults to `observe`; `block` retains the former
+`PENDING_CHECKS` behavior. Observe makes one best-effort source CI request,
+records `ci_state`, `ci_contexts`, `checked_at` and `ci_evidence` (`main` when
+green, otherwise `observe`), then continues to registry digest and signature
+checks and the GitOps proposal. Pending, failed or unavailable CI does not hold
+the Dev deployment lock. CI remains blocking for signing when signing requires
+status contexts, and production paths are unchanged.
+
+The build dispatcher also polls source CI for eligible builds for three hours,
+with bounded concurrency and a one-minute per-build interval. `get_build` and
+`list_builds` expose the latest `ci_state`, contexts, failing contexts, timestamps
+and triage. A failure creates `BUILD_CI_FAILED` attention with commit, Feature,
+Integration and handoff context; recovery clears it. Attention is limited to the
+newest non-superseded build on each product/profile/branch and deduplicates a
+corresponding `MAIN_CI_FAILED`. Pipelines shows a Checks stage; observed CI
+failure is attention even when image build and Dev rollout succeeded.
+
+Every configured build image still requires a fresh HEAD of its exact registry
+digest; 404 fails `ARTIFACT_MISSING`.
 
 The renderer parses multi-document Flux HelmRelease YAML to locate matching
 `spec.values.image.repository`, then edits only that mapping's `tag` scalar.
@@ -320,18 +332,19 @@ A trusted `failure` status with description exactly `Has been cancelled` is canc
 
 ## Superseded
 
-A new build cancels older `QUEUED` builds of the same product, profile and
-branch only when the source provider confirms their SHA is an ancestor of the
-new SHA. Active builds are unchanged. Cancelled builds leave the dispatch queue.
-A new Dev deployment similarly replaces ancestor `PENDING_CHECKS` deployments
-of the same product, profile and environment; other active states still block.
-Diverged SHAs and ancestry lookup errors never cause superseding. Rollback
-protection still applies.
+A branch build queue keeps one active build per product/profile/branch. While it
+runs, newer queued branch intent replaces every older queued build of that branch,
+regardless of ancestry; dispatch also coalesces restored/concurrent duplicates.
+SHA builds (empty branch) retain existing parallel behavior. Dev requests replace
+ancestor `PENDING_CHECKS` and `VERIFYING_ROLLOUT` deployments for the same product,
+profile and environment. `PROPOSING` and `MERGING` still block; rollout evidence
+is retained. Rollback protection still applies.
 
 Superseded handles retain provenance and request-key replay, carry failure code
 `SUPERSEDED` and `superseded_by`, and emit `supersede_build` or
 `supersede_deployment` with `superseded_by`, `source_sha`, and `new_source_sha`.
-Follow the replacement handle rather than re-queueing the superseded work.
+Follow `superseded_by`; never re-queue superseded work. Queued builds held behind
+an active branch build expose `waiting_for_build_id` on build reads.
 
 ## Automatic delivery
 

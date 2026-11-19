@@ -32,6 +32,21 @@ func TestStrictAuthority(t *testing.T) {
 	}
 }
 
+func TestCIGateDevModeValidation(t *testing.T) {
+	for _, mode := range []string{"observe", "block"} {
+		c := valid()
+		c.Profiles[0].CIGate = &CIGate{DevMode: mode}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+	}
+	c := valid()
+	c.Profiles[0].CIGate = &CIGate{DevMode: "sometimes"}
+	if c.Validate() == nil {
+		t.Fatal("invalid dev_mode accepted")
+	}
+}
+
 func TestTagCandidatesContract(t *testing.T) {
 	for _, templates := range [][]string{nil, {}, {"main-{unknown}"}, {"main-{sha8}-{other}"}, {"latest"}, {"{sha8}/bad"}} {
 		c := valid()

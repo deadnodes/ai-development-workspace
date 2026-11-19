@@ -139,6 +139,22 @@ func TestAutoDeployNewestAndReplay(t *testing.T) {
 		t.Fatal(replay, err)
 	}
 }
+
+func TestAutoDeployUsesObservedBranchHeadOnly(t *testing.T) {
+	s, m := autoDeployFixture(t)
+	a := m.state.Builds[0]
+	a.ID, a.SourceSHA = "build-a", strings.Repeat("a", 40)
+	a.Status, a.Branch = "SUCCEEDED", "main"
+	d := a
+	d.ID, d.SourceSHA = "build-d", strings.Repeat("d", 40)
+	d.QueuedAt = a.QueuedAt.Add(time.Minute)
+	m.state.Builds = []domain.Build{a, d}
+	s.builds.setAutoHead("app", &autoHead{seen: d.SourceSHA, observed: time.Now()})
+	s.autoDeployBuilds(context.Background())
+	if len(m.state.Deployments) != 1 || m.state.Deployments[0].BuildID != d.ID {
+		t.Fatalf("auto delivery did not select observed head: %+v", m.state.Deployments)
+	}
+}
 func TestAutoDeployBranchAndKillSwitch(t *testing.T) {
 	s, m := autoDeployFixture(t)
 	m.state.Builds[0].Branch = "feature"

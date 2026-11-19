@@ -7,6 +7,7 @@ import (
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/providers/forgejo"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -258,9 +259,234 @@ func (s *Service) watchMainCI(ctx context.Context) error {
 func mainCIAttention(st domain.State, product string) []map[string]any {
 	var items []map[string]any
 	for _, d := range st.Deployments {
-		if d.ProductID == product && d.CIEvidence == "pr_tree" && d.MainCIState == "failure" {
+		if d.ProductID == product && d.CIEvidence == "pr_tree" && d.MainCIState == "failure" && !buildCIFailedForDeployment(st, d) {
 			items = append(items, map[string]any{"id": d.ID, "deployment_id": d.ID, "profile_id": d.ProfileID, "reason": "MAIN_CI_FAILED", "source_sha": d.SourceSHA, "main_ci_checked_at": d.MainCICheckedAt})
 		}
 	}
 	return items
+}
+
+func buildCIFailedForDeployment(st domain.State, d domain.Deployment) bool {
+	for _, b := range st.Builds {
+		if b.ID == d.BuildID && b.CIState == "failure" {
+			return true
+		}
+	}
+	return false
+}
+func buildCIAttention(st domain.State, product string) []map[string]any {
+	out := []map[string]any{}
+	var selected []domain.Build
+	for _, b := range st.Builds {
+		if b.ProductID != product || b.SupersededBy != "" || b.Branch == "" || b.CIState != "failure" {
+			continue
+		}
+		suppressed := false
+		for _, n := range st.Builds {
+			if n.ProductID == b.ProductID && n.ProfileID == b.ProfileID && n.Branch == b.Branch && n.SupersededBy == "" && n.CIState == "success" && n.QueuedAt.After(b.QueuedAt) {
+				suppressed = true
+				break
+			}
+		}
+		if suppressed {
+			continue
+		}
+		selected = append(selected, b)
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		if selected[i].CIFailedAt == nil {
+			return false
+		}
+		if selected[j].CIFailedAt == nil {
+			return true
+		}
+		return selected[i].CIFailedAt.After(*selected[j].CIFailedAt)
+	})
+	for _, b := range selected {
+		ds := []string{}
+		for _, d := range st.Deployments {
+			if d.ProductID == product && d.BuildID == b.ID && d.EnvironmentID == "dev" {
+				ds = append(ds, d.ID)
+			}
+		}
+		features, integrations := []string{}, []string{}
+		if b.CITriage != nil {
+			seen := map[string]bool{}
+			for _, f := range b.CITriage.Features {
+				features = append(features, f.FeatureID)
+				for _, id := range f.IntegrationIDs {
+					if !seen[id] {
+						integrations = append(integrations, id)
+						seen[id] = true
+					}
+				}
+			}
+		}
+		out = append(out, map[string]any{"id": "build-ci:" + b.ID, "build_id": b.ID, "reason": "BUILD_CI_FAILED", "profile_id": b.ProfileID, "branch": b.Branch, "source_sha": b.SourceSHA, "failing_contexts": b.CIFailingContexts, "ci_failed_at": b.CIFailedAt, "deployment_ids": ds, "triage": b.CITriage, "agent_action": map[string]any{"type": "INVESTIGATE_CI_FAILURE", "build_id": b.ID, "feature_ids": features, "integration_ids": integrations, "instructions": []string{"Resume the listed Feature(s) via resume and read the latest handoff.", "Fix forward on a branch, then open a PR and merge; the next main build supersedes this one.", "Do not re-queue or roll back unless asked."}}})
+	}
+	return out
+}
+
+// watchBuildCI stores a bounded observation of source CI independently from
+// image build and deployment progress.
+func (s *Service) watchBuildCI(ctx context.Context) error {
+	checkCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	st, err := s.buildSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	slices.SortStableFunc(st.Builds, func(a, b domain.Build) int {
+		if a.CICheckedAt == nil {
+			if b.CICheckedAt == nil {
+				return 0
+			}
+			return -1
+		}
+		if b.CICheckedAt == nil {
+			return 1
+		}
+		return a.CICheckedAt.Compare(*b.CICheckedAt)
+	})
+	type result struct {
+		b      domain.Build
+		p      buildconfig.Profile
+		status forgejo.CommitStatus
+		err    error
+	}
+	results := make(chan result, len(st.Builds))
+	slots := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, b := range st.Builds {
+		now := time.Now().UTC()
+		if checkCtx.Err() != nil {
+			break
+		}
+		if b.Branch == "" || b.RestoreQuarantined || b.SupersededBy != "" || b.QueuedAt.Before(now.Add(-3*time.Hour)) || b.CIState == "success" || b.CIState == "cancelled" || b.CICheckedAt != nil && now.Sub(*b.CICheckedAt) < time.Minute || !(b.Status == "SUCCEEDED" || buildActive(b)) {
+			continue
+		}
+		p, ok := s.builds.config.Profile(b.ProfileID)
+		if !ok || p.ProductID != b.ProductID || !s.builds.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
+			continue
+		}
+		select {
+		case slots <- struct{}{}:
+		case <-checkCtx.Done():
+			break
+		}
+		if checkCtx.Err() != nil {
+			break
+		}
+		reserved := false
+		err = s.store.Update(ctx, func(state *domain.State) error {
+			for i := range state.Builds {
+				cur := &state.Builds[i]
+				if cur.ID == b.ID && buildFingerprint(*cur) == buildFingerprint(b) {
+					cur.CICheckedAt = &now
+					b = copyBuild(*cur)
+					reserved = true
+					break
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			<-slots
+			return err
+		}
+		if !reserved {
+			<-slots
+			continue
+		}
+		wg.Add(1)
+		go func(b domain.Build, p buildconfig.Profile) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			poll, c := context.WithTimeout(checkCtx, 10*time.Second)
+			defer c()
+			v, e := s.deployments.source.CommitStatus(poll, s.builds.config.Connection(p.ConnectionID), p.Repository, b.SourceSHA)
+			results <- result{b, p, v, e}
+		}(b, p)
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		if r.err != nil {
+			continue
+		}
+		green, failed, contexts := ciVerdict(trustedCIStatus(r.status, r.p), r.p.RequiredStatusContexts)
+		state := "pending"
+		if failed {
+			state = "failure"
+		} else if green {
+			state = "success"
+		} else {
+			for k, v := range contexts {
+				if v == "cancelled" && (len(r.p.RequiredStatusContexts) == 0 || slices.Contains(r.p.RequiredStatusContexts, k)) {
+					state = "cancelled"
+					break
+				}
+			}
+		}
+		now := *r.b.CICheckedAt
+		var updatedBuild domain.Build
+		err = s.store.Update(ctx, func(st *domain.State) error {
+			for i := range st.Builds {
+				cur := &st.Builds[i]
+				if cur.ID != r.b.ID || buildFingerprint(*cur) != buildFingerprint(r.b) {
+					continue
+				}
+				prior := cur.CIState
+				cur.CIState = state
+				cur.CIContexts = contexts
+				cur.CIFailingContexts = map[string]string{}
+				if failed {
+					for k, v := range contexts {
+						if (len(r.p.RequiredStatusContexts) == 0 || slices.Contains(r.p.RequiredStatusContexts, k)) && (v == "failure" || v == "error") {
+							cur.CIFailingContexts[k] = v
+						}
+					}
+					if prior != "failure" {
+						cur.CIFailedAt = &now
+						st.Events = append(st.Events, domain.Event{ID: id(), Action: "build_ci_failed", Actor: cur.Actor, At: now, EntityID: cur.ID, ProductID: cur.ProductID, Data: domain.Command{Action: "build_ci_failed", Data: map[string]any{"failing_contexts": cur.CIFailingContexts, "profile_id": cur.ProfileID, "source_sha": cur.SourceSHA, "build_id": cur.ID}}})
+					}
+				} else if state == "success" && prior == "failure" {
+					st.Events = append(st.Events, domain.Event{ID: id(), Action: "build_ci_recovered", Actor: cur.Actor, At: now, EntityID: cur.ID, ProductID: cur.ProductID, Data: domain.Command{Action: "build_ci_recovered", Data: map[string]any{"profile_id": cur.ProfileID, "source_sha": cur.SourceSHA, "build_id": cur.ID}}})
+				}
+				updatedBuild = copyBuild(*cur)
+				break
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if state == "failure" {
+			for _, prior := range st.Builds {
+				if prior.ID == r.b.ID && (prior.CIState != "failure" || prior.CITriage == nil) {
+					triage := s.computeBuildCITriage(ctx, r.b, r.p)
+					if e := s.store.Update(ctx, func(cur *domain.State) error {
+						for i := range cur.Builds {
+							x := &cur.Builds[i]
+							if x.ID == r.b.ID && buildFingerprint(*x) == buildFingerprint(updatedBuild) && x.CIState == "failure" && x.CITriage == nil {
+								x.CITriage = triage
+								for j := len(cur.Events) - 1; j >= 0; j-- {
+									if cur.Events[j].Action == "build_ci_failed" && cur.Events[j].EntityID == x.ID {
+										cur.Events[j].Data.Data["triage"] = triageSummary(triage)
+										break
+									}
+								}
+								break
+							}
+						}
+						return nil
+					}); e != nil {
+						return e
+					}
+					break
+				}
+			}
+		}
+	}
+	return nil
 }

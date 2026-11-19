@@ -224,13 +224,14 @@ implicitly. Up-to-date branch protection makes tree equivalence more frequent.
 ### Superseded
 
 Do not re-queue builds marked `CANCELLED` / `SUPERSEDED`. Follow `superseded_by`
-to the newer build instead. A newer source SHA can supersede queued ancestor
-builds of the same product/profile/branch and `PENDING_CHECKS` ancestor
-deployments of the same product/profile/environment. Superseded deployments
-are `FAILED` / `SUPERSEDED`; follow their replacement. Request-key replays
-retain the original handle. Active builds and deployments beyond pending checks
-are never automatically superseded; ancestry errors or diverged SHAs leave
-existing handles unchanged, and rollback protection still applies.
+to the replacement handle. Branch builds allow one active build per
+product/profile/branch; while it runs, only the newest queued build is retained,
+regardless of ancestry. SHA builds keep pool-based parallel admission. Dev
+requests can supersede ancestor `PENDING_CHECKS` or `VERIFYING_ROLLOUT`
+deployments for the same product/profile/environment; `PROPOSING` and `MERGING`
+still block, rollout evidence is retained, and rollback protection still applies.
+Request-key replays retain the original handle. Held branch builds expose
+`waiting_for_build_id` on build reads.
 
 ## Automatic delivery profiles
 
@@ -252,3 +253,11 @@ observation failure or delivery guard as the actual blocker.
 
 When configured, RCP signs newly successful Forgejo images through pinned Vault Transit keys. Inspect `get_build.signing_status` and `signatures`; SUCCEEDED alone does not mean signed. Signing is separate from release approval. Dev delivery can require allowed pinned signatures and records `signature_verified`; `SIGNATURE_MISSING` requires fixing signing evidence before retrying delivery. Explicit backfill uses `sign_artifact {product_id, profile_id, image_id, image_ref, key_ids, reason, request_key}` with a digest-only reference and operator-authorized scope. Poll `list_signatures {product_id, digest?, limit?, cursor?}` for the durable handle. Reuse a request key only to read its historical result; a new retry requires a fresh key. Never supply credentials or private keys. Signing never grants production promotion, Flux merge, or trust-policy changes. See docs/IMAGE_SIGNING.md.
 For profiles with the security gate enabled, `security_status` must be `PASS` before signing or delivery. Fix findings or add reviewed `.trivyignore`/`.gitleaksignore` entries; never bypass the gate. See docs/SECURITY_GATE.md.
+
+### CI failure on a build you delivered
+
+Use `get_attention_required` and open the `BUILD_CI_FAILED` item. Read its
+`triage` commits and handoffs, then resume the listed Feature and read its latest
+handoff. The agent whose commits appear in `triage.commits` or whose handoff is
+listed owns the fix. Fix forward on a branch, open a PR and merge; the next main
+build supersedes this one. Do not re-queue or roll back unless asked.

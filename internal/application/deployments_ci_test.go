@@ -84,7 +84,7 @@ func TestPRTreeGate(t *testing.T) {
 		{"head pending", func(_ *Service, f *treeGateFake) { f.headStatus.State = "pending"; f.headStatus.Statuses = nil }, "PENDING_CHECKS", ""},
 		{"head failed", func(_ *Service, f *treeGateFake) { f.headStatus.Statuses[0].Status = "failure" }, "PENDING_CHECKS", ""},
 		{"disabled", func(s *Service, _ *treeGateFake) {
-			s.builds.config.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: false}
+			s.builds.config.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: false, DevMode: "block"}
 		}, "PENDING_CHECKS", ""},
 		{"context mapping", func(s *Service, f *treeGateFake) {
 			s.builds.config.Profiles[0].RequiredStatusContexts = []string{"check (push)", "exact (push) inner", "plain"}
@@ -112,6 +112,30 @@ func TestPRTreeGate(t *testing.T) {
 			}
 			if (tc.name == "main failure" || tc.name == "main green" || tc.name == "disabled") && f.prCalls != 0 {
 				t.Fatal("unexpected PR lookup")
+			}
+		})
+	}
+}
+
+func TestDevObserveModeDoesNotWaitForCI(t *testing.T) {
+	for _, state := range []string{"pending", "failure"} {
+		t.Run(state, func(t *testing.T) {
+			s, m, f, in := deploymentFixture(t)
+			s.builds.config.Profiles[0].CIGate.DevMode = "observe"
+			f.status = forgejo.CommitStatus{State: state, Statuses: []forgejo.StatusContext{{Context: "verify", Status: state}}}
+			if _, err := s.DeployBuild(context.Background(), in); err != nil {
+				t.Fatal(err)
+			}
+			deployTick(t, s)
+			if m.state.Deployments[0].Status == "PENDING_CHECKS" {
+				t.Fatalf("CI %s delayed Dev deployment", state)
+			}
+			if f.proposals == 0 {
+				t.Fatalf("CI %s prevented proposal", state)
+			}
+			d := m.state.Deployments[0]
+			if d.CIEvidence != "observe" || d.CIState != state || d.CheckedAt == nil {
+				t.Fatalf("observation not recorded: %+v", d)
 			}
 		})
 	}
@@ -293,7 +317,7 @@ func TestTrustedProducerBothGates(t *testing.T) {
 		for _, producer := range []string{"actions", "user", "other repo"} {
 			t.Run(gate+"/"+producer, func(t *testing.T) {
 				s, m, f, in := treeGateFixture(t)
-				s.builds.config.Profiles[0].CIGate = nil
+				s.builds.config.Profiles[0].CIGate = &buildconfig.CIGate{AcceptPRTree: true, DevMode: "block"}
 				p := s.builds.config.Profiles[0]
 				status := forgejo.StatusContext{Context: "verify", Status: "success", TargetURL: "/" + strings.ToUpper(p.Repository) + "/actions/runs/47/jobs/0"}
 				if producer == "user" {

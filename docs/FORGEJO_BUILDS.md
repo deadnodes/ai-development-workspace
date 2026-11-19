@@ -186,7 +186,12 @@ after registry, repository or image configuration changes.
 ## Execution and recovery
 
 The context-cancellable server loop runs immediately and every 15 seconds, with
-single-flight processing. FIFO admission atomically counts DISPATCHED, RUNNING and
+single-flight processing. Branch builds allow one active build per product/profile/branch;
+the newest queued build wins, and older queued builds are superseded regardless of
+ancestry. A held build does not consume or block a pool slot. SHA builds (empty branch)
+keep the existing pool-only parallel admission behavior. Build reads expose
+`waiting_for_build_id` for a queued branch build held behind its active build;
+pipelines show the same wait state. FIFO admission atomically counts DISPATCHED, RUNNING and
 RECONCILIATION_REQUIRED records per configured pool. Before dispatch it checks the
 repository's `build.yml` runs. A `workflow_dispatch` run with `event_payload.inputs.sha == source_sha`
 (any request ID) in waiting/running/success attaches with `reused:"run"`.

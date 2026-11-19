@@ -184,7 +184,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		}
 		for _, d := range st.Deployments {
 			if !deploymentTerminal(d) && d.EnvironmentID == in.EnvironmentID && (d.Identity != identity || !s.builds.deploymentAuthorityMatches(d.ProfileID, d.AuthorityHash)) && (d.ProfileID == p.ID || deploymentOverlap(s.builds.config, candidate, d)) {
-				if d.ProductID == in.ProductID && d.ProfileID == p.ID && d.Status == "PENDING_CHECKS" {
+				if d.ProductID == in.ProductID && d.ProfileID == p.ID && (d.Status == "PENDING_CHECKS" || d.Status == "VERIFYING_ROLLOUT") {
 					if preflight {
 						candidates[d.ID] = d.SourceSHA
 						continue
@@ -236,7 +236,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 		out.Branch = "rcp/deploy/" + out.ID
 		for i := range st.Deployments {
 			d := &st.Deployments[i]
-			if d.ProductID != in.ProductID || d.ProfileID != p.ID || d.EnvironmentID != in.EnvironmentID || d.Status != "PENDING_CHECKS" || d.SourceSHA == "" || superseded[d.ID] != d.SourceSHA {
+			if d.ProductID != in.ProductID || d.ProfileID != p.ID || d.EnvironmentID != in.EnvironmentID || d.Status != "PENDING_CHECKS" && d.Status != "VERIFYING_ROLLOUT" || d.SourceSHA == "" || superseded[d.ID] != d.SourceSHA {
 				continue
 			}
 			d.Status, d.FailureCode, d.SupersededBy = "FAILED", "SUPERSEDED", out.ID
@@ -588,6 +588,9 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 	if err := s.watchMainCI(ctx); err != nil {
 		verificationErrors = append(verificationErrors, err)
 	}
+	if err := s.watchBuildCI(ctx); err != nil {
+		verificationErrors = append(verificationErrors, err)
+	}
 	return errors.Join(verificationErrors...)
 }
 func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p buildconfig.Profile, g buildconfig.GitOps) error {
@@ -603,8 +606,9 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 		return e
 	}
 	if d.Status == "PENDING_CHECKS" {
+		observe := p.CIGate == nil || p.CIGate.DevMode == "" || p.CIGate.DevMode == "observe"
 		v, e := a.source.CommitStatus(ctx, s.builds.config.Connection(p.ConnectionID), p.Repository, d.SourceSHA)
-		if e != nil {
+		if e != nil && !observe {
 			next := d
 			next.FailureCode = "CI_UNAVAILABLE"
 			if time.Now().After(d.Deadline) && !errors.Is(e, forgejo.ErrStatusPageLimit) {
@@ -612,26 +616,35 @@ func (s *Service) processDeployment(ctx context.Context, d domain.Deployment, p 
 			}
 			return save(next, false)
 		}
-		green, failed, contexts := ciVerdict(trustedCIStatus(v, p), p.RequiredStatusContexts)
+		green, failed, contexts := false, false, map[string]string{}
+		if e == nil {
+			green, failed, contexts = ciVerdict(trustedCIStatus(v, p), p.RequiredStatusContexts)
+		}
 		next := d
 		now := time.Now().UTC()
 		next.CheckedAt = &now
 		next.CIEvidence, next.CIPRNumber, next.CIPRHeadSHA = "", 0, ""
 		next.MainCIState, next.MainCICheckedAt = "", nil
-		next.CIState = v.State
+		if e == nil {
+			next.CIState = v.State
+		} else {
+			next.CIState = "unavailable"
+		}
 		next.CIContexts = contexts
 		next.FailureCode = ""
 		if green {
 			next.CIEvidence = "main"
+		} else if observe {
+			next.CIEvidence = "observe"
 		} else if !failed {
 			if err := s.acceptPRTree(ctx, &next, p); err == nil && next.CIEvidence == "pr_tree" {
 				green = true
 			}
 		}
-		if failed || !green && now.After(d.Deadline) {
+		if !observe && (failed || !green && now.After(d.Deadline)) {
 			return save(failedDeployment(next, "CI_NOT_GREEN"), false)
 		}
-		if !green {
+		if !observe && !green {
 			return save(next, false)
 		}
 		for _, i := range d.Images {

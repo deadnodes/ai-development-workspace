@@ -38,7 +38,7 @@ func TestQueueBuildSuperseded(t *testing.T) {
 		{name: "reconciliation", status: "RECONCILIATION_REQUIRED", ancestor: true},
 		{name: "diverged", status: "QUEUED"},
 		{name: "older request", status: "QUEUED"},
-		{name: "ancestry error", status: "QUEUED", ancestor: true, unavailable: true},
+		{name: "ancestry error no longer relevant", status: "QUEUED", ancestor: true, unavailable: true},
 		{name: "other branch", status: "QUEUED", scope: "branch", ancestor: true},
 		{name: "other profile", status: "QUEUED", scope: "profile", ancestor: true},
 		{name: "other product", status: "QUEUED", scope: "product", ancestor: true},
@@ -66,25 +66,13 @@ func TestQueueBuildSuperseded(t *testing.T) {
 				f.head = strings.Repeat("a", 40)
 			}
 			calls := 0
-			f.ancestorFunc = func(ctx context.Context, ancestor, descendant string) (bool, error) {
+			f.ancestorFunc = func(context.Context, string, string) (bool, error) {
 				calls++
-				if store.locked {
-					t.Fatal("ancestry I/O under store lock")
-				}
-				if _, ok := ctx.Deadline(); !ok {
-					t.Fatal("unbounded ancestry check")
-				}
-				if ancestor != old.SourceSHA || descendant != f.head {
-					t.Fatal("wrong ancestry direction", ancestor, descendant)
-				}
-				if tc.unavailable {
-					return true, errors.New("unavailable")
-				}
-				return tc.ancestor, nil
+				return tc.ancestor, errors.New("ancestry must not gate branch coalescing")
 			}
 			next := queue(t, s, "new")
 			got := m.state.Builds[0]
-			superseded := tc.status == "QUEUED" && tc.scope == "" && tc.ancestor && !tc.unavailable
+			superseded := tc.status == "QUEUED" && tc.scope == "" && true
 			if superseded {
 				if got.Status != "CANCELLED" || got.FailureCode != "SUPERSEDED" || got.SupersededBy != next.ID || got.FinishedAt == nil {
 					t.Fatal(got)
@@ -103,6 +91,9 @@ func TestQueueBuildSuperseded(t *testing.T) {
 			} else if !reflect.DeepEqual(before, got) {
 				t.Fatal("ineligible build changed", got)
 			}
+			if calls != 0 {
+				t.Fatal("branch coalescing unexpectedly checked ancestry", calls)
+			}
 			count := calls
 			replay, err := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", RequestKey: "old"})
 			if err != nil || replay.ID != old.ID || calls != count || len(m.state.Builds) != 2 {
@@ -113,29 +104,26 @@ func TestQueueBuildSuperseded(t *testing.T) {
 }
 
 func TestQueueBuildSupersedeRevalidatesClaim(t *testing.T) {
-	for _, change := range []string{"status", "sha", "branch", "profile", "product"} {
+	// Branch builds supersede without ancestry I/O; only QUEUED builds of the same
+	// product, profile and branch are eligible.
+	for _, change := range []string{"status", "branch", "profile", "product"} {
 		t.Run(change, func(t *testing.T) {
 			s, m, f, _ := buildFixture(t)
 			queue(t, s, "old")
-			f.head = strings.Repeat("b", 40)
-			f.ancestorFunc = func(context.Context, string, string) (bool, error) {
-				switch change {
-				case "status":
-					m.state.Builds[0].Status = "DISPATCHED"
-				case "sha":
-					m.state.Builds[0].SourceSHA = strings.Repeat("c", 40)
-				case "branch":
-					m.state.Builds[0].Branch = "other"
-				case "profile":
-					m.state.Builds[0].ProfileID = "other"
-				case "product":
-					m.state.Builds[0].ProductID = "other"
-				}
-				return true, nil
+			switch change {
+			case "status":
+				m.state.Builds[0].Status = "DISPATCHED"
+			case "branch":
+				m.state.Builds[0].Branch = "other"
+			case "profile":
+				m.state.Builds[0].ProfileID = "other"
+			case "product":
+				m.state.Builds[0].ProductID = "other"
 			}
+			f.head = strings.Repeat("b", 40)
 			queue(t, s, "new")
 			if m.state.Builds[0].SupersededBy != "" {
-				t.Fatal("changed build superseded")
+				t.Fatal("ineligible build superseded")
 			}
 		})
 	}
@@ -154,6 +142,7 @@ func TestDeployBuildSuperseded(t *testing.T) {
 		{"merging", "MERGING", true, false},
 		{"reconciliation", "RECONCILIATION_REQUIRED", true, false},
 		{"rollout", "VERIFYING_ROLLOUT", true, false},
+		{"rollout diverged", "VERIFYING_ROLLOUT", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, m, f, in := deploymentFixture(t)
@@ -166,6 +155,9 @@ func TestDeployBuildSuperseded(t *testing.T) {
 				t.Fatal(err)
 			}
 			m.state.Deployments[0].Status = tc.status
+			if tc.status == "VERIFYING_ROLLOUT" {
+				m.state.Deployments[0].RolloutVerified = true
+			}
 			before := copyDeployment(m.state.Deployments[0])
 			b := copyBuild(m.state.Builds[0])
 			b.ID = "new-build"
@@ -191,13 +183,16 @@ func TestDeployBuildSuperseded(t *testing.T) {
 			nextIn.BuildID = b.ID
 			nextIn.RequestKey = "new"
 			next, err := s.DeployBuild(context.Background(), nextIn)
-			if tc.status == "PENDING_CHECKS" && tc.ancestor && !tc.unavailable {
+			if (tc.status == "PENDING_CHECKS" || tc.status == "VERIFYING_ROLLOUT") && tc.ancestor && !tc.unavailable {
 				if err != nil || next.Status != "PENDING_CHECKS" {
 					t.Fatal(next, err)
 				}
 				got := m.state.Deployments[0]
 				if got.Status != "FAILED" || got.FailureCode != "SUPERSEDED" || got.SupersededBy != next.ID || got.FinishedAt == nil {
 					t.Fatal(got)
+				}
+				if tc.status == "VERIFYING_ROLLOUT" && !got.RolloutVerified {
+					t.Fatal("supersede cleared rollout evidence", got)
 				}
 				assertSupersedeEvent(t, m.state, "supersede_deployment", old.ID, next.ID, old.SourceSHA, next.SourceSHA)
 				stale := old
@@ -281,12 +276,13 @@ func TestSupersedeAllEligibleHandles(t *testing.T) {
 			return (old == first.SourceSHA || old == second.SourceSHA) && head == f.head, nil
 		}
 		next := queue(t, s, "third")
-		for _, old := range []domain.Build{first, second} {
-			got, err := s.GetBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: old.ID})
-			if err != nil || got.SupersededBy != next.ID || got.Status != "CANCELLED" {
+		// Each newer branch build replaces the queued predecessor immediately.
+		for _, c := range []struct{ old, by domain.Build }{{first, second}, {second, next}} {
+			got, err := s.GetBuild(context.Background(), domain.BuildLookup{ProductID: "p", BuildID: c.old.ID})
+			if err != nil || got.SupersededBy != c.by.ID || got.Status != "CANCELLED" {
 				t.Fatal(got, err)
 			}
-			assertSupersedeEvent(t, m.state, "supersede_build", old.ID, next.ID, old.SourceSHA, next.SourceSHA)
+			assertSupersedeEvent(t, m.state, "supersede_build", c.old.ID, c.by.ID, c.old.SourceSHA, c.by.SourceSHA)
 		}
 		count := len(m.state.Events)
 		duplicate := queue(t, s, "new-key-same-sha")
