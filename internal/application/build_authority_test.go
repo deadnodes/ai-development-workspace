@@ -126,6 +126,30 @@ func TestProfileAuthorityScope(t *testing.T) {
 	}
 }
 
+func TestDevModeOmittedAuthorityHashIsStable(t *testing.T) {
+	s, _, _, _ := deploymentFixture(t)
+	provider := &fakeForgejo{head: strings.Repeat("a", 40)}
+	registry := &fakeBuildRegistry{}
+	c := cloneAuthorityConfig(t, s.builds.config)
+	c.Profiles[0].CIGate.DevMode = ""
+	if err := s.ConfigureBuilds(c, provider, registry); err != nil {
+		t.Fatal(err)
+	}
+	before := s.builds.deploymentHashes["app"]
+	var roundTrip buildconfig.CIGate
+	raw, _ := json.Marshal(c.Profiles[0].CIGate)
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	c.Profiles[0].CIGate = &roundTrip
+	if err := s.ConfigureBuilds(c, provider, registry); err != nil {
+		t.Fatal(err)
+	}
+	if s.builds.deploymentHashes["app"] != before {
+		t.Fatal("omitted dev_mode changed authority hash")
+	}
+}
+
 func TestProfileAuthorityLegacyAndDedupe(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		s, m, _, in := deploymentFixture(t)

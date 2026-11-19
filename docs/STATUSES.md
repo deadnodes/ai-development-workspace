@@ -10,6 +10,12 @@ Discover the complete current catalog and transition graph with `GET /api/status
 | Integration | planned, working, implemented, verifying, ready, released |
 | Deployment | PENDING_CHECKS, PROPOSING, MERGING, VERIFYING_ROLLOUT, SUCCEEDED, FAILED, RECONCILIATION_REQUIRED |
 
+Build source CI is an independent observation (`ci_state`: pending, success,
+failure, cancelled). A failure is `BUILD_CI_FAILED` attention on the newest
+non-superseded build for a product/profile/branch; a later green poll recovers
+it. Dev deployments observe CI by default and continue on pending/failure;
+profiles can explicitly select `ci_gate.dev_mode: block` to retain the old gate.
+
 A Feature’s completed state describes implementation scope; it does not imply production delivery. An Integration’s ready state means readiness checks passed; it does not mean released. `start_integration`, `transition_integration` and `complete_integration` retain their application guards. Clients cannot assign released through plan edits or generic transitions: successful release execution records it. The graph describes potential transitions, not permission to bypass dependencies, blockers or verification.
 
 Check outcomes, findings, operations, deployment states and other server-owned states use the same catalog endpoint. Record their dedicated engineering actions and evidence instead of attempting direct status edits. Existing persisted data is validated by the domain; unknown values require an explicit audited repair rather than silent acceptance as a new lifecycle state.

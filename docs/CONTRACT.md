@@ -15,6 +15,12 @@ Existing execution and `get_worker_job` contracts remain unchanged.
 
 `domain.Command` is `{action, actor, id?, product_id?, feature_id?, integration_id?, gate_id?, check_id?, result_id?, data: {...}}`. Actor is mandatory. IDs supplied for creates are optional; generated when absent. Execute returns created/updated entity. State uses arrays (always non-null): products, features, integrations, gates, checks, results, findings, memories, environments, repositories, releases, events. All entities have snake_case JSON keys. Entity IDs globally unique.
 
+Build reads (`get_build`, `list_builds`) include optional `ci_state`,
+`ci_contexts`, `ci_failing_contexts`, `ci_checked_at`, `ci_failed_at` and
+`ci_triage`. CI observation does not alter build execution status. `BUILD_CI_FAILED`
+attention carries the build and triage context; a later successful observation
+records recovery.
+
 Actions and data:
 - create_product: name, description
 - create_feature: product_id top-level; title, problem, goal, requirements[], constraints[], context, repositories[], owner, status

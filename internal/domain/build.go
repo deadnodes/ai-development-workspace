@@ -13,32 +13,76 @@ type Build struct {
 	SigningNextAttemptAt time.Time            `json:"signing_next_attempt_at,omitempty"`
 	Trigger              string               `json:"trigger"`
 	SupersededBy         string               `json:"superseded_by,omitempty"`
+	WaitingForBuildID    string               `json:"waiting_for_build_id,omitempty"`
 	LastError            string               `json:"last_error,omitempty"`
 	ProviderUnavailable  bool                 `json:"provider_unavailable,omitempty"`
 	RestoreQuarantined   bool                 `json:"restore_quarantined,omitempty"`
 	AuthorityHash        string               `json:"authority_hash"`
 	Meta
-	ConnectionID     string       `json:"connection_id"`
-	ConnectionAPIURL string       `json:"connection_api_url,omitempty"`
-	ProfileID        string       `json:"profile_id"`
-	PoolID           string       `json:"pool_id"`
-	Repository       string       `json:"repository"`
-	Workflow         string       `json:"workflow"`
-	Branch           string       `json:"branch"`
-	SourceSHA        string       `json:"source_sha"`
-	RequestKey       string       `json:"request_key,omitempty"`
-	Status           string       `json:"status"`
-	ProviderRunID    int64        `json:"provider_run_id,omitempty"`
-	RunURL           string       `json:"run_url,omitempty"`
-	RunStatus        string       `json:"run_status,omitempty"`
-	Images           []BuildImage `json:"images,omitempty"`
-	Reused           string       `json:"reused,omitempty"`
-	FailureCode      string       `json:"failure_code,omitempty"`
-	FailureMessage   string       `json:"failure_message,omitempty"`
-	QueuedAt         time.Time    `json:"queued_at"`
-	DispatchedAt     *time.Time   `json:"dispatched_at,omitempty"`
-	StartedAt        *time.Time   `json:"started_at,omitempty"`
-	FinishedAt       *time.Time   `json:"finished_at,omitempty"`
+	ConnectionID      string            `json:"connection_id"`
+	ConnectionAPIURL  string            `json:"connection_api_url,omitempty"`
+	ProfileID         string            `json:"profile_id"`
+	PoolID            string            `json:"pool_id"`
+	Repository        string            `json:"repository"`
+	Workflow          string            `json:"workflow"`
+	Branch            string            `json:"branch"`
+	SourceSHA         string            `json:"source_sha"`
+	RequestKey        string            `json:"request_key,omitempty"`
+	Status            string            `json:"status"`
+	ProviderRunID     int64             `json:"provider_run_id,omitempty"`
+	RunURL            string            `json:"run_url,omitempty"`
+	RunStatus         string            `json:"run_status,omitempty"`
+	Images            []BuildImage      `json:"images,omitempty"`
+	Reused            string            `json:"reused,omitempty"`
+	FailureCode       string            `json:"failure_code,omitempty"`
+	FailureMessage    string            `json:"failure_message,omitempty"`
+	QueuedAt          time.Time         `json:"queued_at"`
+	DispatchedAt      *time.Time        `json:"dispatched_at,omitempty"`
+	StartedAt         *time.Time        `json:"started_at,omitempty"`
+	FinishedAt        *time.Time        `json:"finished_at,omitempty"`
+	CIState           string            `json:"ci_state,omitempty"`
+	CIContexts        map[string]string `json:"ci_contexts,omitempty"`
+	CIFailingContexts map[string]string `json:"ci_failing_contexts,omitempty"`
+	CICheckedAt       *time.Time        `json:"ci_checked_at,omitempty"`
+	CIFailedAt        *time.Time        `json:"ci_failed_at,omitempty"`
+	CITriage          *BuildCITriage    `json:"ci_triage,omitempty"`
+}
+
+type BuildCITriage struct {
+	BaseBuildID       string           `json:"base_build_id,omitempty"`
+	BaseSHA           string           `json:"base_sha,omitempty"`
+	Commits           []BuildCICommit  `json:"commits,omitempty"`
+	CommitsTruncated  bool             `json:"commits_truncated,omitempty"`
+	Features          []BuildCIFeature `json:"features,omitempty"`
+	Handoffs          []BuildCIHandoff `json:"handoffs,omitempty"`
+	BuildActor        string           `json:"build_actor,omitempty"`
+	BuildTrigger      string           `json:"build_trigger,omitempty"`
+	ComputedAt        time.Time        `json:"computed_at,omitempty"`
+	UnavailableReason string           `json:"unavailable_reason,omitempty"`
+}
+type BuildCICommit struct {
+	SHA         string    `json:"sha"`
+	Title       string    `json:"title"`
+	Author      string    `json:"author,omitempty"`
+	CommittedAt time.Time `json:"committed_at,omitempty"`
+	PRNumber    int       `json:"pr_number,omitempty"`
+}
+type BuildCIFeature struct {
+	FeatureID      string   `json:"feature_id"`
+	Title          string   `json:"title"`
+	Status         string   `json:"status"`
+	IntegrationIDs []string `json:"integration_ids,omitempty"`
+	MatchedBy      []string `json:"matched_by,omitempty"`
+}
+type BuildCIHandoff struct {
+	MemoryID      string    `json:"memory_id"`
+	FeatureID     string    `json:"feature_id,omitempty"`
+	IntegrationID string    `json:"integration_id,omitempty"`
+	Kind          string    `json:"kind"`
+	Title         string    `json:"title"`
+	Session       string    `json:"session,omitempty"`
+	Actor         string    `json:"actor,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 type BuildImageSecurity struct {
 	ImageID          string    `json:"image_id"`

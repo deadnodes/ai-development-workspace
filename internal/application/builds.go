@@ -135,6 +135,64 @@ func (a *buildRuntime) deploymentAuthorityMatches(profileID, hash string) bool {
 func buildActive(b domain.Build) bool {
 	return !b.RestoreQuarantined && (b.Status == "DISPATCHED" || b.Status == "RUNNING" || b.Status == "RECONCILIATION_REQUIRED")
 }
+func branchBuildKey(b domain.Build) string {
+	return b.ProductID + "\x00" + b.ProfileID + "\x00" + b.Branch
+}
+func waitingBuildID(builds []domain.Build, b domain.Build) string {
+	if b.Branch == "" || b.Status != "QUEUED" {
+		return ""
+	}
+	for _, x := range builds {
+		if x.ProductID == b.ProductID && x.ProfileID == b.ProfileID && x.Branch == b.Branch && buildActive(x) {
+			return x.ID
+		}
+	}
+	return ""
+}
+func (s *Service) coalesceQueuedBranches(ctx context.Context) error {
+	snapshot, err := s.buildSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	newest := map[string]domain.Build{}
+	queued := map[string]domain.Build{}
+	for _, b := range snapshot.Builds {
+		if b.Status == "QUEUED" && !b.RestoreQuarantined && b.Branch != "" {
+			queued[b.ID] = b
+			k := branchBuildKey(b)
+			old, ok := newest[k]
+			if !ok || newerAutoBuild(b, old) {
+				newest[k] = b
+			}
+		}
+	}
+	// Nothing to coalesce: avoid a store write on every dispatcher tick.
+	if len(queued) == len(newest) {
+		return nil
+	}
+	return s.store.Update(ctx, func(st *domain.State) error {
+		current := make(map[string]domain.Build, len(st.Builds))
+		for _, b := range st.Builds {
+			current[b.ID] = b
+		}
+		now := time.Now().UTC()
+		for i := range st.Builds {
+			b := &st.Builds[i]
+			n, ok := newest[branchBuildKey(*b)]
+			old, captured := queued[b.ID]
+			currentOld, oldExists := current[b.ID]
+			currentNewest, newestExists := current[n.ID]
+			if ok && captured && oldExists && newestExists && b.ID != n.ID && b.SourceSHA != n.SourceSHA && b.Status == "QUEUED" && b.UpdatedAt.Equal(old.UpdatedAt) && currentOld.Status == "QUEUED" && currentNewest.Status == "QUEUED" && currentNewest.UpdatedAt.Equal(n.UpdatedAt) {
+				b.Status, b.FailureCode, b.SupersededBy = "CANCELLED", "SUPERSEDED", n.ID
+				b.UpdatedAt, b.FinishedAt = now, &now
+				buildEvent(st, *b, "supersede_build")
+				supersedeEventData(st, n.ID, b.SourceSHA, n.SourceSHA)
+				st.Events[len(st.Events)-1].Data.Data["reason"] = "branch_newer_queued"
+			}
+		}
+		return nil
+	})
+}
 func buildStatus(s string) bool { return domain.ValidStatus("build", s) }
 
 func buildEvent(st *domain.State, b domain.Build, action string) {
@@ -228,18 +286,8 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		}
 	}
 	// Copy candidates under the view, then perform provider I/O without store locks.
-	candidates := map[string]string{}
-	if e = s.view(ctx, func(st *domain.State) error {
-		for _, b := range st.Builds {
-			if b.ProductID == in.ProductID && b.ProfileID == p.ID && b.Branch == in.Branch && b.Status == "QUEUED" {
-				candidates[b.ID] = b.SourceSHA
-			}
-		}
-		return nil
-	}); e != nil {
-		return out, e
-	}
-	superseded := checkSuperseded(ctx, a.provider, a.config.Connection(p.ConnectionID), p.Repository, head, candidates)
+	// For a branch request, the observed branch head is the newest intent regardless
+	// of ancestry. SHA requests have no branch queue to coalesce.
 	e = s.store.Update(ctx, func(st *domain.State) error {
 		if !productExists(st, in.ProductID) {
 			return missing("product", in.ProductID)
@@ -276,7 +324,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 		bind(out)
 		for i := range st.Builds {
 			b := &st.Builds[i]
-			if b.ProductID != in.ProductID || b.ProfileID != p.ID || b.Branch != in.Branch || b.Status != "QUEUED" || superseded[b.ID] != b.SourceSHA || b.SourceSHA == "" {
+			if in.Branch == "" || b.ProductID != in.ProductID || b.ProfileID != p.ID || b.Branch != in.Branch || b.Status != "QUEUED" || b.SourceSHA == "" || b.SourceSHA == head {
 				continue
 			}
 			b.Status, b.FailureCode, b.SupersededBy = "CANCELLED", "SUPERSEDED", out.ID
@@ -285,6 +333,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 			audit.Actor = actor
 			buildEvent(st, audit, "supersede_build")
 			supersedeEventData(st, b.SupersededBy, b.SourceSHA, head)
+			st.Events[len(st.Events)-1].Data.Data["reason"] = "branch_newer_queued"
 		}
 		st.Builds = append(st.Builds, out)
 		buildEvent(st, out, "queue_build")
@@ -304,6 +353,7 @@ func (s *Service) GetBuild(ctx context.Context, in domain.BuildLookup) (domain.B
 		for _, b := range st.Builds {
 			if b.ID == in.BuildID && b.ProductID == in.ProductID {
 				out = copyBuild(b)
+				out.WaitingForBuildID = waitingBuildID(st.Builds, b)
 				return nil
 			}
 		}
@@ -473,7 +523,9 @@ func (s *Service) ListBuilds(ctx context.Context, in domain.ListBuildsRequest) (
 				out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
 				break
 			}
-			out.Items = append(out.Items, copyBuild(b))
+			item := copyBuild(b)
+			item.WaitingForBuildID = waitingBuildID(st.Builds, b)
+			out.Items = append(out.Items, item)
 		}
 		return nil
 	})
@@ -486,18 +538,20 @@ func buildFingerprint(p any) string {
 }
 
 var errBuildPoolFull = invalid("build pool full")
+var errBuildBranchActive = invalid("build branch already active")
 var errBuildTerminal = invalid("build is terminal")
 
 // advanceBuild uses CAS so cancellation/concurrent pollers cannot overwrite newer evidence.
 func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admit bool) (err error) {
 	defer func() {
-		if err != nil && !errors.Is(err, errBuildPoolFull) && !errors.Is(err, errBuildTerminal) {
+		if err != nil && !errors.Is(err, errBuildPoolFull) && !errors.Is(err, errBuildBranchActive) && !errors.Is(err, errBuildTerminal) {
 			slog.Warn("build transition failed", "build_id", old.ID, "from_status", old.Status, "to_status", next.Status, "error", err.Error())
 		}
 	}()
 	if reflect.DeepEqual(old, next) {
 		return nil
 	}
+	next.WaitingForBuildID = ""
 	return s.store.Update(ctx, func(st *domain.State) error {
 		for i, b := range st.Builds {
 			if b.ID != old.ID {
@@ -511,6 +565,13 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 				return invalid("build changed")
 			}
 			if admit {
+				if old.Branch != "" {
+					for _, v := range st.Builds {
+						if v.ID != old.ID && v.ProductID == old.ProductID && v.ProfileID == old.ProfileID && v.Branch == old.Branch && buildActive(v) {
+							return errBuildBranchActive
+						}
+					}
+				}
 				n := 0
 				for _, v := range st.Builds {
 					if v.PoolID == old.PoolID && buildActive(v) {
@@ -739,6 +800,26 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		return st.Builds[i].QueuedAt.Before(st.Builds[j].QueuedAt)
 	})
 	blockedPools := map[string]bool{}
+	// Reconcile concurrent/restored duplicate branch queues atomically before dispatch.
+	if e = s.coalesceQueuedBranches(ctx); e != nil {
+		return e
+	}
+	st, e = s.buildSnapshot(ctx)
+	if e != nil {
+		return e
+	}
+	sort.SliceStable(st.Builds, func(i, j int) bool {
+		if st.Builds[i].QueuedAt.Equal(st.Builds[j].QueuedAt) {
+			return st.Builds[i].ID < st.Builds[j].ID
+		}
+		return st.Builds[i].QueuedAt.Before(st.Builds[j].QueuedAt)
+	})
+	activeBranches := map[string]string{}
+	for _, b := range st.Builds {
+		if b.Branch != "" && buildActive(b) {
+			activeBranches[branchBuildKey(b)] = b.ID
+		}
+	}
 	for _, b := range st.Builds {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -831,13 +912,13 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		if b.Status != "QUEUED" {
 			continue
 		}
+		heldByBranch := b.Branch != "" && activeBranches[branchBuildKey(b)] != ""
 
-		// A waiting head blocks younger queued work in this pool. Admission or
-		// terminal reuse frees the next FIFO position within this tick.
-		if blockedPools[b.PoolID] {
+		// Held branch builds may still complete from the registry and never block
+		// unrelated work in their shared pool.
+		if !heldByBranch && blockedPools[b.PoolID] {
 			continue
 		}
-		blockedPools[b.PoolID] = true
 		v, re := a.artifact(ctx, p, b.SourceSHA)
 		if re == nil {
 			n := artifactBuild(b, v)
@@ -845,16 +926,19 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			if e = s.advanceBuild(ctx, b, n, false); e != nil {
 				return e
 			}
-			delete(blockedPools, b.PoolID)
 			continue
 		}
 		if errors.Is(re, errRevision) {
 			if e = s.advanceBuild(ctx, b, failedBuild(b, "ARTIFACT_REVISION_MISMATCH"), false); e != nil {
 				return e
 			}
-			delete(blockedPools, b.PoolID)
 			continue
 		}
+		if heldByBranch {
+			continue
+		}
+		// A waiting head blocks younger queued work in this pool.
+		blockedPools[b.PoolID] = true
 		if !errors.Is(re, buildregistry.ErrMissing) {
 			slog.Warn("build registry lookup failed; pool stays blocked", "build_id", b.ID, "profile_id", b.ProfileID, "error", re.Error())
 			continue
@@ -931,6 +1015,9 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 			if e = s.advanceBuild(ctx, b, n, true); e != nil {
 				continue
 			}
+			if b.Branch != "" {
+				activeBranches[branchBuildKey(b)] = b.ID
+			}
 			delete(blockedPools, b.PoolID)
 			continue
 		}
@@ -945,6 +1032,9 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		n.FailureCode = "DISPATCH_UNCERTAIN"
 		if e = s.advanceBuild(ctx, b, n, true); e != nil {
 			continue
+		}
+		if b.Branch != "" {
+			activeBranches[branchBuildKey(b)] = b.ID
 		}
 		delete(blockedPools, b.PoolID)
 		// Verify admission still holds before contacting the provider.

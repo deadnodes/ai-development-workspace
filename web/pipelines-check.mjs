@@ -16,4 +16,13 @@ const detail=w.document.querySelector('.pipeline-detail');assert.match(detail.te
 const link=w.document.querySelector('[data-pipeline-detail]');link.dispatchEvent(new w.MouseEvent('click',{bubbles:true,cancelable:true}));await tick();assert.equal(detail.hidden,false);run('render()');await tick();assert.equal(w.document.querySelector('.pipeline-detail').hidden,false);
 const p=new URL(calls.find(c=>c.path.startsWith('/api/pipelines')).path,'http://localhost').searchParams;assert.equal(p.get('limit'),'20');assert.equal(p.get('product_id'),'p');
 run("setPipelineParam('q','abcdef')");assert.equal(new URL(w.location.href).searchParams.get('pipeline_q'),'abcdef');
+// Failed CI on a successful build: checks stage, triage block, escaping.
+Object.assign(build,{status:'SUCCEEDED',failure_code:'',connection_api_url:'https://git.example/api/v1',ci_state:'failure',ci_contexts:{'repo ci / gate (push)':'failure'},ci_failing_contexts:{'repo ci / gate (push)':'failure'},ci_triage:{base_build_id:'b0',commits:[{sha:'0123456789abcdef0123',title:'fix <img src=x onerror=alert(1)>',pr_number:7}],features:[{feature_id:'feat-1',title:'Queue <b>coalesce</b>',integration_ids:['int-1']}],handoffs:[{memory_id:'m1',title:'handoff one',session:'sess-42',actor:'agent',created_at:'2026-01-01T00:00:00Z'}]}});
+page.items[0].stages=[{kind:'build',entity_id:build.id,status:'success',label:'Built',raw_status:'SUCCEEDED'},{kind:'checks',entity_id:build.id,status:'failed',label:'Checks failed',hint:'Failing: repo ci / gate (push)',raw_status:'failure'}];page.items[0].status='attention';
+run('render()');await tick();await tick();
+const ci=w.document.querySelector('.pipeline-detail');assert.match(ci.textContent,/Who should look/);assert.match(ci.textContent,/Checks failed|failure/);assert.match(ci.textContent,/sess-42/);assert.match(ci.textContent,/PR #7/);
+assert.equal(ci.querySelector('img'),null);assert.equal(ci.querySelector('b'),null);assert.match(ci.textContent,/fix <img src=x onerror=alert\(1\)>/);
+assert.ok(ci.querySelector('[data-copy="feat-1"]')&&ci.querySelector('[data-copy="int-1"]'));
+assert.ok([...ci.querySelectorAll('a')].some(a=>a.href==='https://git.example/org/repo/pulls/7'));
+fs.writeFileSync(process.env.PIPELINES_SNAPSHOT||'/dev/null',w.document.documentElement.outerHTML);
 await tick();await tick();run("stopPipelines()");await tick();dom.window.close();console.log('Pipelines page renders its independent GET, escapes pipeline data and persists shareable filters.');

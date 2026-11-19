@@ -310,6 +310,8 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items = append(items, secretWarnings...)
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
+		ciBuilds := buildCIAttention(st, id)
+		items = append(items, ciBuilds...)
 		items = append(items, mainCIAttention(st, id)...)
 		for _, finding := range st.Findings {
 			if finding.ProductID == id && finding.Status == "open" && finding.ReviewSource != nil {

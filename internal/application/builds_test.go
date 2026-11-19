@@ -119,6 +119,14 @@ func queue(t *testing.T, s *Service, key string) domain.Build {
 	}
 	return b
 }
+func queueSHA(t *testing.T, s *Service, key, sha string) domain.Build {
+	t.Helper()
+	b, err := s.QueueBuild(context.Background(), domain.QueueBuildRequest{ProductID: "p", ProfileID: "app", SHA: sha, RequestKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 func tick(t *testing.T, s *Service) {
 	t.Helper()
 	if e := s.DispatchBuildsOnce(context.Background()); e != nil {
@@ -189,9 +197,8 @@ func TestBuildBranchRequestReplay(t *testing.T) {
 
 func TestBuildPoolLimitAndDigest(t *testing.T) {
 	s, _, f, r := buildFixture(t)
-	b := queue(t, s, "one")
-	f.head = strings.Repeat("b", 40)
-	second := queue(t, s, "two")
+	b := queueSHA(t, s, "one", strings.Repeat("a", 40))
+	second := queueSHA(t, s, "two", strings.Repeat("b", 40))
 	f.head = b.SourceSHA
 	tick(t, s)
 	if f.dispatches != 1 || getBuild(t, s, b).Status != "DISPATCHED" || getBuild(t, s, second).Status != "QUEUED" {
@@ -408,8 +415,7 @@ func TestBuildAuthorityDriftFailsClosed(t *testing.T) {
 func TestBuildFIFOBlockedHead(t *testing.T) {
 	s, _, f, _ := buildFixture(t)
 	first := queue(t, s, "first")
-	f.head = strings.Repeat("b", 40)
-	second := queue(t, s, "second")
+	second := queueSHA(t, s, "second", strings.Repeat("b", 40))
 	f.runs = []forgejo.Run{{ID: 99, SHA: strings.Repeat("c", 40), Branch: "other", Workflow: "build.yml", Event: "workflow_dispatch", Status: "running"}}
 	tick(t, s)
 	if f.dispatches != 0 || getBuild(t, s, first).Status != "QUEUED" || getBuild(t, s, second).Status != "QUEUED" {
@@ -646,15 +652,13 @@ func TestBuildOwnedRunsDoNotBlockPoolCapacity(t *testing.T) {
 	if e := s.ConfigureBuilds(c, f, r); e != nil {
 		t.Fatal(e)
 	}
-	first := queue(t, s, "one")
-	f.head = strings.Repeat("b", 40)
-	second := queue(t, s, "two")
+	first := queueSHA(t, s, "one", strings.Repeat("a", 40))
+	second := queueSHA(t, s, "two", strings.Repeat("b", 40))
 	tick(t, s)
 	if f.dispatches != 2 || getBuild(t, s, first).Status != "DISPATCHED" || getBuild(t, s, second).Status != "DISPATCHED" {
 		t.Fatal("owned run blocked spare capacity")
 	}
-	f.head = strings.Repeat("c", 40)
-	third := queue(t, s, "three")
+	third := queueSHA(t, s, "three", strings.Repeat("c", 40))
 	tick(t, s)
 	if f.dispatches != 2 || getBuild(t, s, third).Status != "QUEUED" {
 		t.Fatal("pool capacity exceeded")
@@ -766,10 +770,9 @@ func TestBuildUncertainDispatchTerminalReconciliation(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			s, _, f, _ := buildFixture(t)
 			f.uncertain = true
-			b := queue(t, s, "first")
+			b := queueSHA(t, s, "first", strings.Repeat("a", 40))
 			tick(t, s)
-			f.head = strings.Repeat("b", 40)
-			second := queue(t, s, "second")
+			second := queueSHA(t, s, "second", strings.Repeat("b", 40))
 			// A terminal run with the same source but a different request is not ours.
 			f.runs[0].Status = status
 			other := f.runs[0]
