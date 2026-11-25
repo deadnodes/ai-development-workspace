@@ -20,6 +20,9 @@ func (m *memoryStore) Update(_ context.Context, fn func(*domain.State) error) er
 	m.state = copy
 	return nil
 }
+func (m *memoryStore) UpdateScoped(ctx context.Context, _ domain.StateMutationScope, fn func(*domain.State) error) error {
+	return m.Update(ctx, fn)
+}
 func fixture(t *testing.T) (*Service, *memoryStore) {
 	t.Helper()
 	m := &memoryStore{domain.EmptyState()}

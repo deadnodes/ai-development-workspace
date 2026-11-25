@@ -99,7 +99,8 @@ type ExecutionEvent struct {
 	ConditionGeneration uint64                   `json:"condition_generation"`
 	Reason              string                   `json:"reason"`
 	DedupeKey           string                   `json:"dedupe_key"`
-	SessionRef          string                   `json:"session_ref,omitempty"`
+	SessionRef          string                   `json:"session_ref"`
+	HarnessKind         string                   `json:"harness_kind"`
 	CreatedAt           time.Time                `json:"created_at"`
 	Delivery            ExecutionEventDelivery   `json:"delivery"`
 	Resolution          ExecutionEventResolution `json:"resolution"`

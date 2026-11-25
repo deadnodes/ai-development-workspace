@@ -31,10 +31,19 @@ func (m *executionSerialStore) Update(ctx context.Context, fn func(*domain.State
 	defer m.mu.Unlock()
 	return m.memoryStore.Update(ctx, fn)
 }
+func (m *executionSerialStore) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.memoryStore.UpdateScoped(ctx, scope, fn)
+}
 
 func (m *executionCountingStore) Update(ctx context.Context, fn func(*domain.State) error) error {
 	m.writes++
 	return m.memoryStore.Update(ctx, fn)
+}
+func (m *executionCountingStore) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
+	m.writes++
+	return m.memoryStore.UpdateScoped(ctx, scope, fn)
 }
 
 func TestIdleExecutionSweepDoesNotWrite(t *testing.T) {
@@ -388,6 +397,77 @@ func TestExecutionEventAckDoesNotResolveAndUnsupportedEscalates(t *testing.T) {
 	}
 	if !hasAuditAction(m.state.Events, "execution_event_resolved") {
 		t.Fatal("resolution audit absent")
+	}
+}
+
+func TestUnacknowledgedExecutionEventCanBeReclaimedAfterBackoff(t *testing.T) {
+	s, m := fixture(t)
+	event := domain.ExecutionEvent{ID: "ev", ProductID: "p", IntegrationID: "i", Delivery: domain.ExecutionEventDelivery{NextAttemptAt: time.Now().UTC().Add(-time.Second)}}
+	m.state.ExecutionEvents = append(m.state.ExecutionEvents, event)
+	old := exec(t, s, domain.Command{Action: "claim_execution_event_delivery", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup"}}).(string)
+	m.state.ExecutionEvents[0].Delivery.NextAttemptAt = time.Now().UTC().Add(-time.Second)
+	newID := exec(t, s, domain.Command{Action: "claim_execution_event_delivery", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup"}}).(string)
+	if old == newID {
+		t.Fatal("retry reused delivery id")
+	}
+	_, err := s.Execute(context.Background(), domain.Command{Action: "ack_execution_event", Actor: "agent", ProductID: "p", Data: map[string]any{"event_id": "ev", "delivery_id": old, "supervisor_id": "sup", "outcome": "delivered"}})
+	if err == nil || !strings.Contains(err.Error(), "INVALID_STATE") {
+		t.Fatalf("late ack error=%v", err)
+	}
+}
+
+func TestTurnEndDebounceIdempotencyAndMemberFiltering(t *testing.T) {
+	s, m := fixture(t)
+	ids := []string{"i"}
+	for _, state := range []string{"running", "completed", "paused", "waiting_external", "blocked"} {
+		iid := "member-" + state
+		m.state.Integrations = append(m.state.Integrations, domain.Integration{Meta: domain.Meta{ID: iid, ProductID: "p"}, Status: "planned"})
+		m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex-" + iid, IntegrationID: iid, ProductID: "p", DesiredState: "ready", State: state, OrchestratorID: "orch", Harness: domain.ExecutionHarness{Kind: "claude", SessionRef: "s-" + iid}, Reconciliation: domain.ExecutionReconciliation{Enabled: true}})
+		ids = append(ids, iid)
+	}
+	m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex-i", IntegrationID: "i", ProductID: "p", DesiredState: "ready", State: "running", OrchestratorID: "orch", Harness: domain.ExecutionHarness{Kind: "codex", SessionRef: "session"}, Reconciliation: domain.ExecutionReconciliation{Enabled: true}})
+	// Seed intended terminal and pending flags explicitly.
+	for _, e := range m.state.IntegrationExecutions {
+		if e.IntegrationID == "member-completed" || e.IntegrationID == "member-paused" || e.IntegrationID == "member-waiting_external" || e.IntegrationID == "member-blocked" {
+			e.Reconciliation.ActionRequired = false
+		}
+	}
+	_, err := s.Execute(context.Background(), domain.Command{Action: "create_execution_group", Actor: "agent", ProductID: "p", Data: map[string]any{"name": "g", "orchestrator_id": "orch", "integration_ids": ids}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "codex", "session_ref": "unknown"}})
+	if err != nil || len(res.(map[string]any)["matched"].([]string)) != 0 {
+		t.Fatalf("unknown session result=%v err=%v", res, err)
+	}
+	res, err = s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "codex", "session_ref": "session", "turn_id": "turn-1"}})
+	if err != nil || len(res.(map[string]any)["matched"].([]string)) != 1 {
+		t.Fatalf("turn report=%v err=%v", res, err)
+	}
+	if err = s.ReconcileExecutionsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.state.ExecutionEvents) != 0 {
+		t.Fatalf("event before debounce: %+v", m.state.ExecutionEvents)
+	}
+	base := executionFor(&m.state, "i")
+	base.TurnEndAt = ptrTime(time.Now().UTC().Add(-21 * time.Second))
+	if err = s.ReconcileExecutionsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.state.ExecutionEvents) != 2 {
+		t.Fatalf("expected actionable unfinished members events, got %+v", m.state.ExecutionEvents)
+	}
+	for _, ev := range m.state.ExecutionEvents {
+		if ev.SessionRef == "" || ev.HarnessKind == "" {
+			t.Fatalf("missing wake session metadata: %+v", ev)
+		}
+	}
+	if err = s.ReconcileExecutionsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.state.ExecutionEvents) != 2 {
+		t.Fatalf("turn end not idempotent: %d", len(m.state.ExecutionEvents))
 	}
 }
 

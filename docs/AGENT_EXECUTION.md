@@ -1,6 +1,6 @@
 # Agent execution and continuation contract
 
-Status: Stage 1 implementation in progress, 2026-11-25. The first implementation adds typed execution/group state and a reconciliation entry point; stage 1 acceptance and full transport/configuration coverage remain in progress. This document specifies a control loop for
+Status: Stages 1 and 2 implementation complete, 2026-11-25. Stage 3 supervisor and live harness wake acceptance remain outstanding. This document specifies a control loop for
 external coding-agent orchestrators. RCP records intent and authority, detects
 conditions requiring continuation, and exposes durable wake events. A separate
 supervisor delivers a prompt to an already registered harness session. RCP never
@@ -125,13 +125,14 @@ Starting values (not yet empirically tuned):
 | Stalled timeout | 15 min | Time since meaningful progress; independent of lease expiry |
 | Notification retry | 30 s | Initial outbox redelivery delay |
 | Maximum retry backoff | 15 min | Exponential backoff cap |
+| Turn-end debounce | 20 s | Delay before raising continuation events after a harness turn ends |
 
 Execution defaults remain in the existing runtime config for this stage. They
 are zeroed before computing the legacy build-authority fingerprint, and their
 JSON fields use `omitempty`; this preserves the byte-for-byte fingerprint used
 by the pre-execution build configuration. Splitting the runtime config shape
 would add more compatibility surface without improving the authority boundary.
-When no build config is installed, execution uses the same defaults: 30/60/300/900 seconds.
+When no build config is installed, execution uses the defaults: reconcile/heartbeat/lease/stall/retry/max-backoff/escalation/turn-end debounce = 30/60/300/900/30/900/10/20 seconds (the escalation value is an attempt count).
 
 Effective stalled timeout precedence: Integration override, then Product
 override, then instance/global default (15 minutes). Missing means inherit;
@@ -159,8 +160,8 @@ context loss. Group operations never overwrite a member's execution state.
 
 ## 5. Durable wake events and outbox
 
-Add durable `ExecutionEvent` rows and a delivery outbox (or one row with
-independent lifecycle and delivery fields). Required condition types:
+The typed `ExecutionEvent` rows retain condition lifecycle and delivery fields
+independently. Required condition types:
 `execution_lost`, `execution_stalled`, `execution_unassigned`,
 `execution_continuation_required`. Include event id, Product/group/Integration,
 execution fence, condition generation, reason, created/resolved timestamps,
@@ -170,9 +171,12 @@ allowed for a supervisor only when it supplies a current fence and resolution
 evidence. ACK means “supervisor received this event”; it does not resolve the
 cause. Resolve/close must not erase or mutate event history.
 
-Supervisor polls `list_execution_events {cursor, limit, unresolved_only}` and
-receives stable cursor pagination. Unresolved conditions are redelivered until
-ACK, while resolved-but-unacknowledged events remain queryable for audit. Use
+Supervisor polls `list_execution_events {cursor, limit, unresolved_only,
+due_only}` and receives stable cursor pagination. Unresolved conditions are
+eligible for delivery at `next_attempt_at` even when a prior attempt was never
+acknowledged; each retry replaces the delivery id and rejects a late ACK from
+the older attempt. Acknowledged unresolved events become due at the persisted
+retry time, while resolved events remain queryable for audit. Use
 dedupe key `(execution_id, fence, condition_type, condition_generation)` so
 reconciliation does not enqueue duplicates. Retry with exponential backoff
 30 seconds to 15 minutes; persist attempt and due time. An optional notification
@@ -207,9 +211,10 @@ between turns, so heartbeat expiry alone would mark every idle orchestrator
 `lost`. The decisive event for continuation is **turn end**:
 
 - Claude Code: `Stop` hook (payload has `session_id`, `cwd`), installed by the
-  supervisor's setup, calls `report_turn_end {session_ref}`.
+  supervisor's setup, calls `report_turn_end {harness_kind, session_ref,
+  turn_id?, cwd?}`.
 - Codex: `notify` program on `agent-turn-complete` (payload has thread id) calls
-  the same endpoint.
+  the same endpoint, including a turn id when available.
 
 On turn end RCP looks up every execution whose harness `session_ref` matches,
 renews nothing, and after the configured turn-end debounce (default 20 seconds,
@@ -246,7 +251,7 @@ fields to set `action_required`, fence, or lease expiry.
 | `set_desired_state` | `integration_id`, `fence`, target status, reason, idempotency key | Updated execution and recomputed completion. Must also pass existing Integration transition policy. |
 | `create_execution_group` | `product_id`, `orchestrator_id`, `name`, `integration_ids[]` | `{group_id, revision, members[]}`; validate all IDs share Product. No dependency edges added. |
 | `get_execution_group` | `group_id` | Full set and per-member execution/reconciliation/next action for context restoration. |
-| `report_turn_end` | `harness.kind`, `session_ref`, optional `cwd` | `{matched_executions[], raised_events[]}`; idempotent per turn id. |
+| `report_turn_end` | `harness_kind`, `session_ref`, optional `turn_id`, `cwd` | `{matched: [integration_id, ...], turn_id}`; unknown sessions return an empty `matched` array. Idempotent per session/turn or session/minute bucket. |
 | `list_execution_events` | `product_id`, cursor, limit, unresolved filter | `{items[], next_cursor}`. |
 | `ack_execution_event` | `event_id`, supervisor id, delivery id | Acknowledgement receipt only; does not clear condition. |
 | `resolve_execution_event` | `event_id`, supervisor id, current fence, resolution evidence | `{resolved_at}` only if cause is cleared or explicitly resolved. |
@@ -319,9 +324,34 @@ implementation stage. Done: above proof is captured and linked to the Product
 acceptance record; Desktop/Remote remain explicitly incomplete until a working
 bridge is tested.
 
+## Stage 2 implementation notes (2026-11-25)
+
+Durable execution events, delivery receipts, retries, explicit resolution,
+escalation visibility and shared MCP/HTTP/code-mode application paths are
+implemented. An unacknowledged claim can be reclaimed once `next_attempt_at` is
+due; each claim replaces `delivery_id`, so an ACK from a late attempt is
+rejected. A due event still has one transactional winner. ACK never resolves
+the underlying condition, and acknowledged unresolved events become due again
+at their persisted backoff time.
+
+`report_turn_end` records the server timestamp and turn identity against all
+matching executions. The reconciler waits `turn_end_debounce_seconds` (default
+20) and then raises continuation events for eligible members of open groups
+owned by the same orchestrator. Turn reports are idempotent by
+`(session_ref, turn_id)` or `(session_ref, minute bucket)`; events carry the
+target execution's session reference and harness kind. The supervisor
+deduplicates wakes per session when multiple events concern the same idle
+orchestrator. Idle sweeps remain read-only, and changed sweeps use scoped
+updates for execution/event rows plus append-only audit events.
+
+PostgreSQL event/delivery restart and concurrent claim coverage uses isolated
+test schemas when `TEST_DATABASE_URL` is configured. This proves persistence
+and claim arbitration, not live harness wake acceptance; supervisor work is
+Stage 3.
+
 ## Stage 1 implementation notes
 
-Current implementation uses the ordinary typed State collections so embedded and PostgreSQL stores persist executions and groups through their existing schema-derived record codec. Execution condition changes increment reconciliation.generation and append an audit Event, providing the stage 2 hook without adding the event/outbox model in this stage. Takeover stage 1 accepts a required state_check_reference string; stage 2 will bind it to durable event evidence.
+Current implementation uses the ordinary typed State collections so embedded and PostgreSQL stores persist executions, groups and events through their existing schema-derived record codec. Execution condition changes increment reconciliation.generation and append audit Events. Takeover requires delivered lost/stalled event evidence.
 
 ## Open questions
 

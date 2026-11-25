@@ -163,6 +163,8 @@ func TestPostgresExecutionRecordsSurviveReopen(t *testing.T) {
 		st.Integrations = []domain.Integration{{Meta: domain.Meta{ID: "i", ProductID: "p"}, Title: "Integration", Status: "planned"}}
 		st.IntegrationExecutions = []domain.IntegrationExecution{{ID: "execution-i", IntegrationID: "i", ProductID: "p", DesiredState: "ready", State: "lost", Fence: 4, Reconciliation: domain.ExecutionReconciliation{Enabled: true, ActionRequired: true, Generation: 3}}}
 		st.ExecutionGroups = []domain.ExecutionGroup{{ID: "g", ProductID: "p", Name: "group", MemberIntegrationIDs: []string{"i"}, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: []string{"i"}, CreatedAt: now}}, CreatedAt: now}}
+		ackAt := now.Add(-time.Second)
+		st.ExecutionEvents = []domain.ExecutionEvent{{ID: "wake", ProductID: "p", IntegrationID: "i", Type: "execution_lost", Fence: 4, ConditionGeneration: 3, SessionRef: "session", HarnessKind: "codex", CreatedAt: now, Delivery: domain.ExecutionEventDelivery{Attempts: 2, LastAttemptAt: &ackAt, NextAttemptAt: now.Add(time.Minute), AcknowledgedAt: &ackAt, AcknowledgedBy: "supervisor", DeliveryID: "delivery"}, Acknowledgements: []domain.ExecutionEventAck{{DeliveryID: "delivery", SupervisorID: "supervisor", Outcome: "delivered", At: ackAt}}}}
 		return nil
 	})
 	if err != nil {
@@ -178,7 +180,7 @@ func TestPostgresExecutionRecordsSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.IntegrationExecutions) != 1 || got.IntegrationExecutions[0].Fence != 4 || got.IntegrationExecutions[0].Reconciliation.Generation != 3 || len(got.ExecutionGroups) != 1 {
+	if len(got.IntegrationExecutions) != 1 || got.IntegrationExecutions[0].Fence != 4 || got.IntegrationExecutions[0].Reconciliation.Generation != 3 || len(got.ExecutionGroups) != 1 || len(got.ExecutionEvents) != 1 || got.ExecutionEvents[0].Delivery.Attempts != 2 || got.ExecutionEvents[0].Delivery.DeliveryID != "delivery" || len(got.ExecutionEvents[0].Acknowledgements) != 1 {
 		t.Fatalf("execution state was not restored: %+v", got.IntegrationExecutions)
 	}
 }

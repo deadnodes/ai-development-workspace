@@ -31,7 +31,16 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 			groups = append(groups, g.ID)
 		}
 	}
-	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: e.Harness.SessionRef, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	sessionRef, harnessKind := e.Harness.SessionRef, e.Harness.Kind
+	if typ == "execution_continuation_required" && reason == "turn ended with unfinished group work" && (sessionRef == "" || harnessKind == "") {
+		for _, candidate := range st.IntegrationExecutions {
+			if candidate.ProductID == e.ProductID && candidate.OrchestratorID == e.OrchestratorID && candidate.TurnEndID != "" && candidate.Harness.SessionRef != "" && candidate.Harness.Kind != "" {
+				sessionRef, harnessKind = candidate.Harness.SessionRef, candidate.Harness.Kind
+				break
+			}
+		}
+	}
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: sessionRef, HarnessKind: harnessKind, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
 }
@@ -209,24 +218,29 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if err := decode(c.Data, &x); err != nil {
 				return err
 			}
-			if x.SessionRef == "" {
-				return invalid("session_ref required")
+			if x.SessionRef == "" || x.HarnessKind == "" {
+				return invalid("harness_kind and session_ref required")
 			}
 			bucket := now.Truncate(time.Minute).Format(time.RFC3339)
 			key := x.TurnID
 			if key == "" {
 				key = bucket
 			}
-			n := 0
+			matched := []string{}
 			for i := range st.IntegrationExecutions {
 				e := &st.IntegrationExecutions[i]
 				if e.ProductID == c.ProductID && e.Harness.SessionRef == x.SessionRef && (x.HarnessKind == "" || e.Harness.Kind == x.HarnessKind) {
+					if e.TurnEndID == key {
+						matched = append(matched, e.IntegrationID)
+						continue
+					}
 					e.TurnEndAt = &now
 					e.TurnEndID = key
-					n++
+					matched = append(matched, e.IntegrationID)
 				}
 			}
-			out = map[string]any{"matched": n, "turn_id": key}
+			slices.Sort(matched)
+			out = map[string]any{"matched": matched, "turn_id": key}
 		case "claim_execution_event_delivery":
 			var x struct {
 				EventID      string `json:"event_id"`
@@ -243,7 +257,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || (ev.Delivery.AcknowledgedAt == nil && ev.Delivery.Attempts > 0) {
+				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) {
 					return invalid("INVALID_STATE")
 				}
 				beforeEscalation := ev.EscalationRequired
@@ -705,8 +719,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 	return out, err
 }
 
-func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int) bool {
+func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, debounceSeconds ...int) bool {
 	changed := false
+	debounce := 20
+	if len(debounceSeconds) > 0 && debounceSeconds[0] > 0 {
+		debounce = debounceSeconds[0]
+	}
 	for i := range st.IntegrationExecutions {
 		e := &st.IntegrationExecutions[i]
 		if !e.Reconciliation.Enabled {
@@ -778,6 +796,37 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int) boo
 			changed = true
 		}
 	}
+	// Turn-end reports are persisted on the matching execution. The sweep uses
+	// them as debounce inputs and raises continuation events for unfinished
+	// members of each still-open group owned by the same orchestrator.
+	for i := range st.IntegrationExecutions {
+		source := &st.IntegrationExecutions[i]
+		if source.TurnEndAt == nil || source.TurnEndID == "" || now.Before(source.TurnEndAt.Add(time.Duration(debounce)*time.Second)) {
+			continue
+		}
+		for _, g := range st.ExecutionGroups {
+			if g.ProductID != source.ProductID || g.OrchestratorID != source.OrchestratorID || g.ClosedAt != nil {
+				continue
+			}
+			for _, iid := range g.MemberIntegrationIDs {
+				e := executionFor(st, iid)
+				in := integration(st, iid)
+				if e == nil || in == nil || e.ProductID != source.ProductID || e.State == "completed" || e.State == "paused" || e.State == "cancelled" || ((e.State == "waiting_external" || e.State == "blocked") && !e.Reconciliation.ActionRequired) || statusReachedIntegration(in.Status, e.DesiredState) {
+					continue
+				}
+				if e.State == "exited_incomplete" && e.Reconciliation.ActionRequired && e.Reconciliation.Reason == "turn ended with unfinished group work" {
+					continue
+				}
+				if e.OrchestratorID == "" {
+					e.OrchestratorID = source.OrchestratorID
+				}
+				e.TurnEndAt = source.TurnEndAt
+				e.TurnEndID = source.TurnEndID
+				executionCondition(st, e, "exited_incomplete", true, "turn ended with unfinished group work", now)
+				changed = true
+			}
+		}
+	}
 	return changed
 }
 
@@ -786,12 +835,16 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	if s.executionDefaults != nil {
 		globalTimeout = s.executionDefaults.StalledTimeout
 	}
+	debounce := 20
+	if s.executionDefaults != nil && s.executionDefaults.TurnEndDebounceSeconds > 0 {
+		debounce = s.executionDefaults.TurnEndDebounceSeconds
+	}
 	now := time.Now().UTC()
 	changed := false
 	if err := s.view(ctx, func(st *domain.State) error {
 		// Borrow read-only state and copy only the collection the plan mutates.
-		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories}
-		changed = reconcileExecutions(&snapshot, now, globalTimeout)
+		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups}
+		changed = reconcileExecutions(&snapshot, now, globalTimeout, debounce)
 		return nil
 	}); err != nil {
 		return err
@@ -803,10 +856,10 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 		UpdateScoped(context.Context, domain.StateMutationScope, func(*domain.State) error) error
 	})
 	if !ok {
-		return s.store.Update(ctx, func(st *domain.State) error { reconcileExecutions(st, now, globalTimeout); return nil })
+		return fmt.Errorf("execution reconciler requires UpdateScoped")
 	}
 	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
-		reconcileExecutions(st, now, globalTimeout)
+		reconcileExecutions(st, now, globalTimeout, debounce)
 		return nil
 	})
 }

@@ -134,7 +134,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
 				continue
 			}
-			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || time.Now().UTC().Before(ev.Delivery.NextAttemptAt) || (ev.Delivery.Attempts > 0 && ev.Delivery.AcknowledgedAt == nil)) {
+			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || time.Now().UTC().Before(ev.Delivery.NextAttemptAt)) {
 				continue
 			}
 			if options.Cursor != "" {

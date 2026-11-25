@@ -32,6 +32,7 @@ func TestLegacyGlobalFingerprintMatchesMain48bd4f1(t *testing.T) {
 	}
 	config := cloneAuthorityConfig(t, s.builds.config)
 	config.ReconcileInterval, config.HeartbeatInterval, config.LeaseTTL, config.StalledTimeout = 2, 3, 60, 10
+	config.TurnEndDebounceSeconds = 45
 	if err := s.ConfigureBuilds(config, &fakeForgejo{head: strings.Repeat("a", 40)}, &fakeBuildRegistry{}); err != nil {
 		t.Fatal(err)
 	}
