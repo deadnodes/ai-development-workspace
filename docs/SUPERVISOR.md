@@ -19,6 +19,7 @@ Create `~/.config/release-control/supervisor.json` with mode `0600`:
   "poll_interval": "15s",
   "idle_window": "5s",
   "wake_timeout": "120s",
+  "headless_kinds": [],
   "allowed_kinds": ["codex", "claude_code", "claude_desktop", "ccr", "other"]
 }
 ```
@@ -31,6 +32,10 @@ With `profile`, the supervisor resolves the same encrypted credential managed by
 `state_file` selects where the non-secret last-wake timestamps are stored. The
 `tmux_path`, `codex_path`, `claude_path`, and `pgrep_path` fields can pin command
 paths. Defaults are resolved using the launchd `PATH`.
+`headless_kinds` defaults to empty, so only registered tmux sessions are woken.
+Opt in per kind (currently `codex` and `claude_code`) only when headless resume is
+intended; the process-list guard cannot see an interactive TUI whose session ID
+is absent from its argv, so enabling headless can start a second session.
 
 Run once in a terminal with `~/bin/rcp-supervisor -config ~/.config/release-control/supervisor.json`.
 The process handles SIGTERM and Ctrl-C. It continues polling after transient
@@ -49,9 +54,9 @@ ssh -t <host> tmux attach -t orch-backend
 
 The supervisor waits for stable pane contents and checks the last 15 lines for
 the interactive busy marker before sending a literal message and Enter. It
-verifies that pane contents change before acknowledging `delivered`. A busy
-pane is acknowledged `failed` with detail `busy`, allowing server backoff and
-redelivery.
+acknowledges `delivered` only after seeing “esc to interrupt” or when the typed
+message has disappeared from the last five lines. Otherwise it records
+`wake not observed`. A busy pane is acknowledged `failed` with detail `busy`.
 
 ## Turn-end hooks
 
@@ -62,6 +67,59 @@ expected sources. The server applies its debounce and emits
 `execution_continuation_required`; the supervisor only handles the resulting
 durable event. A tmux target is included in execution events along with harness
 kind and session reference.
+
+## Mac mini installation runbook
+
+On the mini, from a checkout of this repository, build and configure the agent:
+
+```sh
+mkdir -p ~/bin ~/.config/release-control ~/Library/Logs ~/Library/LaunchAgents
+go build -o ~/bin/rcp-supervisor ./cmd/supervisor
+chmod 700 ~/bin/rcp-supervisor
+cat > ~/.config/release-control/supervisor.json <<'JSON'
+{
+  "rcp_url": "https://rcp.example.com",
+  "profile": "default",
+  "supervisor_id": "mini-orchestrator",
+  "product_ids": ["PRODUCT_ID"],
+  "poll_interval": "15s",
+  "idle_window": "5s",
+  "wake_timeout": "120s",
+  "allowed_kinds": ["codex", "claude_code"],
+  "headless_kinds": []
+}
+JSON
+chmod 600 ~/.config/release-control/supervisor.json
+```
+
+Log in once with the installed CLI (`release-control login --url
+https://rcp.example.com --profile default`) and complete its browser approval.
+Start the orchestrator in its persistent tmux pane, for example:
+
+```sh
+tmux new -s orch-backend
+```
+
+Have the orchestrator register its harness with `tmux_target` set to
+`orch-backend` (or the precise pane such as `orch-backend:0.1`) on
+`claim_execution`. Install the provided plist, replacing `OWNER` with the
+mini's short account name:
+
+```sh
+cp deploy/launchd/com.deadnodes.rcp-supervisor.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.deadnodes.rcp-supervisor.plist
+launchctl kickstart -k gui/$(id -u)/com.deadnodes.rcp-supervisor
+tail -f ~/Library/Logs/rcp-supervisor.log
+```
+
+From a MacBook, attach to the same orchestrator session:
+
+```sh
+ssh -t <mini-host> tmux attach -t orch-backend
+```
+
+Run a harmless delivery smoke check on the mini with
+`scripts/supervisor-smoke.sh orch-backend:0.1`.
 
 ## launchd
 
@@ -86,8 +144,8 @@ launchctl bootout gui/$(id -u)/com.deadnodes.rcp-supervisor
 
 | Registered kind | Wake path | Limit |
 |---|---|---|
-| `codex` | tmux; otherwise `codex exec resume <session_ref> <message>` | Headless resume is skipped if `pgrep -f` finds a live process for the exact session ref. |
-| `claude_code` | tmux; otherwise `claude -p --resume <session_ref> <message>` | Requires Claude CLI auth available to launchd; live process guard applies. |
+| `codex` | tmux; optional headless `codex exec resume <session_ref> <message>` | Headless requires `headless_kinds: ["codex"]`; process guard is best effort. |
+| `claude_code` | tmux; optional headless `claude -p --resume <session_ref> <message>` | Requires `headless_kinds: ["claude_code"]` and CLI auth available to launchd. |
 | `claude_desktop` | tmux only | No supported out-of-process Desktop API; without tmux this is acknowledged unsupported. |
 | `ccr` | tmux only | No generic router resume protocol is assumed. |
 | `other` | tmux only | Adapter-specific wake protocol is not assumed. |
@@ -95,7 +153,9 @@ launchctl bootout gui/$(id -u)/com.deadnodes.rcp-supervisor
 The supervisor never scrapes agent session stores. Session refs must be
 registered by their owning orchestrator. tmux detection is pane-content based;
 it cannot prove semantic readiness. The headless process guard is a best-effort
-process-list check, not an OS lock. ACK records delivery outcome; the RCP event
+process-list check, not an OS lock. `pgrep -f <session_ref>` cannot see an
+interactive TUI started without the ID in argv. Keep `headless_kinds` empty on
+machines hosting interactive sessions to prevent a second copy. ACK records delivery outcome; the RCP event
 remains unresolved until its cause clears.
 
 ## Manual smoke test

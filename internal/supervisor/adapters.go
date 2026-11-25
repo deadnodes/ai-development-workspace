@@ -22,6 +22,9 @@ func (a ExecAdapter) Wake(ctx context.Context, req WakeRequest) WakeResult {
 			return a.wakeTmux(wakeCtx, req)
 		}
 	}
+	if !a.headlessAllowed(req.Kind) {
+		return WakeResult{Outcome: Unsupported, Detail: "headless fallback disabled"}
+	}
 	if !ValidSessionRef(req.SessionRef) {
 		return WakeResult{Outcome: Unsupported, Detail: "invalid or missing session_ref"}
 	}
@@ -82,11 +85,10 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	}
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, a.Config.WakeFor)
 	defer cancelVerify()
-	initial := paneHash(after)
 	for {
 		pane, e := a.capture(verifyCtx, req.TmuxTarget)
-		if e == nil && paneHash(pane) != initial {
-			return WakeResult{Outcome: Delivered, Detail: "tmux pane changed"}
+		if e == nil && (paneBusy(pane) || !messageInLastLines(pane, req.Message, 5)) {
+			return WakeResult{Outcome: Delivered, Detail: "tmux wake observed"}
 		}
 		select {
 		case <-verifyCtx.Done():
@@ -94,6 +96,28 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func (a ExecAdapter) headlessAllowed(kind string) bool {
+	for _, k := range a.Config.HeadlessKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func messageInLastLines(p []byte, message string, count int) bool {
+	lines := strings.Split(strings.TrimRight(string(p), "\n"), "\n")
+	if len(lines) > count {
+		lines = lines[len(lines)-count:]
+	}
+	for _, line := range lines {
+		if strings.Contains(line, message) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a ExecAdapter) tmuxHas(ctx context.Context, target string) (bool, error) {

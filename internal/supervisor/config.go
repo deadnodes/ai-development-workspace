@@ -11,25 +11,26 @@ import (
 )
 
 type Config struct {
-	RCPURL       string        `json:"rcp_url"`
-	Profile      string        `json:"profile,omitempty"`
-	TokenEnv     string        `json:"token_env,omitempty"`
-	SupervisorID string        `json:"supervisor_id"`
-	ProductIDs   []string      `json:"product_ids"`
-	PollInterval string        `json:"poll_interval,omitempty"`
-	IdleWindow   string        `json:"idle_window,omitempty"`
-	WakeTimeout  string        `json:"wake_timeout,omitempty"`
-	RateLimit    string        `json:"rate_limit,omitempty"`
-	AllowedKinds []string      `json:"allowed_kinds,omitempty"`
-	StateFile    string        `json:"state_file,omitempty"`
-	TmuxPath     string        `json:"tmux_path,omitempty"`
-	CodexPath    string        `json:"codex_path,omitempty"`
-	ClaudePath   string        `json:"claude_path,omitempty"`
-	PgrepPath    string        `json:"pgrep_path,omitempty"`
-	PollEvery    time.Duration `json:"-"`
-	IdleFor      time.Duration `json:"-"`
-	WakeFor      time.Duration `json:"-"`
-	RateFor      time.Duration `json:"-"`
+	RCPURL        string        `json:"rcp_url"`
+	Profile       string        `json:"profile,omitempty"`
+	TokenEnv      string        `json:"token_env,omitempty"`
+	SupervisorID  string        `json:"supervisor_id"`
+	ProductIDs    []string      `json:"product_ids"`
+	PollInterval  string        `json:"poll_interval,omitempty"`
+	IdleWindow    string        `json:"idle_window,omitempty"`
+	WakeTimeout   string        `json:"wake_timeout,omitempty"`
+	RateLimit     string        `json:"rate_limit,omitempty"`
+	AllowedKinds  []string      `json:"allowed_kinds,omitempty"`
+	HeadlessKinds []string      `json:"headless_kinds,omitempty"`
+	StateFile     string        `json:"state_file,omitempty"`
+	TmuxPath      string        `json:"tmux_path,omitempty"`
+	CodexPath     string        `json:"codex_path,omitempty"`
+	ClaudePath    string        `json:"claude_path,omitempty"`
+	PgrepPath     string        `json:"pgrep_path,omitempty"`
+	PollEvery     time.Duration `json:"-"`
+	IdleFor       time.Duration `json:"-"`
+	WakeFor       time.Duration `json:"-"`
+	RateFor       time.Duration `json:"-"`
 }
 
 var (
@@ -119,6 +120,11 @@ func (c *Config) Normalize() error {
 	for _, k := range c.AllowedKinds {
 		if k != "codex" && k != "claude_code" && k != "claude_desktop" && k != "ccr" && k != "other" {
 			return errors.New("invalid allowed harness kind")
+		}
+	}
+	for _, k := range c.HeadlessKinds {
+		if k != "codex" && k != "claude_code" {
+			return errors.New("invalid headless harness kind")
 		}
 	}
 	return nil

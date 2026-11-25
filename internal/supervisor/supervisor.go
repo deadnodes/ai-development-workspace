@@ -290,7 +290,6 @@ func (s *Supervisor) request(ctx context.Context, method, path, token string, in
 	}
 	if out != nil {
 		d := json.NewDecoder(bytes.NewReader(raw))
-		d.DisallowUnknownFields()
 		if err = d.Decode(out); err != nil {
 			return errors.New("invalid RCP response")
 		}

@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"releasecontrol/internal/application"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/persistence"
+	"releasecontrol/internal/transport"
 )
 
 type fakeAdapter struct {
@@ -116,6 +119,131 @@ func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 	}
 }
 
+func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
+	ctx := context.Background()
+	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := application.New(store)
+	httpServer := httptest.NewServer(transport.New(svc, transport.Options{}))
+	defer httpServer.Close()
+	post := func(c domain.Command, out any) {
+		t.Helper()
+		raw, _ := json.Marshal(c)
+		res, e := http.Post(httpServer.URL+"/api/commands", "application/json", strings.NewReader(string(raw)))
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			t.Fatalf("%s: HTTP %d", c.Action, res.StatusCode)
+		}
+		if out != nil {
+			if e = json.NewDecoder(res.Body).Decode(out); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	var product struct {
+		ID string `json:"id"`
+	}
+	post(domain.Command{Action: "create_product", Actor: "test", Data: map[string]any{"name": "Supervisor contract"}}, &product)
+	var feature struct {
+		ID string `json:"id"`
+	}
+	post(domain.Command{Action: "create_feature", Actor: "test", ProductID: product.ID, Data: map[string]any{"title": "Execution", "problem": "test", "goal": "test"}}, &feature)
+	var integration struct {
+		ID string `json:"id"`
+	}
+	post(domain.Command{Action: "create_integration", Actor: "test", FeatureID: feature.ID, Data: map[string]any{"title": "Harness", "objective": "test"}}, &integration)
+	var group domain.ExecutionGroup
+	post(domain.Command{Action: "create_execution_group", Actor: "test", ProductID: product.ID, Data: map[string]any{"name": "group", "orchestrator_id": "orch", "integration_ids": []string{integration.ID}}}, &group)
+	if group.ID == "" {
+		t.Fatal("group not created")
+	}
+	eventURL := httpServer.URL + "/api/products/" + product.ID + "/execution-events?due_only=true&unresolved_only=true"
+	response, e := http.Get(eventURL)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var due struct {
+		Items []domain.ExecutionEvent `json:"items"`
+	}
+	e = json.NewDecoder(response.Body).Decode(&due)
+	response.Body.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(due.Items) != 1 {
+		t.Fatalf("due events: %+v", due.Items)
+	}
+	a := &fakeAdapter{}
+	c := testConfig(t, httpServer.URL)
+	c.ProductIDs = []string{product.ID}
+	c.HeadlessKinds = nil
+	if err = c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	sup, err := New(c, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sup.Cycle(ctx, product.ID, "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.requests) != 1 || a.requests[0].GroupID != group.ID {
+		t.Fatalf("wakes: %+v", a.requests)
+	}
+	response, e = http.Get(eventURL)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var remaining struct {
+		Items []domain.ExecutionEvent `json:"items"`
+	}
+	e = json.NewDecoder(response.Body).Decode(&remaining)
+	response.Body.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(remaining.Items) != 1 || len(remaining.Items[0].Acknowledgements) != 1 || remaining.Items[0].Acknowledgements[0].Outcome != "delivered" {
+		t.Fatalf("server ack: %+v", remaining.Items)
+	}
+	response, e = http.Get(httpServer.URL + "/api/execution-groups/" + group.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer response.Body.Close()
+	var got domain.ExecutionGroup
+	if e = json.NewDecoder(response.Body).Decode(&got); e != nil {
+		t.Fatal(e)
+	}
+	if got.ID != group.ID {
+		t.Fatalf("group readback: %+v", got)
+	}
+}
+
+func TestRCPResponseAllowsAdditiveFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[],"next_cursor":"","new_server_field":true}`))
+	}))
+	defer server.Close()
+	c := testConfig(t, server.URL)
+	s, err := New(c, &fakeAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Items      []domain.ExecutionEvent `json:"items"`
+		NextCursor string                  `json:"next_cursor"`
+	}
+	if err = s.request(context.Background(), http.MethodGet, "/events", "test-token", nil, &response); err != nil {
+		t.Fatalf("additive server field rejected: %v", err)
+	}
+}
+
 func TestBusyTmuxFailedThenDelivered(t *testing.T) {
 	a := &fakeAdapter{results: []WakeResult{{Outcome: Failed, Detail: "busy"}, {Outcome: Delivered, Detail: "ok"}}}
 	ev := []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "orch", "aabbccdd", "execution_stalled")}
@@ -198,7 +326,7 @@ func TestHeadlessFallbackAndLiveProcessGuard(t *testing.T) {
 	t.Setenv("TMUX_LOG", tmuxLog)
 	t.Setenv("PGREP_LOG", pgrepLog)
 	t.Setenv("CODEX_LOG", codexLog)
-	c := Config{TmuxPath: filepath.Join(dir, "tmux"), PgrepPath: filepath.Join(dir, "pgrep"), CodexPath: filepath.Join(dir, "codex"), WakeFor: time.Second, IdleFor: time.Millisecond}
+	c := Config{TmuxPath: filepath.Join(dir, "tmux"), PgrepPath: filepath.Join(dir, "pgrep"), CodexPath: filepath.Join(dir, "codex"), WakeFor: time.Second, IdleFor: time.Millisecond, HeadlessKinds: []string{"codex"}}
 	req := WakeRequest{Kind: "codex", SessionRef: "session-12345678", TmuxTarget: "orch", Message: "safe"}
 	a := ExecAdapter{Config: c}
 	if got := a.Wake(context.Background(), req); got.Outcome != Delivered {
@@ -213,6 +341,16 @@ func TestHeadlessFallbackAndLiveProcessGuard(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(codexLog); strings.Count(string(raw), "exec resume") != 1 {
 		t.Fatalf("woke live session: %s", raw)
+	}
+}
+
+func TestHeadlessFallbackDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeFake(t, filepath.Join(dir, "tmux"), "case \"$1\" in has-session) exit 1;; esac\n")
+	writeFake(t, filepath.Join(dir, "codex"), "exit 0\n")
+	r := (ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), CodexPath: filepath.Join(dir, "codex"), WakeFor: time.Second}}).Wake(context.Background(), WakeRequest{Kind: "codex", SessionRef: "session-12345678", TmuxTarget: "orch", Message: "hi"})
+	if r.Outcome != Unsupported || r.Detail != "headless fallback disabled" {
+		t.Fatalf("default was not tmux-only: %+v", r)
 	}
 }
 
@@ -236,6 +374,34 @@ func TestTmuxAdapterRequiresIdleAndVerifiesPaneChange(t *testing.T) {
 	r = a.Wake(context.Background(), WakeRequest{Kind: "codex", SessionRef: "session-12345678", TmuxTarget: "orch:0.1", Message: "safe"})
 	if r.Outcome != Failed || r.Detail != "busy" {
 		t.Fatalf("busy tmux pane: %+v", r)
+	}
+}
+
+func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) {
+	for _, tc := range []struct {
+		name, final string
+		want        Outcome
+	}{
+		{"busy marker", "Claude Esc to interrupt", Delivered},
+		{"still typed", "idle prompt\\nliteral safe", Failed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pane := filepath.Join(dir, "pane")
+			_ = os.WriteFile(pane, []byte("idle prompt"), 0600)
+			// The send operation changes the pane to include the typed line; only the
+			// post-Enter scripted output determines whether that line was consumed.
+			writeFake(t, filepath.Join(dir, "tmux"), "case \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'idle prompt\\nliteral safe\\n' > \"$PANE\";; *Enter*) printf '"+strings.ReplaceAll(tc.final, "\\n", "\\n")+"\\n' > \"$PANE\";; esac;; esac\n")
+			t.Setenv("PANE", pane)
+			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, WakeFor: 25 * time.Millisecond}}
+			got := a.Wake(context.Background(), WakeRequest{Kind: "codex", TmuxTarget: "orch", Message: "literal safe"})
+			if got.Outcome != tc.want {
+				t.Fatalf("got %+v", got)
+			}
+			if tc.want == Failed && got.Detail != "wake not observed" {
+				t.Fatalf("wrong failure: %+v", got)
+			}
+		})
 	}
 }
 
