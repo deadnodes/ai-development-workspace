@@ -76,6 +76,7 @@ func approved(b []byte, r *Ref, c Config) (string, string, bool) {
 	if !subject || !builder || d.BuildType != "https://deadnodes.dev/rcp/forgejo-build/v1" || !strings.HasPrefix(d.External.Tag, "main-") || d.External.SHA == "" {
 		return "", "", false
 	}
+	contextsFound := false
 	for _, b := range p.Predicate.RunDetails.Byproducts {
 		if c.RequireSecurityScan && b.Name == "security_scan" && (b.Annotations.Verdict != "PASS" || b.Annotations.Blocking != 0 || b.Annotations.GitleaksFindings != 0) {
 			return "", "", false
@@ -83,6 +84,7 @@ func approved(b []byte, r *Ref, c Config) (string, string, bool) {
 		if b.Name != "required_status_contexts" {
 			continue
 		}
+		contextsFound = len(b.Annotations.Required) > 0
 		for _, name := range b.Annotations.Required {
 			if b.Annotations.Observed[name] != "success" {
 				return "", "", false
@@ -93,6 +95,9 @@ func approved(b []byte, r *Ref, c Config) (string, string, bool) {
 				return "", "", false
 			}
 		}
+	}
+	if !contextsFound {
+		return "", "", false
 	}
 	if c.RequireSecurityScan {
 		found := false
@@ -194,45 +199,13 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 			predicate["approved_in"] = r.ApprovedIn
 		} else {
 			repo := registryRepo(c, r.Repo)
-			sigs, e := client.Evidence(ctx, reg, repo, credential, digest, "sig", c.DevPublicKeyPEM)
+			var reason string
+			buildID, sha, reason, e = VerifyDevEvidence(ctx, c, client, repo, r.Repo, digest, "", "")
 			if e != nil {
 				s.Errors++
-				continue
-			}
-			signature := false
-			for _, b := range sigs {
-				var payload struct {
-					Critical struct {
-						Identity map[string]string `json:"identity"`
-					} `json:"critical"`
-				}
-				if json.Unmarshal(b, &payload) == nil {
-					signature = signature || imagesigning.SignatureMatches(b, payload.Critical.Identity["docker-reference"], digest)
-				}
-			}
-			if signature {
-				atts, e := client.Evidence(ctx, reg, repo, credential, digest, "att", c.DevPublicKeyPEM)
-				if e != nil {
-					s.Errors++
-					continue
-				}
-				for _, b := range atts {
-					var ok bool
-					buildID, sha, ok = approved(b, r, c)
-					if !ok {
-						continue
-					}
-					revision, e := client.Inspect(ctx, reg, repo, credential, digest)
-					if e != nil {
-						s.Errors++
-						infrastructureFailure = true
-						break
-					}
-					if revision == sha {
-						valid = true
-						break
-					}
-				}
+				infrastructureFailure = true
+			} else {
+				valid = reason == ""
 			}
 			predicate["dev_build_id"] = buildID
 			predicate["source_sha"] = sha

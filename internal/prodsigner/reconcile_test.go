@@ -147,6 +147,20 @@ func TestStrictConfig(t *testing.T) {
 	}
 }
 
+func TestPromoteModeConfigIsStrictWithoutFluxFields(t *testing.T) {
+	c, _, _, _, _, _ := promoteFixture(t)
+	if err := c.ValidateMode("promote"); err != nil {
+		t.Fatalf("valid promote config: %v", err)
+	}
+	if err := c.ValidateMode("flux"); err == nil {
+		t.Fatal("promote-only config accepted for flux mode")
+	}
+	c.RCP.URL = "http://rcp.example"
+	if err := c.ValidateMode("promote"); err == nil {
+		t.Fatal("non-HTTPS RCP accepted")
+	}
+}
+
 func TestApprovedSecurityScanByproduct(t *testing.T) {
 	ref := &Ref{Digest: "sha256:" + strings.Repeat("a", 64)}
 	base := map[string]any{"_type": "https://in-toto.io/Statement/v0.1", "predicateType": imagesigning.ProvenanceType, "subject": []any{map[string]any{"name": "x", "digest": map[string]string{"sha256": strings.Repeat("a", 64)}}}, "predicate": map[string]any{"buildDefinition": map[string]any{"buildType": "https://deadnodes.dev/rcp/forgejo-build/v1", "externalParameters": map[string]string{"tag": "main-abc", "source_sha": "abc"}, "internalParameters": map[string]string{"build_id": "b"}}, "runDetails": map[string]any{"builder": map[string]string{"id": "builder"}, "byproducts": []any{}}}}
@@ -156,6 +170,8 @@ func TestApprovedSecurityScanByproduct(t *testing.T) {
 		c.RequireSecurityScan = require
 		pred := base["predicate"].(map[string]any)
 		run := pred["runDetails"].(map[string]any)
+		contexts := map[string]any{"name": "required_status_contexts", "annotations": map[string]any{"required": []string{"ci"}, "observed": map[string]string{"ci": "success"}}}
+		byproducts = append([]any{contexts}, byproducts...)
 		run["byproducts"] = byproducts
 		raw, _ := json.Marshal(base)
 		_, _, ok := approved(raw, ref, c)

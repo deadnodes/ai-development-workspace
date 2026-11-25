@@ -8,6 +8,8 @@ Signing configuration is excluded from build authority hashes. Restart to reload
 RCP signs only within its own contour, using cosign-dev. Never grant the dev
 server access to production Vault or production signing credentials. Production
 approval belongs to the separate [prod-signer](PROD_SIGNER.md) in the prod cluster.
+The explicit request path and planned prod-side promotion protocol are described in
+[PROD_PROMOTION.md](PROD_PROMOTION.md).
 The generic multi-key adapter does not establish a cross-contour trust boundary.
 
 ## Configuration

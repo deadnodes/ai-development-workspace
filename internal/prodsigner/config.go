@@ -13,6 +13,12 @@ import (
 )
 
 type Config struct {
+	RCP struct {
+		URL           string `json:"url"`
+		TokenFile     string `json:"token_file"`
+		ProductID     string `json:"product_id"`
+		EnvironmentID string `json:"environment_id"`
+	} `json:"rcp,omitempty"`
 	RequireSecurityScan bool `json:"require_security_scan,omitempty"`
 	FluxArtifact        struct {
 		Namespace string `json:"namespace"`
@@ -36,13 +42,16 @@ type Config struct {
 }
 
 func Decode(r io.Reader) (Config, error) {
+	return DecodeMode(r, "flux")
+}
+func DecodeMode(r io.Reader, mode string) (Config, error) {
 	var c Config
 	d := json.NewDecoder(io.LimitReader(r, 1<<20))
 	d.DisallowUnknownFields()
 	if d.Decode(&c) != nil || d.Decode(new(any)) != io.EOF {
 		return c, errors.New("invalid config")
 	}
-	return c, c.Validate()
+	return c, c.ValidateMode(mode)
 }
 func safePath(p string) bool {
 	return p != "" && !strings.HasPrefix(p, "/") && !strings.Contains(p, "\\") && path.Clean(p) == strings.TrimSuffix(p, "/") && p != "." && !strings.HasPrefix(p, "../")
@@ -52,16 +61,31 @@ func origin(s string, httpOK bool) bool {
 	return e == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/") && (u.Scheme == "https" || httpOK && u.Scheme == "http")
 }
 func (c Config) Validate() error {
+	return c.ValidateMode("flux")
+}
+func (c Config) ValidateMode(mode string) error {
 	bad := errors.New("invalid config")
-	if c.FluxArtifact.Kind != "GitRepository" || c.FluxArtifact.Namespace == "" || c.FluxArtifact.Name == "" || strings.ContainsAny(c.FluxArtifact.Namespace+c.FluxArtifact.Name, "/ ?#") || len(c.Paths) == 0 || len(c.OwnImagePrefixes) == 0 || len(c.BuilderIDs) == 0 {
+	if mode != "flux" && mode != "promote" {
 		return bad
+	}
+	if len(c.OwnImagePrefixes) == 0 || len(c.BuilderIDs) == 0 {
+		return bad
+	}
+	if mode == "flux" && (c.FluxArtifact.Kind != "GitRepository" || c.FluxArtifact.Namespace == "" || c.FluxArtifact.Name == "" || strings.ContainsAny(c.FluxArtifact.Namespace+c.FluxArtifact.Name, "/ ?#") || len(c.Paths) == 0) {
+		return bad
+	}
+	if mode == "promote" {
+		u, e := url.Parse(c.RCP.URL)
+		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !filepath.IsAbs(c.RCP.TokenFile) || c.RCP.ProductID == "" || c.RCP.EnvironmentID == "" {
+			return bad
+		}
 	}
 	for _, p := range c.Paths {
 		if !safePath(p) || !strings.HasSuffix(p, "/") {
 			return bad
 		}
 	}
-	if c.BackfillFile != "" && !safePath(c.BackfillFile) {
+	if mode == "flux" && c.BackfillFile != "" && !safePath(c.BackfillFile) {
 		return bad
 	}
 	for _, p := range c.OwnImagePrefixes {

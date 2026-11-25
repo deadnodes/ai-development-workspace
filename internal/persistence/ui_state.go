@@ -52,7 +52,7 @@ func (s *Store) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domai
  SELECT kind,CASE WHEN kind='features' THEN jsonb_build_object('id',id,'product_id',product_id,'title',left(coalesce(document->>'title',''),512),'status',document->>'status','owner',left(coalesce(document->>'owner',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') WHEN kind='products' AND id<>$1 THEN jsonb_build_object('id',id,'name',left(coalesce(document->>'name',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') ELSE document END AS document,position,id,row_number() OVER(PARTITION BY kind ORDER BY position DESC,id) AS n FROM records
  WHERE ((kind IN ('products','features') AND (NOT $2::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($3::text[])))
  OR (kind<>ALL($4::text[]) AND kind NOT IN ('products','features','operations') AND (product_id=$1 OR coalesce(product_id,'')='')))
- ) SELECT kind,document,n FROM selected WHERE n<=CASE WHEN kind IN ('git_observations','runtime_snapshots') THEN 51 ELSE $5 END ORDER BY kind,position,id`, q.ProductID, q.RestrictProducts, q.AllowedProductIDs, uiOmitted, uiCollectionLimit+1)
+	) SELECT kind,document,n FROM selected WHERE n<=CASE WHEN kind IN ('git_observations','runtime_snapshots') THEN 51 WHEN kind='prod_promotions' THEN 101 ELSE $5 END ORDER BY kind,position,id`, q.ProductID, q.RestrictProducts, q.AllowedProductIDs, uiOmitted, uiCollectionLimit+1)
 	if err != nil {
 		return out, err
 	}
@@ -67,6 +67,9 @@ func (s *Store) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domai
 			return out, err
 		}
 		limit := uiCollectionLimit
+		if kind == "prod_promotions" {
+			limit = 100
+		}
 		if kind == "git_observations" || kind == "runtime_snapshots" {
 			limit = 50
 		}
@@ -323,9 +326,13 @@ func (s *LocalStore) ReadUIState(ctx context.Context, q domain.UIStateRequest) (
 			}
 			selected[kind] = append(selected[kind], d)
 		}
-		if len(selected[kind]) > uiCollectionLimit {
+		limit := uiCollectionLimit
+		if kind == "prod_promotions" {
+			limit = 100
+		}
+		if len(selected[kind]) > limit {
 			out.Projection.Truncated = append(out.Projection.Truncated, kind)
-			selected[kind] = selected[kind][len(selected[kind])-uiCollectionLimit:]
+			selected[kind] = selected[kind][len(selected[kind])-limit:]
 		}
 	}
 	for _, kind := range []string{"memories", "events"} {

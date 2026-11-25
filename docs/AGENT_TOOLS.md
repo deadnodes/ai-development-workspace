@@ -265,6 +265,29 @@ Read protected roots, effective retention policy, availability evidence and bloc
 
 **Authority:** Read-only stored evidence; registry is not queried and artifact deletion is never authorized.
 
+### `GET /api/public/prod-signatures/{digest}` — http_route
+
+Return public cosign-prod signature evidence for an approved digest.
+
+**When:** Use from CI without OIDC or a local bearer token; supply `sha256:` plus 64 lowercase hex characters. The RCP host must still be allowed by ALLOWED_HOSTS.
+
+**Inputs:**
+
+- `digest` (string, required): Digest path parameter: sha256:<64 lowercase hex>
+
+**Output:** Digest and at most ten verified prod signature items with prod_image_ref, signature tag/payload/signature, key fingerprint, promotion ID, and signed_at; contains no approval text or principals.
+
+**Errors:**
+
+- `NOT_FOUND`: No verified signature is recorded for the digest, or the digest is invalid.
+- `HTTP_ERROR`: HTTP 413 if the bounded response would exceed the size limit.
+
+**Example:** `GET /api/public/prod-signatures/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+
+**Related:** `request_prod_promotion`, `GET /api/prod-promotions/{id}`
+
+**Authority:** Unauthenticated, read-only public signature data; it does not expose approval/principal fields or authorize deployment.
+
 ### `POST /api/signatures` — http_route
 
 **Same operation:** `mcp_tool:sign_artifact`
@@ -4132,6 +4155,203 @@ Record an externally performed release in append-only Product history.
 **Related:** `plan_release`, `get_operation`
 
 **Authority:** Records an external assertion; does not run a release, merge, build, promote or deploy.
+
+### `request_prod_promotion` — mcp_tool
+
+Queue explicit prod-side signing for eligible main-build images.
+
+**When:** This is the only way to obtain cosign-prod signatures. Quote the owner's explicit go verbatim in owner_approval; the request does not merge or deploy anything.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `build_ids` (array[string], required): One to 20 successful build IDs
+- `owner_approval` (string, required): Owner's verbatim explicit go, 1..2000 characters
+- `request_key` (string, required): Idempotency key, 16..128 characters
+
+**Output:** Product-scoped QUEUED promotion with one pending item per build image; the prod promoter later records per-image outcomes.
+
+**Errors:**
+
+- `VALIDATION`: BUILD_NOT_FOUND, BUILD_NOT_DELIVERABLE, NOT_SIGNED, NOT_PIPELINE_SIGNED, CI_NOT_GREEN, INVALID_IMAGE, SECURITY_GATE_FAILED, INVALID_REQUEST, or REQUEST_KEY_CONFLICT; correct the inputs or satisfy the recorded build evidence.
+- `FORBIDDEN`: Product write permission is required.
+
+**Example:** `{"name":"request_prod_promotion","arguments":{"product_id":"PRODUCT","build_ids":["BUILD"],"owner_approval":"I approve this production promotion","request_key":"prod-promotion-2026-11-25-001"}}`
+
+**Related:** `get_prod_promotion`, `list_prod_promotions`, `sign_artifact`
+
+**Authority:** Records explicit owner approval and queues prod-side signing only; it does not merge a Flux PR or deploy.
+
+### `get_prod_promotion` — mcp_tool
+
+Read one Product-scoped production promotion and its item results.
+
+**When:** Use with a promotion ID returned by request_prod_promotion or list_prod_promotions.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `promotion_id` (string, required): Promotion ID
+
+**Output:** Promotion record, approval, claim state, and per-image signing result.
+
+**Errors:**
+
+- `NOT_FOUND`: Promotion is missing or outside the Product; verify both IDs.
+- `FORBIDDEN`: Product read permission is required.
+
+**Example:** `{"name":"get_prod_promotion","arguments":{"product_id":"PRODUCT","promotion_id":"PROMOTION"}}`
+
+**Related:** `request_prod_promotion`, `list_prod_promotions`
+
+**Authority:** Read-only Product-scoped promotion record; it does not authorize or perform merge or deployment.
+
+### `list_prod_promotions` — mcp_tool
+
+List recent Product-scoped production promotion requests.
+
+**When:** Use to review promotion status and per-image outcomes; default page size is 25 and the maximum is 100.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `limit` (integer, optional): Page size 1..100; defaults to 25
+
+**Output:** Recent promotion records, each with per-image result and reason.
+
+**Errors:**
+
+- `FORBIDDEN`: Product read permission is required.
+
+**Example:** `{"name":"list_prod_promotions","arguments":{"product_id":"PRODUCT","limit":25}}`
+
+**Related:** `request_prod_promotion`, `get_prod_promotion`
+
+**Authority:** Read-only Product-scoped listing; it does not authorize or perform merge or deployment.
+
+### `POST /api/prod-promotions` — http_route
+
+Create an explicit Product-scoped production signing request.
+
+**When:** Use only after quoting the owner's explicit go verbatim in owner_approval. This request queues prod signing; it does not merge or deploy.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `build_ids` (array[string], required): One to 20 successful Product build IDs
+- `owner_approval` (string, required): Owner's verbatim explicit approval, nonempty and at most 2000 characters
+- `request_key` (string, required): Idempotency key, 16..128 characters
+
+**Output:** QUEUED promotion record with pending per-image items.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 415 unless Content-Type is application/json; HTTP 400 for malformed/oversized JSON.
+- `VALIDATION`: Build/pipeline/signing gates return BUILD_NOT_FOUND, BUILD_NOT_DELIVERABLE, NOT_SIGNED, NOT_PIPELINE_SIGNED, CI_NOT_GREEN, INVALID_IMAGE, SECURITY_GATE_FAILED, INVALID_REQUEST, or REQUEST_KEY_CONFLICT.
+- `FORBIDDEN`: Product write permission is required.
+
+**Example:** `POST /api/prod-promotions {"product_id":"PRODUCT","build_ids":["BUILD"],"owner_approval":"I approve this production promotion","request_key":"prod-promotion-2026-11-25-001"}`
+
+**Related:** `request_prod_promotion`, `GET /api/prod-promotions`, `GET /api/prod-promotions/{id}`
+
+**Authority:** Records owner approval and queues prod-side signing only; it never merges a Flux PR or deploys.
+
+### `GET /api/prod-promotions` — http_route
+
+List recent Product-scoped production promotion requests.
+
+**When:** Use to inspect request and per-image outcomes; page size defaults to 25 and is bounded to 100.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope query parameter
+- `limit` (integer, optional): Page size 1..100; defaults to 25
+
+**Output:** Recent promotion records with per-image status and reason.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 422 for a limit outside 1..100 or a noninteger limit.
+- `FORBIDDEN`: Product read permission is required.
+
+**Example:** `GET /api/prod-promotions?product_id=PRODUCT&limit=25`
+
+**Related:** `list_prod_promotions`, `GET /api/prod-promotions/{id}`
+
+**Authority:** Read-only Product-scoped listing; it does not authorize or perform merge or deployment.
+
+### `GET /api/prod-promotions/{id}` — http_route
+
+Read one Product-scoped production promotion and its item outcomes.
+
+**When:** Use with a known promotion ID; include the Product scope query parameter.
+
+**Inputs:**
+
+- `id` (string, required): Promotion ID path parameter
+- `product_id` (string, required): Product scope query parameter
+
+**Output:** Promotion record including owner approval, claim state, and per-image signing result.
+
+**Errors:**
+
+- `NOT_FOUND`: Promotion is missing or outside the Product; verify both IDs.
+- `FORBIDDEN`: Product read permission is required.
+
+**Example:** `GET /api/prod-promotions/PROMOTION?product_id=PRODUCT`
+
+**Related:** `get_prod_promotion`, `GET /api/prod-promotions`
+
+**Authority:** Read-only Product-scoped record; it does not authorize or perform merge or deployment.
+
+### `POST /api/prod-promotions/claim` — http_route
+
+Long-poll for the oldest eligible promotion in the configured promoter scope and claim it with a lease.
+
+**When:** Call only from the prod promoter authenticated with its projected ServiceAccount JWT; wait defaults to 50 seconds and is capped at 55.
+
+**Inputs:**
+
+- `wait` (integer, optional): Long-poll seconds, 0..55; defaults to 50
+
+**Output:** 200 with a claimed promotion and claim_id, or 204 when no request is available.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 for malformed claim JSON; HTTP 422 for wait outside 0..55.
+- `FORBIDDEN`: Only the configured prod-promoter ServiceAccount JWT may call this route.
+
+**Example:** `POST /api/prod-promotions/claim {"wait":50}`
+
+**Related:** `POST /api/prod-promotions/{id}/result`, `GET /api/prod-promotions`
+
+**Authority:** Promoter-only service route; claims one eligible request in the configured Product/environment scope and does not authorize deployment.
+
+### `POST /api/prod-promotions/{id}/result` — http_route
+
+Record per-image prod-promoter results for the current claim.
+
+**When:** Call only from the configured prod promoter; submit the exact claim_id and one result per claimed image. SIGNED/ALREADY_SIGNED signatures are verified against the pinned prod public key.
+
+**Inputs:**
+
+- `id` (string, required): Promotion ID path parameter
+- `claim_id` (string, required): Current claim lease identity
+- `items` (array[object], required): Per-image result: build_id, image_id, digest, result (SIGNED, ALREADY_SIGNED, REJECTED, or ERROR), optional reason and prod_signature
+
+**Output:** Completed promotion record; SUCCEEDED only when every item is SIGNED or ALREADY_SIGNED, otherwise FAILED.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 for malformed/oversized result JSON.
+- `VALIDATION`: STALE_CLAIM for an expired/replaced claim; INVALID_RESULT or INVALID_SIGNATURE for invalid item results.
+- `FORBIDDEN`: Only the configured prod-promoter ServiceAccount JWT may call this route.
+
+**Example:** `POST /api/prod-promotions/PROMOTION/result {"claim_id":"CLAIM","items":[{"build_id":"BUILD","image_id":"web","digest":"sha256:…","result":"SIGNED","prod_signature":{"signature_tag":"sha256-….sig","payload_b64":"…","signature_b64":"…","key_fingerprint":"…"}}]}`
+
+**Related:** `POST /api/prod-promotions/claim`, `GET /api/prod-promotions/{id}`
+
+**Authority:** Promoter-only service route; records checked signing outcomes and cannot merge, deploy, or alter the request's approved image identities.
 
 ### `POST /api/products/{id}/candidate-dev/capture-baseline` — http_route
 
