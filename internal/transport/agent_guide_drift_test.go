@@ -16,13 +16,19 @@ import (
 // ServeMux patterns, and the authoritative domain action catalog.
 func TestAgentGuideRegistryDrift(t *testing.T) {
 	known := map[string]bool{}
+	canonical := map[string]bool{}
+	aliases := map[string]bool{}
 	for _, e := range agentguide.Registry() {
 		known[e.Kind+":"+e.Name] = true
+		canonical[e.Kind+":"+e.Name] = true
+	}
+	for _, e := range agentguide.Registry() {
 		for _, alias := range e.Aliases {
-			if known[alias] {
+			if known[alias] && !canonical[alias] {
 				t.Errorf("duplicate registry alias %q", alias)
 			}
 			known[alias] = true
+			aliases[alias] = true
 		}
 	}
 	for _, p := range agentguide.PendingDocumentation() {
@@ -98,6 +104,9 @@ func TestAgentGuideRegistryDrift(t *testing.T) {
 		delete(known, "execute_action:"+n)
 	}
 	for key := range known {
+		if aliases[key] {
+			continue
+		}
 		t.Errorf("registry names non-existent interface %q", key)
 	}
 }

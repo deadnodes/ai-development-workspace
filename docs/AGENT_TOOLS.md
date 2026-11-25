@@ -246,6 +246,30 @@ Release one artifact retention pin belonging to the exact Product and component.
 
 **Authority:** Updates pin metadata only; does not delete registry bytes or authorize image deletion.
 
+### `GET /api/products/{id}/retention` — http_route
+
+**Same operation:** `mcp_tool:get_artifact_retention`
+
+Read protected roots, effective retention policy, availability evidence and blockers.
+
+**When:** Use before discussing retention impact; output never authorizes deletion.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+
+**Output:** Normalized retention inventory and blockers.
+
+**Errors:**
+
+- `NOT_FOUND`: Product missing; verify ID.
+
+**Example:** `GET /api/products/P/retention`
+
+**Related:** `get_artifact_retention`, `configure_artifact_retention`
+
+**Authority:** Read-only stored evidence; registry is not queried and artifact deletion is never authorized.
+
 ## backup
 
 ### `create_backup` — mcp_tool
@@ -743,6 +767,161 @@ Read a bounded excerpt from one curated context source.
 **Related:** `get_context_excerpt`
 
 **Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/context/graph` — http_route
+
+**Same operation:** `mcp_tool:graph_neighbors`
+
+Traverse stored product-context relationships as a bounded graph.
+
+**When:** Use to explore recorded links around a node; use search for text discovery.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `id` (string, required): Starting node ID
+- `depth` (integer, optional): Traversal depth, bounded to 1..2
+- `limit` (integer, optional): Node bound, at most 30
+
+**Output:** Bounded graph tree with typed stored edges and truncation indicator.
+
+**Errors:**
+
+- `VALIDATION`: Invalid integer query value; correct depth or limit.
+- `NOT_FOUND`: Starting node missing or outside Product; refresh scoped context.
+
+**Example:** `GET /api/context/graph?product_id=P&id=FEATURE&depth=2&limit=30`
+
+**Related:** `graph_neighbors`, `GET /api/features/{id}/graph`
+
+**Authority:** Read-only stored relationships; does not infer semantic edges or authorize changes.
+
+### `GET /api/context/search` — http_route
+
+**Same operation:** `mcp_tool:search_context`
+
+Search indexed authored context for a Product or Feature.
+
+**When:** Use to find relevant source excerpts before requesting a bounded excerpt.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope
+- `feature_id` (string, optional): Optional Feature scope
+- `query` (string, required): Search terms
+- `limit` (integer, optional): Result bound
+
+**Output:** Ranked matching context sources and excerpts.
+
+**Errors:**
+
+- `VALIDATION`: Malformed integer query values return HTTP 400; correct limit.
+- `NOT_FOUND`: Invalid scope; refresh Product or Feature context.
+
+**Example:** `GET /api/context/search?product_id=P&query=deployment&limit=10`
+
+**Related:** `search_context`, `GET /api/context/excerpt`
+
+**Authority:** Read-only indexed authored context; does not retrieve credentials or raw provider documents.
+
+### `GET /api/features/{id}/graph` — http_route
+
+**Same operation:** `mcp_tool:get_feature_graph`
+
+Read a Feature delivery graph including repository, PR, revision, artifact and deployment evidence.
+
+**When:** Use to understand recorded delivery provenance for a Feature.
+
+**Inputs:**
+
+- `id` (string, required): Feature ID path parameter
+
+**Output:** Feature graph projection with recorded links and observations.
+
+**Errors:**
+
+- `NOT_FOUND`: Feature not found; refresh scoped context.
+
+**Example:** `GET /api/features/FEATURE/graph`
+
+**Related:** `get_feature_graph`, `GET /api/integrations/{id}/context`
+
+**Authority:** Read-only evidence; historical reports are not live runtime proof and this does not authorize delivery.
+
+### `GET /api/integrations/{id}/context` — http_route
+
+**Same operation:** `mcp_tool:get_integration_context`
+
+Read implementation context, provider observations and deployment operations for an Integration.
+
+**When:** Use before continuing work or handing it off.
+
+**Inputs:**
+
+- `id` (string, required): Integration ID path parameter
+
+**Output:** Integration context projection.
+
+**Errors:**
+
+- `NOT_FOUND`: Integration not found; verify ID and Feature scope.
+
+**Example:** `GET /api/integrations/INTEGRATION/context`
+
+**Related:** `get_integration_context`, `GET /api/integrations/{id}/git`
+
+**Authority:** Read-only context; does not claim, start or complete work.
+
+### `GET /api/products/{id}/context` — http_route
+
+**Same operation:** `mcp_tool:get_project_context`
+
+Return bounded Product entry context and metadata cards.
+
+**When:** Use as a Product entrypoint before focused searches or queries.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+
+**Output:** Bounded Product context summary.
+
+**Errors:**
+
+- `NOT_FOUND`: Product missing; verify ID.
+
+**Example:** `GET /api/products/P/context`
+
+**Related:** `get_project_context`, `GET /api/products/{id}/knowledge/search`
+
+**Authority:** Read-only summary; omits full source documents and grants no mutation authority.
+
+### `GET /api/products/{id}/knowledge/search` — http_route
+
+**Same operation:** `mcp_tool:search_product_knowledge`
+
+Search curated Product knowledge nodes and links.
+
+**When:** Use for durable decisions, constraints, discoveries and agreements.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+- `q` (string, optional): Search terms
+- `limit` (integer, optional): Result count; default 20
+
+**Output:** Matching node metadata, excerpts and graph edges, bounded to 32 KiB.
+
+**Errors:**
+
+- `VALIDATION`: HTTP 400 "limit must be an integer"; supply an integer.
+- `NOT_FOUND`: Product missing; verify ID.
+
+**Example:** `GET /api/products/P/knowledge/search?q=contract&limit=10`
+
+**Related:** `search_product_knowledge`, `GET /api/products/{id}/context`
+
+**Authority:** Read-only curated knowledge; does not turn knowledge into tasks or permissions.
 
 ## delivery
 
@@ -1339,6 +1518,144 @@ Capture a named immutable composition of exact component bases and ordered Integ
 **Related:** `select_composition`, `reconcile_composition`, `assemble_environment`
 
 **Authority:** Records intent only; does not merge source, build, deploy, resolve conflicts or authorize production release.
+
+### `GET /api/deployments` — http_route
+
+**Same operation:** `mcp_tool:list_deployments`
+
+List deployment history with supported filters and pagination.
+
+**When:** Use to inspect deployment progress or history; retain filters when following a cursor.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product filter
+- `environment_id` (string, optional): Environment filter
+- `application_id` (string, optional): Component filter
+- `status` (string, optional): Deployment status filter
+- `limit` (integer, optional): Page size
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Deployment page and continuation cursor.
+
+**Errors:**
+
+- `VALIDATION`: HTTP 400 "invalid deployment query" for malformed or unknown query fields; correct the query.
+
+**Example:** `GET /api/deployments?product_id=P&limit=20`
+
+**Related:** `list_deployments`, `GET /api/deployments/{id}`
+
+**Authority:** Read-only deployment records; does not start or reconcile deployment.
+
+### `GET /api/deployments/{id}` — http_route
+
+**Same operation:** `mcp_tool:get_deployment`
+
+Read one deployment record.
+
+**When:** Use with a known deployment ID, optionally constrained to a Product.
+
+**Inputs:**
+
+- `id` (string, required): Deployment path ID
+- `product_id` (string, optional): Optional Product scope
+
+**Output:** Deployment details and recorded progress/evidence.
+
+**Errors:**
+
+- `NOT_FOUND`: Deployment missing or outside scope; verify ID and Product.
+
+**Example:** `GET /api/deployments/DEPLOYMENT?product_id=P`
+
+**Related:** `GET /api/deployments`, `get_operation`
+
+**Authority:** Read-only record; does not authorize rollout or imply runtime health.
+
+### `GET /api/environments/{id}/state` — http_route
+
+**Same operation:** `mcp_tool:get_environment_state`
+
+Read desired GitOps state separately from recorded reconciliation and runtime observations.
+
+**When:** Use to inspect an Environment's current recorded state.
+
+**Inputs:**
+
+- `id` (string, required): Environment ID path parameter
+
+**Output:** Environment desired state and associated observations.
+
+**Errors:**
+
+- `NOT_FOUND`: Environment not found; verify ID.
+
+**Example:** `GET /api/environments/ENV/state`
+
+**Related:** `get_environment_state`, `GET /api/products/{id}/configuration`
+
+**Authority:** Read-only state; does not perform GitOps reconciliation or establish live health.
+
+### `GET /api/pipelines` — http_route
+
+**Same operation:** `mcp_tool:list_pipelines`
+
+List time-ordered builds with deployments, stage statuses and hints.
+
+**When:** Use for pipeline overview and diagnostics; preserve filters with cursor.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `profile_id` (string, optional): Build profile filter
+- `status` (string, optional): Pipeline status filter
+- `environment_id` (string, optional): Environment filter
+- `q` (string, optional): Search filter
+- `limit` (integer, optional): Page size 1..100
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Pipeline page and cursor.
+
+**Errors:**
+
+- `VALIDATION`: HTTP 400 "invalid pipeline query" for invalid/unknown filters; correct query values.
+- `UNAVAILABLE`: HTTP 501 "pipeline service unavailable" when capability is absent.
+
+**Example:** `GET /api/pipelines?product_id=P&limit=20`
+
+**Related:** `list_pipelines`, `get_build`
+
+**Authority:** Read-only pipeline history; does not dispatch builds or deploy.
+
+### `GET /api/runtime-reports` — http_route
+
+**Same operation:** `mcp_tool:get_runtime_report`
+
+Read pushed runtime snapshots and cluster freshness.
+
+**When:** Use to inspect reported runtime; snapshots older than five minutes are stale.
+
+**Inputs:**
+
+- `product_id` (string, optional): Optional Product filter
+- `environment_id` (string, optional): Environment filter
+- `cluster` (string, optional): Cluster filter
+- `limit` (integer, optional): Page size 1..1000
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Runtime report page and cursor.
+
+**Errors:**
+
+- `VALIDATION`: HTTP 422 "limit must be 1..1000"; correct limit.
+- `UNAVAILABLE`: HTTP 503 when runtime report service is unavailable.
+
+**Example:** `GET /api/runtime-reports?product_id=P&environment_id=E&limit=100`
+
+**Related:** `get_runtime_report`, `GET /api/environments/{id}/state`
+
+**Authority:** Read-only reported snapshots; no collector or rollout is invoked and stale data is not current health.
 
 ## discovery
 
@@ -3017,6 +3334,54 @@ Verify passing exact-commit evidence for each integration affected by a composit
 
 **Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
 
+### `GET /api/intelligence-tasks/{id}` — http_route
+
+**Same operation:** `mcp_tool:get_intelligence_task`
+
+Read a generated draft or bounded conflict patch with provenance and review state.
+
+**When:** Use to inspect a known task; treat outputs as untrusted proposals requiring review.
+
+**Inputs:**
+
+- `id` (string, required): Task ID path parameter
+
+**Output:** Task content/status and provenance projection.
+
+**Errors:**
+
+- `NOT_FOUND`: Task not found; verify ID.
+
+**Example:** `GET /api/intelligence-tasks/TASK`
+
+**Related:** `get_intelligence_task`, `get_operation`
+
+**Authority:** Reading a proposal does not publish, merge, deploy, or authorize source edits.
+
+### `GET /api/operations/{id}` — http_route
+
+**Same operation:** `mcp_tool:get_operation`
+
+Read persisted operation status, step evidence and attention needs.
+
+**When:** Use to poll a returned operation handle; do not resubmit pending work.
+
+**Inputs:**
+
+- `id` (string, required): Operation ID path parameter
+
+**Output:** Operation, child handles, status and evidence.
+
+**Errors:**
+
+- `NOT_FOUND`: Operation not found; verify the returned ID.
+
+**Example:** `GET /api/operations/OPERATION`
+
+**Related:** `get_operation`, `GET /api/deployments/{id}`
+
+**Authority:** Read-only operation status; queued or pending does not mean deployed and grants no new execution permission.
+
 ## release
 
 ### `confirm_candidate_dev_restoration` — execute_action
@@ -3331,6 +3696,104 @@ Attach a repository observed in a GitHub connection's registry to a Product.
 **Related:** `create_github_connection`, `grant_connection`, `create_application`, `classify_repository`
 
 **Authority:** Attaches provider-observed repository identity to metadata; does not clone, modify code, or grant additional provider permissions.
+
+### `GET /api/integrations/{id}/git` — http_route
+
+**Same operation:** `mcp_tool:get_integration_git`
+
+Read saved Git observations for an Integration.
+
+**When:** Use to inspect linked revisions and branch observations.
+
+**Inputs:**
+
+- `id` (string, required): Integration ID path parameter
+
+**Output:** Stored Integration Git state and provenance.
+
+**Errors:**
+
+- `NOT_FOUND`: Integration not found; verify ID.
+
+**Example:** `GET /api/integrations/INTEGRATION/git`
+
+**Related:** `get_integration_git`, `GET /api/products/{id}/unlinked-git-commits`
+
+**Authority:** Read-only saved observations; does not fetch or mutate remote Git.
+
+### `GET /api/products/{id}/local-checkouts/{checkout}/git` — http_route
+
+**Same operation:** `mcp_tool:get_local_git_state`
+
+Read local checkout branch, HEAD, dirty state and cached upstream comparison.
+
+**When:** Use to inspect a configured local checkout; cached refs are not live remote evidence.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+- `checkout` (string, required): Checkout ID path parameter
+
+**Output:** Local Git state observation.
+
+**Errors:**
+
+- `NOT_FOUND`: Product or checkout missing/outside configured workspace; verify scope and checkout.
+
+**Example:** `GET /api/products/P/local-checkouts/CHECKOUT/git`
+
+**Related:** `get_local_git_state`, `GET /api/integrations/{id}/git`
+
+**Authority:** Read-only local observation; does not fetch or execute Git mutations.
+
+### `GET /api/products/{id}/unlinked-git-commits` — http_route
+
+**Same operation:** `mcp_tool:get_unlinked_git_commits`
+
+List discovered commits not linked to a Feature or Integration.
+
+**When:** Use to review and attach observed commits to the correct work item.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+
+**Output:** Unlinked commit candidates with repository, branch, SHA, author and link metadata.
+
+**Errors:**
+
+- `NOT_FOUND`: Product missing; verify ID.
+
+**Example:** `GET /api/products/P/unlinked-git-commits`
+
+**Related:** `get_unlinked_git_commits`, `GET /api/integrations/{id}/git`
+
+**Authority:** Read-only observations; does not attach commits or alter Git refs.
+
+### `GET /api/repositories/{id}/branches` — http_route
+
+**Same operation:** `mcp_tool:list_branches`
+
+List branches visible for an attached repository connection.
+
+**When:** Use before selecting a branch; provider access and connection scope apply.
+
+**Inputs:**
+
+- `id` (string, required): Attached repository ID path parameter
+
+**Output:** Provider branch list.
+
+**Errors:**
+
+- `NOT_FOUND`: Repository not found; verify Product attachment.
+- `HTTP_ERROR`: Provider/connection errors are returned by query handling; inspect access and configuration.
+
+**Example:** `GET /api/repositories/REPOSITORY/branches`
+
+**Related:** `list_branches`, `GET /api/integrations/{id}/git`
+
+**Authority:** Read-only provider query; does not create, delete or switch branches.
 
 ## verification
 
@@ -4547,6 +5010,52 @@ Scan configured local workspace and match remotes to repositories already attach
 
 **Authority:** Read only; does not fetch, change source, or attach repositories.
 
+### `GET /api/products/{id}/configuration` — http_route
+
+**Same operation:** `mcp_tool:get_product_configuration`
+
+Export effective Product configuration for its one-way Git mirror.
+
+**When:** Use to inspect configuration; treat secret references as references only.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+
+**Output:** Effective Product configuration projection.
+
+**Errors:**
+
+- `NOT_FOUND`: Product missing; verify ID.
+
+**Example:** `GET /api/products/P/configuration`
+
+**Related:** `get_product_configuration`, `GET /api/products/{id}/workspace-config`
+
+**Authority:** Read-only export; not a backup/import format and never resolves credentials.
+
+### `GET /api/products/{id}/workspace-config` — http_route
+
+Export Product workspace configuration for agent setup.
+
+**When:** Use to inspect the generated workspace configuration snapshot.
+
+**Inputs:**
+
+- `id` (string, required): Product ID path parameter
+
+**Output:** Workspace configuration document.
+
+**Errors:**
+
+- `NOT_FOUND`: Product missing; verify ID.
+
+**Example:** `GET /api/products/P/workspace-config`
+
+**Related:** `get_project_context`, `GET /api/products/{id}/configuration`
+
+**Authority:** Read-only export; does not install files or change workspace configuration.
+
 ## Pending documentation
 
 The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
@@ -4554,7 +5063,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `mcp_tool:restore_backup`
 - `mcp_tool:resume`
 - `mcp_tool:scan_workspace`
-- `mcp_tool:search_product_knowledge`
 - `mcp_tool:set_project_knowledge`
 - `mcp_tool:sign_artifact`
 - `mcp_tool:sync_pull_request_review`
@@ -4562,18 +5070,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `http_route:GET /api/context/graph`
-- `http_route:GET /api/context/search`
-- `http_route:GET /api/deployments`
-- `http_route:GET /api/deployments/{id}`
-- `http_route:GET /api/features/{id}/graph`
-- `http_route:GET /api/integrations/{id}/context`
-- `http_route:GET /api/integrations/{id}/git`
-- `http_route:GET /api/products/{id}/context`
-- `http_route:GET /api/products/{id}/knowledge/search`
-- `http_route:GET /api/products/{id}/local-checkouts/{checkout}/git`
-- `http_route:GET /api/products/{id}/unlinked-git-commits`
-- `http_route:GET /api/repositories/{id}/branches`
 - `http_route:GET /api/schema`
 - `http_route:GET /api/state`
 - `http_route:GET /api/statuses`
