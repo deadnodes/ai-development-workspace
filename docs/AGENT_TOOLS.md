@@ -5086,10 +5086,7 @@ Create a Product root for project context and tracked work.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: `name required`; provide a nonblank Product name and retry.
 
 **Example:** `{"action":"create_product","actor":"agent/setup","data":{"name":"Payments","description":"Payments service"}}`
 
@@ -5120,10 +5117,8 @@ Create a Feature with problem, goal, and optional repository scope.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `product not found`; refresh get_state and use an existing Product ID.
+- `VALIDATION`: `invalid feature status %q`, `new feature must be planned or active`, `title and goal required`, or `repository %q is not in product`; use a valid initial status, provide title and goal, and select Product repositories.
 
 **Example:** `{"action":"create_feature","actor":"agent/setup","product_id":"PRODUCT","data":{"title":"Checkout retry","problem":"Transient failures lose orders","goal":"Retry safely"}}`
 
@@ -5155,10 +5150,8 @@ Update a Feature's editable descriptive fields and status.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `feature not found`; refresh scoped Product context and use the current Feature ID.
+- `VALIDATION`: `invalid feature status %q`, `feature transition %s -> %s is not allowed`, `feature completion requires all integrations ready or released`, `feature completion requires integrations`, `title and goal required`, or a repository/readiness error; inspect Feature state, satisfy integration readiness and provide valid fields.
 
 **Example:** `{"action":"update_feature","actor":"agent/backend","feature_id":"FEATURE","data":{"goal":"Retry safely"}}`
 
@@ -5190,10 +5183,8 @@ Create a scoped implementation Integration under a Feature.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `feature not found`; refresh Product context and use an existing Feature ID.
+- `VALIDATION`: `new integrations must be planned`, `invalid integration status %q`, `title and objective required`, `integration %q is not in feature`, or repository-scope errors; create planned work with title/objective and references within Feature/Product scope.
 
 **Example:** `{"action":"create_integration","actor":"agent/backend","feature_id":"FEATURE","data":{"title":"Add retry policy","objective":"Retry transient errors"}}`
 
@@ -5226,10 +5217,8 @@ Update an Integration's editable fields and scope.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found`; refresh Feature context and use the current Integration ID.
+- `VALIDATION`: `released integration is immutable`, `use transition_integration for status`, `invalid integration status %q`, `title and objective required`, `integration %q is not in feature`, or repository-scope errors; update an unreleased Integration and use transition_integration for lifecycle changes.
 
 **Example:** `{"action":"update_integration","actor":"agent/backend","integration_id":"INTEGRATION","data":{"objective":"Retry transient errors safely"}}`
 
@@ -5254,10 +5243,8 @@ Record that implementation has started for an Integration.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found`; refresh Feature context and use the current Integration ID.
+- `VALIDATION`: `released integration is immutable`, `integration transition %s -> %s is not allowed`, or readiness failures such as `dependency %s is not ready`, `open blocker %s`, `open finding %s`, `gate %s is not passing`, or `check %s evidence does not match integration commits`; inspect lifecycle and resolve readiness requirements before starting.
 
 **Example:** `{"action":"start_integration","actor":"agent/backend","integration_id":"INTEGRATION","data":{}}`
 
@@ -5284,10 +5271,8 @@ Request a lifecycle transition for an Integration.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found`; refresh Feature context and use the current Integration ID.
+- `VALIDATION`: `released integration is immutable`, `integration transition %s -> %s is not allowed`, or readiness failures (`dependency %s is not ready`, `open blocker %s`, `open finding %s`, `gate %s is not passing`, `check %s evidence does not match integration commits`); read current status and readiness evidence, then request an allowed transition.
 
 **Example:** `{"action":"transition_integration","actor":"agent/backend","integration_id":"INTEGRATION","data":{"status":"planned","execution_fence":1}}`
 
@@ -5312,10 +5297,8 @@ Mark an Integration complete under its acceptance and lifecycle rules.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found`; refresh Feature context and use the current Integration ID.
+- `VALIDATION`: `released integration is immutable`, `integration transition %s -> %s is not allowed`, or readiness failures (`dependency %s is not ready`, `open blocker %s`, `open finding %s`, `gate %s is not passing`, `check %s evidence does not match integration commits`); resolve blockers/findings, satisfy dependencies and record current passing gate evidence.
 
 **Example:** `{"action":"complete_integration","actor":"agent/backend","integration_id":"INTEGRATION","data":{}}`
 
@@ -5347,10 +5330,8 @@ Create a Feature gate with required integrations and release conditions.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `feature not found`; refresh Product context and use an existing Feature ID.
+- `VALIDATION`: `title, reason and integration_ids required`, `integration %q is not in feature`, or `environment is not in product`; provide gate fields, Feature integrations and an environment from the same Product.
 
 **Example:** `{"action":"create_gate","actor":"agent/backend","feature_id":"FEATURE","data":{"title":"API review","reason":"Verify compatibility","integration_ids":["INTEGRATION"]}}`
 
@@ -5379,10 +5360,8 @@ Add a verification check to a Gate.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `gate not found`; refresh Feature context and use the exact Gate ID.
+- `VALIDATION`: `title and mechanism required`; provide both fields and retry.
 
 **Example:** `{"action":"add_check","actor":"agent/backend","gate_id":"GATE","data":{"title":"Unit tests","mechanism":"command","instructions":"go test ./..."}}`
 
@@ -5412,10 +5391,8 @@ Append a result for a Gate check.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `check not found`; refresh Gate context and use the exact Check ID.
+- `VALIDATION`: `tested commit or deployment required`, `invalid check result`, or `environment is not in product`; provide commit/deployment evidence, a supported result and an environment from the Check’s Product.
 
 **Example:** `{"action":"record_check_result","actor":"agent/backend","check_id":"CHECK","data":{"result":"passed","body":"go test ./... passed"}}`
 
@@ -5444,10 +5421,8 @@ Record a finding linked to a CheckResult.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `result not found`; refresh Gate results and use the exact CheckResult ID.
+- `VALIDATION`: `findings require failed or blocked result`, `title and severity required`, `integration %q is not in feature`, or `finding gate outside feature`; attach to a failed/blocked result and provide fields/references within its Feature.
 
 **Example:** `{"action":"record_finding","actor":"agent/backend","result_id":"RESULT","data":{"title":"Missing retry cap","severity":"major","body":"Retries are unbounded"}}`
 
@@ -5473,10 +5448,8 @@ Append resolution evidence for a Finding.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `finding not found`; refresh Feature history and use the exact Finding ID.
+- `VALIDATION`: `finding already resolved` or `resolution body required`; provide evidence for an open Finding.
 
 **Example:** `{"action":"resolve_finding","actor":"agent/backend","id":"FINDING","data":{"body":"Added a bounded retry count"}}`
 
@@ -5529,10 +5502,7 @@ Read one bounded native worker job and its attempts.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `worker job not found`; obtain the exact job ID from get_worker_history and retry.
 
 **Example:** `{"name":"get_worker_job","arguments":{"job_id":"JOB"}}`
 
@@ -5744,10 +5714,8 @@ Export portable Product setup and agent docs without feature history, machine pa
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `product not found`; refresh get_state and use an existing Product ID.
+- `VALIDATION`: `repository %s needs a credential-free remote URL before export`; update the repository configuration to a portable credential-free remote URL, then retry.
 
 **Example:** `{"name":"export_workspace_configuration","arguments":{"product_id":"PRODUCT"}}`
 
@@ -5839,10 +5807,7 @@ Export effective Product configuration from the authoritative store for a one-wa
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `product not found`; refresh get_state and use an existing Product ID.
 
 **Example:** `{"name":"get_product_configuration","arguments":{"product_id":"PRODUCT"}}`
 
