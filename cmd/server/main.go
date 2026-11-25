@@ -23,6 +23,7 @@ import (
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/intelligence"
 	"releasecontrol/internal/persistence"
+	"releasecontrol/internal/prodjwt"
 	"releasecontrol/internal/providers/forgejo"
 	"releasecontrol/internal/providers/github"
 	"releasecontrol/internal/providers/runtimeobserver"
@@ -57,6 +58,10 @@ func run() error {
 		return agentconnect.Run(context.Background(), os.Args[2:], os.Stdout)
 	}
 	reporterToken, err := runtimeReporterConfig()
+	if err != nil {
+		return err
+	}
+	promoterOptions, err := prodPromoterConfig()
 	if err != nil {
 		return err
 	}
@@ -103,6 +108,15 @@ func run() error {
 	}
 	githubProvider := github.New()
 	service := application.NewWithProvider(store, githubProvider)
+	if keyPath := os.Getenv("RCP_PROD_PUBLIC_KEY_FILE"); keyPath != "" {
+		pem, e := os.ReadFile(keyPath)
+		if e != nil {
+			return fmt.Errorf("read production public key: %w", e)
+		}
+		if e = service.ConfigureProdPublicKey(string(pem)); e != nil {
+			return fmt.Errorf("configure production public key: %w", e)
+		}
+	}
 	if err := service.CheckConnectionSecrets(boot); err != nil {
 		return err
 	}
@@ -290,7 +304,7 @@ func run() error {
 		}
 	}()
 	defer func() { stop(); <-workerDone }()
-	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{RuntimeReporterToken: reporterToken, RuntimeReporterScope: os.Getenv("RCP_RUNTIME_REPORTER_SCOPE"), Auth: authManager, Workers: workers, Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: addr, Handler: transport.New(service, transport.Options{RuntimeReporterToken: reporterToken, RuntimeReporterScope: os.Getenv("RCP_RUNTIME_REPORTER_SCOPE"), ProdPromoterKeys: promoterOptions.keys, ProdPromoterIssuer: promoterOptions.issuer, ProdPromoterAudience: promoterOptions.audience, ProdPromoterSubject: promoterOptions.subject, ProdPromoterScope: promoterOptions.scope, Auth: authManager, Workers: workers, Token: os.Getenv("RC_TOKEN"), AllowedHosts: strings.FieldsFunc(os.Getenv("ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan error, 1)
 	go func() { slog.Info("release-control listening", "address", addr); done <- server.ListenAndServe() }()
 	select {
@@ -325,6 +339,48 @@ func runtimeReporterConfig() (string, error) {
 		}
 	}
 	return reporterToken, nil
+}
+
+type prodPromoterSettings struct {
+	keys                             prodjwt.Keys
+	issuer, audience, subject, scope string
+}
+
+func prodPromoterConfig() (prodPromoterSettings, error) {
+	var c prodPromoterSettings
+	path := strings.TrimSpace(os.Getenv("RCP_PROD_PROMOTER_JWKS_FILE"))
+	if path == "" {
+		return c, nil
+	}
+	b, e := os.ReadFile(path)
+	if e != nil {
+		return c, fmt.Errorf("read production promoter JWKS: %w", e)
+	}
+	if len(b) > 1<<20 {
+		return c, fmt.Errorf("production promoter JWKS exceeds limit")
+	}
+	c.keys, e = prodjwt.LoadJWKS(b)
+	if e != nil {
+		return c, fmt.Errorf("invalid production promoter JWKS")
+	}
+	c.issuer = strings.TrimSpace(os.Getenv("RCP_PROD_PROMOTER_ISSUER"))
+	if c.issuer == "" {
+		return c, fmt.Errorf("RCP_PROD_PROMOTER_ISSUER required when JWKS is configured")
+	}
+	c.audience = os.Getenv("RCP_PROD_PROMOTER_AUDIENCE")
+	if c.audience == "" {
+		c.audience = "rcp-prod-promoter"
+	}
+	c.subject = os.Getenv("RCP_PROD_PROMOTER_SUBJECT")
+	if c.subject == "" {
+		c.subject = "system:serviceaccount:supply-chain:cosign-prod-signer"
+	}
+	c.scope = os.Getenv("RCP_PROD_PROMOTER_SCOPE")
+	product, environment, ok := strings.Cut(c.scope, ":")
+	if !ok || product == "" || environment == "" || strings.Contains(environment, ":") {
+		return c, fmt.Errorf("RCP_PROD_PROMOTER_SCOPE must be product_id:environment_id")
+	}
+	return c, nil
 }
 
 // Bootstrap is local-only and runs once. A failed scan retains the Product so a

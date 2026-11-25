@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"releasecontrol/internal/imagesigning"
 	"releasecontrol/internal/prodsigner"
+	"syscall"
 )
 
 func main() { os.Exit(run()) }
@@ -18,26 +20,35 @@ func run() int {
 		defaultPath = "/etc/prod-signer/config.json"
 	}
 	filename := flag.String("config", defaultPath, "strict JSON configuration")
+	mode := flag.String("mode", "flux", "execution mode: flux or promote")
 	flag.Parse()
 	summary := prodsigner.Summary{}
 	code := 0
-	defer func() { _ = json.NewEncoder(os.Stdout).Encode(summary) }()
 	f, e := os.Open(*filename)
 	if e != nil {
 		summary.Errors++
 		return 1
 	}
-	c, e := prodsigner.Decode(f)
+	c, e := prodsigner.DecodeMode(f, *mode)
 	f.Close()
 	if e != nil {
 		summary.Errors++
 		return 1
 	}
-	// The shared registry adapter confines credential reads to this secret directory.
 	if os.Setenv("RCP_SECRET_DIR", filepath.Dir(c.Registry.CredentialsFile)) != nil {
-		summary.Errors++
 		return 1
 	}
+	if *mode == "promote" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if e = prodsigner.Promote(ctx, c, imagesigning.New(), os.Stdout); e != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, "production promotion loop failed")
+			return 1
+		}
+		return 0
+	}
+	defer func() { _ = json.NewEncoder(os.Stdout).Encode(summary) }()
+	// The shared registry adapter confines credential reads to this secret directory.
 	source, e := prodsigner.InCluster()
 	if e != nil {
 		summary.Errors++

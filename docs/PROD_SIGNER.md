@@ -1,5 +1,10 @@
 # Production signer
 
+The signer supports the one-shot Flux reconcile mode and the explicit long-running
+pre-Flux promotion mode. Flux reconcile remains the default; run
+`prod-signer -mode promote -config /etc/prod-signer/config.json` for the RCP request
+flow described in [PROD_PROMOTION.md](PROD_PROMOTION.md).
+
 The standalone /usr/local/bin/prod-signer runs one reconciliation pass in the
 PROD cluster, namespace supply-chain. It shares an image with RCP but does not
 change the server entrypoint. RCP dev has only cosign-dev authority: no prod
@@ -15,7 +20,8 @@ controller to identify the reviewed artifact. A compromised prod Flux controller
 prod signer identity or prod Vault authorization can bypass this boundary.
 
 The signer writes cosign signature and DSSE approval attestation tags into
-prod-signatures, preserving the Flux repository in docker-reference. Predicate
+prod-signatures, preserving the Flux repository without its image tag in
+docker-reference. Predicate
 type: https://deadnodes.dev/attestations/prod-approval/v1. Approval records Flux
 revision/digest, file paths, image ref, and dev build/source or backfill approval.
 Tags are appended idempotently; keep concurrencyPolicy: Forbid and prohibit

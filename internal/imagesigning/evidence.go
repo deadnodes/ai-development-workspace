@@ -7,7 +7,25 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"releasecontrol/internal/buildconfig"
+	"strings"
 )
+
+// RepositoryIdentity removes the image tag and digest from a fully qualified ref.
+func RepositoryIdentity(ref string) (string, bool) {
+	name, digest, ok := strings.Cut(ref, "@")
+	if !ok || !DigestPattern.MatchString(digest) {
+		return "", false
+	}
+	colon := strings.LastIndex(name, ":")
+	if colon <= strings.LastIndex(name, "/") || colon == len(name)-1 {
+		return "", false
+	}
+	repository := name[:colon]
+	if repository == "" || strings.HasSuffix(repository, "/") || strings.ContainsAny(repository, "?#@") {
+		return "", false
+	}
+	return repository, true
+}
 
 // Evidence returns only cryptographically verified bodies. Missing tags are not infrastructure failures.
 func (c *Client) Evidence(ctx context.Context, reg buildconfig.Registry, repo, credential, digest, suffix, pem string) ([][]byte, error) {

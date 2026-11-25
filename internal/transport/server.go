@@ -17,6 +17,7 @@ import (
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/prodjwt"
 	"releasecontrol/internal/workerconfig"
 	"releasecontrol/web"
 )
@@ -33,6 +34,11 @@ type Options struct {
 	Workers              *workerconfig.Authority
 	RuntimeReporterToken string
 	RuntimeReporterScope string
+	ProdPromoterKeys     prodjwt.Keys
+	ProdPromoterIssuer   string
+	ProdPromoterAudience string
+	ProdPromoterSubject  string
+	ProdPromoterScope    string
 	Token                string
 	AllowedHosts         []string
 }
@@ -92,6 +98,7 @@ func New(service Service, options Options) http.Handler {
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
+	registerProdPromotions(mux, server, service)
 	registerRuntimeReports(mux, server, service, options)
 	registerStateNavigationTool(server, service)
 	registerRetrieval(mux, server, service)
@@ -145,6 +152,19 @@ func New(service Service, options Options) http.Handler {
 		control = options.Auth.Wrap(control)
 	}
 	return protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/public/prod-signatures/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if promoterTokenValid(r, options) {
+			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && strings.HasSuffix(r.URL.Path, "/result")) {
+				ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
+				prodPromoterRoutes(service, options).ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})
+			return
+		}
 		if isRuntimeReporter(r, options) {
 			runtimeReportPost(service, options).ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-runtime-reporter", Kind: "service"})))
 			return
@@ -203,6 +223,12 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 403, map[string]string{"error": "Host not allowed; configure ALLOWED_HOSTS"})
 			return
 		}
+		if promoterTokenValid(r, o) {
+			if r.Method != http.MethodPost || !(r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && strings.HasSuffix(r.URL.Path, "/result")) {
+				write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})
+				return
+			}
+		}
 		authNavigation := o.Auth != nil && o.Auth.Enabled() && r.Method == http.MethodGet && (r.URL.Path == "/auth/login" || r.URL.Path == "/auth/callback")
 		if origin := r.Header.Get("Origin"); origin != "" && !authNavigation {
 			u, e := url.Parse(origin)
@@ -223,9 +249,11 @@ func protect(next http.Handler, o Options) http.Handler {
 			write(w, 401, map[string]string{"error": "worker credential restricted to worker channel"})
 			return
 		}
+		publicSignature := r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/public/prod-signatures/")
+		promoter := promoterTokenValid(r, o)
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
 			w.Header().Set("Cache-Control", "no-store")
-			if !isRuntimeReporter(r, o) && !workerEndpoint(r.URL.Path) && (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
+			if !publicSignature && !promoter && !isRuntimeReporter(r, o) && !workerEndpoint(r.URL.Path) && (o.Auth == nil || !o.Auth.Enabled()) && o.Token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.Token)) != 1 {
 				write(w, 401, map[string]string{"error": "Bearer token required"})
 				return
 			}
@@ -244,4 +272,15 @@ func defaultActor(actor string) string {
 
 func isRuntimeReporter(r *http.Request, o Options) bool {
 	return o.RuntimeReporterToken != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+o.RuntimeReporterToken)) == 1
+}
+
+func promoterTokenValid(r *http.Request, o Options) bool {
+	if len(o.ProdPromoterKeys) == 0 {
+		return false
+	}
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") {
+		return false
+	}
+	return prodjwt.Verify(strings.TrimPrefix(h, "Bearer "), o.ProdPromoterKeys, prodjwt.Config{Issuer: o.ProdPromoterIssuer, Audience: o.ProdPromoterAudience, Subject: o.ProdPromoterSubject}) == nil
 }

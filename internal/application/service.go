@@ -27,6 +27,8 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
+	prodPublicKey            string
+	prodPromotionNotify      chan struct{}
 	runtimeFreshnessSnapshot map[string]time.Time
 	builds                   *buildRuntime
 	deployments              *deployRuntime
@@ -56,7 +58,9 @@ func (s *Service) restorationWriteNow() time.Time {
 	}
 	return time.Now().UTC()
 }
-func New(store Store) *Service { return &Service{store: store, workerID: id()} }
+func New(store Store) *Service {
+	return &Service{store: store, workerID: id(), prodPromotionNotify: make(chan struct{}, 1)}
+}
 func NewWithProvider(store Store, provider delivery.Provider) *Service {
 	s := New(store)
 	s.provider = provider
