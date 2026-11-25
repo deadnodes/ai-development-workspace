@@ -63,3 +63,23 @@ func TestConnectRefusesUserCodexURLServerWithSameName(t *testing.T) {
 		t.Fatalf("unexpected doctor output:\n%s", text)
 	}
 }
+
+// codex exec ignores default_tools_approval_mode for stdio servers, so a
+// token-env connection writes a direct URL entry that Codex authenticates itself.
+func TestTokenEnvCodexEntryUsesDirectURL(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RCP_DOCTOR_TEST_TOKEN", "doctor-token")
+	server := kitServer(t, 1, "doctor-token")
+	if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root, TokenEnv: "RCP_DOCTOR_TEST_TOKEN", Harness: "both", CodexAutoApprove: true}); err != nil {
+		t.Fatal(err)
+	}
+	config := string(readFile(t, root, ".codex/config.toml"))
+	if !strings.Contains(config, "url = \""+server.URL+"/mcp\"") || !strings.Contains(config, "bearer_token_env_var = \"RCP_DOCTOR_TEST_TOKEN\"") || strings.Contains(config, "command = ") || strings.Contains(config, "doctor-token") {
+		t.Fatalf("unexpected Codex entry:\n%s", config)
+	}
+	var out bytes.Buffer
+	_ = RunDoctor(context.Background(), []string{"--url", server.URL, "--workspace", root, "--product-id", "p0", "--token-env", "RCP_DOCTOR_TEST_TOKEN"}, &out)
+	if strings.Contains(out.String(), "Codex MCP tool approval") {
+		t.Fatalf("doctor still warns about approval:\n%s", out.String())
+	}
+}

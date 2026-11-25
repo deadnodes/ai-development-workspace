@@ -10,6 +10,8 @@ and have the owner approve the browser sign-in. Then run
 and `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
 
 Connect writes `.codex/`, `.claude/`, `.mcp.json` and `~/.config/release-control`. An agent sandbox (Codex `workspace-write`) denies writes to `.codex/`; ask the owner to approve running this one command outside the sandbox.
+
+Orchestrators driven by `codex exec` or `codex -a never` need `--token-env NAME --codex-auto-approve`: Codex then connects to `/mcp` directly with `bearer_token_env_var`. Codex ignores auto-approval for stdio MCP servers, so a `--profile` (stdio proxy) connection works only in interactive sessions.
 Restart the agent to load MCP tools, then call `get_project_context` and
 `get_tool_guide`. Configure the optional supervisor on its orchestrator host using
 [SUPERVISOR.md](SUPERVISOR.md).

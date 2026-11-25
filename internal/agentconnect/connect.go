@@ -285,6 +285,12 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 			args += ", \"--token-env\", " + strconv.Quote(o.TokenEnv)
 		}
 		entry := "[mcp_servers." + strconv.Quote(o.Name) + "]\ncommand = " + strconv.Quote(o.Executable) + "\nargs = [" + args + "]\n"
+		if o.TokenEnv != "" {
+			// Codex reads the env token itself; a direct URL entry keeps
+			// default_tools_approval_mode effective in `codex exec`, which
+			// ignores it for stdio servers (verified with codex-cli 0.167).
+			entry = "[mcp_servers." + strconv.Quote(o.Name) + "]\nurl = " + strconv.Quote(endpoint+"/mcp") + "\nbearer_token_env_var = " + strconv.Quote(o.TokenEnv) + "\n"
+		}
 		if o.CodexAutoApprove {
 			entry += "default_tools_approval_mode = \"approve\"\n"
 		}

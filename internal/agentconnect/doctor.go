@@ -168,18 +168,17 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 				checks = append(checks, doctorCheck{name: "Codex hook credential", fix: "use --profile; Codex notify does not inherit env", err: errors.New("Codex notify does not inherit env; use --profile"), warn: true})
 			}
 		}
-		if !codexAutoApproveConfigured(filepath.Join(root, ".codex/config.toml")) {
+		approve, stdio := codexAutoApproveConfigured(filepath.Join(root, ".codex/config.toml"), bindingServerName(root))
+		if !approve {
 			checks = append(checks, doctorCheck{name: "Codex MCP tool approval", fix: "connect --codex-auto-approve", err: errors.New("orchestrators running codex -a never need --codex-auto-approve"), warn: true})
+		} else if stdio {
+			checks = append(checks, doctorCheck{name: "Codex MCP tool approval", fix: "reconnect with --token-env NAME --codex-auto-approve", err: errors.New("codex exec ignores auto-approval for stdio MCP servers; orchestrators need the direct URL entry that --token-env writes"), warn: true})
 		}
 	} else {
 		add("Workspace checks", "--workspace /path", rootErr)
 	}
 	if rootErr == nil {
-		name := "release-control"
-		var b Binding
-		if raw, err := os.ReadFile(filepath.Join(root, ".release-control.json")); err == nil && json.Unmarshal(raw, &b) == nil && b.ServerName != "" {
-			name = b.ServerName
-		}
+		name := bindingServerName(root)
 		add("Codex user config does not shadow project MCP", "rerun connect with --name "+name+"-project or remove the url table from ~/.codex/config.toml", userCodexConflict(name))
 	}
 	if plaintextCodexBearer() {
@@ -233,18 +232,27 @@ func readHookConfig(path string) map[string]string {
 }
 func hookHarness(path string) string   { return readHookConfig(path)["harness_kind"] }
 func hookHasTokenEnv(path string) bool { return readHookConfig(path)["token_env"] != "" }
-func codexAutoApproveConfigured(path string) bool {
+func codexAutoApproveConfigured(path, name string) (approve, stdio bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return false, false
 	}
 	var root map[string]any
 	if toml.Unmarshal(b, &root) != nil {
-		return false
+		return false, false
 	}
 	servers, _ := root["mcp_servers"].(map[string]any)
-	rc, _ := servers["release-control"].(map[string]any)
-	return rc["default_tools_approval_mode"] == "approve"
+	rc, _ := servers[name].(map[string]any)
+	_, hasCommand := rc["command"]
+	return rc["default_tools_approval_mode"] == "approve", hasCommand
+}
+
+func bindingServerName(root string) string {
+	var b Binding
+	if raw, err := os.ReadFile(filepath.Join(root, ".release-control.json")); err == nil && json.Unmarshal(raw, &b) == nil && b.ServerName != "" {
+		return b.ServerName
+	}
+	return "release-control"
 }
 
 func productContextCheck(ctx context.Context, endpoint, token, id string) (bool, error) {

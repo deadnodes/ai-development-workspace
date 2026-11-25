@@ -173,7 +173,7 @@ for the separate operator recipe, credential and runner configuration.
 1. Установи Go 1.24+, Node.js, Git, tmux и Codex/Claude CLI; войди в CLI.
 2. Собери бинарники: `make build` (или `go build -o bin/release-control ./cmd/server`).
 3. Для защищённого сервера запусти `./bin/release-control login --url https://CONTROL_HOST --profile default` и попроси владельца одобрить вход в браузере.
-4. Подключи проект: `./bin/release-control connect --url https://CONTROL_HOST --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID --harness both`. Команда пишет `.codex/`, `.claude/`, `.mcp.json` и `~/.config/release-control`; песочница агента (Codex `workspace-write`) запрещает запись в `.codex/` — запроси у владельца разрешение выполнить эту команду вне песочницы.
+4. Подключи проект: `./bin/release-control connect --url https://CONTROL_HOST --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID --harness both`. Команда пишет `.codex/`, `.claude/`, `.mcp.json` и `~/.config/release-control`; песочница агента (Codex `workspace-write`) запрещает запись в `.codex/` — запроси у владельца разрешение выполнить эту команду вне песочницы. Для оркестратора на `codex exec`/`-a never` добавь `--token-env ИМЯ --codex-auto-approve`: stdio-подключение через `--profile` в таком режиме не получает автоодобрения инструментов.
 5. Проверь установку: `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
 6. Перезапусти агента, чтобы загрузились MCP-инструменты; вызови `get_project_context` и `get_tool_guide`.
 7. Supervisor настраивается отдельно на orchestrator host: [docs/SUPERVISOR.md](docs/SUPERVISOR.md).
