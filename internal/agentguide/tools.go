@@ -13,6 +13,7 @@ import (
 type ToolEntry struct {
 	Name      string      `json:"name"`
 	Kind      string      `json:"kind"`
+	Aliases   []string    `json:"aliases,omitempty"`
 	Area      string      `json:"area"`
 	Purpose   string      `json:"purpose"`
 	When      string      `json:"when_to_use"`
@@ -97,6 +98,26 @@ var documented = []ToolEntry{
 	{Name: "record_check_result", Kind: "execute_action", Area: "work_tracking", Purpose: "Append a result for a Gate check.", When: "Record the actual outcome and evidence; rerun blocking checks after relevant changes.", Inputs: env("check_id", "result", "body", "evidence", "logs", "url"), Output: "Persisted CheckResult ID.", Errors: commonErrors, Example: `{"action":"record_check_result","actor":"agent/backend","check_id":"CHECK","data":{"result":"passed","body":"go test ./... passed"}}`, Related: []string{"record_finding", "create_gate"}, Authority: guideAuthority},
 	{Name: "record_finding", Kind: "execute_action", Area: "work_tracking", Purpose: "Record a finding linked to a CheckResult.", When: "Use for a concrete issue observed during verification or review.", Inputs: env("result_id", "title", "severity", "body", "url"), Output: "Persisted Finding ID.", Errors: commonErrors, Example: `{"action":"record_finding","actor":"agent/backend","result_id":"RESULT","data":{"title":"Missing retry cap","severity":"major","body":"Retries are unbounded"}}`, Related: []string{"resolve_finding", "record_check_result"}, Authority: guideAuthority},
 	{Name: "resolve_finding", Kind: "execute_action", Area: "work_tracking", Purpose: "Append resolution evidence for a Finding.", When: "Use after fixing or otherwise resolving the finding; blocking gates still require a passing rerun.", Inputs: env("id", "body"), Output: "Updated Finding status and resolution event.", Errors: commonErrors, Example: `{"action":"resolve_finding","actor":"agent/backend","id":"FINDING","data":{"body":"Added a bounded retry count"}}`, Related: []string{"record_finding", "record_check_result"}, Authority: guideAuthority},
+	{Name: "assemble_environment", Kind: "mcp_tool", Aliases: []string{"execute_action:assemble_environment", "http_route:POST /api/products/{id}/assemble-environment"}, Area: "delivery", Purpose: "Capture active Integration revisions into a disposable environment composition and queue Git/build/GitOps execution.", When: "Use only after checking adoption, target, exact selection and deployment policy; never infer permission to assemble all active work.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"product_id", "string", true, "Product owning the target"}, {"environment_id", "string", true, "Configured DEV/TEST environment"}, {"integration_ids", "array[string]", false, "Optional explicit Integration selection"}, {"name", "string", false, "Optional composition name"}, {"expected_selection", "object", false, "Current CAS token where required"}}, Output: "Composition and persistent asynchronous operation; poll get_operation and inspect children/runtime evidence.", Errors: []ErrorInfo{{"VALIDATION", "Messages include 'environment_id required', 'environment must be DEV/TEST', and selection/policy validation errors; correct scope/target."}, {"NOT_FOUND", "Verify Product, Environment and Integration IDs."}, {"CONFLICT", "Selection or environment changed; reread state and replan."}, {"FORBIDDEN", "Deployment policy denies this request; obtain applicable authorization."}}, Example: `{"name":"assemble_environment","arguments":{"product_id":"PRODUCT","environment_id":"DEV","integration_ids":["INTEGRATION"]}}`, Related: []string{"get_environment_state", "get_operation", "claim_composition_conflict"}, Authority: "Queues permitted composition/build/GitOps work only; does not authorize source editing, conflict resolution, merge, functional acceptance, or production release."},
+	{Name: "capture_candidate_dev_baseline", Kind: "mcp_tool", Aliases: []string{"execute_action:capture_candidate_dev_baseline", "http_route:POST /api/products/{id}/candidate-dev/capture-baseline"}, Area: "delivery", Purpose: "Capture complete shared Dev state and restoration evidence under an active candidate reservation.", When: "Before candidate effects, using the reservation owner and current exact selection CAS.", Inputs: []Field{{"actor", "string", true, "Attribution, not authentication"}, {"product_id", "string", true, "Product scope"}, {"reservation_operation_id", "string", true, "Active reservation operation"}, {"request_key", "string", true, "Idempotency key, 16..128 bytes"}, {"expected_selection", "object", true, "Exact composition_id, operation_id and generation"}}, Output: "Persistent baseline-capture operation and scoped GitOps/runtime/registry evidence.", Errors: []ErrorInfo{{"VALIDATION", "'restoration requires explicit actor and product_id', 'required restoration field: …', 'request_key must be 16–128 bytes', or 'exact expected_selection required'; correct wire shape."}, {"CONFLICT", "Reservation ownership/CAS/state is stale; inspect current selection."}, {"NOT_FOUND", "Verify Product and reservation operation."}}, Example: `{"name":"capture_candidate_dev_baseline","arguments":{"actor":"agent/release","product_id":"PRODUCT","reservation_operation_id":"OP","request_key":"candidate-baseline-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":1}}}`, Related: []string{"reserve_candidate_dev", "deploy_candidate_dev", "get_operation"}, Authority: "Captures restoration evidence only; does not grant build provenance, approval, unlock, deployment acceptance, or production rights."},
+	{Name: "claim_composition_conflict", Kind: "mcp_tool", Aliases: []string{"execute_action:claim_composition_conflict", "http_route:POST /api/products/{id}/conflicts/claim"}, Area: "delivery", Purpose: "Claim responsibility for resolving one persisted composition conflict externally.", When: "After get_operation identifies RESOLVE_CONFLICT and exact conflict context is available.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"product_id", "string", true, "Product scope"}, {"conflict_id", "string", true, "Exact conflict ID"}}, Output: "Conflict claim/ownership record used by the conflict resolution workflow.", Errors: commonErrors, Example: `{"name":"claim_composition_conflict","arguments":{"product_id":"PRODUCT","conflict_id":"CONFLICT"}}`, Related: []string{"get_operation", "record_conflict_resolution", "verify_conflict_resolution"}, Authority: "Records ownership only; RCP does not resolve source conflicts or authorize source edits, merge, build, or deployment."},
+	{Name: "confirm_candidate_dev_restoration", Kind: "mcp_tool", Aliases: []string{"execute_action:confirm_candidate_dev_restoration", "http_route:POST /api/products/{id}/candidate-dev/confirm-restoration"}, Area: "delivery", Purpose: "Record attributed confirmation for the exact ready restoration plan.", When: "Only after reviewing the complete plan/hash and external PR heads; use separate operator-approved confirmation.", Inputs: []Field{{"actor", "string", true, "Required attribution, not authenticated human approval"}, {"product_id", "string", true, "Product scope"}, {"restoration_operation_id", "string", true, "Ready restoration operation"}, {"expected_plan_hash", "string", true, "Exact reviewed plan hash"}, {"request_key", "string", true, "16..128 byte idempotency key"}, {"expected_selection", "object", true, "Exact CAS selection"}}, Output: "Persistent confirmation operation/evidence for the plan.", Errors: []ErrorInfo{{"VALIDATION", "Explicit actor/product and required restoration fields; request_key 16–128 bytes; exact expected_selection; correct schema errors."}, {"CONFLICT", "Plan hash or selection changed; reread and review current plan."}, {"NOT_FOUND", "Verify restoration operation and Product."}}, Example: `{"name":"confirm_candidate_dev_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","restoration_operation_id":"RESTORE","expected_plan_hash":"HASH","request_key":"restore-confirm-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":2}}}`, Related: []string{"request_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration"}, Authority: "Attribution is not proof of human approval; never merges Flux PRs or authorizes release."},
+	{Name: "create_backup", Kind: "mcp_tool", Aliases: []string{"http_route:POST /api/backups/export"}, Area: "backup", Purpose: "Export full Control Plane state/history as a bounded gzip/base64 backup with SHA-256.", When: "Before migration or archival when MCP transport is suitable; use HTTP export for file transfer.", Inputs: []Field{{"actor", "string", false, "Attribution"}}, Output: "Compressed encoded archive and checksum; limits 8 MiB compressed and 64 MiB expanded.", Errors: []ErrorInfo{{"VALIDATION", "Backup exceeds configured format bounds; reduce retained state or use supported export process."}, {"INTERNAL", "Storage/export failure; inspect service logs."}}, Example: `{"name":"create_backup","arguments":{}}`, Related: []string{"get_backup_capabilities", "restore_backup"}, Authority: "Exports metastore state, private context and secret references, not secret values or external image/log bytes; grants no restore or application-data access."},
+	{Name: "create_hotfix", Kind: "mcp_tool", Aliases: []string{"execute_action:create_hotfix", "http_route:POST /api/features/{id}/hotfix"}, Area: "work_tracking", Purpose: "Create a focused hotfix Integration under a Feature, optionally linked to a Finding.", When: "Use for scoped corrective work; record and verify the implementation through normal workflow.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"feature_id", "string", true, "Parent Feature"}, {"title", "string", true, "Hotfix title"}, {"objective", "string", true, "Intended correction"}, {"finding_id", "string", false, "Related Finding"}, {"repositories", "array[string]", false, "Repository scope"}, {"remaining", "array[string]", false, "Outstanding work"}}, Output: "Created Integration identity and lifecycle record.", Errors: commonErrors, Example: `{"name":"create_hotfix","arguments":{"feature_id":"FEATURE","title":"Fix retries","objective":"Bound transient retries"}}`, Related: []string{"resume", "record_progress", "create_test_scenario"}, Authority: guideAuthority},
+	{Name: "create_test_scenario", Kind: "mcp_tool", Aliases: []string{"execute_action:create_test_scenario", "http_route:POST /api/test-scenarios"}, Area: "verification", Purpose: "Create an immutable versioned behavior scenario for later execution against an exact composition or candidate.", When: "Define checks before execution; include scope, preconditions, steps and expected outcomes.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"product_id", "string", true, "Product scope"}, {"title", "string", true, "Scenario title"}, {"objective", "string", true, "Behavior under test"}, {"mechanism", "string", true, "Execution mechanism"}, {"preconditions", "array[string]", false, "Required setup"}, {"steps", "array[string]", true, "Ordered actions"}, {"expected_outcomes", "array[string]", true, "Expected results"}, {"integration_ids", "array[string]", false, "Relevant work scope"}, {"blocking", "boolean", false, "Whether failure blocks readiness"}}, Output: "Scenario ID and immutable first version.", Errors: commonErrors, Example: `{"name":"create_test_scenario","arguments":{"product_id":"PRODUCT","title":"Retry safely","objective":"Transient failure recovers","mechanism":"integration test","steps":["Return 503","Retry"],"expected_outcomes":["Request succeeds"]}}`, Related: []string{"revise_test_scenario", "record_scenario_run", "get_operation"}, Authority: "Defines verification only; does not execute tests, supply business data, or establish release readiness."},
+	{Name: "deploy_candidate_dev", Kind: "mcp_tool", Aliases: []string{"http_route:POST /api/products/{id}/candidate-dev/deploy"}, Area: "delivery", Purpose: "Prepare PR-only Dev delivery using exact existing main-candidate artifacts under reservation, verified baseline and CAS.", When: "Only for an admitted candidate with current owner reservation and complete baseline.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"product_id", "string", true, "Product scope"}, {"reservation_operation_id", "string", true, "Active reservation"}, {"request_key", "string", true, "Idempotency key, 16..128 bytes"}, {"expected_selection", "object", true, "Exact current selection"}}, Output: "Persistent operation tracking PR-only desired-state delivery; poll get_operation.", Errors: []ErrorInfo{{"VALIDATION", "Invalid request key or exact selection; correct schema."}, {"CONFLICT", "Reservation, baseline, owner, or selection is stale; inspect current state."}, {"NOT_FOUND", "Verify Product/reservation/candidate IDs."}}, Example: `{"name":"deploy_candidate_dev","arguments":{"product_id":"PRODUCT","reservation_operation_id":"RESERVATION","request_key":"candidate-deploy-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":2}}}`, Related: []string{"capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "get_operation"}, Authority: "Does not rebuild, edit source, merge PRs, assert runtime/functional acceptance, or authorize production promotion."},
+	{Name: "deploy_existing_artifact", Kind: "mcp_tool", Aliases: []string{"execute_action:deploy_existing_artifact"}, Area: "delivery", Purpose: "Request DEV GitOps deployment of an already recorded successful build artifact for an exact Integration revision.", When: "Use only with enabled DEV mapping, fresh registry evidence and matching immutable digest; never to trigger a build.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"integration_id", "string", true, "Integration scope"}, {"environment_id", "string", true, "Configured DEV Environment"}, {"application_id", "string", true, "Component"}, {"revision_id", "string", true, "Exact Integration revision"}, {"artifact_id", "string", true, "Recorded artifact"}, {"request_key", "string", false, "Stable key for exact scoped replay"}, {"expected_digest", "string", false, "Expected immutable digest"}}, Output: "Persistent deployment operation; GitOps success is not runtime health.", Errors: []ErrorInfo{{"VALIDATION", "'fresh registry evidence' or exact mapping/revision/digest validation failed; refresh evidence and correct identities."}, {"NOT_FOUND", "Verify Integration, component, revision, artifact and environment."}, {"CONFLICT", "State changed; reread before retry."}, {"FORBIDDEN", "Deployment policy disabled; obtain approval/configuration."}}, Example: `{"name":"deploy_existing_artifact","arguments":{"integration_id":"INTEGRATION","environment_id":"DEV","application_id":"APP","revision_id":"REV","artifact_id":"ARTIFACT"}}`, Related: []string{"deploy_integration", "get_operation", "get_environment_state"}, Authority: "Does not launch CI/rebuild, prove runtime health, authorize production, or bypass deployment policy."},
+	{Name: "deploy_integration", Kind: "mcp_tool", Aliases: []string{"execute_action:deploy_integration", "http_route:POST /api/integrations/{id}/deploy"}, Area: "delivery", Purpose: "Queue real DEV build/artifact/GitOps deployment for an exact Integration source revision.", When: "Use only after verifying environment policy, source identity and intended external effect.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"integration_id", "string", true, "Integration scope"}, {"environment_id", "string", true, "Configured DEV Environment"}, {"application_id", "string", false, "Component selection"}, {"revision_id", "string", false, "Exact source revision; omitted resolves bound source branch"}, {"expected_digest", "string", false, "Expected immutable artifact digest"}, {"request_key", "string", false, "Idempotency key"}}, Output: "Persistent operation handle; poll get_operation and separately verify runtime.", Errors: []ErrorInfo{{"VALIDATION", "Missing environment_id or exact revision/component inputs; consult GET /api/schema."}, {"NOT_FOUND", "Verify Integration, Environment, component and revision."}, {"CONFLICT", "Re-read current operation/source state; do not blindly resubmit."}, {"FORBIDDEN", "Explicit deployment policy denies request."}}, Example: `{"name":"deploy_integration","arguments":{"actor":"agent/release","integration_id":"INTEGRATION","environment_id":"DEV","application_id":"APP","revision_id":"REV"}}`, Related: []string{"get_operation", "get_environment_state", "deploy_existing_artifact"}, Authority: "May dispatch CI and update configured DEV GitOps image fields; does not authorize production or infer runtime health."},
+	{Name: "export_workspace_configuration", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/products/{id}/workspace-config"}, Area: "workspace", Purpose: "Export portable Product setup and agent docs without feature history, machine paths, credentials or deployment authorizations.", When: "Use to transfer configuration between workspaces; inspect excluded secrets/authorization assumptions separately.", Inputs: []Field{{"actor", "string", false, "Attribution"}, {"product_id", "string", true, "Product to export"}}, Output: "Portable repositories/clone URLs, components, environments, areas and observed repo-root AGENTS documentation.", Errors: commonErrors, Example: `{"name":"export_workspace_configuration","arguments":{"product_id":"PRODUCT"}}`, Related: []string{"import_workspace_configuration", "create_backup", "get_agent_kit"}, Authority: "Exports configuration only; does not export history, credentials or deployment authority, and does not install or mutate a workspace."},
+	{Name: "get_agent_kit", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/agent-kit"}, Area: "workspace", Purpose: "Read the bundled workspace instructions and handoff/delivery skills with checksums.", When: "Use to inspect or install canonical guidance; release-control connect handles workspace setup.", Inputs: []Field{}, Output: "Instructions and named skill content/checksums.", Errors: []ErrorInfo{{"INTERNAL", "Embedded skill/provenance integrity failure; inspect packaged assets."}}, Example: `{"name":"get_agent_kit","arguments":{}}`, Related: []string{"get_agent_skill", "get_tool_guide"}, Authority: "Guidance only; does not authorize external mutation, adoption, merge, deployment or release."},
+	{Name: "get_agent_skill", Kind: "mcp_tool", Area: "workspace", Purpose: "Fetch one fixed bundled agent workflow skill by exact name.", When: "Use rcp-handoff for checkpoints or rcp-delivery for delivery workflows.", Inputs: []Field{{"name", "string", true, "Exact rcp-handoff or rcp-delivery name"}}, Output: "Skill name, Markdown content and SHA-256.", Errors: []ErrorInfo{{"NOT_FOUND", "'unknown skill'; use one of the two exact supported names."}}, Example: `{"name":"get_agent_skill","arguments":{"name":"rcp-delivery"}}`, Related: []string{"get_agent_kit", "get_tool_guide"}, Authority: "Workflow guidance only; grants no execution permission."},
+	{Name: "get_artifact_retention", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/products/{id}/retention"}, Area: "artifacts", Purpose: "Read normalized protected artifact roots, effective retention policies, stored availability/freshness and blockers.", When: "Use before retention decisions; this is stored evidence, not a registry fetch.", Inputs: []Field{{"product_id", "string", true, "Product scope"}}, Output: "Root inventory, minimum-10 policies, evidence and blockers; deletion_allowed is always false.", Errors: commonErrors, Example: `{"name":"get_artifact_retention","arguments":{"product_id":"PRODUCT"}}`, Related: []string{"configure_artifact_retention", "get_attention_required"}, Authority: "Read only; InputHash and inventory do not authorize artifact deletion or registry mutation."},
+	{Name: "get_attention_required", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/attention"}, Area: "operations", Purpose: "Read failed/blocked operations and other product-scoped attention items.", When: "Use during resume or after an operation reports an error; open each referenced record for detail.", Inputs: []Field{{"product_id", "string", true, "Product scope"}}, Output: "Attention items with operation/context references.", Errors: commonErrors, Example: `{"name":"get_attention_required","arguments":{"product_id":"PRODUCT"}}`, Related: []string{"get_operation", "resume"}, Authority: "Read only; attention status is not authorization or readiness proof."},
+	{Name: "get_backup_capabilities", Kind: "mcp_tool", Area: "backup", Purpose: "Read supported backup format, limits and restore policy.", When: "Before exporting/restoring state or planning a migration.", Inputs: []Field{}, Output: "Backup/restore capabilities and format bounds.", Errors: []ErrorInfo{{"INTERNAL", "Storage capability lookup failed; inspect service state."}}, Example: `{"name":"get_backup_capabilities","arguments":{}}`, Related: []string{"create_backup", "restore_backup"}, Authority: "Read only; does not create, restore or authorize a backup."},
+	{Name: "get_code_api", Kind: "mcp_tool", Aliases: nil, Area: "workspace", Purpose: "Discover the typed agent-side TypeScript SDK declarations, optionally filtered by query.", When: "Use before scripting batches of MCP calls; inspect returned declarations and use only supported tools.", Inputs: []Field{{"query", "string", false, "Optional case-insensitive declaration filter"}}, Output: "SDK declaration text or filtered declarations.", Errors: []ErrorInfo{{"VALIDATION", "Malformed query input; provide a string."}}, Example: `{"name":"get_code_api","arguments":{"query":"resume"}}`, Related: []string{"get_tool_guide", "execute"}, Authority: "Schema discovery only; SDK access grants no command authority."},
+	{Name: "get_environment_state", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/environments/{id}/state"}, Area: "delivery", Purpose: "Read desired GitOps state separately from reconciled and runtime observations.", When: "Use before/after deployment to compare desired, reconciled and observed environment state.", Inputs: []Field{{"environment_id", "string", true, "Exact Environment ID"}}, Output: "Environment state projection containing distinct desired/reconciled/runtime evidence.", Errors: commonErrors, Example: `{"name":"get_environment_state","arguments":{"environment_id":"ENVIRONMENT"}}`, Related: []string{"get_operation", "deploy_integration", "assemble_environment"}, Authority: "Read only; desired state is not runtime health, functional acceptance or deployment authorization."},
+	{Name: "get_intelligence_task", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/intelligence-tasks/{id}"}, Area: "intelligence", Purpose: "Read a scoped generated draft or bounded conflict patch with provenance, stale-input status and review requirements.", When: "Use to inspect an existing task result before any human/agent review or external application.", Inputs: []Field{{"task_id", "string", true, "Exact task/operation ID"}}, Output: "Task status, bounded output, input provenance and stale/review metadata.", Errors: []ErrorInfo{{"NOT_FOUND", "Verify task ID and Product scope."}, {"FORBIDDEN", "Use authorized Product scope."}, {"VALIDATION", "Correct malformed task ID."}}, Example: `{"name":"get_intelligence_task","arguments":{"task_id":"TASK"}}`, Related: []string{"queue_intelligence_task", "get_operation"}, Authority: "Read only; generated text/patch is untrusted proposal and does not publish, merge, edit source or deploy."},
+	{Name: "get_operation", Kind: "mcp_tool", Aliases: []string{"http_route:GET /api/operations/{id}"}, Area: "operations", Purpose: "Read persisted operation status, step evidence, child handles and attention needs.", When: "Poll the returned operation ID; inspect exact same handle after timeouts and follow agent_action workflow when present.", Inputs: []Field{{"operation_id", "string", true, "Exact operation ID"}}, Output: "Operation status and evidence; may include children and RESOLVE_CONFLICT action context.", Errors: commonErrors, Example: `{"name":"get_operation","arguments":{"operation_id":"OPERATION"}}`, Related: []string{"get_attention_required", "claim_composition_conflict", "get_environment_state"}, Authority: "Read only; queued/pending is not completion, deployment health or authorization. Conflict resolution is external and reconciliation is separate."},
 }
 
 var commonErrors = []ErrorInfo{{"VALIDATION", "Correct the action envelope or values using GET /api/schema."}, {"NOT_FOUND", "Refresh scoped context and verify the ID."}, {"CONFLICT", "Re-read current state; do not replay with changed intent."}, {"STALE_FENCE", "Resume the same executor with the current fence or follow takeover policy."}}
@@ -114,26 +135,6 @@ func env(fields ...string) []Field {
 // pendingDocumentation is deliberately explicit. Each value is kind:name and
 // will be replaced by later briefs with complete records.
 var pendingDocumentation = []string{
-	"mcp_tool:assemble_environment",
-	"mcp_tool:capture_candidate_dev_baseline",
-	"mcp_tool:claim_composition_conflict",
-	"mcp_tool:confirm_candidate_dev_restoration",
-	"mcp_tool:create_backup",
-	"mcp_tool:create_hotfix",
-	"mcp_tool:create_test_scenario",
-	"mcp_tool:deploy_candidate_dev",
-	"mcp_tool:deploy_existing_artifact",
-	"mcp_tool:deploy_integration",
-	"mcp_tool:export_workspace_configuration",
-	"mcp_tool:get_agent_kit",
-	"mcp_tool:get_agent_skill",
-	"mcp_tool:get_artifact_retention",
-	"mcp_tool:get_attention_required",
-	"mcp_tool:get_backup_capabilities",
-	"mcp_tool:get_code_api",
-	"mcp_tool:get_environment_state",
-	"mcp_tool:get_intelligence_task",
-	"mcp_tool:get_operation",
 	"mcp_tool:get_product_configuration",
 	"mcp_tool:get_runtime_report",
 	"mcp_tool:get_status_schema",
@@ -168,29 +169,21 @@ var pendingDocumentation = []string{
 	"mcp_tool:verify_candidate_dev_restoration",
 	"mcp_tool:verify_candidate_dev_runtime",
 	"mcp_tool:verify_conflict_resolution",
-	"execute_action:assemble_environment",
 	"execute_action:cancel_intelligence_task",
 	"execute_action:cancel_native_delivery",
 	"execute_action:cancel_worker_job",
-	"execute_action:capture_candidate_dev_baseline",
-	"execute_action:claim_composition_conflict",
 	"execute_action:classify_repository",
 	"execute_action:configure_artifact_retention",
 	"execute_action:configure_component",
 	"execute_action:configure_environment",
 	"execute_action:configure_publication",
-	"execute_action:confirm_candidate_dev_restoration",
 	"execute_action:create_application",
 	"execute_action:create_environment",
 	"execute_action:create_external_system",
 	"execute_action:create_github_connection",
-	"execute_action:create_hotfix",
 	"execute_action:create_repository",
 	"execute_action:create_system_relationship",
-	"execute_action:create_test_scenario",
 	"execute_action:delete_product",
-	"execute_action:deploy_existing_artifact",
-	"execute_action:deploy_integration",
 	"execute_action:grant_connection",
 	"execute_action:import_repository",
 	"execute_action:pin_artifact",
@@ -226,8 +219,6 @@ var pendingDocumentation = []string{
 	"execute_action:verify_candidate_dev_runtime",
 	"execute_action:verify_conflict_resolution",
 	"http_route:/mcp",
-	"http_route:GET /api/agent-kit",
-	"http_route:GET /api/attention",
 	"http_route:GET /api/build-profiles",
 	"http_route:GET /api/builds",
 	"http_route:GET /api/builds/{id}",
@@ -238,20 +229,15 @@ var pendingDocumentation = []string{
 	"http_route:GET /api/context/search",
 	"http_route:GET /api/deployments",
 	"http_route:GET /api/deployments/{id}",
-	"http_route:GET /api/environments/{id}/state",
 	"http_route:GET /api/features/{id}/graph",
 	"http_route:GET /api/integrations/{id}/context",
 	"http_route:GET /api/integrations/{id}/git",
-	"http_route:GET /api/intelligence-tasks/{id}",
-	"http_route:GET /api/operations/{id}",
 	"http_route:GET /api/pipelines",
 	"http_route:GET /api/products/{id}/configuration",
 	"http_route:GET /api/products/{id}/context",
 	"http_route:GET /api/products/{id}/knowledge/search",
 	"http_route:GET /api/products/{id}/local-checkouts/{checkout}/git",
-	"http_route:GET /api/products/{id}/retention",
 	"http_route:GET /api/products/{id}/unlinked-git-commits",
-	"http_route:GET /api/products/{id}/workspace-config",
 	"http_route:GET /api/repositories/{id}/branches",
 	"http_route:GET /api/runtime-reports",
 	"http_route:GET /api/schema",
@@ -263,7 +249,6 @@ var pendingDocumentation = []string{
 	"http_route:GET /api/worker-history",
 	"http_route:GET /api/worker-jobs/{id}",
 	"http_route:GET /healthz",
-	"http_route:POST /api/backups/export",
 	"http_route:POST /api/backups/restore",
 	"http_route:POST /api/builds",
 	"http_route:POST /api/builds/{id}/cancel",
@@ -273,23 +258,16 @@ var pendingDocumentation = []string{
 	"http_route:POST /api/deployments",
 	"http_route:POST /api/deployments/{id}/close",
 	"http_route:POST /api/deployments/{id}/reconcile",
-	"http_route:POST /api/features/{id}/hotfix",
 	"http_route:POST /api/features/{id}/update-environment",
-	"http_route:POST /api/integrations/{id}/deploy",
 	"http_route:POST /api/local-git/plan",
 	"http_route:POST /api/local-git/record",
 	"http_route:POST /api/operations/{id}/runtime",
-	"http_route:POST /api/products/{id}/assemble-environment",
-	"http_route:POST /api/products/{id}/candidate-dev/capture-baseline",
-	"http_route:POST /api/products/{id}/candidate-dev/confirm-restoration",
-	"http_route:POST /api/products/{id}/candidate-dev/deploy",
 	"http_route:POST /api/products/{id}/candidate-dev/release",
 	"http_route:POST /api/products/{id}/candidate-dev/release-after-restoration",
 	"http_route:POST /api/products/{id}/candidate-dev/request-restoration",
 	"http_route:POST /api/products/{id}/candidate-dev/reserve",
 	"http_route:POST /api/products/{id}/candidate-dev/verify-restoration",
 	"http_route:POST /api/products/{id}/candidate-dev/verify-runtime",
-	"http_route:POST /api/products/{id}/conflicts/claim",
 	"http_route:POST /api/products/{id}/conflicts/resolution",
 	"http_route:POST /api/products/{id}/conflicts/verify",
 	"http_route:POST /api/products/{id}/knowledge",
@@ -300,7 +278,6 @@ var pendingDocumentation = []string{
 	"http_route:POST /api/runtime-reports",
 	"http_route:POST /api/scenario-runs",
 	"http_route:POST /api/signatures",
-	"http_route:POST /api/test-scenarios",
 	"http_route:POST /api/test-scenarios/revisions",
 	"http_route:POST /api/tools/{name}",
 	"http_route:POST /api/workspaces/import",
@@ -373,7 +350,7 @@ func ToolGuide(name string) any {
 	entries := Registry()
 	if name != "" {
 		for _, e := range entries {
-			if e.Name == name {
+			if e.Name == name || e.Kind+":"+e.Name == name || contains(e.Aliases, name) {
 				b, _ := json.Marshal(e)
 				if len(b) <= 32*1024 {
 					return e
@@ -397,6 +374,15 @@ func ToolGuide(name string) any {
 		return map[string]string{"error": "guide index exceeds output bound"}
 	}
 	return areas
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidateActionCoverage() error {

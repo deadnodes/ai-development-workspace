@@ -18,6 +18,12 @@ func TestAgentGuideRegistryDrift(t *testing.T) {
 	known := map[string]bool{}
 	for _, e := range agentguide.Registry() {
 		known[e.Kind+":"+e.Name] = true
+		for _, alias := range e.Aliases {
+			if known[alias] {
+				t.Errorf("duplicate registry alias %q", alias)
+			}
+			known[alias] = true
+		}
 	}
 	for _, p := range agentguide.PendingDocumentation() {
 		if known[p] {

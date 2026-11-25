@@ -3,6 +3,83 @@
 
 Use `get_tool_guide {}` for the compact index and `get_tool_guide {"name":"…"}` for a full entry. This guide describes interfaces; it grants no authority.
 
+## artifacts
+
+### `get_artifact_retention` — mcp_tool
+
+**Same operation:** `http_route:GET /api/products/{id}/retention`
+
+Read normalized protected artifact roots, effective retention policies, stored availability/freshness and blockers.
+
+**When:** Use before retention decisions; this is stored evidence, not a registry fetch.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+
+**Output:** Root inventory, minimum-10 policies, evidence and blockers; deletion_allowed is always false.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"get_artifact_retention","arguments":{"product_id":"PRODUCT"}}`
+
+**Related:** `configure_artifact_retention`, `get_attention_required`
+
+**Authority:** Read only; InputHash and inventory do not authorize artifact deletion or registry mutation.
+
+## backup
+
+### `create_backup` — mcp_tool
+
+**Same operation:** `http_route:POST /api/backups/export`
+
+Export full Control Plane state/history as a bounded gzip/base64 backup with SHA-256.
+
+**When:** Before migration or archival when MCP transport is suitable; use HTTP export for file transfer.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+
+**Output:** Compressed encoded archive and checksum; limits 8 MiB compressed and 64 MiB expanded.
+
+**Errors:**
+
+- `VALIDATION`: Backup exceeds configured format bounds; reduce retained state or use supported export process.
+- `INTERNAL`: Storage/export failure; inspect service logs.
+
+**Example:** `{"name":"create_backup","arguments":{}}`
+
+**Related:** `get_backup_capabilities`, `restore_backup`
+
+**Authority:** Exports metastore state, private context and secret references, not secret values or external image/log bytes; grants no restore or application-data access.
+
+### `get_backup_capabilities` — mcp_tool
+
+Read supported backup format, limits and restore policy.
+
+**When:** Before exporting/restoring state or planning a migration.
+
+**Inputs:**
+
+
+**Output:** Backup/restore capabilities and format bounds.
+
+**Errors:**
+
+- `INTERNAL`: Storage capability lookup failed; inspect service state.
+
+**Example:** `{"name":"get_backup_capabilities","arguments":{}}`
+
+**Related:** `create_backup`, `restore_backup`
+
+**Authority:** Read only; does not create, restore or authorize a backup.
+
 ## context read
 
 ### `search_context` — mcp_tool
@@ -187,6 +264,254 @@ Read a Feature delivery graph of repository-scoped PRs, source revisions, compos
 **Related:** `get_integration_context`, `get_git_state`, `get_operation`
 
 **Authority:** Read only; missing runtime is unknown and graph history does not authorize merge, deploy, or release.
+
+## delivery
+
+### `assemble_environment` — mcp_tool
+
+**Same operation:** `execute_action:assemble_environment`, `http_route:POST /api/products/{id}/assemble-environment`
+
+Capture active Integration revisions into a disposable environment composition and queue Git/build/GitOps execution.
+
+**When:** Use only after checking adoption, target, exact selection and deployment policy; never infer permission to assemble all active work.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product owning the target
+- `environment_id` (string, required): Configured DEV/TEST environment
+- `integration_ids` (array[string], optional): Optional explicit Integration selection
+- `name` (string, optional): Optional composition name
+- `expected_selection` (object, optional): Current CAS token where required
+
+**Output:** Composition and persistent asynchronous operation; poll get_operation and inspect children/runtime evidence.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'environment_id required', 'environment must be DEV/TEST', and selection/policy validation errors; correct scope/target.
+- `NOT_FOUND`: Verify Product, Environment and Integration IDs.
+- `CONFLICT`: Selection or environment changed; reread state and replan.
+- `FORBIDDEN`: Deployment policy denies this request; obtain applicable authorization.
+
+**Example:** `{"name":"assemble_environment","arguments":{"product_id":"PRODUCT","environment_id":"DEV","integration_ids":["INTEGRATION"]}}`
+
+**Related:** `get_environment_state`, `get_operation`, `claim_composition_conflict`
+
+**Authority:** Queues permitted composition/build/GitOps work only; does not authorize source editing, conflict resolution, merge, functional acceptance, or production release.
+
+### `capture_candidate_dev_baseline` — mcp_tool
+
+**Same operation:** `execute_action:capture_candidate_dev_baseline`, `http_route:POST /api/products/{id}/candidate-dev/capture-baseline`
+
+Capture complete shared Dev state and restoration evidence under an active candidate reservation.
+
+**When:** Before candidate effects, using the reservation owner and current exact selection CAS.
+
+**Inputs:**
+
+- `actor` (string, required): Attribution, not authentication
+- `product_id` (string, required): Product scope
+- `reservation_operation_id` (string, required): Active reservation operation
+- `request_key` (string, required): Idempotency key, 16..128 bytes
+- `expected_selection` (object, required): Exact composition_id, operation_id and generation
+
+**Output:** Persistent baseline-capture operation and scoped GitOps/runtime/registry evidence.
+
+**Errors:**
+
+- `VALIDATION`: 'restoration requires explicit actor and product_id', 'required restoration field: …', 'request_key must be 16–128 bytes', or 'exact expected_selection required'; correct wire shape.
+- `CONFLICT`: Reservation ownership/CAS/state is stale; inspect current selection.
+- `NOT_FOUND`: Verify Product and reservation operation.
+
+**Example:** `{"name":"capture_candidate_dev_baseline","arguments":{"actor":"agent/release","product_id":"PRODUCT","reservation_operation_id":"OP","request_key":"candidate-baseline-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":1}}}`
+
+**Related:** `reserve_candidate_dev`, `deploy_candidate_dev`, `get_operation`
+
+**Authority:** Captures restoration evidence only; does not grant build provenance, approval, unlock, deployment acceptance, or production rights.
+
+### `claim_composition_conflict` — mcp_tool
+
+**Same operation:** `execute_action:claim_composition_conflict`, `http_route:POST /api/products/{id}/conflicts/claim`
+
+Claim responsibility for resolving one persisted composition conflict externally.
+
+**When:** After get_operation identifies RESOLVE_CONFLICT and exact conflict context is available.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `conflict_id` (string, required): Exact conflict ID
+
+**Output:** Conflict claim/ownership record used by the conflict resolution workflow.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"claim_composition_conflict","arguments":{"product_id":"PRODUCT","conflict_id":"CONFLICT"}}`
+
+**Related:** `get_operation`, `record_conflict_resolution`, `verify_conflict_resolution`
+
+**Authority:** Records ownership only; RCP does not resolve source conflicts or authorize source edits, merge, build, or deployment.
+
+### `confirm_candidate_dev_restoration` — mcp_tool
+
+**Same operation:** `execute_action:confirm_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/confirm-restoration`
+
+Record attributed confirmation for the exact ready restoration plan.
+
+**When:** Only after reviewing the complete plan/hash and external PR heads; use separate operator-approved confirmation.
+
+**Inputs:**
+
+- `actor` (string, required): Required attribution, not authenticated human approval
+- `product_id` (string, required): Product scope
+- `restoration_operation_id` (string, required): Ready restoration operation
+- `expected_plan_hash` (string, required): Exact reviewed plan hash
+- `request_key` (string, required): 16..128 byte idempotency key
+- `expected_selection` (object, required): Exact CAS selection
+
+**Output:** Persistent confirmation operation/evidence for the plan.
+
+**Errors:**
+
+- `VALIDATION`: Explicit actor/product and required restoration fields; request_key 16–128 bytes; exact expected_selection; correct schema errors.
+- `CONFLICT`: Plan hash or selection changed; reread and review current plan.
+- `NOT_FOUND`: Verify restoration operation and Product.
+
+**Example:** `{"name":"confirm_candidate_dev_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","restoration_operation_id":"RESTORE","expected_plan_hash":"HASH","request_key":"restore-confirm-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":2}}}`
+
+**Related:** `request_candidate_dev_restoration`, `verify_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
+
+**Authority:** Attribution is not proof of human approval; never merges Flux PRs or authorizes release.
+
+### `deploy_candidate_dev` — mcp_tool
+
+**Same operation:** `http_route:POST /api/products/{id}/candidate-dev/deploy`
+
+Prepare PR-only Dev delivery using exact existing main-candidate artifacts under reservation, verified baseline and CAS.
+
+**When:** Only for an admitted candidate with current owner reservation and complete baseline.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `reservation_operation_id` (string, required): Active reservation
+- `request_key` (string, required): Idempotency key, 16..128 bytes
+- `expected_selection` (object, required): Exact current selection
+
+**Output:** Persistent operation tracking PR-only desired-state delivery; poll get_operation.
+
+**Errors:**
+
+- `VALIDATION`: Invalid request key or exact selection; correct schema.
+- `CONFLICT`: Reservation, baseline, owner, or selection is stale; inspect current state.
+- `NOT_FOUND`: Verify Product/reservation/candidate IDs.
+
+**Example:** `{"name":"deploy_candidate_dev","arguments":{"product_id":"PRODUCT","reservation_operation_id":"RESERVATION","request_key":"candidate-deploy-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":2}}}`
+
+**Related:** `capture_candidate_dev_baseline`, `verify_candidate_dev_runtime`, `get_operation`
+
+**Authority:** Does not rebuild, edit source, merge PRs, assert runtime/functional acceptance, or authorize production promotion.
+
+### `deploy_existing_artifact` — mcp_tool
+
+**Same operation:** `execute_action:deploy_existing_artifact`
+
+Request DEV GitOps deployment of an already recorded successful build artifact for an exact Integration revision.
+
+**When:** Use only with enabled DEV mapping, fresh registry evidence and matching immutable digest; never to trigger a build.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `integration_id` (string, required): Integration scope
+- `environment_id` (string, required): Configured DEV Environment
+- `application_id` (string, required): Component
+- `revision_id` (string, required): Exact Integration revision
+- `artifact_id` (string, required): Recorded artifact
+- `request_key` (string, optional): Stable key for exact scoped replay
+- `expected_digest` (string, optional): Expected immutable digest
+
+**Output:** Persistent deployment operation; GitOps success is not runtime health.
+
+**Errors:**
+
+- `VALIDATION`: 'fresh registry evidence' or exact mapping/revision/digest validation failed; refresh evidence and correct identities.
+- `NOT_FOUND`: Verify Integration, component, revision, artifact and environment.
+- `CONFLICT`: State changed; reread before retry.
+- `FORBIDDEN`: Deployment policy disabled; obtain approval/configuration.
+
+**Example:** `{"name":"deploy_existing_artifact","arguments":{"integration_id":"INTEGRATION","environment_id":"DEV","application_id":"APP","revision_id":"REV","artifact_id":"ARTIFACT"}}`
+
+**Related:** `deploy_integration`, `get_operation`, `get_environment_state`
+
+**Authority:** Does not launch CI/rebuild, prove runtime health, authorize production, or bypass deployment policy.
+
+### `deploy_integration` — mcp_tool
+
+**Same operation:** `execute_action:deploy_integration`, `http_route:POST /api/integrations/{id}/deploy`
+
+Queue real DEV build/artifact/GitOps deployment for an exact Integration source revision.
+
+**When:** Use only after verifying environment policy, source identity and intended external effect.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `integration_id` (string, required): Integration scope
+- `environment_id` (string, required): Configured DEV Environment
+- `application_id` (string, optional): Component selection
+- `revision_id` (string, optional): Exact source revision; omitted resolves bound source branch
+- `expected_digest` (string, optional): Expected immutable artifact digest
+- `request_key` (string, optional): Idempotency key
+
+**Output:** Persistent operation handle; poll get_operation and separately verify runtime.
+
+**Errors:**
+
+- `VALIDATION`: Missing environment_id or exact revision/component inputs; consult GET /api/schema.
+- `NOT_FOUND`: Verify Integration, Environment, component and revision.
+- `CONFLICT`: Re-read current operation/source state; do not blindly resubmit.
+- `FORBIDDEN`: Explicit deployment policy denies request.
+
+**Example:** `{"name":"deploy_integration","arguments":{"actor":"agent/release","integration_id":"INTEGRATION","environment_id":"DEV","application_id":"APP","revision_id":"REV"}}`
+
+**Related:** `get_operation`, `get_environment_state`, `deploy_existing_artifact`
+
+**Authority:** May dispatch CI and update configured DEV GitOps image fields; does not authorize production or infer runtime health.
+
+### `get_environment_state` — mcp_tool
+
+**Same operation:** `http_route:GET /api/environments/{id}/state`
+
+Read desired GitOps state separately from reconciled and runtime observations.
+
+**When:** Use before/after deployment to compare desired, reconciled and observed environment state.
+
+**Inputs:**
+
+- `environment_id` (string, required): Exact Environment ID
+
+**Output:** Environment state projection containing distinct desired/reconciled/runtime evidence.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"get_environment_state","arguments":{"environment_id":"ENVIRONMENT"}}`
+
+**Related:** `get_operation`, `deploy_integration`, `assemble_environment`
+
+**Authority:** Read only; desired state is not runtime health, functional acceptance or deployment authorization.
 
 ## execution
 
@@ -1367,6 +1692,128 @@ Queue create-only provider pinning of an existing Integration revision under a m
 
 **Authority:** Queues a create-only pinned ref; does not rewrite history or create administrator-enforced GitHub branch protection.
 
+## intelligence
+
+### `get_intelligence_task` — mcp_tool
+
+**Same operation:** `http_route:GET /api/intelligence-tasks/{id}`
+
+Read a scoped generated draft or bounded conflict patch with provenance, stale-input status and review requirements.
+
+**When:** Use to inspect an existing task result before any human/agent review or external application.
+
+**Inputs:**
+
+- `task_id` (string, required): Exact task/operation ID
+
+**Output:** Task status, bounded output, input provenance and stale/review metadata.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify task ID and Product scope.
+- `FORBIDDEN`: Use authorized Product scope.
+- `VALIDATION`: Correct malformed task ID.
+
+**Example:** `{"name":"get_intelligence_task","arguments":{"task_id":"TASK"}}`
+
+**Related:** `queue_intelligence_task`, `get_operation`
+
+**Authority:** Read only; generated text/patch is untrusted proposal and does not publish, merge, edit source or deploy.
+
+## operations
+
+### `get_attention_required` — mcp_tool
+
+**Same operation:** `http_route:GET /api/attention`
+
+Read failed/blocked operations and other product-scoped attention items.
+
+**When:** Use during resume or after an operation reports an error; open each referenced record for detail.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+
+**Output:** Attention items with operation/context references.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"get_attention_required","arguments":{"product_id":"PRODUCT"}}`
+
+**Related:** `get_operation`, `resume`
+
+**Authority:** Read only; attention status is not authorization or readiness proof.
+
+### `get_operation` — mcp_tool
+
+**Same operation:** `http_route:GET /api/operations/{id}`
+
+Read persisted operation status, step evidence, child handles and attention needs.
+
+**When:** Poll the returned operation ID; inspect exact same handle after timeouts and follow agent_action workflow when present.
+
+**Inputs:**
+
+- `operation_id` (string, required): Exact operation ID
+
+**Output:** Operation status and evidence; may include children and RESOLVE_CONFLICT action context.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"get_operation","arguments":{"operation_id":"OPERATION"}}`
+
+**Related:** `get_attention_required`, `claim_composition_conflict`, `get_environment_state`
+
+**Authority:** Read only; queued/pending is not completion, deployment health or authorization. Conflict resolution is external and reconciliation is separate.
+
+## verification
+
+### `create_test_scenario` — mcp_tool
+
+**Same operation:** `execute_action:create_test_scenario`, `http_route:POST /api/test-scenarios`
+
+Create an immutable versioned behavior scenario for later execution against an exact composition or candidate.
+
+**When:** Define checks before execution; include scope, preconditions, steps and expected outcomes.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `title` (string, required): Scenario title
+- `objective` (string, required): Behavior under test
+- `mechanism` (string, required): Execution mechanism
+- `preconditions` (array[string], optional): Required setup
+- `steps` (array[string], required): Ordered actions
+- `expected_outcomes` (array[string], required): Expected results
+- `integration_ids` (array[string], optional): Relevant work scope
+- `blocking` (boolean, optional): Whether failure blocks readiness
+
+**Output:** Scenario ID and immutable first version.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"create_test_scenario","arguments":{"product_id":"PRODUCT","title":"Retry safely","objective":"Transient failure recovers","mechanism":"integration test","steps":["Return 503","Retry"],"expected_outcomes":["Request succeeds"]}}`
+
+**Related:** `revise_test_scenario`, `record_scenario_run`, `get_operation`
+
+**Authority:** Defines verification only; does not execute tests, supply business data, or establish release readiness.
+
 ## work tracking
 
 ### `execute` — mcp_tool
@@ -2057,30 +2504,140 @@ Append resolution evidence for a Finding.
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+### `create_hotfix` — mcp_tool
+
+**Same operation:** `execute_action:create_hotfix`, `http_route:POST /api/features/{id}/hotfix`
+
+Create a focused hotfix Integration under a Feature, optionally linked to a Finding.
+
+**When:** Use for scoped corrective work; record and verify the implementation through normal workflow.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `feature_id` (string, required): Parent Feature
+- `title` (string, required): Hotfix title
+- `objective` (string, required): Intended correction
+- `finding_id` (string, optional): Related Finding
+- `repositories` (array[string], optional): Repository scope
+- `remaining` (array[string], optional): Outstanding work
+
+**Output:** Created Integration identity and lifecycle record.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"create_hotfix","arguments":{"feature_id":"FEATURE","title":"Fix retries","objective":"Bound transient retries"}}`
+
+**Related:** `resume`, `record_progress`, `create_test_scenario`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
+## workspace
+
+### `export_workspace_configuration` — mcp_tool
+
+**Same operation:** `http_route:GET /api/products/{id}/workspace-config`
+
+Export portable Product setup and agent docs without feature history, machine paths, credentials or deployment authorizations.
+
+**When:** Use to transfer configuration between workspaces; inspect excluded secrets/authorization assumptions separately.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product to export
+
+**Output:** Portable repositories/clone URLs, components, environments, areas and observed repo-root AGENTS documentation.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"export_workspace_configuration","arguments":{"product_id":"PRODUCT"}}`
+
+**Related:** `import_workspace_configuration`, `create_backup`, `get_agent_kit`
+
+**Authority:** Exports configuration only; does not export history, credentials or deployment authority, and does not install or mutate a workspace.
+
+### `get_agent_kit` — mcp_tool
+
+**Same operation:** `http_route:GET /api/agent-kit`
+
+Read the bundled workspace instructions and handoff/delivery skills with checksums.
+
+**When:** Use to inspect or install canonical guidance; release-control connect handles workspace setup.
+
+**Inputs:**
+
+
+**Output:** Instructions and named skill content/checksums.
+
+**Errors:**
+
+- `INTERNAL`: Embedded skill/provenance integrity failure; inspect packaged assets.
+
+**Example:** `{"name":"get_agent_kit","arguments":{}}`
+
+**Related:** `get_agent_skill`, `get_tool_guide`
+
+**Authority:** Guidance only; does not authorize external mutation, adoption, merge, deployment or release.
+
+### `get_agent_skill` — mcp_tool
+
+Fetch one fixed bundled agent workflow skill by exact name.
+
+**When:** Use rcp-handoff for checkpoints or rcp-delivery for delivery workflows.
+
+**Inputs:**
+
+- `name` (string, required): Exact rcp-handoff or rcp-delivery name
+
+**Output:** Skill name, Markdown content and SHA-256.
+
+**Errors:**
+
+- `NOT_FOUND`: 'unknown skill'; use one of the two exact supported names.
+
+**Example:** `{"name":"get_agent_skill","arguments":{"name":"rcp-delivery"}}`
+
+**Related:** `get_agent_kit`, `get_tool_guide`
+
+**Authority:** Workflow guidance only; grants no execution permission.
+
+### `get_code_api` — mcp_tool
+
+Discover the typed agent-side TypeScript SDK declarations, optionally filtered by query.
+
+**When:** Use before scripting batches of MCP calls; inspect returned declarations and use only supported tools.
+
+**Inputs:**
+
+- `query` (string, optional): Optional case-insensitive declaration filter
+
+**Output:** SDK declaration text or filtered declarations.
+
+**Errors:**
+
+- `VALIDATION`: Malformed query input; provide a string.
+
+**Example:** `{"name":"get_code_api","arguments":{"query":"resume"}}`
+
+**Related:** `get_tool_guide`, `execute`
+
+**Authority:** Schema discovery only; SDK access grants no command authority.
+
 ## Pending documentation
 
 The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
 
-- `mcp_tool:assemble_environment`
-- `mcp_tool:capture_candidate_dev_baseline`
-- `mcp_tool:claim_composition_conflict`
-- `mcp_tool:confirm_candidate_dev_restoration`
-- `mcp_tool:create_backup`
-- `mcp_tool:create_hotfix`
-- `mcp_tool:create_test_scenario`
-- `mcp_tool:deploy_candidate_dev`
-- `mcp_tool:deploy_existing_artifact`
-- `mcp_tool:deploy_integration`
-- `mcp_tool:export_workspace_configuration`
-- `mcp_tool:get_agent_kit`
-- `mcp_tool:get_agent_skill`
-- `mcp_tool:get_artifact_retention`
-- `mcp_tool:get_attention_required`
-- `mcp_tool:get_backup_capabilities`
-- `mcp_tool:get_code_api`
-- `mcp_tool:get_environment_state`
-- `mcp_tool:get_intelligence_task`
-- `mcp_tool:get_operation`
 - `mcp_tool:get_product_configuration`
 - `mcp_tool:get_runtime_report`
 - `mcp_tool:get_status_schema`
@@ -2115,29 +2672,21 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `mcp_tool:verify_candidate_dev_restoration`
 - `mcp_tool:verify_candidate_dev_runtime`
 - `mcp_tool:verify_conflict_resolution`
-- `execute_action:assemble_environment`
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `execute_action:capture_candidate_dev_baseline`
-- `execute_action:claim_composition_conflict`
 - `execute_action:classify_repository`
 - `execute_action:configure_artifact_retention`
 - `execute_action:configure_component`
 - `execute_action:configure_environment`
 - `execute_action:configure_publication`
-- `execute_action:confirm_candidate_dev_restoration`
 - `execute_action:create_application`
 - `execute_action:create_environment`
 - `execute_action:create_external_system`
 - `execute_action:create_github_connection`
-- `execute_action:create_hotfix`
 - `execute_action:create_repository`
 - `execute_action:create_system_relationship`
-- `execute_action:create_test_scenario`
 - `execute_action:delete_product`
-- `execute_action:deploy_existing_artifact`
-- `execute_action:deploy_integration`
 - `execute_action:grant_connection`
 - `execute_action:import_repository`
 - `execute_action:pin_artifact`
@@ -2173,8 +2722,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:verify_candidate_dev_runtime`
 - `execute_action:verify_conflict_resolution`
 - `http_route:/mcp`
-- `http_route:GET /api/agent-kit`
-- `http_route:GET /api/attention`
 - `http_route:GET /api/build-profiles`
 - `http_route:GET /api/builds`
 - `http_route:GET /api/builds/{id}`
@@ -2185,20 +2732,15 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:GET /api/context/search`
 - `http_route:GET /api/deployments`
 - `http_route:GET /api/deployments/{id}`
-- `http_route:GET /api/environments/{id}/state`
 - `http_route:GET /api/features/{id}/graph`
 - `http_route:GET /api/integrations/{id}/context`
 - `http_route:GET /api/integrations/{id}/git`
-- `http_route:GET /api/intelligence-tasks/{id}`
-- `http_route:GET /api/operations/{id}`
 - `http_route:GET /api/pipelines`
 - `http_route:GET /api/products/{id}/configuration`
 - `http_route:GET /api/products/{id}/context`
 - `http_route:GET /api/products/{id}/knowledge/search`
 - `http_route:GET /api/products/{id}/local-checkouts/{checkout}/git`
-- `http_route:GET /api/products/{id}/retention`
 - `http_route:GET /api/products/{id}/unlinked-git-commits`
-- `http_route:GET /api/products/{id}/workspace-config`
 - `http_route:GET /api/repositories/{id}/branches`
 - `http_route:GET /api/runtime-reports`
 - `http_route:GET /api/schema`
@@ -2210,7 +2752,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:GET /api/worker-history`
 - `http_route:GET /api/worker-jobs/{id}`
 - `http_route:GET /healthz`
-- `http_route:POST /api/backups/export`
 - `http_route:POST /api/backups/restore`
 - `http_route:POST /api/builds`
 - `http_route:POST /api/builds/{id}/cancel`
@@ -2220,23 +2761,16 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:POST /api/deployments`
 - `http_route:POST /api/deployments/{id}/close`
 - `http_route:POST /api/deployments/{id}/reconcile`
-- `http_route:POST /api/features/{id}/hotfix`
 - `http_route:POST /api/features/{id}/update-environment`
-- `http_route:POST /api/integrations/{id}/deploy`
 - `http_route:POST /api/local-git/plan`
 - `http_route:POST /api/local-git/record`
 - `http_route:POST /api/operations/{id}/runtime`
-- `http_route:POST /api/products/{id}/assemble-environment`
-- `http_route:POST /api/products/{id}/candidate-dev/capture-baseline`
-- `http_route:POST /api/products/{id}/candidate-dev/confirm-restoration`
-- `http_route:POST /api/products/{id}/candidate-dev/deploy`
 - `http_route:POST /api/products/{id}/candidate-dev/release`
 - `http_route:POST /api/products/{id}/candidate-dev/release-after-restoration`
 - `http_route:POST /api/products/{id}/candidate-dev/request-restoration`
 - `http_route:POST /api/products/{id}/candidate-dev/reserve`
 - `http_route:POST /api/products/{id}/candidate-dev/verify-restoration`
 - `http_route:POST /api/products/{id}/candidate-dev/verify-runtime`
-- `http_route:POST /api/products/{id}/conflicts/claim`
 - `http_route:POST /api/products/{id}/conflicts/resolution`
 - `http_route:POST /api/products/{id}/conflicts/verify`
 - `http_route:POST /api/products/{id}/knowledge`
@@ -2247,7 +2781,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:POST /api/runtime-reports`
 - `http_route:POST /api/scenario-runs`
 - `http_route:POST /api/signatures`
-- `http_route:POST /api/test-scenarios`
 - `http_route:POST /api/test-scenarios/revisions`
 - `http_route:POST /api/tools/{name}`
 - `http_route:POST /api/workspaces/import`

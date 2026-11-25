@@ -32,6 +32,9 @@ func render() string {
 		b.WriteString("## " + strings.ReplaceAll(area, "_", " ") + "\n\n")
 		for _, e := range areas[area] {
 			b.WriteString("### `" + e.Name + "` — " + e.Kind + "\n\n")
+			if len(e.Aliases) > 0 {
+				b.WriteString("**Same operation:** `" + strings.Join(e.Aliases, "`, `") + "`\n\n")
+			}
 			b.WriteString(e.Purpose + "\n\n**When:** " + e.When + "\n\n**Inputs:**\n\n")
 			for _, f := range e.Inputs {
 				b.WriteString("- `" + f.Name + "` (" + f.Type + ", ")
