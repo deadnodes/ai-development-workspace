@@ -5,6 +5,96 @@ Use `get_tool_guide {}` for the compact index and `get_tool_guide {"name":"…"}
 
 ## artifacts
 
+### `configure_artifact_retention` — execute_action
+
+Set the retention policy counts for a Product component's images.
+
+**When:** Use to record retention intent for an existing component; inspect protected roots and blockers before operational retention work.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `application_id` (string, required): Component ID
+- `keep_last` (integer, required): Number of recent artifacts to retain (0..10000)
+- `keep_current` (boolean, required): Retain currently selected image
+- `keep_previous` (integer, required): Number of previous artifacts to retain (0..10000)
+
+**Output:** Updated component record with its normalized retention policy.
+
+**Errors:**
+
+- `VALIDATION`: 'component must belong to product' or 'retention counts must be between 0 and 10000'; verify scope and counts.
+- `NOT_FOUND`: Refresh Product context and verify component ID.
+
+**Example:** `{"action":"configure_artifact_retention","product_id":"PRODUCT","data":{"application_id":"APP","keep_last":3,"keep_current":true,"keep_previous":1}}`
+
+**Related:** `get_artifact_retention`, `pin_artifact`
+
+**Authority:** Records policy only; does not query or delete registry images or authorize artifact deletion.
+
+### `configure_publication` — execute_action
+
+Record publication target metadata for a library component.
+
+**When:** Use for a LIBRARY component after selecting its package format and credential-free HTTPS registry endpoint.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `application_id` (string, required): LIBRARY component ID
+- `format` (string, required): Supported publication format
+- `registry_url` (string, required): HTTPS URL without credentials, query or fragment
+- `package_name` (string, required): Package name without surrounding whitespace
+
+**Output:** Persisted PublicationTarget.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'publication requires a product-scoped LIBRARY component', 'unsupported publication format', 'registry_url must be HTTPS without credentials, query or fragment', and 'package_name required without surrounding whitespace'; correct target metadata.
+
+**Example:** `{"action":"configure_publication","product_id":"PRODUCT","data":{"application_id":"LIBRARY","format":"npm","registry_url":"https://registry.npmjs.org","package_name":"@team/package"}}`
+
+**Related:** `create_application`, `record_package_artifact`
+
+**Authority:** Records publication configuration only; does not publish packages or disclose/manage registry credentials.
+
+### `pin_artifact` — execute_action
+
+Create an explicit retention pin for a digest in a component image repository.
+
+**When:** Use only when a specific image digest needs manual or rollback protection; use a unique request key and verify the image identity.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `application_id` (string, required): Component ID
+- `image_repository` (string, required): Image repository
+- `digest` (string, required): Immutable image digest
+- `purpose` (string, required): manual or rollback
+- `request_key` (string, required): Replay-safe request key
+
+**Output:** Persistent pin receipt/evidence; inspect get_artifact_retention for effective inventory.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'artifact pin requires exact product/component scope', 'invalid immutable artifact pin request', 'component must belong to pin product', 'invalid explicit image repository', and 'artifact pin request_key conflicts with original intent'; correct Product/component, provide a canonical sha256 digest and manual/rollback purpose, then use a fresh key only for new intent.
+- `CONFLICT`: Request key already binds another payload; inspect the prior receipt and use a new key for new intent.
+
+**Example:** `{"action":"pin_artifact","product_id":"PRODUCT","data":{"application_id":"APP","image_repository":"ghcr.io/team/app","digest":"sha256:…","purpose":"manual","request_key":"pin-image-001"}}`
+
+**Related:** `configure_artifact_retention`, `get_artifact_retention`, `release_artifact_pin`
+
+**Authority:** Records retention protection; does not inspect or mutate registry bytes and does not authorize deployment or deletion.
+
 ### `get_artifact_retention` — mcp_tool
 
 **Same operation:** `http_route:GET /api/products/{id}/retention`
@@ -111,6 +201,67 @@ Read supported backup format, limits and restore policy.
 **Authority:** Read only; does not create, restore or authorize a backup.
 
 ## context read
+
+### `create_external_system` — execute_action
+
+Record an external system and its owner/interface context in the instance registry.
+
+**When:** Use to document an external dependency or integration before linking it to a Product.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `name` (string, required): Unique external system name
+- `description` (string, optional): System description
+- `team` (string, optional): Owning team
+- `contact` (string, optional): Contact reference
+- `interfaces` (array[string], optional): Interfaces used or exposed
+- `contracts` (array[string], optional): Relevant contracts
+- `notes` (string, optional): Additional context
+
+**Output:** Persisted instance-level ExternalSystem record.
+
+**Errors:**
+
+- `VALIDATION`: 'external system name required' or 'external system name already exists'; supply a unique nonblank name.
+
+**Example:** `{"action":"create_external_system","data":{"name":"Identity Provider","team":"Platform","interfaces":["OIDC"]}}`
+
+**Related:** `create_system_relationship`, `set_external_scope`
+
+**Authority:** Records context only; does not connect to or operate the external system.
+
+### `create_system_relationship` — execute_action
+
+Link a Product or optional component to a registered external system with a typed relationship.
+
+**When:** Use after creating or locating the external system; choose the relationship type that describes the dependency accurately.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `external_system_id` (string, required): Registered external system
+- `component_id` (string, optional): Optional Product component
+- `type` (string, required): DEPENDS_ON, CONSUMES, PROVIDES_TO, or SHARES_DATA_WITH
+- `notes` (string, optional): Relationship context
+
+**Output:** Persisted SystemRelationship scoped to Product.
+
+**Errors:**
+
+- `NOT_FOUND`: Product or external system missing; refresh context.
+- `VALIDATION`: Messages include 'component must belong to relationship product', 'unsupported external relationship type', and 'relationship already exists'; correct scope/type or reuse existing relation.
+
+**Example:** `{"action":"create_system_relationship","product_id":"PRODUCT","data":{"external_system_id":"SYSTEM","type":"DEPENDS_ON"}}`
+
+**Related:** `create_external_system`, `set_external_scope`
+
+**Authority:** Records a relationship only; does not configure, access, or mutate the external system.
 
 ### `search_context` — mcp_tool
 
@@ -297,6 +448,239 @@ Read a Feature delivery graph of repository-scoped PRs, source revisions, compos
 
 ## delivery
 
+### `configure_component` — execute_action
+
+Configure how one application component is built and which image repository it uses.
+
+**When:** Use after attaching its source repository and granting the chosen GitHub connection; select the configured build mode and workflow/recipe deliberately.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `application_id` (string, required): Application component
+- `connection_id` (string, required): Granted GitHub connection
+- `mode` (string, optional): GITHUB_ACTIONS (default) or NATIVE
+- `workflow` (string, optional): GitHub Actions workflow path; required for GITHUB_ACTIONS
+- `workflow_ref` (string, optional): Optional safe workflow branch/ref
+- `image_repository` (string, required): Configured image repository
+- `profile` (string, optional): Native delivery profile
+- `rebuild_missing` (boolean, optional): Whether a missing artifact may be rebuilt
+- `native` (object, optional): Native build/publication recipe binding
+- `inputs` (object, optional): Nonreserved string workflow inputs
+
+**Output:** Persisted component build configuration.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'application must belong to product', 'component requires SOURCE repository and its connection', 'product has no grant for instance connection', 'workflow and ghcr.io image_repository required', 'unknown component build mode', and native configuration/recipe validation messages; correct the component, grant, and mode inputs.
+- `NOT_FOUND`: Refresh Product and connection context.
+
+**Example:** `{"action":"configure_component","product_id":"PRODUCT","data":{"application_id":"APP","connection_id":"CONNECTION","workflow":"build.yml","image_repository":"ghcr.io/team/app"}}`
+
+**Related:** `create_application`, `create_github_connection`, `grant_connection`, `configure_environment`
+
+**Authority:** Stores build configuration; does not run a workflow, publish an image, edit application source, or deploy.
+
+### `configure_environment` — execute_action
+
+Map one component to a specific environment and GitOps image fields.
+
+**When:** Use to configure an explicit DEV, TEST, or PROD target after verifying repository, path, ref and field ownership.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `environment_id` (string, required): Environment in Product
+- `application_id` (string, required): Application component in Product
+- `purpose` (string, required): DEV, TEST, or PROD
+- `connection_id` (string, required): Granted GitHub connection
+- `repository_id` (string, required): Attached GITOPS repository
+- `ref` (string, required): GitOps branch/ref
+- `path` (string, required): Clean repository relative file path
+- `image_field` (string, required): Image repository field path
+- `digest_field` (string, optional): Optional digest/tag field path
+- `allow_deploy` (boolean, required): Whether deployment requests are enabled
+- `gitops_mode` (string, optional): DIRECT or PR; defaults DIRECT
+
+**Output:** Persisted EnvironmentBinding mapping.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'environment and application must belong to product', 'explicit GITOPS repository and its connection required', 'product has no grant for instance connection', 'explicit DEV/TEST/PROD purpose with ref, clean relative path and image_field required', and 'gitops_mode must be DIRECT or PR'; correct mapping and scope.
+
+**Example:** `{"action":"configure_environment","product_id":"PRODUCT","data":{"environment_id":"ENV","application_id":"APP","purpose":"DEV","connection_id":"CONNECTION","repository_id":"GITOPS","ref":"main","path":"app.yaml","image_field":"image.repository","allow_deploy":true,"gitops_mode":"PR"}}`
+
+**Related:** `create_environment`, `configure_component`, `deploy_integration`, `get_environment_state`
+
+**Authority:** Stores a bounded image-field mapping; does not edit source code, deploy, merge a PR, or establish runtime health.
+
+### `create_environment` — execute_action
+
+Create an environment record within a Product.
+
+**When:** Use to model a named environment before configuring its GitOps target; names must be unique within the Product.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `name` (string, required): Environment name
+- `cluster` (string, optional): Cluster label
+- `namespace` (string, optional): Namespace label
+- `parameters` (object, optional): String-valued environment parameters
+- `desired` (object, optional): Caller supplied desired-state map; not execution evidence
+- `reconciled` (object, optional): Caller supplied reconciliation map; not verified state
+- `runtime` (object, optional): Caller supplied runtime map; not health proof
+- `composition` (object, optional): Caller supplied composition map; not a deployment authorization
+
+**Output:** Persisted Environment record with desired/reconciled/runtime state kept separate.
+
+**Errors:**
+
+- `NOT_FOUND`: 'product not found'; refresh Product context.
+- `VALIDATION`: 'name required' or 'environment name already exists in product'; provide a nonblank unique name.
+
+**Example:** `{"action":"create_environment","product_id":"PRODUCT","data":{"name":"dev","cluster":"cluster-a","namespace":"app-dev"}}`
+
+**Related:** `configure_environment`, `get_environment_state`
+
+**Authority:** Creates environment metadata only; does not create a cluster or deploy workloads.
+
+### `create_github_connection` — execute_action
+
+Register a GitHub App installation reference for provider operations.
+
+**When:** Use after creating the GitHub App and installation; pass a secret reference, never the private key value.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution
+- `product_id` (string, optional): Optional Product; creates its initial grant when supplied
+- `data` (object, required): Action fields
+- `name` (string, required): Connection label
+- `app_id` (integer, required): Positive GitHub App ID
+- `installation_id` (integer, required): Positive installation ID
+- `owner` (string, required): GitHub owner
+- `private_key_ref` (string, required): env: or file: secret reference
+- `api_url` (string, optional): HTTPS API origin/base; defaults to api.github.com
+- `registry_credential_ref` (string, optional): Rejected; permanent registry credentials are unsupported
+
+**Output:** Instance GitHubConnection record; optional Product grant is recorded separately.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'name, app_id, installation_id, owner and env:/file: private_key_ref required', 'api_url must be an HTTPS API origin/base', and 'permanent registry credentials are not supported; use the correlated Actions report'; fix configuration and never pass secret material.
+- `NOT_FOUND`: Optional Product ID is unknown; verify scope.
+
+**Example:** `{"action":"create_github_connection","data":{"name":"GitHub","app_id":123,"installation_id":456,"owner":"team","private_key_ref":"file:/run/secrets/github.pem"}}`
+
+**Related:** `grant_connection`, `import_repository`, `configure_component`
+
+**Authority:** Registers a secret reference only; does not validate credentials, grant another Product access, or run provider operations.
+
+### `deploy_existing_artifact` — execute_action
+
+**Same operation:** `mcp_tool:deploy_existing_artifact`
+
+Request deployment of a previously recorded successful artifact for an exact Integration revision.
+
+**When:** Use when an eligible existing artifact is available and rebuilding is not intended; verify the configured DEV mapping and digest first.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `integration_id` (string, required): Integration scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `environment_id` (string, required): Configured environment
+- `application_id` (string, required): Component (may be inferred only when unambiguous)
+- `revision_id` (string, required): Exact captured Integration revision
+- `artifact_id` (string, required): Previously recorded successful artifact
+- `expected_digest` (string, optional): Expected immutable image digest
+- `request_key` (string, optional): Optional idempotency key
+
+**Output:** Persistent asynchronous deployment operation; poll get_operation for build/artifact/GitOps evidence.
+
+**Errors:**
+
+- `NOT_FOUND`: Integration, environment, revision or artifact missing; refresh scoped context.
+- `VALIDATION`: Messages include 'application_id required when environment has multiple components', 'component and environment must belong to integration product', 'invalid delivery request_key', and delivery policy, revision, registry freshness or digest validation messages; correct exact identities.
+- `CONFLICT`: 'conflicting delivery request replay'; use the original payload for that request key.
+
+**Example:** `{"action":"deploy_existing_artifact","integration_id":"INTEGRATION","data":{"environment_id":"DEV","application_id":"APP","revision_id":"REVISION","artifact_id":"ARTIFACT"}}`
+
+**Related:** `deploy_integration`, `get_operation`, `get_environment_state`
+
+**Authority:** Queues an existing-artifact deployment only when domain policy permits; does not rebuild, edit source, prove runtime health, or authorize production.
+
+### `deploy_integration` — execute_action
+
+**Same operation:** `mcp_tool:deploy_integration`, `http_route:POST /api/integrations/{id}/deploy`
+
+Request build and delivery of an Integration's exact source to an enabled environment mapping.
+
+**When:** Use only after reviewing exact captured revision, environment policy, and consequences; poll the returned operation.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `integration_id` (string, required): Integration scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `environment_id` (string, required): Configured environment
+- `application_id` (string, optional): Component; required if mapping is ambiguous
+- `revision_id` (string, optional): Exact source revision when required
+- `request_key` (string, optional): Optional idempotency key
+
+**Output:** Persistent asynchronous DEPLOY operation; submission is not completion; poll get_operation.
+
+**Errors:**
+
+- `NOT_FOUND`: Integration or environment missing; refresh scoped context.
+- `VALIDATION`: Messages include 'application_id required when environment has multiple components', 'component and environment must belong to integration product', 'invalid delivery request_key', and environment policy, revision freshness or configuration errors; correct scope and satisfy policy.
+- `CONFLICT`: 'conflicting delivery request replay'; replay the original payload or choose a new key for new intent.
+
+**Example:** `{"action":"deploy_integration","integration_id":"INTEGRATION","data":{"environment_id":"DEV","application_id":"APP","revision_id":"REVISION"}}`
+
+**Related:** `deploy_existing_artifact`, `get_operation`, `get_environment_state`
+
+**Authority:** Can queue real DEV build/GitOps effects when configured and permitted; does not authorize source editing, PR merge, runtime health claims, or production release.
+
+### `grant_connection` — execute_action
+
+Grant a Product use of an existing instance-level GitHub connection.
+
+**When:** Use before importing repositories or configuring component/environment provider work under a shared connection.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product to grant
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `connection_id` (string, required): Existing instance connection
+
+**Output:** Persisted ConnectionGrant record.
+
+**Errors:**
+
+- `VALIDATION`: 'existing product and instance connection required' or 'connection grant already exists'; verify IDs or use existing grant.
+
+**Example:** `{"action":"grant_connection","product_id":"PRODUCT","data":{"connection_id":"CONNECTION"}}`
+
+**Related:** `create_github_connection`, `import_repository`
+
+**Authority:** Grants this Product connection access only; does not authenticate the connection or grant provider-side permissions.
+
 ### `assemble_environment` — mcp_tool
 
 **Same operation:** `execute_action:assemble_environment`, `http_route:POST /api/products/{id}/assemble-environment`
@@ -388,37 +772,6 @@ Claim responsibility for resolving one persisted composition conflict externally
 
 **Authority:** Records ownership only; RCP does not resolve source conflicts or authorize source edits, merge, build, or deployment.
 
-### `confirm_candidate_dev_restoration` — mcp_tool
-
-**Same operation:** `execute_action:confirm_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/confirm-restoration`
-
-Record attributed confirmation for the exact ready restoration plan.
-
-**When:** Only after reviewing the complete plan/hash and external PR heads; use separate operator-approved confirmation.
-
-**Inputs:**
-
-- `actor` (string, required): Required attribution, not authenticated human approval
-- `product_id` (string, required): Product scope
-- `restoration_operation_id` (string, required): Ready restoration operation
-- `expected_plan_hash` (string, required): Exact reviewed plan hash
-- `request_key` (string, required): 16..128 byte idempotency key
-- `expected_selection` (object, required): Exact CAS selection
-
-**Output:** Persistent confirmation operation/evidence for the plan.
-
-**Errors:**
-
-- `VALIDATION`: Explicit actor/product and required restoration fields; request_key 16–128 bytes; exact expected_selection; correct schema errors.
-- `CONFLICT`: Plan hash or selection changed; reread and review current plan.
-- `NOT_FOUND`: Verify restoration operation and Product.
-
-**Example:** `{"name":"confirm_candidate_dev_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","restoration_operation_id":"RESTORE","expected_plan_hash":"HASH","request_key":"restore-confirm-0001","expected_selection":{"composition_id":"COMP","operation_id":"OP","generation":2}}}`
-
-**Related:** `request_candidate_dev_restoration`, `verify_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
-
-**Authority:** Attribution is not proof of human approval; never merges Flux PRs or authorizes release.
-
 ### `deploy_candidate_dev` — mcp_tool
 
 **Same operation:** `http_route:POST /api/products/{id}/candidate-dev/deploy`
@@ -448,73 +801,6 @@ Prepare PR-only Dev delivery using exact existing main-candidate artifacts under
 **Related:** `capture_candidate_dev_baseline`, `verify_candidate_dev_runtime`, `get_operation`
 
 **Authority:** Does not rebuild, edit source, merge PRs, assert runtime/functional acceptance, or authorize production promotion.
-
-### `deploy_existing_artifact` — mcp_tool
-
-**Same operation:** `execute_action:deploy_existing_artifact`
-
-Request DEV GitOps deployment of an already recorded successful build artifact for an exact Integration revision.
-
-**When:** Use only with enabled DEV mapping, fresh registry evidence and matching immutable digest; never to trigger a build.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution
-- `integration_id` (string, required): Integration scope
-- `environment_id` (string, required): Configured DEV Environment
-- `application_id` (string, required): Component
-- `revision_id` (string, required): Exact Integration revision
-- `artifact_id` (string, required): Recorded artifact
-- `request_key` (string, optional): Stable key for exact scoped replay
-- `expected_digest` (string, optional): Expected immutable digest
-
-**Output:** Persistent deployment operation; GitOps success is not runtime health.
-
-**Errors:**
-
-- `VALIDATION`: 'fresh registry evidence' or exact mapping/revision/digest validation failed; refresh evidence and correct identities.
-- `NOT_FOUND`: Verify Integration, component, revision, artifact and environment.
-- `CONFLICT`: State changed; reread before retry.
-- `FORBIDDEN`: Deployment policy disabled; obtain approval/configuration.
-
-**Example:** `{"name":"deploy_existing_artifact","arguments":{"integration_id":"INTEGRATION","environment_id":"DEV","application_id":"APP","revision_id":"REV","artifact_id":"ARTIFACT"}}`
-
-**Related:** `deploy_integration`, `get_operation`, `get_environment_state`
-
-**Authority:** Does not launch CI/rebuild, prove runtime health, authorize production, or bypass deployment policy.
-
-### `deploy_integration` — mcp_tool
-
-**Same operation:** `execute_action:deploy_integration`, `http_route:POST /api/integrations/{id}/deploy`
-
-Queue real DEV build/artifact/GitOps deployment for an exact Integration source revision.
-
-**When:** Use only after verifying environment policy, source identity and intended external effect.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution
-- `integration_id` (string, required): Integration scope
-- `environment_id` (string, required): Configured DEV Environment
-- `application_id` (string, optional): Component selection
-- `revision_id` (string, optional): Exact source revision; omitted resolves bound source branch
-- `expected_digest` (string, optional): Expected immutable artifact digest
-- `request_key` (string, optional): Idempotency key
-
-**Output:** Persistent operation handle; poll get_operation and separately verify runtime.
-
-**Errors:**
-
-- `VALIDATION`: Missing environment_id or exact revision/component inputs; consult GET /api/schema.
-- `NOT_FOUND`: Verify Integration, Environment, component and revision.
-- `CONFLICT`: Re-read current operation/source state; do not blindly resubmit.
-- `FORBIDDEN`: Explicit deployment policy denies request.
-
-**Example:** `{"name":"deploy_integration","arguments":{"actor":"agent/release","integration_id":"INTEGRATION","environment_id":"DEV","application_id":"APP","revision_id":"REV"}}`
-
-**Related:** `get_operation`, `get_environment_state`, `deploy_existing_artifact`
-
-**Authority:** May dispatch CI and update configured DEV GitOps image fields; does not authorize production or infer runtime health.
 
 ### `get_environment_state` — mcp_tool
 
@@ -2037,6 +2323,38 @@ Read persisted operation status, step evidence, child handles and attention need
 
 ## release
 
+### `confirm_candidate_dev_restoration` — execute_action
+
+**Same operation:** `mcp_tool:confirm_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/confirm-restoration`
+
+Record attributed confirmation for the exact stable candidate Dev restoration plan after required external reviewed merges.
+
+**When:** Use only after inspecting the complete plan and its hash, and after its external human-reviewed Flux merges are complete; this action does not itself prove human approval.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, required): Attribution; not authenticated human approval
+- `data` (object, required): Exact restoration request
+- `restoration_operation_id` (string, required): Restoration operation handle
+- `expected_plan_hash` (string, required): Hash of the complete stable recovery plan
+- `request_key` (string, required): Unique 16..128 character idempotency key
+- `expected_selection` (object, required): Exact composition_id, operation_id and generation CAS
+
+**Output:** Persistent confirmation receipt/operation for the restoration flow.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'restoration requires attributed actor and Product scope only', 'exact request_key16..128 and selection required', 'exact selection fields required', 'same attributed restoration owner required', 'exact complete stable recovery plan required', and 'unapproved external restoration merge before attributed confirmation'; satisfy the exact scope, owner, plan and prior merge conditions.
+- `CONFLICT`: A restoration confirmation is immutable; inspect the existing operation rather than retrying with changed intent.
+
+**Example:** `{"action":"confirm_candidate_dev_restoration","actor":"operator","product_id":"PRODUCT","data":{"restoration_operation_id":"RESTORE","expected_plan_hash":"PLAN_HASH","request_key":"confirm-restoration-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `request_candidate_dev_restoration`, `verify_candidate_dev_restoration`, `get_operation`
+
+**Authority:** Records attributed confirmation only; does not authenticate a human, merge Flux changes, verify runtime, release a reservation, or authorize production.
+
 ### `prepare_release_candidate` — mcp_tool
 
 **Same operation:** `execute_action:prepare_release_candidate`, `http_route:POST /api/release-candidates`
@@ -2194,43 +2512,135 @@ Request bounded restoration of every original baseline component under recovery 
 
 **Authority:** Requests a plan only; does not confirm, merge Flux changes, verify runtime, or unlock.
 
-## verification
+## repositories
 
-### `create_test_scenario` — mcp_tool
+### `classify_repository` — execute_action
 
-**Same operation:** `execute_action:create_test_scenario`, `http_route:POST /api/test-scenarios`
+Change the purpose classification of an already attached repository.
 
-Create an immutable versioned behavior scenario for later execution against an exact composition or candidate.
-
-**When:** Define checks before execution; include scope, preconditions, steps and expected outcomes.
+**When:** Use after confirming how the repository is used; choose a role compatible with its components and deployment mappings.
 
 **Inputs:**
 
-- `actor` (string, optional): Attribution
-- `product_id` (string, required): Product scope
-- `title` (string, required): Scenario title
-- `objective` (string, required): Behavior under test
-- `mechanism` (string, required): Execution mechanism
-- `preconditions` (array[string], optional): Required setup
-- `steps` (array[string], required): Ordered actions
-- `expected_outcomes` (array[string], required): Expected results
-- `integration_ids` (array[string], optional): Relevant work scope
-- `blocking` (boolean, optional): Whether failure blocks readiness
+- `action` (string, required): Exact action name
+- `id` (string, required): Attached repository ID
+- `product_id` (string, optional): Optional product scope
+- `actor` (string, optional): Attribution, not authentication
+- `data` (object, required): Action fields
+- `role` (string, required): SOURCE, APPLICATION, LIBRARY, GITOPS, or MIXED repository purpose
 
-**Output:** Scenario ID and immutable first version.
+**Output:** Updated repository and appended binding classification when applicable.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: 'invalid repository role', 'repository outside product', 'role conflicts with existing component …', or 'repository has GitOps deployment mappings'; select a supported compatible role.
+- `NOT_FOUND`: 'repository not found'; refresh Product context and verify id.
 
-**Example:** `{"name":"create_test_scenario","arguments":{"product_id":"PRODUCT","title":"Retry safely","objective":"Transient failure recovers","mechanism":"integration test","steps":["Return 503","Retry"],"expected_outcomes":["Request succeeds"]}}`
+**Example:** `{"action":"classify_repository","id":"REPOSITORY","data":{"role":"LIBRARY"}}`
 
-**Related:** `revise_test_scenario`, `record_scenario_run`, `get_operation`
+**Related:** `create_repository`, `create_application`, `configure_environment`
 
-**Authority:** Defines verification only; does not execute tests, supply business data, or establish release readiness.
+**Authority:** Changes Control Plane repository metadata only; does not change the remote repository, code, permissions, or deployment.
+
+### `create_repository` — execute_action
+
+Attach a repository record to a Product without provider registry discovery.
+
+**When:** Use for a manually described repository; for GitHub-backed delivery prefer create_github_connection and import_repository so provider identity is registered.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `name` (string, required): Repository name
+- `url` (string, required): Repository URL
+- `role` (string, optional): Repository purpose; defaults APPLICATION
+- `provider` (string, optional): Provider label
+
+**Output:** Persisted Product Repository record.
+
+**Errors:**
+
+- `NOT_FOUND`: 'product not found'; refresh Product context.
+- `VALIDATION`: 'invalid repository role' or 'name and url required'; correct fields.
+
+**Example:** `{"action":"create_repository","product_id":"PRODUCT","data":{"name":"service","url":"https://github.com/team/service","role":"APPLICATION"}}`
+
+**Related:** `create_github_connection`, `import_repository`, `classify_repository`
+
+**Authority:** Creates a repository attachment record only; does not clone, discover provider identity, grant credentials, or change remote state.
+
+### `import_repository` — execute_action
+
+Attach a repository observed in a GitHub connection's registry to a Product.
+
+**When:** Use after connection setup/discovery; choose the repository's correct role and branch names from provider evidence.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `connection_id` (string, required): Connection granted to Product
+- `full_name` (string, required): owner/repository name matching connection owner
+- `role` (string, required): Supported repository role
+- `default_branch` (string, required): Observed default branch
+- `base_branch` (string, optional): Base branch; defaults to default_branch
+- `url` (string, optional): Repository URL; defaults to canonical GitHub URL
+
+**Output:** Product repository attachment and registered repository identity.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'valid base_branch required', 'product has no grant for instance connection', 'repository owner, valid role and default_branch required', and 'repository already imported'; use observed names, a grant, and safe branch names.
+- `NOT_FOUND`: Verify Product, connection and repository discovery.
+
+**Example:** `{"action":"import_repository","product_id":"PRODUCT","data":{"connection_id":"CONNECTION","full_name":"team/service","role":"APPLICATION","default_branch":"main"}}`
+
+**Related:** `create_github_connection`, `grant_connection`, `create_application`, `classify_repository`
+
+**Authority:** Attaches provider-observed repository identity to metadata; does not clone, modify code, or grant additional provider permissions.
+
+## verification
+
+### `create_test_scenario` — execute_action
+
+**Same operation:** `mcp_tool:create_test_scenario`, `http_route:POST /api/test-scenarios`
+
+Create immutable version 1 of a Product test scenario definition.
+
+**When:** Use to define repeatable acceptance checks before executing them; include concrete steps and expected outcomes.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `title` (string, required): Scenario title
+- `objective` (string, required): Scenario objective
+- `mechanism` (string, required): How checks are performed
+- `steps` (array[string], required): Nonblank execution steps
+- `expected_outcomes` (array[string], required): Nonblank expected results
+- `preconditions` (array[string], optional): Preconditions
+- `integration_ids` (array[string], optional): Unique Product-scoped Integrations
+- `blocking` (boolean, optional): Whether scenario blocks release
+
+**Output:** Immutable ScenarioVersion with generated scenario identity and version 1.
+
+**Errors:**
+
+- `NOT_FOUND`: Product missing; verify Product ID.
+- `VALIDATION`: Messages include 'title, objective, mechanism, steps and expected_outcomes required', 'steps and outcomes cannot be empty', and 'unique product-scoped integration_ids required'; complete the definition and scope.
+
+**Example:** `{"action":"create_test_scenario","product_id":"PRODUCT","data":{"title":"API smoke","objective":"Validate health","mechanism":"HTTP","steps":["GET /healthz"],"expected_outcomes":["200"]}}`
+
+**Related:** `revise_test_scenario`, `record_scenario_run`, `create_gate`
+
+**Authority:** Defines checks only; does not execute tests, assert passing results, or authorize release.
 
 ### `record_scenario_run` — mcp_tool
 
@@ -2270,6 +2680,39 @@ Record execution evidence for one immutable scenario version against an exact co
 **Authority:** Records supplied evidence; does not execute tests or make failed evidence disappear.
 
 ## work tracking
+
+### `create_hotfix` — execute_action
+
+**Same operation:** `mcp_tool:create_hotfix`, `http_route:POST /api/features/{id}/hotfix`
+
+Create a small hotfix Integration under an existing Feature, optionally linked to a finding.
+
+**When:** Use for a narrowly scoped urgent fix; provide exact Feature scope and a focused objective.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `feature_id` (string, required): Parent Feature
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `title` (string, required): Hotfix title
+- `objective` (string, required): Intended outcome
+- `finding_id` (string, optional): Related finding
+- `repositories` (array[string], optional): Repositories in scope
+- `remaining` (array[string], optional): Outstanding work
+
+**Output:** Created hotfix Integration and related Feature record references.
+
+**Errors:**
+
+- `NOT_FOUND`: Feature or referenced finding missing; refresh Feature context.
+- `VALIDATION`: 'title and objective required' or 'finding must belong to same feature'; supply a focused title/objective and a finding linked to this Feature. Repository scope errors require using repositories within the Feature.
+
+**Example:** `{"action":"create_hotfix","feature_id":"FEATURE","data":{"title":"Fix timeout retry","objective":"Avoid duplicate requests"}}`
+
+**Related:** `resume`, `create_integration`, `get_integration_context`
+
+**Authority:** Creates work tracking only; does not edit source, skip checks, or deploy.
 
 ### `execute` — mcp_tool
 
@@ -2959,39 +3402,6 @@ Append resolution evidence for a Finding.
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `create_hotfix` — mcp_tool
-
-**Same operation:** `execute_action:create_hotfix`, `http_route:POST /api/features/{id}/hotfix`
-
-Create a focused hotfix Integration under a Feature, optionally linked to a Finding.
-
-**When:** Use for scoped corrective work; record and verify the implementation through normal workflow.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution
-- `feature_id` (string, required): Parent Feature
-- `title` (string, required): Hotfix title
-- `objective` (string, required): Intended correction
-- `finding_id` (string, optional): Related Finding
-- `repositories` (array[string], optional): Repository scope
-- `remaining` (array[string], optional): Outstanding work
-
-**Output:** Created Integration identity and lifecycle record.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"name":"create_hotfix","arguments":{"feature_id":"FEATURE","title":"Fix retries","objective":"Bound transient retries"}}`
-
-**Related:** `resume`, `record_progress`, `create_test_scenario`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
 ## workers
 
 ### `get_worker_history` — mcp_tool
@@ -3049,6 +3459,65 @@ Read one bounded native worker job and its attempts.
 **Authority:** Read only; does not run, retry, or authorize a worker job.
 
 ## workspace
+
+### `create_application` — execute_action
+
+Add a component record tied to one repository attached to the Product.
+
+**When:** Use to model an application or library component before configuring delivery or selecting source revisions.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `name` (string, required): Component name
+- `repository_id` (string, required): Product attached repository
+- `kind` (string, optional): Component kind; defaults APPLICATION
+- `path` (string, optional): Clean repository relative component path
+- `parameters` (object, optional): String-valued component parameters
+
+**Output:** Persisted Application component record.
+
+**Errors:**
+
+- `NOT_FOUND`: 'product not found' or attached repository missing; refresh Product context.
+- `VALIDATION`: Messages include 'application name required', 'repository must belong to product', 'application path must be a clean repository-relative path', 'invalid component kind', and 'repository purpose does not support this component kind'; correct values and repository role.
+
+**Example:** `{"action":"create_application","product_id":"PRODUCT","data":{"name":"api","repository_id":"REPOSITORY","path":"services/api"}}`
+
+**Related:** `create_repository`, `classify_repository`, `configure_component`
+
+**Authority:** Creates Control Plane metadata only; does not create files, modify source, or configure a build by itself.
+
+### `delete_product` — execute_action
+
+Delete one Product and its Product-owned metastore records after explicit name confirmation.
+
+**When:** Use only when the Product should be removed and all active pins, builds, deployments and operations have been cleared.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `product_id` (string, required): Product ID to delete
+- `actor` (string, optional): Attribution
+- `data` (object, required): Action fields
+- `name` (string, required): Exact current Product name as deletion confirmation
+
+**Output:** {"deleted_product_id":"PRODUCT"}; append-only event history and instance registry remain.
+
+**Errors:**
+
+- `NOT_FOUND`: 'product not found'; verify ID.
+- `VALIDATION`: Messages include 'type the exact product name to confirm deletion', 'native-quarantined product cannot be deleted; ownership transfer is not implemented', 'product has active artifact pins; release each pin explicitly before deletion', 'product has unfinished deployments; reconcile before deletion', 'product has unfinished builds; cancel queued work and reconcile in-flight builds before deletion', and 'product has unfinished operations; finish or cancel them before deletion'; clear each blocker and retry.
+- `CONFLICT`: Active reservation prevents deletion; inspect current reservation state.
+
+**Example:** `{"action":"delete_product","product_id":"PRODUCT","data":{"name":"Exact Product Name"}}`
+
+**Related:** `get_project_context`, `get_operation`, `release_artifact_pin`
+
+**Authority:** Deletes Control Plane Product metadata only after guards; does not delete repositories, provider resources, images, or application data.
 
 ### `export_workspace_configuration` — mcp_tool
 
@@ -3245,21 +3714,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `execute_action:classify_repository`
-- `execute_action:configure_artifact_retention`
-- `execute_action:configure_component`
-- `execute_action:configure_environment`
-- `execute_action:configure_publication`
-- `execute_action:create_application`
-- `execute_action:create_environment`
-- `execute_action:create_external_system`
-- `execute_action:create_github_connection`
-- `execute_action:create_repository`
-- `execute_action:create_system_relationship`
-- `execute_action:delete_product`
-- `execute_action:grant_connection`
-- `execute_action:import_repository`
-- `execute_action:pin_artifact`
 - `execute_action:plan_composition`
 - `execute_action:plan_release`
 - `execute_action:queue_intelligence_task`
