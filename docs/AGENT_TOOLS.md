@@ -111,10 +111,7 @@ Read normalized protected artifact roots, effective retention policies, stored a
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `product not found`; refresh Product context and use an existing product_id.
 
 **Example:** `{"name":"get_artifact_retention","arguments":{"product_id":"PRODUCT"}}`
 
@@ -141,10 +138,8 @@ List Product-scoped signing request handles and per-key signature evidence.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: `invalid signature scope or bounds` (missing product_id, limit outside 0..100, or malformed digest) or `invalid signature cursor`; provide a valid Product, digest, limit and cursor bound to the same Product/digest.
+- `FORBIDDEN`: Product read authorization failed; use an authorized Product scope.
 
 **Example:** `{"name":"list_signatures","arguments":{"product_id":"PRODUCT"}}`
 
@@ -1374,10 +1369,8 @@ Claim responsibility for resolving one persisted composition conflict externally
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `conflict not found`; reload the operation conflict list and use its exact conflict_id.
+- `VALIDATION`: `conflict product mismatch` or `conflict already claimed or resolved`; use the owning Product and claim only a conflict still requiring resolution (or already claimed by you).
 
 **Example:** `{"name":"claim_composition_conflict","arguments":{"product_id":"PRODUCT","conflict_id":"CONFLICT"}}`
 
@@ -1431,10 +1424,7 @@ Read desired GitOps state separately from reconciled and runtime observations.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `environment not found`; refresh Product context and use the exact environment_id.
 
 **Example:** `{"name":"get_environment_state","arguments":{"environment_id":"ENVIRONMENT"}}`
 
@@ -1520,10 +1510,9 @@ Queue execution of one selected immutable composition in its configured environm
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Composition not found; refresh environment composition and use its exact ID.
+- `VALIDATION`: Composition must belong to an eligible configured environment; reread composition/environment state and satisfy readiness, conflict-resolution and delivery policy requirements before retrying.
+- `CONFLICT`: Desired selection/reservation changed or a conflicting operation is active; reread current environment state and retry only with current selection.
 
 **Example:** `{"name":"reconcile_composition","arguments":{"composition_id":"COMPOSITION"}}`
 
@@ -1551,10 +1540,8 @@ Record the claim owner's externally completed conflict resolution commit and rat
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `conflict not found`; reload conflicts and use the exact conflict_id.
+- `VALIDATION`: `conflict product mismatch` or `claim owner, exact commit and rationale required`; use the owning Product, hold the claim as the attributed actor, and provide a full commit SHA and non-empty rationale.
 
 **Example:** `{"name":"record_conflict_resolution","arguments":{"product_id":"PRODUCT","conflict_id":"CONFLICT","commit":"SHA","rationale":"Keep both changes"}}`
 
@@ -1584,10 +1571,8 @@ Record caller-supplied runtime observation against an exact child operation, env
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Operation not found; refresh get_operation and use the exact successful deployment child ID.
+- `VALIDATION`: `target must be at most 300 characters`, `runtime evidence must match successful deployment commit/digest/environment`, or `deployment superseded`; copy the exact environment, GitOps commit and digest from the successful current child and include observed details.
 
 **Example:** `{"name":"record_runtime_observation","arguments":{"operation_id":"OP","gitops_commit":"SHA","artifact_digest":"sha256:DIGEST","healthy":true,"environment_id":"ENV","details":"All replicas ready"}}`
 
@@ -1614,10 +1599,7 @@ Queue read-only Kubernetes/Flux and GitOps/Actions inventory for an environment.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: `environment must belong to product` or `component must belong to product`; refresh scoped context and provide an environment and optional component from the requested Product.
 
 **Example:** `{"name":"refresh_environment_runtime","arguments":{"product_id":"PRODUCT","environment_id":"ENV"}}`
 
@@ -2172,10 +2154,8 @@ Acknowledge durable acceptance of a claimed supervisor event.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `execution_event not found`; reload execution events and use a current event_id.
+- `VALIDATION`: `SCOPE_MISMATCH` or `INVALID_STATE` when event is outside Product, delivery is missing/stale/already acknowledged, supervisor_id is empty, or outcome is not delivered/failed/unsupported; reclaim the delivery and submit the returned delivery_id with a supported outcome.
 
 **Example:** `{"product_id":"PRODUCT","data":{"event_id":"EVENT","delivery_id":"DELIVERY"}}`
 
@@ -2198,10 +2178,8 @@ Record resolution of a supervisor event after its underlying condition is addres
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `execution_event not found`; reload execution events and use a current event_id.
+- `VALIDATION`: `SCOPE_MISMATCH` or `INVALID_STATE` when the event is outside Product, already resolved, evidence/supervisor_id is empty, execution is absent, fence is stale, or its condition remains active; refresh execution state and condition, then submit current fence and non-empty evidence.
 
 **Example:** `{"product_id":"PRODUCT","data":{"event_id":"EVENT","resolution":"member resumed"}}`
 
@@ -2299,10 +2277,8 @@ Create an orchestrator-owned group for coordinating multiple Integration members
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found`; refresh Product integrations and use existing integration IDs.
+- `VALIDATION`: `actor required`, `group fields required`, `SCOPE_MISMATCH`, or invalid harness values; provide actor, group name, orchestrator_id, at least one same-Product Integration and a valid harness kind/target.
 
 **Example:** `{"actor":"agent/orchestrator","data":{"name":"release","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}},"product_id":"PRODUCT"}`
 
@@ -2331,10 +2307,8 @@ Add an Integration to an execution group with its desired completion state.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `execution_group not found` or `integration not found`; refresh group and Product integration context.
+- `VALIDATION`: `actor required` or `SCOPE_MISMATCH`; use an open group and Integration in the same Product.
 
 **Example:** `{"actor":"agent/orchestrator","data":{"desired_state":"complete","group_id":"GROUP"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2362,10 +2336,8 @@ Remove a member from an execution group.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `execution_group not found` or `integration not found`; refresh group and Product integration context.
+- `VALIDATION`: `actor required` or `SCOPE_MISMATCH`; use an Integration in the same Product.
 
 **Example:** `{"actor":"agent/orchestrator","data":{"group_id":"GROUP"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2393,10 +2365,8 @@ Register or replace the orchestrator harness target for a group.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `execution_group not found`; refresh Product execution groups and use the exact group_id.
+- `VALIDATION`: `actor required`, `harness required`, `SCOPE_MISMATCH`, `invalid harness kind`, `invalid tmux target`, or `harness kind required`; provide a same-Product group and a valid harness object.
 
 **Example:** `{"actor":"agent/orchestrator","data":{"group_id":"GROUP","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}},"product_id":"PRODUCT"}`
 
@@ -2425,10 +2395,8 @@ Claim an Integration execution and obtain its current fencing token.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found`; refresh Product integration context.
+- `VALIDATION`: `actor required`, `SCOPE_MISMATCH`, `LEASE_HELD`, `INVALID_STATE`, `DESIRED_STATE_INVALID`, `executor identity required`, `invalid lease ttl`, `invalid stalled timeout`, or invalid harness values; use the correct Product, inspect current lease/state, then claim only unassigned/exited_incomplete/paused work with valid executor and options.
 
 **Example:** `{"actor":"agent/worker","data":{"execution_group_id":"GROUP","executor":"agent/worker"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2457,10 +2425,8 @@ Renew the current executor's active execution lease using its fence.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `execution not found`; refresh execution group/state and claim the Integration first.
+- `VALIDATION`: `actor required`, `SCOPE_MISMATCH`, `STALE_FENCE`, `INVALID_STATE`, `LEASE_EXPIRED`, or `progress receipt exceeds limit`; use the current fence, valid active execution and receipt no longer than 256 characters.
 
 **Example:** `{"actor":"agent/worker","data":{"execution_fence":1,"executor":"agent/worker"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2488,10 +2454,8 @@ Take over another executor's lost or stalled execution after the delivered event
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: `integration not found` or `execution not found`; refresh execution state and verify the Integration.
+- `VALIDATION`: `actor required`, `TAKEOVER_CHECK_REQUIRED`, `STALE_FENCE`, `INVALID_STATE`, `TAKEOVER_NOT_REQUIRED`, or invalid executor/harness values; use a delivered lost/stalled event, current fence, changed executor identity and current state.
 
 **Example:** `{"actor":"agent/recovery","data":{"executor":"agent/recovery"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 

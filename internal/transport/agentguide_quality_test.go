@@ -15,6 +15,24 @@ import (
 	"releasecontrol/internal/persistence"
 )
 
+const maxIdenticalErrorGroup = 33
+
+func TestAgentGuideNoBoilerplateErrors(t *testing.T) {
+	groups := map[string][]string{}
+	for _, entry := range agentguide.Registry() {
+		encoded, err := json.Marshal(entry.Errors)
+		if err != nil {
+			t.Fatalf("encode %s errors: %v", entry.Name, err)
+		}
+		groups[string(encoded)] = append(groups[string(encoded)], entry.Kind+":"+entry.Name)
+	}
+	for _, entries := range groups {
+		if len(entries) > maxIdenticalErrorGroup {
+			t.Errorf("%d entries share an identical Errors block (maximum %d): %v", len(entries), maxIdenticalErrorGroup, entries)
+		}
+	}
+}
+
 func TestAgentGuideEntriesHaveCompleteBriefs(t *testing.T) {
 	entries := agentguide.Registry()
 	if pending := agentguide.PendingDocumentation(); len(pending) != 0 {
