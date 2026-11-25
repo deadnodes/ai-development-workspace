@@ -116,6 +116,57 @@ func TestProviderSemanticTransportsDelegate(t *testing.T) {
 		t.Fatalf("optional inputs not omitted: %+v", minimalCommand)
 	}
 }
+
+func TestExecutionToolsAcceptDocumentedMCPInputs(t *testing.T) {
+	svc := &boundaryService{commands: make(chan domain.Command, 32), queries: make(chan [2]string, 1)}
+	server := httptest.NewServer(transport.New(svc, transport.Options{}))
+	defer server.Close()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "execution-schema-test", Version: "1"}, nil).Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	harness := map[string]any{"kind": "codex", "session_ref": "session-12345678", "tmux_target": "orch:0.1"}
+	cases := []struct {
+		name, integration string
+		data              map[string]any
+	}{
+		{"claim_execution", "i", map[string]any{"orchestrator_id": "orch", "agent_id": "agent", "harness": harness}},
+		{"heartbeat_execution", "i", map[string]any{"execution_fence": 1}},
+		{"report_execution", "i", map[string]any{"execution_fence": 1, "state": "waiting", "reason": "blocked"}},
+		{"release_execution", "i", map[string]any{"execution_fence": 1, "state": "paused"}},
+		{"takeover_execution", "i", map[string]any{"orchestrator_id": "orch", "agent_id": "agent", "fence": 1, "state_check_reference": "event", "harness": harness}},
+		{"set_desired_state", "i", map[string]any{"desired": "working"}},
+		{"create_execution_group", "", map[string]any{"name": "group", "orchestrator_id": "orch", "integration_ids": []string{"i"}, "orchestrator_harness": harness}},
+		{"add_execution_group_member", "", map[string]any{"group_id": "group", "integration_id": "i"}},
+		{"remove_execution_group_member", "", map[string]any{"group_id": "group", "integration_id": "i"}},
+		{"set_execution_group_harness", "", map[string]any{"group_id": "group", "harness": harness}},
+		{"set_product_stalled_timeout", "", map[string]any{"timeout": "5m"}},
+		{"report_turn_end", "", map[string]any{"harness_kind": "codex", "session_ref": "session-12345678", "turn_id": "turn-1", "cwd": "/work"}},
+		{"claim_execution_event_delivery", "", map[string]any{"event_id": "event", "supervisor_id": "sup"}},
+		{"ack_execution_event", "", map[string]any{"event_id": "event", "delivery_id": "delivery", "outcome": "delivered"}},
+		{"resolve_execution_event", "", map[string]any{"event_id": "event", "resolution": "resolved"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"actor": "agent/test", "product_id": "p", "data": tc.data}
+			if tc.integration != "" {
+				args["integration_id"] = tc.integration
+			}
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: tc.name, Arguments: args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.IsError {
+				t.Fatalf("MCP rejected documented fields: %+v", result)
+			}
+			got := <-svc.commands
+			if got.Action != tc.name || got.Data["harness"] != nil && got.Data["harness"].(map[string]any)["tmux_target"] != "orch:0.1" && tc.name != "create_execution_group" {
+				t.Fatalf("input was altered: %+v", got)
+			}
+		})
+	}
+}
 func TestDeployEndpointRejectsUnknownInput(t *testing.T) {
 	svc := &boundaryService{commands: make(chan domain.Command, 1), queries: make(chan [2]string, 1)}
 	server := httptest.NewServer(transport.New(svc, transport.Options{}))

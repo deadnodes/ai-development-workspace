@@ -20,6 +20,7 @@ Create `~/.config/release-control/supervisor.json` with mode `0600`:
   "idle_window": "5s",
   "wake_timeout": "120s",
   "verify_for": "5s",
+  "submit_delay": "800ms",
   "headless_kinds": [],
   "allowed_kinds": ["codex", "claude_code", "claude_desktop", "ccr", "other"]
 }
@@ -58,9 +59,20 @@ ssh -t <host> tmux attach -t orch-backend
 
 The supervisor waits for stable pane contents and checks the last 15 lines for
 the interactive busy marker before sending a literal message and Enter. It
-acknowledges `delivered` only after seeing “esc to interrupt” or when the typed
-message has disappeared from the last five lines. Otherwise it records
-`wake not observed`. A busy pane is acknowledged `failed` with detail `busy`.
+waits `submit_delay` (default `800ms`) after literal input and before sending
+Enter. A delivery is accepted only after observing the case insensitive
+`esc to interrupt` marker within `verify_for`. If the marker does not appear
+within three seconds, it sends Enter once more and continues verification. If
+the last eight pane lines already contain `[RCP supervisor]`, it sends Enter
+without typing another copy, to submit a previous pending wake. Otherwise it
+records `wake not observed`. A busy pane is acknowledged `failed` with detail
+`busy`.
+
+When running Codex TUI with `-a never`, configure the RCP server under
+`mcp_servers.<name>.default_tools_approval_mode = "approve"`; without this,
+every MCP call fails with “requires approval, but approval policy is never”.
+On first start in a new directory, Codex may also ask to trust the folder and
+approve hooks. Complete those prompts before expecting supervisor wakes to run.
 
 ## Turn-end hooks
 
@@ -89,6 +101,7 @@ cat > ~/.config/release-control/supervisor.json <<'JSON'
   "idle_window": "5s",
   "wake_timeout": "120s",
   "verify_for": "5s",
+  "submit_delay": "800ms",
   "allowed_kinds": ["codex", "claude_code"],
   "headless_kinds": []
 }

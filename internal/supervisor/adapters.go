@@ -77,8 +77,13 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	if paneBusy(after) || paneHash(before) != paneHash(after) {
 		return WakeResult{Outcome: Failed, Detail: "busy"}
 	}
-	if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "-l", req.Message); err != nil {
-		return WakeResult{Outcome: Failed, Detail: "tmux send failed"}
+	if !containsLastLines(after, "[RCP supervisor]", 8) {
+		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "-l", req.Message); err != nil {
+			return WakeResult{Outcome: Failed, Detail: "tmux send failed"}
+		}
+		if err = waitDuration(ctx, a.Config.SubmitFor); err != nil {
+			return WakeResult{Outcome: Failed, Detail: "tmux submit interrupted"}
+		}
 	}
 	if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux enter failed"}
@@ -89,10 +94,18 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	}
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, verifyFor)
 	defer cancelVerify()
+	retryAt := time.Now().Add(3 * time.Second)
+	retried := false
 	for {
 		pane, e := a.capture(verifyCtx, req.TmuxTarget)
-		if e == nil && (paneBusy(pane) || !messageInLastLines(pane, req.Message, 5)) {
+		if e == nil && paneBusy(pane) {
 			return WakeResult{Outcome: Delivered, Detail: "tmux wake observed"}
+		}
+		if !retried && !time.Now().Before(retryAt) {
+			if err = a.run(verifyCtx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
+				return WakeResult{Outcome: Failed, Detail: "tmux retry enter failed"}
+			}
+			retried = true
 		}
 		select {
 		case <-verifyCtx.Done():
@@ -111,7 +124,7 @@ func (a ExecAdapter) headlessAllowed(kind string) bool {
 	return false
 }
 
-func messageInLastLines(p []byte, message string, count int) bool {
+func containsLastLines(p []byte, message string, count int) bool {
 	lines := strings.Split(strings.TrimRight(string(p), "\n"), "\n")
 	if len(lines) > count {
 		lines = lines[len(lines)-count:]

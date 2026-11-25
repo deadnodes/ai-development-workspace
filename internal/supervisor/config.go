@@ -20,6 +20,7 @@ type Config struct {
 	IdleWindow    string        `json:"idle_window,omitempty"`
 	WakeTimeout   string        `json:"wake_timeout,omitempty"`
 	VerifyWindow  string        `json:"verify_for,omitempty"`
+	SubmitDelay   string        `json:"submit_delay,omitempty"`
 	RateLimit     string        `json:"rate_limit,omitempty"`
 	AllowedKinds  []string      `json:"allowed_kinds,omitempty"`
 	HeadlessKinds []string      `json:"headless_kinds,omitempty"`
@@ -32,6 +33,7 @@ type Config struct {
 	IdleFor       time.Duration `json:"-"`
 	WakeFor       time.Duration `json:"-"`
 	VerifyFor     time.Duration `json:"-"`
+	SubmitFor     time.Duration `json:"-"`
 	RateFor       time.Duration `json:"-"`
 }
 
@@ -104,6 +106,13 @@ func (c *Config) Normalize() error {
 			return errors.New("invalid verify_for")
 		}
 	}
+	submit := 800 * time.Millisecond
+	if c.SubmitDelay != "" {
+		submit, err = time.ParseDuration(c.SubmitDelay)
+		if err != nil {
+			return errors.New("invalid submit_delay")
+		}
+	}
 	rate := idle * 6
 	if c.RateLimit != "" {
 		rate, err = time.ParseDuration(c.RateLimit)
@@ -111,10 +120,10 @@ func (c *Config) Normalize() error {
 			return errors.New("invalid rate_limit")
 		}
 	}
-	if poll <= 0 || poll > time.Hour || idle <= 0 || idle > 10*time.Minute || wake <= 0 || wake > time.Hour || verify <= 0 || verify > time.Hour || rate < 0 || rate > 24*time.Hour {
+	if poll <= 0 || poll > time.Hour || idle <= 0 || idle > 10*time.Minute || wake <= 0 || wake > time.Hour || verify <= 0 || verify > time.Hour || submit < 0 || submit > time.Minute || rate < 0 || rate > 24*time.Hour {
 		return errors.New("invalid supervisor timing configuration")
 	}
-	c.PollEvery, c.IdleFor, c.WakeFor, c.VerifyFor, c.RateFor = poll, idle, wake, verify, rate
+	c.PollEvery, c.IdleFor, c.WakeFor, c.VerifyFor, c.SubmitFor, c.RateFor = poll, idle, wake, verify, submit, rate
 	if c.SupervisorID == "" || len(c.SupervisorID) > 128 {
 		return errors.New("invalid supervisor_id")
 	}

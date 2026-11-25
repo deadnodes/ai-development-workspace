@@ -401,10 +401,10 @@ func TestTmuxAdapterRequiresIdleAndVerifiesPaneChange(t *testing.T) {
 	if err := os.WriteFile(state, []byte("idle prompt"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	writeFake(t, filepath.Join(dir, "tmux"), "printf '%s\\n' \"$*\" >> \"$TMUX_LOG\"\ncase \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'working\\n' > \"$PANE\";; esac;; esac\n")
+	writeFake(t, filepath.Join(dir, "tmux"), "printf '%s\\n' \"$*\" >> \"$TMUX_LOG\"\ncase \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'working\\n' > \"$PANE\";; *Enter*) printf 'Codex: esc to interrupt\\n' > \"$PANE\";; esac;; esac\n")
 	t.Setenv("TMUX_LOG", log)
 	t.Setenv("PANE", state)
-	a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, WakeFor: 2 * time.Second}}
+	a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: 2 * time.Second}}
 	r := a.Wake(context.Background(), WakeRequest{Kind: "codex", SessionRef: "session-12345678", TmuxTarget: "orch:0.1", Message: "literal safe"})
 	if r.Outcome != Delivered {
 		t.Fatalf("idle tmux wake: %+v", r)
@@ -425,6 +425,7 @@ func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) 
 	}{
 		{"busy marker", "Claude Esc to interrupt", Delivered},
 		{"still typed", "idle prompt\\nliteral safe", Failed},
+		{"wrapped typed message", "idle prompt\\n[RCP supervisor] a long message\\nthat wraps across lines", Failed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -434,7 +435,7 @@ func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) 
 			// post-Enter scripted output determines whether that line was consumed.
 			writeFake(t, filepath.Join(dir, "tmux"), "case \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'idle prompt\\nliteral safe\\n' > \"$PANE\";; *Enter*) printf '"+strings.ReplaceAll(tc.final, "\\n", "\\n")+"\\n' > \"$PANE\";; esac;; esac\n")
 			t.Setenv("PANE", pane)
-			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, WakeFor: 5 * time.Second, VerifyFor: 200 * time.Millisecond}}
+			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: 5 * time.Second, VerifyFor: 200 * time.Millisecond}}
 			got := a.Wake(context.Background(), WakeRequest{Kind: "codex", TmuxTarget: "orch", Message: "literal safe"})
 			if got.Outcome != tc.want {
 				t.Fatalf("got %+v", got)
@@ -443,6 +444,48 @@ func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) 
 				t.Fatalf("wrong failure: %+v", got)
 			}
 		})
+	}
+}
+
+func TestTmuxWakeRetriesSwallowedEnter(t *testing.T) {
+	dir := t.TempDir()
+	pane, calls := filepath.Join(dir, "pane"), filepath.Join(dir, "enters")
+	_ = os.WriteFile(pane, []byte("idle prompt"), 0600)
+	writeFake(t, filepath.Join(dir, "tmux"), `case "$1" in
+has-session) exit 0;;
+capture-pane) cat "$PANE";;
+send-keys) case "$*" in *" -l "*) printf 'typed wrapped\nmessage\n' > "$PANE";; *Enter*) n=0; test -f "$ENTERS" && n=$(cat "$ENTERS"); n=$((n+1)); printf '%s' "$n" > "$ENTERS"; if [ "$n" -ge 2 ]; then printf 'Codex: Esc to Interrupt\n' > "$PANE"; fi;; esac;;
+esac
+`)
+	t.Setenv("PANE", pane)
+	t.Setenv("ENTERS", calls)
+	a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: 5 * time.Second, VerifyFor: 4 * time.Second}}
+	got := a.Wake(context.Background(), WakeRequest{Kind: "codex", TmuxTarget: "orch", Message: "[RCP supervisor] a long message that wraps"})
+	if got.Outcome != Delivered || got.Detail != "tmux wake observed" {
+		t.Fatalf("retry failed to deliver: %+v", got)
+	}
+	if raw, _ := os.ReadFile(calls); string(raw) != "2" {
+		t.Fatalf("expected exactly one Enter retry, got %q", raw)
+	}
+}
+
+func TestTmuxWakeSubmitsLeftoverWithoutTypingDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	pane, log := filepath.Join(dir, "pane"), filepath.Join(dir, "argv")
+	_ = os.WriteFile(pane, []byte("idle\n[RCP supervisor] previous pending message"), 0600)
+	writeFake(t, filepath.Join(dir, "tmux"), `printf '%s\n' "$*" >> "$TMUX_LOG"
+case "$1" in has-session) exit 0;; capture-pane) cat "$PANE";; send-keys) case "$*" in *Enter*) printf 'Codex: esc to interrupt\n' > "$PANE";; esac;; esac
+`)
+	t.Setenv("PANE", pane)
+	t.Setenv("TMUX_LOG", log)
+	a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: 2 * time.Second, VerifyFor: time.Second}}
+	got := a.Wake(context.Background(), WakeRequest{Kind: "codex", TmuxTarget: "orch", Message: "[RCP supervisor] duplicate must not be typed"})
+	if got.Outcome != Delivered {
+		t.Fatalf("leftover wake not submitted: %+v", got)
+	}
+	raw, _ := os.ReadFile(log)
+	if strings.Contains(string(raw), "-l") || strings.Count(string(raw), "Enter") != 1 {
+		t.Fatalf("expected only one Enter, got %s", raw)
 	}
 }
 
@@ -464,7 +507,7 @@ func TestConfigDefaultsAndTmuxValidation(t *testing.T) {
 	if err := c.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if c.PollEvery != 15*time.Second || c.IdleFor != 5*time.Second || c.WakeFor != 120*time.Second {
+	if c.PollEvery != 15*time.Second || c.IdleFor != 5*time.Second || c.WakeFor != 120*time.Second || c.SubmitFor != 800*time.Millisecond {
 		t.Fatalf("defaults: %+v", c)
 	}
 	for _, v := range []string{"orch", "orch:0.1", "session_a"} {
