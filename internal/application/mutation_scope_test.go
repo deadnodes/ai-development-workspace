@@ -14,12 +14,14 @@ import (
 // without updating its trusted persistence scope.
 type checkingScopeStore struct {
 	*memoryStore
-	t     *testing.T
-	calls int
+	t      *testing.T
+	calls  int
+	scopes []domain.StateMutationScope
 }
 
 func (s *checkingScopeStore) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
 	s.calls++
+	s.scopes = append(s.scopes, scope)
 	return s.memoryStore.Update(ctx, func(st *domain.State) error {
 		raw, _ := json.Marshal(st)
 		var before domain.State
@@ -53,6 +55,27 @@ func (s *checkingScopeStore) UpdateScoped(ctx context.Context, scope domain.Stat
 		}
 		return nil
 	})
+}
+
+func TestExecutionCommandsUseNarrowMutationScopes(t *testing.T) {
+	s, m := fixture(t)
+	checked := &checkingScopeStore{memoryStore: m, t: t}
+	s.store = checked
+	exec(t, s, domain.Command{Action: "claim_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "a"}})
+	exec(t, s, domain.Command{Action: "heartbeat_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"fence": float64(1)}})
+	exec(t, s, domain.Command{Action: "release_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"fence": float64(1), "outcome": "paused"}})
+	exec(t, s, domain.Command{Action: "create_execution_group", ProductID: "p", Data: map[string]any{"name": "g", "orchestrator_id": "o", "integration_ids": []string{"i"}}})
+	exec(t, s, domain.Command{Action: "set_product_stalled_timeout", ProductID: "p", Data: map[string]any{"seconds": float64(30)}})
+	if checked.calls != 5 {
+		t.Fatalf("scoped calls=%d", checked.calls)
+	}
+	wantMutable := [][]string{{"integration_executions"}, {"integration_executions"}, {"integration_executions"}, nil, {"products"}}
+	wantAppend := [][]string{{"events"}, {"events"}, {"events"}, {"integration_executions", "execution_groups", "events"}, {"events"}}
+	for i, scope := range checked.scopes {
+		if !reflect.DeepEqual(scope.MutableCollections, wantMutable[i]) || !reflect.DeepEqual(scope.AppendCollections, wantAppend[i]) {
+			t.Errorf("scope[%d]=%+v", i, scope)
+		}
+	}
 }
 func TestCommonCommandMutationScopes(t *testing.T) {
 	s, m := fixture(t)

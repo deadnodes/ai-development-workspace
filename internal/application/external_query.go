@@ -59,7 +59,15 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 					} else if ex.State == "waiting_external" || ex.State == "blocked" {
 						next = "wait for external condition"
 					}
-					members = append(members, map[string]any{"integration": in, "execution": ex, "desired_state": func() string {
+					effectiveTimeout, timeoutSource := 900, "global"
+					if ex != nil {
+						global := 900
+						if s.executionDefaults != nil {
+							global = s.executionDefaults.StalledTimeout
+						}
+						effectiveTimeout, timeoutSource = effectiveStalledTimeout(&st, ex, global)
+					}
+					members = append(members, map[string]any{"integration": in, "execution": ex, "effective_stalled_timeout_seconds": effectiveTimeout, "stalled_timeout_source": timeoutSource, "desired_state": func() string {
 						if ex != nil {
 							return ex.DesiredState
 						}

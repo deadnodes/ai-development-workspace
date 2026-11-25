@@ -24,6 +24,22 @@ func cloneAuthorityConfig(t *testing.T, c *buildconfig.Config) *buildconfig.Conf
 	return &out
 }
 
+func TestLegacyGlobalFingerprintMatchesMain48bd4f1(t *testing.T) {
+	s, _, _, _ := deploymentFixture(t)
+	const mainFingerprint = "99896a39d66075a81397498bab54185741c8cf1b1e601ff2f5dbcf25bee3dfb1"
+	if s.builds.legacyGlobal != mainFingerprint {
+		t.Fatalf("legacy fingerprint changed: got %s want main 48bd4f1 %s", s.builds.legacyGlobal, mainFingerprint)
+	}
+	config := cloneAuthorityConfig(t, s.builds.config)
+	config.ReconcileInterval, config.HeartbeatInterval, config.LeaseTTL, config.StalledTimeout = 2, 3, 60, 10
+	if err := s.ConfigureBuilds(config, &fakeForgejo{head: strings.Repeat("a", 40)}, &fakeBuildRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	if s.builds.legacyGlobal != mainFingerprint {
+		t.Fatalf("execution policy entered build authority: %s", s.builds.legacyGlobal)
+	}
+}
+
 func TestProfileAuthorityScope(t *testing.T) {
 	for _, tc := range []struct {
 		name                        string

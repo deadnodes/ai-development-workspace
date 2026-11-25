@@ -3,8 +3,54 @@ package application
 import (
 	"context"
 	"releasecontrol/internal/domain"
+	"slices"
 	"time"
 )
+
+func statusReachedIntegration(actual, desired string) bool {
+	order := map[string]int{"planned": 0, "working": 1, "implemented": 2, "verifying": 3, "ready": 4, "released": 5}
+	a, aok := order[actual]
+	d, dok := order[desired]
+	return aok && dok && a >= d
+}
+
+func statusInCatalog(kind, status string, active []string) bool {
+	if !domain.ValidStatus(kind, status) {
+		return false
+	}
+	for _, candidate := range active {
+		if candidate == status {
+			return true
+		}
+	}
+	return false
+}
+func buildStatusNonTerminal(status string) bool {
+	return statusInCatalog("build", status, []string{"QUEUED", "DISPATCHED", "RUNNING"})
+}
+func deploymentStatusNonTerminal(status string) bool {
+	return statusInCatalog("deployment", status, []string{"VERIFYING_ROLLOUT", "PENDING_CHECKS", "PROPOSING", "MERGING"})
+}
+func operationStatusNonTerminal(status string) bool {
+	return statusInCatalog("operation", status, []string{"PENDING", "RUNNING"})
+}
+
+func effectiveStalledTimeout(st *domain.State, e *domain.IntegrationExecution, global ...int) (int, string) {
+	timeout, source := 900, "global"
+	if len(global) > 0 {
+		timeout = global[0]
+	}
+	for i := range st.Products {
+		if st.Products[i].ID == e.ProductID && st.Products[i].StalledTimeoutSeconds != nil {
+			timeout, source = *st.Products[i].StalledTimeoutSeconds, "product"
+			break
+		}
+	}
+	if e.StalledTimeoutSeconds != nil {
+		timeout, source = *e.StalledTimeoutSeconds, "integration"
+	}
+	return timeout, source
+}
 
 func executionAction(a string) bool {
 	switch a {
@@ -21,6 +67,14 @@ func (s *Service) ExecutionReconcileInterval() time.Duration {
 	}
 	if seconds <= 0 {
 		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *Service) ExecutionHeartbeatInterval() time.Duration {
+	seconds := 60
+	if s.executionDefaults != nil && s.executionDefaults.HeartbeatInterval != 0 {
+		seconds = s.executionDefaults.HeartbeatInterval
 	}
 	return time.Duration(seconds) * time.Second
 }
@@ -120,8 +174,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if c.Action == "claim_execution" && e.State == "running" && e.LeaseUntil != nil && now.Before(*e.LeaseUntil) {
 					return invalid("LEASE_HELD")
 				}
-				if c.Action == "claim_execution" && e.State != "unassigned" {
-					return invalid("TAKEOVER_CHECK_REQUIRED")
+				if c.Action == "claim_execution" && e.State != "unassigned" && e.State != "exited_incomplete" && e.State != "paused" {
+					return invalid("INVALID_STATE")
 				}
 				if c.Action == "takeover_execution" {
 					if x.StateCheckReference == "" {
@@ -130,11 +184,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					if x.Fence != e.Fence {
 						return invalid("STALE_FENCE")
 					}
-					if e.State != "lost" && e.State != "stalled" && e.State != "exited_incomplete" && e.State != "unassigned" {
+					if e.State != "lost" && e.State != "stalled" {
 						return invalid("INVALID_STATE")
 					}
 				}
 				e.Fence++
+				e.LeaseUntil = nil
 				e.State = "running"
 				e.DesiredState = x.DesiredState
 				e.OrchestratorID = x.OrchestratorID
@@ -186,11 +241,11 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if executionFence(c.Data, "fence") != e.Fence {
 				return invalid("STALE_FENCE")
 			}
-			if e.LeaseUntil == nil || !now.Before(*e.LeaseUntil) {
-				return invalid("LEASE_EXPIRED")
-			}
 			if e.State != "running" && e.State != "stalled" {
 				return invalid("INVALID_STATE")
+			}
+			if e.LeaseUntil == nil || !now.Before(*e.LeaseUntil) {
+				return invalid("LEASE_EXPIRED")
 			}
 			nowp := now
 			e.LastHeartbeat = &nowp
@@ -227,33 +282,29 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			if state == "completed" {
 				in := integration(st, c.IntegrationID)
-				if in == nil || in.Status != e.DesiredState {
+				if in == nil || !statusReachedIntegration(in.Status, e.DesiredState) {
 					return invalid("INVALID_STATE")
 				}
 			}
-			required := state == "exited_incomplete"
-			reason, _ := c.Data["reason"].(string)
-			executionCondition(st, e, state, required, reason, now)
-			e.ExitReason, _ = c.Data["reason"].(string)
-			e.WaitingRef, _ = c.Data["waiting_ref"].(string)
-			e.BlockerRef, _ = c.Data["blocker_ref"].(string)
-			if state == "waiting_external" && e.WaitingRef == "" {
+			waitingRef, _ := c.Data["waiting_ref"].(string)
+			blockerRef, _ := c.Data["blocker_ref"].(string)
+			if state == "waiting_external" && waitingRef == "" {
 				return invalid("WAITING_REFERENCE_REQUIRED")
 			}
 			if state == "waiting_external" {
 				found := false
 				for _, op := range st.Operations {
-					if op.ID == e.WaitingRef && op.ProductID == e.ProductID {
+					if op.ID == waitingRef && op.ProductID == e.ProductID {
 						found = true
 					}
 				}
 				for _, b := range st.Builds {
-					if b.ID == e.WaitingRef && b.ProductID == e.ProductID {
+					if b.ID == waitingRef && b.ProductID == e.ProductID {
 						found = true
 					}
 				}
 				for _, d := range st.Deployments {
-					if d.ID == e.WaitingRef && d.ProductID == e.ProductID {
+					if d.ID == waitingRef && d.ProductID == e.ProductID {
 						found = true
 					}
 				}
@@ -261,13 +312,13 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					return invalid("SCOPE_MISMATCH")
 				}
 			}
-			if state == "blocked" && e.BlockerRef == "" {
+			if state == "blocked" && blockerRef == "" {
 				return invalid("BLOCKER_REFERENCE_REQUIRED")
 			}
 			if state == "blocked" {
 				found := false
 				for _, m := range st.Memories {
-					if m.ID == e.BlockerRef && m.Kind == "blocker" {
+					if m.ID == blockerRef && m.Kind == "blocker" {
 						productID := m.ProductID
 						if productID == "" {
 							if f := feature(st, m.FeatureID); f != nil {
@@ -282,6 +333,13 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if !found {
 					return invalid("SCOPE_MISMATCH")
 				}
+			}
+			required := state == "exited_incomplete"
+			reason, _ := c.Data["reason"].(string)
+			executionCondition(st, e, state, required, reason, now)
+			e.ExitReason, e.WaitingRef, e.BlockerRef = reason, waitingRef, blockerRef
+			if state == "paused" || state == "cancelled" || state == "exited_incomplete" || state == "completed" {
+				e.LeaseUntil = nil
 			}
 			out = *e
 		case "set_desired_state":
@@ -325,7 +383,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					state := "unassigned"
 					required := true
 					reason := "no executor assigned"
-					if in.Status == "ready" {
+					if statusReachedIntegration(in.Status, "ready") {
 						state = "completed"
 						required = false
 						reason = ""
@@ -418,101 +476,108 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 	return out, err
 }
 
-func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
-	return s.store.Update(ctx, func(st *domain.State) error {
-		now := time.Now().UTC()
-		for i := range st.IntegrationExecutions {
-			e := &st.IntegrationExecutions[i]
-			if !e.Reconciliation.Enabled {
-				continue
-			}
-			in := integration(st, e.IntegrationID)
-			if in == nil {
-				continue
-			}
-			next, required, reason := e.State, e.Reconciliation.ActionRequired, e.Reconciliation.Reason
-			if in.Status == e.DesiredState {
-				next, required, reason = "completed", false, ""
-			} else {
-				switch e.State {
-				case "running":
-					required, reason = false, ""
-					if e.LeaseUntil != nil && now.After(*e.LeaseUntil) {
-						next, required, reason = "lost", true, "lease expired"
-					} else if e.LastProgress != nil {
-						timeout := 900
-						if s.executionDefaults != nil {
-							timeout = s.executionDefaults.StalledTimeout
-						}
-						for j := range st.Products {
-							if st.Products[j].ID == e.ProductID && st.Products[j].StalledTimeoutSeconds != nil {
-								timeout = *st.Products[j].StalledTimeoutSeconds
-							}
-						}
-						if e.StalledTimeoutSeconds != nil {
-							timeout = *e.StalledTimeoutSeconds
-						}
-						if timeout > 0 {
-							if now.Sub(*e.LastProgress) > time.Duration(timeout)*time.Second {
-								next, required, reason = "stalled", true, "progress timeout"
-							}
-						}
+func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int) bool {
+	changed := false
+	for i := range st.IntegrationExecutions {
+		e := &st.IntegrationExecutions[i]
+		if !e.Reconciliation.Enabled {
+			continue
+		}
+		in := integration(st, e.IntegrationID)
+		if in == nil {
+			continue
+		}
+		oldState, oldRequired, oldReason := e.State, e.Reconciliation.ActionRequired, e.Reconciliation.Reason
+		next, required, reason := oldState, oldRequired, oldReason
+		if statusReachedIntegration(in.Status, e.DesiredState) {
+			next, required, reason = "completed", false, ""
+		} else {
+			switch e.State {
+			case "running":
+				required, reason = false, ""
+				if e.LeaseUntil != nil && now.After(*e.LeaseUntil) {
+					next, required, reason = "lost", true, "lease expired"
+				} else if e.LastProgress != nil {
+					timeout, _ := effectiveStalledTimeout(st, e, globalTimeout)
+					if timeout > 0 && now.Sub(*e.LastProgress) > time.Duration(timeout)*time.Second {
+						next, required, reason = "stalled", true, "progress timeout"
 					}
-				case "stalled":
-					timeout := 900
-					if s.executionDefaults != nil {
-						timeout = s.executionDefaults.StalledTimeout
+				}
+			case "stalled":
+				timeout, _ := effectiveStalledTimeout(st, e, globalTimeout)
+				if timeout == 0 || (e.LastProgress != nil && now.Sub(*e.LastProgress) <= time.Duration(timeout)*time.Second) {
+					next, required, reason = "running", false, ""
+				}
+			case "unassigned", "lost", "exited_incomplete":
+				required = true
+				if reason == "" {
+					reason = next
+				}
+			case "paused", "cancelled", "completed":
+				required = false
+			case "waiting_external":
+				required = false
+				for _, op := range st.Operations {
+					if op.ID == e.WaitingRef && !operationStatusNonTerminal(op.Status) {
+						required, reason = true, "external operation completed"
 					}
-					for j := range st.Products {
-						if st.Products[j].ID == e.ProductID && st.Products[j].StalledTimeoutSeconds != nil {
-							timeout = *st.Products[j].StalledTimeoutSeconds
-						}
+				}
+				for _, b := range st.Builds {
+					if b.ID == e.WaitingRef && !buildStatusNonTerminal(b.Status) {
+						required, reason = true, "build operation completed"
 					}
-					if e.StalledTimeoutSeconds != nil {
-						timeout = *e.StalledTimeoutSeconds
+				}
+				for _, d := range st.Deployments {
+					if d.ID == e.WaitingRef && !deploymentStatusNonTerminal(d.Status) {
+						required, reason = true, "deployment operation completed"
 					}
-					if timeout == 0 || (e.LastProgress != nil && now.Sub(*e.LastProgress) <= time.Duration(timeout)*time.Second) {
-						next, required, reason = "running", false, ""
-					}
-				case "unassigned", "lost", "exited_incomplete":
-					required = true
-					if reason == "" {
-						reason = next
-					}
-				case "paused", "cancelled", "completed":
-					required = false
-				case "waiting_external":
-					required = false
-					for _, op := range st.Operations {
-						if op.ID == e.WaitingRef && op.Status != "PENDING" && op.Status != "RUNNING" {
-							required = true
-							reason = "external operation completed"
-						}
-					}
-					for _, b := range st.Builds {
-						if b.ID == e.WaitingRef && b.Status != "QUEUED" && b.Status != "RUNNING" && b.Status != "DISPATCHING" {
-							required = true
-							reason = "build operation completed"
-						}
-					}
-					for _, d := range st.Deployments {
-						if d.ID == e.WaitingRef && d.Status != "QUEUED" && d.Status != "RUNNING" && d.Status != "APPLYING" {
-							required = true
-							reason = "deployment operation completed"
-						}
-					}
-				case "blocked":
-					required = false
-					for _, m := range st.Memories {
-						if m.ID == e.BlockerRef && m.Kind == "blocker" && m.Status == "resolved" {
-							required = true
-							reason = "blocker resolved"
-						}
+				}
+			case "blocked":
+				required = false
+				for _, m := range st.Memories {
+					if m.ID == e.BlockerRef && m.Kind == "blocker" && m.Status == "resolved" {
+						required, reason = true, "blocker resolved"
 					}
 				}
 			}
-			executionCondition(st, e, next, required, reason, now)
 		}
+		if next != oldState || required != oldRequired || reason != oldReason {
+			executionCondition(st, e, next, required, reason, now)
+			if next == "completed" {
+				e.LeaseUntil = nil
+			}
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
+	globalTimeout := 900
+	if s.executionDefaults != nil {
+		globalTimeout = s.executionDefaults.StalledTimeout
+	}
+	now := time.Now().UTC()
+	changed := false
+	if err := s.view(ctx, func(st *domain.State) error {
+		// Borrow read-only state and copy only the collection the plan mutates.
+		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories}
+		changed = reconcileExecutions(&snapshot, now, globalTimeout)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	scoped, ok := s.store.(interface {
+		UpdateScoped(context.Context, domain.StateMutationScope, func(*domain.State) error) error
+	})
+	if !ok {
+		return s.store.Update(ctx, func(st *domain.State) error { reconcileExecutions(st, now, globalTimeout); return nil })
+	}
+	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
+		reconcileExecutions(st, now, globalTimeout)
 		return nil
 	})
 }

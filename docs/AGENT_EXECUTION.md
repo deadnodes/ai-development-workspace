@@ -126,6 +126,13 @@ Starting values (not yet empirically tuned):
 | Notification retry | 30 s | Initial outbox redelivery delay |
 | Maximum retry backoff | 15 min | Exponential backoff cap |
 
+Execution defaults remain in the existing runtime config for this stage. They
+are zeroed before computing the legacy build-authority fingerprint, and their
+JSON fields use `omitempty`; this preserves the byte-for-byte fingerprint used
+by the pre-execution build configuration. Splitting the runtime config shape
+would add more compatibility surface without improving the authority boundary.
+When no build config is installed, execution uses the same defaults: 30/60/300/900 seconds.
+
 Effective stalled timeout precedence: Integration override, then Product
 override, then instance/global default (15 minutes). Missing means inherit;
 explicit zero disables stalled detection only for that scope. Validate bounded
