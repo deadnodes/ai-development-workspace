@@ -7,9 +7,9 @@ Check Go 1.24+, Node.js, Git, tmux, Codex CLI and Claude Code. Build with
 For a protected service, run `./bin/release-control login --url https://CONTROL_HOST --profile default`
 and have the owner approve the browser sign-in. Then run
 `./bin/release-control connect --url https://CONTROL_HOST --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID --harness both`
+and `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
 
 Connect writes `.codex/`, `.claude/`, `.mcp.json` and `~/.config/release-control`. An agent sandbox (Codex `workspace-write`) denies writes to `.codex/`; ask the owner to approve running this one command outside the sandbox.
-and `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
 Restart the agent to load MCP tools, then call `get_project_context` and
 `get_tool_guide`. Configure the optional supervisor on its orchestrator host using
 [SUPERVISOR.md](SUPERVISOR.md).
