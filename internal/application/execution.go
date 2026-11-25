@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
@@ -257,6 +256,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if in.ProductID != c.ProductID {
 				return invalid("SCOPE_MISMATCH")
 			}
+			allowUnassigned := c.Action == "claim_execution"
+			if err := requireIntegrationUser(ctx, in, allowUnassigned); err != nil {
+				return err
+			}
 		}
 		switch c.Action {
 		case "report_turn_end":
@@ -292,7 +295,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			matched := []string{}
 			for i := range st.IntegrationExecutions {
 				e := &st.IntegrationExecutions[i]
-				if e.ProductID == c.ProductID && e.Harness.Kind == x.HarnessKind && ((x.SessionRef != "" && e.Harness.SessionRef == x.SessionRef) || (x.TmuxTarget != "" && e.Harness.TmuxTarget == x.TmuxTarget)) {
+				if e.ProductID == c.ProductID && executionOwnedByCaller(ctx, integration(st, e.IntegrationID)) && e.Harness.Kind == x.HarnessKind && ((x.SessionRef != "" && e.Harness.SessionRef == x.SessionRef) || (x.TmuxTarget != "" && e.Harness.TmuxTarget == x.TmuxTarget)) {
 					if e.TurnEndID == key {
 						matched = append(matched, e.IntegrationID)
 						continue
@@ -311,7 +314,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 				for _, iid := range g.MemberIntegrationIDs {
 					e := executionFor(st, iid)
-					if e == nil || e.ProductID != c.ProductID {
+					if e == nil || e.ProductID != c.ProductID || !executionOwnedByCaller(ctx, integration(st, iid)) {
 						continue
 					}
 					if e.TurnEndID != key {
@@ -342,6 +345,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
+				}
+				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+					return err
 				}
 				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) {
 					return invalid("INVALID_STATE")
@@ -394,6 +400,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
+				}
+				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+					return err
 				}
 				if ev.Delivery.Attempts == 0 || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported") || ev.Delivery.AcknowledgedAt != nil {
 					return invalid("INVALID_STATE")
@@ -450,6 +459,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
+				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+					return err
+				}
 				if ev.Resolution.ResolvedAt != nil || x.SupervisorID == "" || x.Evidence == "" {
 					return invalid("INVALID_STATE")
 				}
@@ -477,12 +489,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				return missing("integration", c.IntegrationID)
 			}
 			if c.Action == "claim_execution" {
-				user, enforced := principalUser(ctx)
-				if enforced && user == "" {
-					return fmt.Errorf("%w: AGENT_OWNER_UNKNOWN", auth.ErrForbidden)
-				}
-				if enforced && in.Assignee != "" && in.Assignee != user {
-					return notAssignee(in.Assignee)
+				if err := requireIntegrationUser(ctx, in, true); err != nil {
+					return err
 				}
 			}
 			e := executionFor(st, c.IntegrationID)
@@ -778,6 +786,13 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if in.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
+				if err := requireIntegrationUser(ctx, in, true); err != nil {
+					return err
+				}
+				if user, enforced := principalUser(ctx); enforced && in.Assignee == "" {
+					in.Assignee = user
+					in.Actor, in.UpdatedAt = c.Actor, now
+				}
 				if executionFor(st, iid) == nil {
 					state := "unassigned"
 					required := true
@@ -825,6 +840,11 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if c.ProductID != g.ProductID {
 				return invalid("SCOPE_MISMATCH")
 			}
+			for _, iid := range g.MemberIntegrationIDs {
+				if err := requireIntegrationUser(ctx, integration(st, iid), true); err != nil {
+					return err
+				}
+			}
 			g.OrchestratorHarness = harness
 			out = *g
 		case "add_execution_group_member", "remove_execution_group_member":
@@ -848,6 +868,14 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			if in.ProductID != g.ProductID {
 				return invalid("SCOPE_MISMATCH")
+			}
+			if err := requireIntegrationUser(ctx, in, true); err != nil {
+				return err
+			}
+			for _, memberID := range g.MemberIntegrationIDs {
+				if err := requireIntegrationUser(ctx, integration(st, memberID), true); err != nil {
+					return err
+				}
 			}
 			next := append([]string{}, g.MemberIntegrationIDs...)
 			idx := -1

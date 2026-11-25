@@ -167,6 +167,11 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 				return invalid("native component requires exact operator publication configuration")
 			}
 		}
+		if c.IntegrationID != "" && (c.Action == "record_progress" || c.Action == "transition_integration") {
+			if err := rejectForeignWork(ctx, integration(st, c.IntegrationID)); err != nil {
+				return err
+			}
+		}
 		var err error
 		result, err = applyAuthorizedOrigin(st, c, s.externalWorkers, origin)
 		if err == nil && (c.Action == "record_progress" || c.Action == "transition_integration") {

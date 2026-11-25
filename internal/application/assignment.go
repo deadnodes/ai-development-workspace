@@ -13,6 +13,54 @@ func notAssignee(assignee string) error {
 	return fmt.Errorf("%w: NOT_ASSIGNEE: assigned to %s; pick other work", auth.ErrForbidden, assignee)
 }
 
+// requireIntegrationUser applies execution ownership inside the same storage
+// transaction as the protected mutation. Unassigned work is accepted only by
+// callers that will assign it atomically (claim/group creation).
+func requireIntegrationUser(ctx context.Context, in *domain.Integration, allowUnassigned bool) error {
+	user, enforced := principalUser(ctx)
+	if !enforced {
+		return nil
+	}
+	if user == "" {
+		return fmt.Errorf("%w: AGENT_OWNER_UNKNOWN", auth.ErrForbidden)
+	}
+	if in.Assignee != user && !(allowUnassigned && in.Assignee == "") {
+		assignee := in.Assignee
+		if assignee == "" {
+			assignee = "unassigned"
+		}
+		return notAssignee(assignee)
+	}
+	return nil
+}
+
+// rejectForeignWork guards shared writes (progress, status) on an Integration:
+// unassigned work stays open to everyone, including agents enrolled without an
+// owner; work assigned to another user is refused.
+func rejectForeignWork(ctx context.Context, in *domain.Integration) error {
+	user, enforced := principalUser(ctx)
+	if !enforced || in == nil || in.Assignee == "" || in.Assignee == user {
+		return nil
+	}
+	return notAssignee(in.Assignee)
+}
+
+func executionVisibleTo(ctx context.Context, in *domain.Integration) bool {
+	user, enforced := principalUser(ctx)
+	if !enforced {
+		return true
+	}
+	return user != "" && in != nil && (in.Assignee == "" || in.Assignee == user)
+}
+
+func executionOwnedByCaller(ctx context.Context, in *domain.Integration) bool {
+	user, enforced := principalUser(ctx)
+	if !enforced {
+		return true
+	}
+	return user != "" && in != nil && in.Assignee == user
+}
+
 func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any, error) {
 	if strings.TrimSpace(c.Actor) == "" {
 		return nil, invalid("actor required")

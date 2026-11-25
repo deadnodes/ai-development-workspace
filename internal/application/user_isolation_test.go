@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
@@ -96,5 +97,107 @@ func TestAssignIntegrationAuthorizationAndAdminForce(t *testing.T) {
 	}
 	if _, err = s.Execute(admin, domain.Command{Action: "assign_integration", IntegrationID: "i", Data: map[string]any{"assignee": "human/B", "force": true}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExecutionIsolationCoversLifecycleGroupsAndSupervisorEvents(t *testing.T) {
+	ctx := context.Background()
+	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := New(store)
+	for _, c := range []domain.Command{
+		{Action: "create_product", ID: "p", Data: map[string]any{"name": "P"}},
+		{Action: "create_feature", ID: "f", ProductID: "p", Data: map[string]any{"title": "F", "goal": "G"}},
+		{Action: "create_integration", ID: "i1", FeatureID: "f", Data: map[string]any{"title": "I1", "objective": "O"}},
+		{Action: "create_integration", ID: "i2", FeatureID: "f", Data: map[string]any{"title": "I2", "objective": "O"}},
+	} {
+		c.Actor = "local"
+		if _, err = s.Execute(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	principal := func(id, owner string) context.Context {
+		return auth.WithPrincipal(ctx, auth.Principal{ID: id, Owner: owner, Kind: "agent", Role: "member", Products: []string{"p"}, Permissions: []string{"read", "write"}})
+	}
+	a1, b1 := principal("agent/a1", "human/A"), principal("agent/b1", "human/B")
+	cmd := func(c context.Context, action, integrationID string, data map[string]any) error {
+		_, e := s.Execute(c, domain.Command{Action: action, ProductID: "p", IntegrationID: integrationID, Data: data})
+		return e
+	}
+	if err = cmd(a1, "claim_execution", "i1", map[string]any{"orchestrator_id": "oa", "agent_id": "a1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		action string
+		data   map[string]any
+	}{{"claim_execution", map[string]any{"orchestrator_id": "ob", "agent_id": "b1"}}, {"takeover_execution", map[string]any{"orchestrator_id": "ob", "agent_id": "b1", "fence": float64(1), "state_check_reference": "ev"}}, {"heartbeat_execution", map[string]any{"fence": float64(1)}}, {"report_execution", map[string]any{"fence": float64(1), "state": "paused"}}, {"release_execution", map[string]any{"fence": float64(1), "outcome": "paused"}}, {"set_desired_state", map[string]any{"fence": float64(1), "desired_state": "released"}}} {
+		if err = cmd(b1, tc.action, "i1", tc.data); err == nil || !strings.Contains(err.Error(), "NOT_ASSIGNEE") {
+			t.Fatalf("%s should be forbidden for B, got %v", tc.action, err)
+		}
+	}
+	for _, tc := range []struct {
+		action string
+		data   map[string]any
+	}{{"record_progress", map[string]any{"title": "foreign", "completed": []string{"work"}}}, {"transition_integration", map[string]any{"status": "working"}}} {
+		if err = cmd(b1, tc.action, "i1", tc.data); err == nil || !strings.Contains(err.Error(), "NOT_ASSIGNEE") {
+			t.Fatalf("%s should be forbidden for B, got %v", tc.action, err)
+		}
+	}
+	if err = store.Update(ctx, func(st *domain.State) error {
+		st.Integrations[1].Assignee = "human/B"
+		now := time.Now().UTC()
+		st.IntegrationExecutions[0].State = "lost"
+		st.ExecutionEvents = append(st.ExecutionEvents, domain.ExecutionEvent{ID: "ev", ProductID: "p", IntegrationID: "i1", Type: "execution_lost", CreatedAt: now, EscalationRequired: true, Delivery: domain.ExecutionEventDelivery{Attempts: 1, DeliveryID: "d", NextAttemptAt: now.Add(time.Hour)}, Acknowledgements: []domain.ExecutionEventAck{{DeliveryID: "d", Outcome: "delivered", At: now}}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd(principal("agent/a2", "human/A"), "takeover_execution", "i1", map[string]any{"orchestrator_id": "oa2", "agent_id": "a2", "fence": float64(1), "state_check_reference": "ev"}); err != nil {
+		t.Fatalf("same human's second agent should take over lost work: %v", err)
+	}
+	if err = cmd(a1, "create_execution_group", "", map[string]any{"name": "mixed", "orchestrator_id": "oa", "integration_ids": []string{"i1", "i2"}}); err == nil || !strings.Contains(err.Error(), "NOT_ASSIGNEE") {
+		t.Fatalf("mixed-owner group should fail, got %v", err)
+	}
+	if err = cmd(b1, "ack_execution_event", "", map[string]any{"event_id": "ev", "delivery_id": "d", "supervisor_id": "sup", "outcome": "delivered"}); err == nil || !strings.Contains(err.Error(), "NOT_ASSIGNEE") {
+		t.Fatalf("event ACK should be forbidden for B, got %v", err)
+	}
+	listed, err := s.Query(b1, "list_execution_events", `{"product_id":"p"}`)
+	if err != nil || len(listed.(map[string]any)["items"].([]domain.ExecutionEvent)) != 0 {
+		t.Fatalf("B should not see A's supervisor event: %#v, %v", listed, err)
+	}
+	attention, err := s.Query(b1, "list_attention", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	masked := false
+	for _, item := range attention.([]map[string]any) {
+		if item["execution_event_id"] == "ev" || item["integration_id"] == "i1" && item["reason"] == "execution" {
+			t.Fatalf("B should not see A's execution attention: %#v", item)
+		}
+		if item["integration_id"] == "i1" {
+			masked = item["code"] == "none" && item["text"] == "assigned to human/A"
+		}
+	}
+	if !masked {
+		t.Fatal("attention must mark A's Integration as unavailable work")
+	}
+	if err = cmd(a1, "create_execution_group", "", map[string]any{"name": "owned", "orchestrator_id": "oa", "integration_ids": []string{"i1"}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupID := state.ExecutionGroups[len(state.ExecutionGroups)-1].ID
+	group, err := s.Query(b1, "get_execution_group", groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := group.(map[string]any)["members"].([]map[string]any)[0]
+	if got := member["next_action"].(map[string]string); got["code"] != "none" || got["text"] != "assigned to human/A" {
+		t.Fatalf("foreign next_action = %#v", got)
 	}
 }

@@ -5,6 +5,9 @@ description: Run fenced, resumable multi-Integration work through Release Contro
 
 # RCP execution protocol
 
+Work only on Integrations assigned to your human or unassigned. `NOT_ASSIGNEE`
+means pick other work; never retry or take over that Integration.
+
 1. At the start of multi-Feature work, create one execution group with `create_execution_group`. Set `orchestrator_harness` and `tmux_target` when available; add each Integration as a member with its own desired state.
 2. Claim each Integration you work on with `claim_execution`. Keep its returned fence. Send `heartbeat_execution` while working and before the lease expires.
 3. Include `execution_fence` in every `record_progress` and `transition_integration` write. A `STALE_FENCE` means stop writes and restore current state; never retry using an old fence.

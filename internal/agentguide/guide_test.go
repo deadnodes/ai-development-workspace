@@ -40,7 +40,7 @@ func TestCanonicalSkillProvenance(t *testing.T) {
 	if json.Unmarshal(raw, &sources) != nil || len(sources) != 3 {
 		t.Fatal("invalid skill provenance")
 	}
-	expected := map[string]string{SkillName: "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179", DeliverySkillName: "3c85ce4fae453b099f38f0b032cbcefa85d69d5e64940664a1fc3ea8d3cb737b", ExecutionSkillName: "14a0b90de7bcf966b746875d883c3194521bd5112420dd26e5a61cc1e8ef8f4e"}
+	expected := map[string]string{SkillName: "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179", DeliverySkillName: "3c85ce4fae453b099f38f0b032cbcefa85d69d5e64940664a1fc3ea8d3cb737b", ExecutionSkillName: "e207231eb40034d6006fcc8aa1f27c0833f1f20a39211b52afdf83a3f63577dd"}
 	for _, source := range sources {
 		sha, ok := expected[source.Name]
 		if !ok {
