@@ -55,17 +55,73 @@ type promoterClient struct {
 	http *http.Client
 }
 
+var errTokenUnavailable = errors.New("projected RCP token unavailable")
+
+type promotionFailure struct {
+	event  string
+	status int
+	class  string
+	count  int
+	last   time.Time
+}
+
+func (f *promotionFailure) failed(w io.Writer, event string, status int, class string, backoff time.Duration) {
+	if w == nil {
+		return
+	}
+	if f.event != "" && (f.event != event || f.status != status || f.class != class) {
+		f.summary(w)
+	}
+	if f.event == event && f.status == status && f.class == class && time.Since(f.last) < 5*time.Minute {
+		f.count++
+		return
+	}
+	f.event, f.status, f.class, f.last = event, status, class, time.Now()
+	writeJSONLine(w, map[string]any{"event": event, "status": status, "error": class, "backoff_seconds": int(backoff.Seconds())})
+}
+
+func (f *promotionFailure) summary(w io.Writer) {
+	if w != nil && f.count > 0 {
+		writeJSONLine(w, map[string]any{"event": "failure_summary", "failure_event": f.event, "status": f.status, "error": f.class, "suppressed_count": f.count})
+	}
+	f.count = 0
+}
+
+func writeJSONLine(w io.Writer, v any) {
+	b, _ := json.Marshal(v)
+	_, _ = fmt.Fprintln(w, string(b))
+}
+
+func failureClass(err error, status int) string {
+	if errors.Is(err, errTokenUnavailable) {
+		return "token_unavailable"
+	}
+	if status == http.StatusUnauthorized {
+		return "unauthorized"
+	}
+	if status == http.StatusForbidden {
+		return "forbidden"
+	}
+	if status >= 300 {
+		return fmt.Sprintf("http_%d", status)
+	}
+	if status == 0 {
+		return "network"
+	}
+	return "invalid_response"
+}
+
 func newPromoterClient(c Config) *promoterClient {
 	return &promoterClient{cfg: c, http: &http.Client{Timeout: 65 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (p *promoterClient) request(ctx context.Context, method, path string, body any) ([]byte, int, error) {
 	token, e := os.ReadFile(p.cfg.RCP.TokenFile)
 	if e != nil {
-		return nil, 0, e
+		return nil, 0, errTokenUnavailable
 	}
 	tokenText := strings.TrimSpace(string(token))
 	if tokenText == "" || len(tokenText) > 16<<10 {
-		return nil, 0, errors.New("projected RCP token unavailable")
+		return nil, 0, errTokenUnavailable
 	}
 	var reader io.Reader
 	if body != nil {
@@ -101,24 +157,24 @@ func (p *promoterClient) request(ctx context.Context, method, path string, body 
 	}
 	return b, res.StatusCode, nil
 }
-func (p *promoterClient) claim(ctx context.Context) (*Promotion, error) {
+func (p *promoterClient) claim(ctx context.Context) (*Promotion, int, error) {
 	b, status, e := p.request(ctx, http.MethodPost, "/api/prod-promotions/claim", map[string]int{"wait": 50})
 	if e != nil {
-		return nil, e
+		return nil, status, e
 	}
 	if status == http.StatusNoContent {
-		return nil, nil
+		return nil, status, nil
 	}
 	var v Promotion
 	if json.Unmarshal(b, &v) != nil || v.ID == "" || v.ClaimID == "" || v.Status != "CLAIMED" || v.ProductID != p.cfg.RCP.ProductID || v.EnvironmentID != p.cfg.RCP.EnvironmentID || len(v.Items) < 1 || len(v.Items) > 20 {
-		return nil, errors.New("invalid promotion claim response")
+		return nil, status, errors.New("invalid promotion claim response")
 	}
-	return &v, nil
+	return &v, status, nil
 }
-func (p *promoterClient) result(ctx context.Context, id string, claim string, items []PromotionItem) error {
+func (p *promoterClient) result(ctx context.Context, id string, claim string, items []PromotionItem) (int, error) {
 	b, _ := json.Marshal(map[string]any{"claim_id": claim, "items": items})
-	_, _, e := p.request(ctx, http.MethodPost, "/api/prod-promotions/"+url.PathEscape(id)+"/result", json.RawMessage(b))
-	return e
+	_, status, e := p.request(ctx, http.MethodPost, "/api/prod-promotions/"+url.PathEscape(id)+"/result", json.RawMessage(b))
+	return status, e
 }
 
 func Promote(ctx context.Context, c Config, client *imagesigning.Client, log io.Writer) error {
@@ -133,17 +189,30 @@ func promoteWithHTTPClient(ctx context.Context, c Config, client *imagesigning.C
 	reg := buildconfig.Registry{Origin: c.Registry.Origin, InsecureHTTP: c.Registry.InsecureHTTP}
 	credential := filepath.Base(c.Registry.CredentialsFile)
 	backoff := 5 * time.Second
+	var claimFailure, resultFailure promotionFailure
+	if log != nil {
+		writeJSONLine(log, map[string]any{"event": "promoter_started", "rcp_url": c.RCP.URL, "product_id": c.RCP.ProductID, "environment_id": c.RCP.EnvironmentID})
+	}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		promotion, e := promoter.claim(ctx)
+		promotion, status, e := promoter.claim(ctx)
 		if e != nil {
+			claimFailure.failed(log, "claim_failed", status, failureClass(e, status), backoff)
 			if !sleepContext(ctx, backoff) {
+				claimFailure.summary(log)
 				return ctx.Err()
 			}
 			backoff = min(backoff*2, 5*time.Minute)
 			continue
+		}
+		if claimFailure.event != "" {
+			claimFailure.summary(log)
+			if log != nil {
+				writeJSONLine(log, map[string]any{"event": "claim_recovered"})
+			}
+			claimFailure = promotionFailure{}
 		}
 		backoff = 5 * time.Second
 		if promotion == nil {
@@ -158,10 +227,15 @@ func promoteWithHTTPClient(ctx context.Context, c Config, client *imagesigning.C
 			fmt.Fprintln(log, string(line))
 		}
 		for {
-			if e = promoter.result(ctx, promotion.ID, promotion.ClaimID, results); e == nil {
+			status, e = promoter.result(ctx, promotion.ID, promotion.ClaimID, results)
+			if e == nil {
+				resultFailure.summary(log)
+				resultFailure = promotionFailure{}
 				break
 			}
+			resultFailure.failed(log, "result_failed", status, failureClass(e, status), backoff)
 			if !sleepContext(ctx, backoff) {
+				resultFailure.summary(log)
 				return ctx.Err()
 			}
 			backoff = min(backoff*2, 5*time.Minute)

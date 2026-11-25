@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/imagesigning"
@@ -140,11 +141,55 @@ func TestPromoteLoopWarmsSignsReadsBackAndReports(t *testing.T) {
 	if !obs.tagGet || obs.blobHeads == 0 {
 		t.Fatalf("image not warmed tag=%v heads=%d", obs.tagGet, obs.blobHeads)
 	}
-	if f.Signs == 0 || !strings.Contains(log.String(), `"promotion_id":"promotion-1"`) {
+	if f.Signs == 0 || !strings.Contains(log.String(), `"promotion_id":"promotion-1"`) || !strings.Contains(log.String(), `"event":"promoter_started"`) {
 		t.Fatalf("did not sign/log %s signs=%d", log.String(), f.Signs)
 	}
 	if strings.Contains(log.String(), "payload_b64") || strings.Contains(log.String(), "signature_b64") {
 		t.Fatal("logged signature material")
+	}
+}
+
+func TestPromoterLogsUnauthorizedRecoveryWithoutToken(t *testing.T) {
+	c, _, client, _, _, _ := promoteFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls int
+	rt := promotionRT(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "secret body"}), nil
+		}
+		cancel()
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	})
+	var log strings.Builder
+	err := promoteWithHTTPClient(ctx, c, client, &log, &http.Client{Transport: rt})
+	if err != context.Canceled {
+		t.Fatalf("loop exit: %v", err)
+	}
+	out := log.String()
+	if !strings.Contains(out, `"event":"promoter_started"`) || !strings.Contains(out, `"event":"claim_failed"`) || !strings.Contains(out, `"error":"unauthorized"`) || !strings.Contains(out, `"status":401`) || !strings.Contains(out, `"event":"claim_recovered"`) {
+		t.Fatalf("missing structured events: %s", out)
+	}
+	for _, secret := range []string{"projected-token", "secret body", "owner_approval"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("logged sensitive value %q: %s", secret, out)
+		}
+	}
+}
+
+func TestPromotionFailureLogsDeduplicateAndSummarize(t *testing.T) {
+	var log strings.Builder
+	var f promotionFailure
+	for i := 0; i < 8; i++ {
+		f.failed(&log, "claim_failed", 401, "unauthorized", 5*time.Second)
+	}
+	if got := strings.Count(log.String(), `"event":"claim_failed"`); got != 1 {
+		t.Fatalf("logged %d identical failures: %s", got, log.String())
+	}
+	f.summary(&log)
+	if !strings.Contains(log.String(), `"suppressed_count":7`) {
+		t.Fatalf("missing suppression summary: %s", log.String())
 	}
 }
 
