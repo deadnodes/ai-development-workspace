@@ -4752,6 +4752,59 @@ Verify passing evidence for every affected Integration and blocking check on the
 
 ## work tracking
 
+### `assign_integration` — execute_action
+
+Assign an Integration to a human user for isolated execution ownership.
+
+**When:** Assign work to yourself or, when already responsible, reassign it. An active execution requires instance admin force.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `assignee` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `force` (boolean, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated Integration assignment and audit event.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the current assignee, an unassigned-work claimant assigning themselves, or an instance admin may assign.
+- `CONFLICT`: ACTIVE_EXECUTION: an active lease prevents reassignment unless an instance admin sets force=true.
+
+**Example:** `{"action":"assign_integration","integration_id":"INTEGRATION","data":{"assignee":"human/user"}}`
+
+**Related:** `get_integration_context`, `claim_execution`
+
+**Authority:** Changes Integration assignment only; it does not transfer or take over an active execution.
+
+### `unassign_integration` — execute_action
+
+Remove an Integration's human assignee.
+
+**When:** Use when the current assignee releases the work back to the unassigned queue; instance admins may also unassign.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated Integration assignment and audit event.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the current assignee or instance admin may unassign.
+
+**Example:** `{"action":"unassign_integration","integration_id":"INTEGRATION","data":{}}`
+
+**Related:** `assign_integration`, `claim_execution`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
 ### `resume` — mcp_tool
 
 Read the bounded summary and recent memory excerpts for a Feature.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
@@ -475,6 +476,15 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if in == nil {
 				return missing("integration", c.IntegrationID)
 			}
+			if c.Action == "claim_execution" {
+				user, enforced := principalUser(ctx)
+				if enforced && user == "" {
+					return fmt.Errorf("%w: AGENT_OWNER_UNKNOWN", auth.ErrForbidden)
+				}
+				if enforced && in.Assignee != "" && in.Assignee != user {
+					return notAssignee(in.Assignee)
+				}
+			}
 			e := executionFor(st, c.IntegrationID)
 			var x struct {
 				OrchestratorID        string                  `json:"orchestrator_id"`
@@ -544,6 +554,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 						return invalid("TAKEOVER_NOT_REQUIRED")
 					}
 				}
+				if c.Action == "claim_execution" {
+					if user, enforced := principalUser(ctx); enforced && in.Assignee == "" {
+						in.Assignee = user
+						in.Actor, in.UpdatedAt = c.Actor, now
+					}
+				}
 				e.Fence++
 				e.LeaseUntil = nil
 				e.State = "running"
@@ -571,6 +587,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 				if in.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
+				}
+				if c.Action == "claim_execution" {
+					if user, enforced := principalUser(ctx); enforced && in.Assignee == "" {
+						in.Assignee = user
+						in.Actor, in.UpdatedAt = c.Actor, now
+					}
 				}
 				ttl := x.LeaseTTLSeconds
 				if ttl <= 0 {

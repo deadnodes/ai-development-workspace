@@ -257,7 +257,7 @@ func (m *Manager) authenticate(r *http.Request) (Principal, string, error) {
 		e := m.store.update(r.Context(), func(st *authState) error {
 			for _, a := range st.Agents {
 				if a.Info.RevokedAt == nil && equal(a.Verifier, hash(token)) {
-					p = Principal{ID: a.Info.ID, Kind: "agent", Role: "member", Products: a.Info.Products, Permissions: a.Info.Permissions}
+					p = Principal{ID: a.Info.ID, Owner: a.Owner, Kind: "agent", Role: "member", Products: a.Info.Products, Permissions: a.Info.Permissions}
 					break
 				}
 			}
@@ -384,6 +384,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 		permissions = append(permissions, "admin")
 	}
 	p := Principal{ID: "human/" + m.mac("subject", id.Issuer+"\x00"+id.Subject), Kind: "human", Role: role, Products: m.config.Products, Permissions: permissions}
+	p.Owner = p.ID
 	sessionToken := randomToken()
 	e = m.store.update(ctx, func(st *authState) error {
 		if len(st.Sessions) >= 4096 {

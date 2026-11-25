@@ -22,6 +22,25 @@ func attributedActor(ctx context.Context, actor string) string {
 func instanceAdmin(p auth.Principal) bool {
 	return (p.Kind == "human" || (p.Kind == "service" && p.ID == "service/bootstrap")) && p.Role == "admin" && slices.Contains(p.Permissions, "admin") && slices.Contains(p.Products, "*")
 }
+
+// principalUser identifies the human whose work an authenticated agent may take.
+// Missing principals are trusted local mode; services and admins are instance-wide.
+func principalUser(ctx context.Context) (user string, enforced bool) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Kind == "service" || instanceAdmin(p) {
+		return "", false
+	}
+	if p.Kind == "agent" {
+		if p.Owner == "" {
+			return "", true
+		}
+		return p.Owner, true
+	}
+	if p.Kind == "human" {
+		return p.ID, true
+	}
+	return "", false
+}
 func allowedProduct(p auth.Principal, product string) bool {
 	return product != "" && (slices.Contains(p.Products, "*") || slices.Contains(p.Products, product))
 }
@@ -90,7 +109,7 @@ func scopedState(ctx context.Context, st domain.State) (domain.State, error) {
 
 // This allowlist deliberately fails closed for newly introduced commands.
 var memberWriteActions = []string{
-	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout",
+	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "assign_integration", "unassign_integration",
 	"queue_intelligence_task", "cancel_intelligence_task",
 	"create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution",
 	"record_package_artifact", "create_hotfix", "create_test_scenario", "revise_test_scenario", "record_scenario_run",

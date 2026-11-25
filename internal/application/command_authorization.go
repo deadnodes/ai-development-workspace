@@ -35,7 +35,9 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	var scope *domain.StateMutationScope
 	switch s.command.Action {
 	case "claim_execution", "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+	case "assign_integration", "unassign_integration":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"events"}}
 	case "report_turn_end":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
 	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":

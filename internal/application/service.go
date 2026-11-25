@@ -21,6 +21,7 @@ import (
 
 var ErrValidation = errors.New("validation")
 var ErrNotFound = errors.New("not found")
+var ErrConflict = errors.New("conflict")
 
 type Store interface {
 	Read(context.Context) (domain.State, error)
@@ -108,6 +109,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "assign_integration" || c.Action == "unassign_integration" {
+		return s.executeAssignment(ctx, c)
+	}
 	if executionAction(c.Action) {
 		return s.executeExecutionCommand(ctx, c)
 	}
@@ -758,6 +762,9 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 		}
 		out = v
 	case "create_integration", "update_integration":
+		if _, supplied := c.Data["assignee"]; supplied {
+			return nil, invalid("use assign_integration to set assignee")
+		}
 		var v domain.Integration
 		var old *domain.Integration
 		if c.Action == "update_integration" {
