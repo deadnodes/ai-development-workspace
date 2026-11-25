@@ -171,6 +171,9 @@ func respond(w http.ResponseWriter, v any, err error) {
 	case errors.Is(err, application.ErrNotFound):
 		code = 404
 		message = err.Error()
+	case errors.Is(err, application.ErrConflict):
+		code = http.StatusConflict
+		message = err.Error()
 	case errors.Is(err, application.ErrValidation):
 		code = 422
 		message = err.Error()

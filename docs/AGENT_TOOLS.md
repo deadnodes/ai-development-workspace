@@ -2395,6 +2395,7 @@ Claim an Integration execution and obtain its current fencing token.
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: `integration not found`; refresh Product integration context.
 - `VALIDATION`: `actor required`, `SCOPE_MISMATCH`, `LEASE_HELD`, `INVALID_STATE`, `DESIRED_STATE_INVALID`, `executor identity required`, `invalid lease ttl`, `invalid stalled timeout`, or invalid harness values; use the correct Product, inspect current lease/state, then claim only unassigned/exited_incomplete/paused work with valid executor and options.
 
@@ -2425,6 +2426,7 @@ Renew the current executor's active execution lease using its fence.
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: `execution not found`; refresh execution group/state and claim the Integration first.
 - `VALIDATION`: `actor required`, `SCOPE_MISMATCH`, `STALE_FENCE`, `INVALID_STATE`, `LEASE_EXPIRED`, or `progress receipt exceeds limit`; use the current fence, valid active execution and receipt no longer than 256 characters.
 
@@ -2454,6 +2456,7 @@ Take over another executor's lost or stalled execution after the delivered event
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: `integration not found` or `execution not found`; refresh execution state and verify the Integration.
 - `VALIDATION`: `actor required`, `TAKEOVER_CHECK_REQUIRED`, `STALE_FENCE`, `INVALID_STATE`, `TAKEOVER_NOT_REQUIRED`, or invalid executor/harness values; use a delivered lost/stalled event, current fence, changed executor identity and current state.
 
@@ -2522,6 +2525,7 @@ Release the active execution lease with its outcome.
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: Execution is absent for this Integration; inspect group membership and initialize it first.
 - `SCOPE_MISMATCH`: Execution belongs to another Product; use its owning Product scope.
 - `STALE_FENCE`: The lease fence changed; reread the execution and release with its current fence.
@@ -4751,6 +4755,59 @@ Verify passing evidence for every affected Integration and blocking check on the
 **Authority:** Records verification outcome only; does not resolve source or authorize deployment/release.
 
 ## work tracking
+
+### `assign_integration` — execute_action
+
+Assign an Integration to a human user for isolated execution ownership.
+
+**When:** Assign work to yourself or, when already responsible, reassign it. An active execution requires instance admin force.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `assignee` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `force` (boolean, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated Integration assignment and audit event.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the current assignee, an unassigned-work claimant assigning themselves, or an instance admin may assign.
+- `CONFLICT`: ACTIVE_EXECUTION: an active lease prevents reassignment unless an instance admin sets force=true.
+
+**Example:** `{"action":"assign_integration","integration_id":"INTEGRATION","data":{"assignee":"human/user"}}`
+
+**Related:** `get_integration_context`, `claim_execution`
+
+**Authority:** Changes Integration assignment only; it does not transfer or take over an active execution.
+
+### `unassign_integration` — execute_action
+
+Remove an Integration's human assignee.
+
+**When:** Use when the current assignee releases the work back to the unassigned queue; instance admins may also unassign.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated Integration assignment and audit event.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the current assignee or instance admin may unassign.
+
+**Example:** `{"action":"unassign_integration","integration_id":"INTEGRATION","data":{}}`
+
+**Related:** `assign_integration`, `claim_execution`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
 ### `resume` — mcp_tool
 

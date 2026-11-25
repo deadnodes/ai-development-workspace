@@ -16,11 +16,11 @@ import (
 
 // SQL bounds text before it crosses the connection; only metadata columns are
 // read. Neither the events table nor the full record document is transferred.
-const stateCardColumns = `left(id,129), left(coalesce(product_id,''),129), left(coalesce(feature_id,''),129), CASE WHEN kind='products' THEN left(coalesce(document->>'name',''),257) ELSE '' END, CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'title',''),257) ELSE '' END, (CASE WHEN kind='products' THEN octet_length(coalesce(document->>'name',''))>256 ELSE octet_length(coalesce(document->>'title',''))>256 END), CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'status',''),65) ELSE '' END`
+const stateCardColumns = `left(id,129), left(coalesce(product_id,''),129), left(coalesce(feature_id,''),129), CASE WHEN kind='products' THEN left(coalesce(document->>'name',''),257) ELSE '' END, CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'title',''),257) ELSE '' END, (CASE WHEN kind='products' THEN octet_length(coalesce(document->>'name',''))>256 ELSE octet_length(coalesce(document->>'title',''))>256 END), CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'status',''),65) ELSE '' END, CASE WHEN kind='integrations' THEN left(coalesce(document->>'assignee',''),129) ELSE '' END`
 
 func scanStateCard(row interface{ Scan(...any) error }) (domain.StateCard, error) {
 	var c domain.StateCard
-	e := row.Scan(&c.ID, &c.ProductID, &c.FeatureID, &c.Name, &c.Title, &c.Truncated, &c.RecordedStatus)
+	e := row.Scan(&c.ID, &c.ProductID, &c.FeatureID, &c.Name, &c.Title, &c.Truncated, &c.RecordedStatus, &c.Assignee)
 	return c, e
 }
 func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataRequest) (domain.StateMetadata, error) {
@@ -373,6 +373,11 @@ func walkStateCollection(ctx context.Context, data []byte, kind string, visit fu
 						return nil
 					}
 					target = &c.RecordedStatus
+				case "assignee":
+					if kind != "integrations" {
+						return nil
+					}
+					target = &c.Assignee
 				default:
 					return nil
 				}

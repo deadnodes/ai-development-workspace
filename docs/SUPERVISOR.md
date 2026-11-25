@@ -34,6 +34,11 @@ With `profile`, the supervisor resolves the same encrypted credential managed by
 `state_file` selects where the non-secret last-wake timestamps are stored. The
 `tmux_path`, `codex_path`, `claude_path`, and `pgrep_path` fields can pin command
 paths. Defaults are resolved using the launchd `PATH`.
+
+Run each supervisor with an agent token owned by the human whose orchestrators
+it should wake. Event polling and delivery are filtered by that human's
+Integration assignments. A service principal can see and deliver events for
+every human, so use one only for an intentionally instance-wide supervisor.
 `headless_kinds` defaults to empty, so only registered tmux sessions are woken.
 Opt in per kind (currently `codex` and `claude_code`) only when headless resume is
 intended; the process-list guard cannot see an interactive TUI whose session ID

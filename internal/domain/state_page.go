@@ -15,6 +15,7 @@ type StateCard struct {
 	Title          string `json:"title,omitempty"`
 	Truncated      bool   `json:"truncated"`
 	RecordedStatus string `json:"recorded_status,omitempty"`
+	Assignee       string `json:"assignee,omitempty"`
 }
 type StateScope struct {
 	Collection string     `json:"collection"`

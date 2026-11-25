@@ -105,6 +105,10 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 					if in == nil {
 						continue
 					}
+					if !executionVisibleTo(ctx, in) {
+						members = append(members, map[string]any{"integration": in, "next_action": map[string]string{"code": "none", "text": "assigned to " + in.Assignee}})
+						continue
+					}
 					var ex *domain.IntegrationExecution
 					for j := range st.IntegrationExecutions {
 						if st.IntegrationExecutions[j].IntegrationID == iid {
@@ -179,6 +183,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items := []domain.ExecutionEvent{}
 		for _, ev := range st.ExecutionEvents {
 			if ev.ProductID != productID {
+				continue
+			}
+			if !executionVisibleTo(ctx, integration(&st, ev.IntegrationID)) {
 				continue
 			}
 			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
@@ -490,6 +497,12 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, missing("product", id)
 		}
 		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC(), freshness))
+		for i := range st.Integrations {
+			in := &st.Integrations[i]
+			if in.ProductID == id && in.Assignee != "" && !executionVisibleTo(ctx, in) {
+				items = append(items, map[string]any{"id": "integration:" + in.ID, "integration_id": in.ID, "code": "none", "text": "assigned to " + in.Assignee})
+			}
+		}
 		var secretWarnings []map[string]any
 		var secretRefreshFailures map[string]bool
 		if err := s.view(ctx, func(raw *domain.State) error {
@@ -503,13 +516,13 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
 		for _, ex := range st.IntegrationExecutions {
-			if ex.ProductID == id && ex.Reconciliation.Enabled && ex.Reconciliation.ActionRequired {
+			if ex.ProductID == id && ex.Reconciliation.Enabled && ex.Reconciliation.ActionRequired && executionVisibleTo(ctx, integration(&st, ex.IntegrationID)) {
 				items = append(items, map[string]any{"id": "execution:" + ex.IntegrationID, "integration_id": ex.IntegrationID, "reason": ex.Reconciliation.Reason, "state": ex.State, "generation": ex.Reconciliation.Generation})
 			}
 		}
 		_, _, escalationThreshold := executionNotifyConfig(s)
 		for _, ev := range st.ExecutionEvents {
-			if ev.ProductID == id && ev.Resolution.ResolvedAt == nil && (ev.EscalationRequired || ev.Delivery.Attempts >= escalationThreshold) {
+			if ev.ProductID == id && ev.Resolution.ResolvedAt == nil && executionVisibleTo(ctx, integration(&st, ev.IntegrationID)) && (ev.EscalationRequired || ev.Delivery.Attempts >= escalationThreshold) {
 				items = append(items, map[string]any{"id": "execution-event:" + ev.ID, "execution_event_id": ev.ID, "integration_id": ev.IntegrationID, "reason": "EXECUTION_EVENT_ESCALATION_REQUIRED", "type": ev.Type, "attempts": ev.Delivery.Attempts})
 			}
 		}

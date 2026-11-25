@@ -18,6 +18,7 @@ var ErrForbidden = errors.New("forbidden")
 
 type Principal struct {
 	ID          string   `json:"id"`
+	Owner       string   `json:"owner"`
 	Kind        string   `json:"kind"`
 	Role        string   `json:"role"`
 	Products    []string `json:"products"`

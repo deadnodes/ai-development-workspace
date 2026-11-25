@@ -28,6 +28,22 @@ commands/queries.
 
 ### Identity and authority
 
+#### Ownership and isolation
+
+In authenticated mode, every Integration is either unassigned or assigned to a
+human user ID. An agent acts as the human who approved its device login. Claiming
+unassigned work assigns it to that human atomically; another human's assigned
+work cannot be claimed, resumed, taken over, or mutated through execution
+commands. Agents with unknown owners are denied execution actions. Instance
+admins and service principals retain instance-wide access. Local mode without
+an authenticated principal keeps the existing single-user behavior.
+
+Execution groups may contain only Integrations assigned to the caller's human
+or unassigned. Creating a group assigns its unassigned members to that human.
+Supervisor event polling and delivery follow the same ownership rule, while
+shared history and context remain readable. An assignment mismatch returns
+`NOT_ASSIGNEE`; pick other work.
+
 `orchestrator_id` identifies the supervisor/orchestrator installation, and
 `agent_id` identifies the coding agent instance. Both are caller-attributed
 labels unless a later authentication scheme binds them. `harness.session_ref`

@@ -46,7 +46,7 @@ func (s *Service) ResumeSummary(ctx context.Context, featureID string) (any, err
 		if i.FeatureID != featureID {
 			continue
 		}
-		integrations = append(integrations, map[string]any{"id": i.ID, "title": contextExcerpt(i.Title, 256), "status": i.Status, "objective": contextExcerpt(i.Objective, 600)})
+		integrations = append(integrations, map[string]any{"id": i.ID, "title": contextExcerpt(i.Title, 256), "status": i.Status, "assignee": i.Assignee, "objective": contextExcerpt(i.Objective, 600)})
 	}
 	integrationsTruncated := len(integrations) > 100
 	if integrationsTruncated {

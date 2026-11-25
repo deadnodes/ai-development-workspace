@@ -34,14 +34,18 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	// derived gates). Other commands retain the fully isolated callback contract.
 	var scope *domain.StateMutationScope
 	switch s.command.Action {
-	case "claim_execution", "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
+	case "claim_execution": // a claim also assigns an unassigned Integration to the caller's user
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+	case "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+	case "assign_integration", "unassign_integration":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"events"}}
 	case "report_turn_end":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
 	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_events"}, AppendCollections: []string{"events"}}
 	case "create_execution_group":
-		scope = &domain.StateMutationScope{AppendCollections: []string{"integration_executions", "execution_groups", "events", "execution_events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"integration_executions", "execution_groups", "events", "execution_events"}}
 	case "add_execution_group_member", "remove_execution_group_member":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups"}, AppendCollections: []string{"events"}}
 	case "set_execution_group_harness":
