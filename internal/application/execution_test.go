@@ -192,7 +192,7 @@ func TestTerminalExecutionReportsReleaseLease(t *testing.T) {
 			if state == "completed" {
 				m.state.Integrations[0].Status = "released"
 			}
-			exec(t, s, domain.Command{Action: "claim_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "a"}})
+			exec(t, s, domain.Command{Action: "claim_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "a", "harness": map[string]any{"kind": "other"}}})
 			_, err := s.Execute(context.Background(), domain.Command{Action: "release_execution", Actor: "agent", ProductID: "p", IntegrationID: "i", Data: map[string]any{"fence": float64(1), "outcome": state}})
 			if err != nil {
 				t.Fatal(err)
@@ -422,7 +422,7 @@ func TestTurnEndDebounceIdempotencyAndMemberFiltering(t *testing.T) {
 	for _, state := range []string{"running", "completed", "paused", "waiting_external", "blocked"} {
 		iid := "member-" + state
 		m.state.Integrations = append(m.state.Integrations, domain.Integration{Meta: domain.Meta{ID: iid, ProductID: "p"}, Status: "planned"})
-		m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex-" + iid, IntegrationID: iid, ProductID: "p", DesiredState: "ready", State: state, OrchestratorID: "orch", Harness: domain.ExecutionHarness{Kind: "claude", SessionRef: "s-" + iid}, Reconciliation: domain.ExecutionReconciliation{Enabled: true}})
+		m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex-" + iid, IntegrationID: iid, ProductID: "p", DesiredState: "ready", State: state, OrchestratorID: "orch", Harness: domain.ExecutionHarness{Kind: "claude_code", SessionRef: "s-" + iid}, Reconciliation: domain.ExecutionReconciliation{Enabled: true}})
 		ids = append(ids, iid)
 	}
 	m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex-i", IntegrationID: "i", ProductID: "p", DesiredState: "ready", State: "running", OrchestratorID: "orch", Harness: domain.ExecutionHarness{Kind: "codex", SessionRef: "session"}, Reconciliation: domain.ExecutionReconciliation{Enabled: true}})

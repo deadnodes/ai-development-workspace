@@ -3,10 +3,13 @@ package application
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"releasecontrol/internal/domain"
 	"slices"
 	"time"
 )
+
+var tmuxTargetPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 
 func resolveExecutionEvents(st *domain.State, e *domain.IntegrationExecution, now time.Time, newState string) {
 	for i := range st.ExecutionEvents {
@@ -40,7 +43,8 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 			}
 		}
 	}
-	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: sessionRef, HarnessKind: harnessKind, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	tmuxTarget := e.Harness.TmuxTarget
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: sessionRef, HarnessKind: harnessKind, TmuxTarget: tmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
 }
@@ -393,6 +397,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			if x.OrchestratorID == "" || x.AgentID == "" {
 				return invalid("executor identity required")
+			}
+			if x.Harness.Kind != "" && x.Harness.Kind != "codex" && x.Harness.Kind != "claude_code" && x.Harness.Kind != "claude_desktop" && x.Harness.Kind != "ccr" && x.Harness.Kind != "other" {
+				return invalid("invalid harness kind")
+			}
+			if x.Harness.TmuxTarget != "" && !tmuxTargetPattern.MatchString(x.Harness.TmuxTarget) {
+				return invalid("invalid tmux target")
 			}
 			if e != nil {
 				if e.ProductID != in.ProductID || (c.ProductID != "" && c.ProductID != e.ProductID) {

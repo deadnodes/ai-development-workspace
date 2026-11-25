@@ -1,6 +1,6 @@
 # Agent execution and continuation contract
 
-Status: Stages 1 and 2 implementation complete, 2026-11-25. Stage 3 supervisor and live harness wake acceptance remain outstanding. This document specifies a control loop for
+Status: Stages 1–3 implementation complete, 2026-11-25. Live harness wake acceptance remains outstanding. This document specifies a control loop for
 external coding-agent orchestrators. RCP records intent and authority, detects
 conditions requiring continuation, and exposes durable wake events. A separate
 supervisor delivers a prompt to an already registered harness session. RCP never
@@ -199,10 +199,12 @@ sessions were not touched.
 | CCR (Claude Code Router) / other | No stable generic wake protocol assumed. Adapter must define send/resume, session registration, idempotency and liveness. | Adapter-specific returned session id. | Not installed/probed. | Unsupported until adapter contract and concurrency behavior are tested. |
 
 Do not scan `~/.codex` or Claude session stores for IDs: the owning orchestrator
-must register its own exact session reference. A wake request includes group id,
-Integration id, event id, and a short instruction to call `get_execution_group`,
-check current work, then report state/progress. Do not assume the agent sees a
-user message; no-user-message continuation is the supervisor's responsibility.
+must register its own exact session reference. RCP delivery records retain
+group, Integration, and event ids as provenance. The supervisor's fixed wake
+prompt uses only a validated group id, event count, and allowlisted event types,
+then asks the orchestrator to call `get_execution_group`, check current work,
+and report state/progress. Do not assume the agent sees a user message;
+no-user-message continuation is the supervisor's responsibility.
 
 ### Turn-end signal (primary continuation trigger)
 
@@ -304,8 +306,9 @@ must not read session secrets, shell text supplied by RCP, or arbitrary commands
 Tests: adapter contract tests using fake CLIs, no-session and already-running
 cases, timeout/retry/idempotency, launchd restart, safe logging/redaction, and
 local integration against scratch sessions. Done: tested Codex and Claude Code
-CLI wakeups with exact registered IDs; unsupported Desktop/Remote adapters are
-reported as unsupported rather than falsely ACKed.
+CLI adapter behavior with exact registered IDs; unsupported Desktop/Remote
+adapters are reported as unsupported rather than falsely ACKed. Live harness
+acceptance remains a separately recorded check.
 
 ### Stage 4 — dev end-to-end
 
@@ -346,8 +349,21 @@ updates for execution/event rows plus append-only audit events.
 
 PostgreSQL event/delivery restart and concurrent claim coverage uses isolated
 test schemas when `TEST_DATABASE_URL` is configured. This proves persistence
-and claim arbitration, not live harness wake acceptance; supervisor work is
-Stage 3.
+and claim arbitration, not live harness wake acceptance; that remains a Stage 3
+operator check.
+
+## Stage 3 implementation notes (2026-11-25)
+
+`cmd/supervisor` is a separate polling process. It reuses the agentconnect
+credential profile loader, claims every due event in a session batch, performs
+one adapter wake, persists non-secret per-session wake timestamps, and
+acknowledges each claim with the adapter outcome. tmux is preferred when the
+registered target exists; Codex and Claude Code headless adapters require a
+valid registered session ref and a best-effort live-process guard. Desktop,
+CCR, and other adapters remain unsupported without an existing tmux target.
+Fake-executable and HTTP mock tests cover the supervisor contract. The manual
+Mac mini smoke test and live authenticated Codex/Claude wake checks have not
+been run by the implementation agent.
 
 ## Stage 1 implementation notes
 

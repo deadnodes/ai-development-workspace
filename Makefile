@@ -1,4 +1,4 @@
-.PHONY: run build test check db
+.PHONY: run build supervisor test check db
 
 db:
 	docker compose up -d --wait db
@@ -6,9 +6,13 @@ run:
 	go run ./cmd/server
 build:
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-supervisor ./cmd/supervisor
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-publisher ./cmd/publisher
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-registry-observer ./cmd/registry-observer
+
+supervisor:
+	go build -o bin/rcp-supervisor ./cmd/supervisor
 test:
 	go test -race ./...
 check:
@@ -40,6 +44,7 @@ check:
 	python3 -m unittest discover -s scripts -p 'test_*.py'
 	go test -race ./...
 	go build -trimpath -ldflags="-s -w" -o bin/release-control ./cmd/server
+	go build -trimpath -ldflags="-s -w" -o bin/rcp-supervisor ./cmd/supervisor
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-worker ./cmd/worker
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-publisher ./cmd/publisher
 	go build -trimpath -ldflags="-s -w" -o bin/rcp-registry-observer ./cmd/registry-observer

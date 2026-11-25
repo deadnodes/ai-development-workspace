@@ -66,6 +66,7 @@ type Integration struct {
 type ExecutionHarness struct {
 	Kind       string `json:"kind"`
 	SessionRef string `json:"session_ref"`
+	TmuxTarget string `json:"tmux_target,omitempty"`
 	CWD        string `json:"cwd"`
 	Host       string `json:"host"`
 }
@@ -101,6 +102,7 @@ type ExecutionEvent struct {
 	DedupeKey           string                   `json:"dedupe_key"`
 	SessionRef          string                   `json:"session_ref"`
 	HarnessKind         string                   `json:"harness_kind"`
+	TmuxTarget          string                   `json:"tmux_target,omitempty"`
 	CreatedAt           time.Time                `json:"created_at"`
 	Delivery            ExecutionEventDelivery   `json:"delivery"`
 	Resolution          ExecutionEventResolution `json:"resolution"`
