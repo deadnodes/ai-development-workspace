@@ -34,8 +34,10 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	// derived gates). Other commands retain the fully isolated callback contract.
 	var scope *domain.StateMutationScope
 	switch s.command.Action {
-	case "claim_execution", "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
+	case "claim_execution": // a claim also assigns an unassigned Integration to the caller's user
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+	case "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
 	case "assign_integration", "unassign_integration":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"events"}}
 	case "report_turn_end":
