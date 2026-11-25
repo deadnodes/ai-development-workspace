@@ -15,6 +15,9 @@ import (
 // static MCP AddTool names, the named flow tools and execution command tools,
 // ServeMux patterns, and the authoritative domain action catalog.
 func TestAgentGuideRegistryDrift(t *testing.T) {
+	if got := len(agentguide.PendingDocumentation()); got != 18 {
+		t.Fatalf("pending documentation count = %d, want 18", got)
+	}
 	known := map[string]bool{}
 	canonical := map[string]bool{}
 	aliases := map[string]bool{}

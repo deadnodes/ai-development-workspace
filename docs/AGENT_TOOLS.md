@@ -3382,6 +3382,466 @@ Read persisted operation status, step evidence and attention needs.
 
 **Authority:** Read-only operation status; queued or pending does not mean deployed and grants no new execution permission.
 
+### `GET /api/schema` — http_route
+
+Return the JSON Schema for execute commands.
+
+**When:** Use to inspect current action inputs before submitting a command.
+
+**Inputs:**
+
+
+**Output:** Command schema with per-action payload constraints.
+
+**Errors:**
+
+- `HTTP_ERROR`: "service unavailable" when schema access is unavailable; retry after service recovery.
+
+**Example:** `GET /api/schema`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /api/state` — http_route
+
+Return the complete persisted state snapshot.
+
+**When:** Use only when a full operator snapshot is needed; prefer bounded get_state navigation for agents.
+
+**Inputs:**
+
+
+**Output:** Serialized State including records and history.
+
+**Errors:**
+
+- `HTTP_ERROR`: "state unavailable" when the reader fails; retry or inspect service health.
+
+**Example:** `GET /api/state`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Exposes instance context; does not prove readiness or authorize changes.
+
+### `GET /api/statuses` — http_route
+
+Return domain status catalogs.
+
+**When:** Use to discover accepted lifecycle status values.
+
+**Inputs:**
+
+
+**Output:** Status catalog by domain entity.
+
+**Errors:**
+
+- `HTTP_ERROR`: "status schema unavailable" if status metadata cannot be served; retry.
+
+**Example:** `GET /api/statuses`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /api/tools` — http_route
+
+Return tool and execution schema metadata.
+
+**When:** Use to inspect available agent operations.
+
+**Inputs:**
+
+
+**Output:** Tool descriptions and input schemas.
+
+**Errors:**
+
+- `HTTP_ERROR`: "tool schema unavailable" if metadata cannot be served; retry.
+
+**Example:** `GET /api/tools`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /api/ui-state` — http_route
+
+Return the UI-oriented state projection.
+
+**When:** Use for UI state hydration; agents should prefer scoped queries.
+
+**Inputs:**
+
+
+**Output:** UI projection of current state.
+
+**Errors:**
+
+- `HTTP_ERROR`: "state unavailable" when state loading fails; retry.
+
+**Example:** `GET /api/ui-state`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only projection; does not authorize mutations.
+
+### `GET /api/worker-history` — http_route
+
+**Same operation:** `mcp_tool:get_worker_history`
+
+List bounded worker job history.
+
+**When:** Use to inspect worker activity with product scope and pagination.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `limit` (string, optional): Page size
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Worker history page and cursor.
+
+**Errors:**
+
+- `HTTP_ERROR`: "invalid worker history query" for malformed filters; correct query parameters.
+
+**Example:** `GET /api/worker-history?product_id=P&limit=20`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /api/worker-jobs/{id}` — http_route
+
+Read one worker job record.
+
+**When:** Use with a known worker job ID.
+
+**Inputs:**
+
+- `id` (string, required): Worker job path ID
+
+**Output:** Worker job details and recorded status.
+
+**Errors:**
+
+- `HTTP_ERROR`: "worker job not found" for an unknown ID; verify the ID.
+
+**Example:** `GET /api/worker-jobs/JOB`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /api/signatures` — http_route
+
+**Same operation:** `mcp_tool:list_signatures`
+
+List artifact signing request receipts.
+
+**When:** Use to inspect signing status and evidence within Product scope.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Signature request page.
+
+**Errors:**
+
+- `HTTP_ERROR`: "invalid signature query" for malformed filters; correct the query.
+
+**Example:** `GET /api/signatures?product_id=P`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /api/worker-history` — http_route
+
+**Same operation:** `mcp_tool:get_worker_history`
+
+List bounded native worker job and attempt history.
+
+**When:** Use for a Product scoped worker execution audit; preserve filters when following cursors.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `feature_id` (string, optional): Optional Feature filter
+- `limit` (string, optional): Page size
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Worker jobs page with attempts and complete links.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 "invalid worker history query" for malformed or unknown query fields; correct filters and pagination.
+
+**Example:** `GET /api/worker-history?product_id=P&limit=25`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `GET /healthz` — http_route
+
+Report HTTP service liveness.
+
+**When:** Use for a basic availability probe.
+
+**Inputs:**
+
+
+**Output:** {"status":"ok"}
+
+**Errors:**
+
+- `HTTP_ERROR`: A non-200 response indicates the service or host policy is unavailable; investigate service health.
+
+**Example:** `GET /healthz`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Read-only interface; does not authorize or perform a domain mutation.
+
+### `POST /api/backups/export` — http_route
+
+Export a complete instance backup as gzip.
+
+**When:** Use for operator backup before maintenance or migration.
+
+**Inputs:**
+
+
+**Output:** Binary gzip attachment and X-Backup-SHA256 response header.
+
+**Errors:**
+
+- `HTTP_ERROR`: "backup unavailable" if backup service is unavailable; retry after recovery.
+
+**Example:** `POST /api/backups/export`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Exports private instance context; it does not grant restore or external credential access.
+
+### `POST /api/backups/restore` — http_route
+
+**Same operation:** `mcp_tool:restore_backup`
+
+Restore a checksummed full-instance backup.
+
+**When:** Use only for an explicitly intended restore into an empty instance.
+
+**Inputs:**
+
+- `X-Backup-SHA256` (string, required): SHA-256 of the compressed backup
+
+**Output:** Restore receipt/result.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 415 "Use Content-Type: application/gzip"; HTTP 413 "Backup exceeds compressed limit or cannot be read"; checksum, format, or nonempty-instance errors require correcting the archive or target.
+
+**Example:** `POST /api/backups/restore (application/gzip; X-Backup-SHA256: …)`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Mutates instance state atomically; does not merge databases or copy credentials.
+
+### `POST /api/builds` — http_route
+
+**Same operation:** `mcp_tool:queue_build`
+
+Queue a component build request.
+
+**When:** Use after checking component build configuration and target scope.
+
+**Inputs:**
+
+
+**Output:** Build record and operation status.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 "invalid build request" for malformed/unknown fields; HTTP 501 "build service unavailable" when unsupported; domain validation errors require fixing request/configuration.
+
+**Example:** `POST /api/builds with JSON QueueBuildRequest`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Queues configured build work only; does not edit source or deploy.
+
+### `POST /api/builds/{id}/cancel` — http_route
+
+**Same operation:** `mcp_tool:cancel_build`
+
+Cancel a queued build.
+
+**When:** Use only while build status is QUEUED; running or uncertain provider work cannot be cancelled here.
+
+**Inputs:**
+
+- `id` (string, required): Build path ID
+
+**Output:** Updated build record.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 for missing build; domain conflict when build is no longer queued; inspect the same build/operation.
+
+**Example:** `POST /api/builds/BUILD/cancel`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Cancels queued RCP work only; does not cancel an external runner.
+
+### `POST /api/builds/{id}/close` — http_route
+
+**Same operation:** `mcp_tool:close_build`
+
+Admin-close an active or reconciliation-required build as failed.
+
+**When:** Use after operator review when provider work has been handled separately.
+
+**Inputs:**
+
+- `id` (string, required): Build path ID
+
+**Output:** Closed build retaining evidence.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 for missing build; validation/conflict errors mean status or authority is ineligible; inspect provider run first.
+
+**Example:** `POST /api/builds/BUILD/close`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Does not cancel an external runner; frees RCP admission while preserving evidence.
+
+### `POST /api/compositions/{id}/reconcile` — http_route
+
+**Same operation:** `mcp_tool:reconcile_composition`
+
+Execute the selected immutable composition in its configured environment.
+
+**When:** Use after validating exact composition selection and applicable release policy.
+
+**Inputs:**
+
+- `id` (string, required): Composition path ID
+- `resolution_conflict_ids` (array[string], optional): Explicit resolved conflict IDs
+
+**Output:** Persistent parent operation handle; poll operation and child evidence.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 for unknown composition; validation/conflict errors identify stale selection, missing mapping, or unavailable capability; correct state then explicitly retry.
+
+**Example:** `POST /api/compositions/COMPOSITION/reconcile with {"resolution_conflict_ids":[]}`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Queues Git/build/GitOps work within configured policy; does not imply deployment success or runtime health.
+
+### `POST /api/connections/{id}/test` — http_route
+
+**Same operation:** `mcp_tool:test_connection`
+
+Test a configured provider connection.
+
+**When:** Use to verify connection access before provider-backed operations.
+
+**Inputs:**
+
+- `id` (string, required): Connection path ID
+
+**Output:** Connection test result and observed repositories/capabilities.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 when connection is unknown; provider HTTP_ERROR describes access/configuration failure; correct credentials or grants.
+
+**Example:** `POST /api/connections/CONNECTION/test`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Performs a provider read/test only; does not grant Product access or mutate remote repositories.
+
+### `POST /api/deployments` — http_route
+
+Request deployment of an Integration to an Environment.
+
+**When:** Use only after reviewing current integration, environment mapping and explicit delivery authorization.
+
+**Inputs:**
+
+
+**Output:** Deployment record and operation handle.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 for missing scope; validation/conflict errors indicate invalid mapping, disabled target, or stale state; resolve before retry.
+
+**Example:** `POST /api/deployments with JSON deployment request`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Queues policy-bounded deployment; does not itself prove reconciliation or runtime health.
+
+### `POST /api/deployments/{id}/close` — http_route
+
+**Same operation:** `mcp_tool:close_deployment`
+
+Close an eligible deployment record while preserving its evidence.
+
+**When:** Use after reviewing the operation and resolving or accepting its external status.
+
+**Inputs:**
+
+- `id` (string, required): Deployment path ID
+
+**Output:** Closed deployment record.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 for unknown deployment; conflict means it cannot be closed in its current state; inspect operation.
+
+**Example:** `POST /api/deployments/DEPLOYMENT/close`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Administrative record lifecycle only; does not cancel provider work or change runtime.
+
+### `POST /api/deployments/{id}/reconcile` — http_route
+
+**Same operation:** `mcp_tool:reconcile_deployment`
+
+Request reconciliation of an existing deployment.
+
+**When:** Use when recorded deployment state needs an explicit reconciliation attempt.
+
+**Inputs:**
+
+- `id` (string, required): Deployment path ID
+
+**Output:** Reconciliation operation handle and evidence.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 404 for unknown deployment; validation/conflict errors require checking current target and operation state.
+
+**Example:** `POST /api/deployments/DEPLOYMENT/reconcile`
+
+**Related:** `GET /api/schema`, `GET /api/state`
+
+**Authority:** Queues configured reconciliation only; does not guarantee healthy runtime.
+
 ## release
 
 ### `confirm_candidate_dev_restoration` — execute_action
@@ -5060,7 +5520,6 @@ Export Product workspace configuration for agent setup.
 
 The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
 
-- `mcp_tool:restore_backup`
 - `mcp_tool:resume`
 - `mcp_tool:scan_workspace`
 - `mcp_tool:set_project_knowledge`
@@ -5070,21 +5529,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `http_route:GET /api/schema`
-- `http_route:GET /api/state`
-- `http_route:GET /api/statuses`
-- `http_route:GET /api/tools`
-- `http_route:GET /api/ui-state`
-- `http_route:GET /api/worker-history`
-- `http_route:GET /healthz`
-- `http_route:POST /api/backups/restore`
-- `http_route:POST /api/builds`
-- `http_route:POST /api/builds/{id}/cancel`
-- `http_route:POST /api/builds/{id}/close`
-- `http_route:POST /api/connections/{id}/test`
-- `http_route:POST /api/deployments`
-- `http_route:POST /api/deployments/{id}/close`
-- `http_route:POST /api/deployments/{id}/reconcile`
 - `http_route:POST /api/local-git/plan`
 - `http_route:POST /api/local-git/record`
 - `http_route:POST /api/products/{id}/knowledge`

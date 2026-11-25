@@ -221,7 +221,6 @@ func env(fields ...string) []Field {
 // pendingDocumentation is deliberately explicit. Each value is kind:name and
 // will be replaced by later briefs with complete records.
 var pendingDocumentation = []string{
-	"mcp_tool:restore_backup",
 	"mcp_tool:resume",
 	"mcp_tool:scan_workspace",
 	"mcp_tool:set_project_knowledge",
@@ -231,21 +230,6 @@ var pendingDocumentation = []string{
 	"execute_action:cancel_intelligence_task",
 	"execute_action:cancel_native_delivery",
 	"execute_action:cancel_worker_job",
-	"http_route:GET /api/schema",
-	"http_route:GET /api/state",
-	"http_route:GET /api/statuses",
-	"http_route:GET /api/tools",
-	"http_route:GET /api/ui-state",
-	"http_route:GET /api/worker-history",
-	"http_route:GET /healthz",
-	"http_route:POST /api/backups/restore",
-	"http_route:POST /api/builds",
-	"http_route:POST /api/builds/{id}/cancel",
-	"http_route:POST /api/builds/{id}/close",
-	"http_route:POST /api/connections/{id}/test",
-	"http_route:POST /api/deployments",
-	"http_route:POST /api/deployments/{id}/close",
-	"http_route:POST /api/deployments/{id}/reconcile",
 	"http_route:POST /api/local-git/plan",
 	"http_route:POST /api/local-git/record",
 	"http_route:POST /api/products/{id}/knowledge",
@@ -259,8 +243,50 @@ var pendingDocumentation = []string{
 
 func PendingDocumentation() []string { return append([]string(nil), pendingDocumentation...) }
 
+// completedRoutes contains the requested HTTP reference briefs. Route schemas
+// are kept here so the generated guide and runtime lookup share one registry.
+func completedRoutes() []ToolEntry {
+	str := func(name, meaning string, required bool) Field {
+		return Field{Name: name, Type: "string", Required: required, Meaning: meaning}
+	}
+	entry := func(name, purpose, when, output, err, example, authority string, fields ...Field) ToolEntry {
+		aliases := map[string][]string{
+			"POST /api/backups/restore": {"mcp_tool:restore_backup"},
+			"GET /api/signatures":       {"mcp_tool:list_signatures"}, "GET /api/worker-history": {"mcp_tool:get_worker_history"},
+			"POST /api/builds": {"mcp_tool:queue_build"}, "POST /api/builds/{id}/cancel": {"mcp_tool:cancel_build"}, "POST /api/builds/{id}/close": {"mcp_tool:close_build"},
+			"POST /api/compositions/{id}/reconcile": {"mcp_tool:reconcile_composition"}, "POST /api/connections/{id}/test": {"mcp_tool:test_connection"},
+			"POST /api/deployments/{id}/close": {"mcp_tool:close_deployment"}, "POST /api/deployments/{id}/reconcile": {"mcp_tool:reconcile_deployment"},
+		}
+		return ToolEntry{Name: name, Kind: "http_route", Aliases: aliases[name], Area: "operations", Purpose: purpose, When: when, Inputs: fields, Output: output, Errors: []ErrorInfo{{"HTTP_ERROR", err}}, Example: example, Related: []string{"GET /api/schema", "GET /api/state"}, Authority: authority}
+	}
+	readOnly := "Read-only interface; does not authorize or perform a domain mutation."
+	return []ToolEntry{
+		entry("GET /api/schema", "Return the JSON Schema for execute commands.", "Use to inspect current action inputs before submitting a command.", "Command schema with per-action payload constraints.", `"service unavailable" when schema access is unavailable; retry after service recovery.`, "GET /api/schema", readOnly),
+		entry("GET /api/state", "Return the complete persisted state snapshot.", "Use only when a full operator snapshot is needed; prefer bounded get_state navigation for agents.", "Serialized State including records and history.", `"state unavailable" when the reader fails; retry or inspect service health.`, "GET /api/state", "Exposes instance context; does not prove readiness or authorize changes."),
+		entry("GET /api/statuses", "Return domain status catalogs.", "Use to discover accepted lifecycle status values.", "Status catalog by domain entity.", `"status schema unavailable" if status metadata cannot be served; retry.`, "GET /api/statuses", readOnly),
+		entry("GET /api/tools", "Return tool and execution schema metadata.", "Use to inspect available agent operations.", "Tool descriptions and input schemas.", `"tool schema unavailable" if metadata cannot be served; retry.`, "GET /api/tools", readOnly),
+		entry("GET /api/ui-state", "Return the UI-oriented state projection.", "Use for UI state hydration; agents should prefer scoped queries.", "UI projection of current state.", `"state unavailable" when state loading fails; retry.`, "GET /api/ui-state", "Read-only projection; does not authorize mutations."),
+		entry("GET /api/worker-history", "List bounded worker job history.", "Use to inspect worker activity with product scope and pagination.", "Worker history page and cursor.", `"invalid worker history query" for malformed filters; correct query parameters.`, "GET /api/worker-history?product_id=P&limit=20", readOnly, str("product_id", "Product scope", true), str("limit", "Page size", false), str("cursor", "Continuation cursor", false)),
+		entry("GET /api/worker-jobs/{id}", "Read one worker job record.", "Use with a known worker job ID.", "Worker job details and recorded status.", `"worker job not found" for an unknown ID; verify the ID.`, "GET /api/worker-jobs/JOB", readOnly, str("id", "Worker job path ID", true)),
+		entry("GET /api/signatures", "List artifact signing request receipts.", "Use to inspect signing status and evidence within Product scope.", "Signature request page.", `"invalid signature query" for malformed filters; correct the query.`, "GET /api/signatures?product_id=P", readOnly, str("product_id", "Product scope", true), str("cursor", "Continuation cursor", false)),
+		entry("GET /api/worker-history", "List bounded native worker job and attempt history.", "Use for a Product scoped worker execution audit; preserve filters when following cursors.", "Worker jobs page with attempts and complete links.", `HTTP 400 "invalid worker history query" for malformed or unknown query fields; correct filters and pagination.`, "GET /api/worker-history?product_id=P&limit=25", readOnly, str("product_id", "Product scope", true), str("feature_id", "Optional Feature filter", false), str("limit", "Page size", false), str("cursor", "Continuation cursor", false)),
+		entry("GET /healthz", "Report HTTP service liveness.", "Use for a basic availability probe.", `{"status":"ok"}`, "A non-200 response indicates the service or host policy is unavailable; investigate service health.", "GET /healthz", readOnly),
+		entry("POST /api/backups/export", "Export a complete instance backup as gzip.", "Use for operator backup before maintenance or migration.", "Binary gzip attachment and X-Backup-SHA256 response header.", `"backup unavailable" if backup service is unavailable; retry after recovery.`, "POST /api/backups/export", "Exports private instance context; it does not grant restore or external credential access."),
+		entry("POST /api/backups/restore", "Restore a checksummed full-instance backup.", "Use only for an explicitly intended restore into an empty instance.", "Restore receipt/result.", `HTTP 415 "Use Content-Type: application/gzip"; HTTP 413 "Backup exceeds compressed limit or cannot be read"; checksum, format, or nonempty-instance errors require correcting the archive or target.`, "POST /api/backups/restore (application/gzip; X-Backup-SHA256: …)", "Mutates instance state atomically; does not merge databases or copy credentials.", str("X-Backup-SHA256", "SHA-256 of the compressed backup", true)),
+		entry("POST /api/builds", "Queue a component build request.", "Use after checking component build configuration and target scope.", "Build record and operation status.", `HTTP 400 "invalid build request" for malformed/unknown fields; HTTP 501 "build service unavailable" when unsupported; domain validation errors require fixing request/configuration.`, "POST /api/builds with JSON QueueBuildRequest", "Queues configured build work only; does not edit source or deploy."),
+		entry("POST /api/builds/{id}/cancel", "Cancel a queued build.", "Use only while build status is QUEUED; running or uncertain provider work cannot be cancelled here.", "Updated build record.", `HTTP 404 for missing build; domain conflict when build is no longer queued; inspect the same build/operation.`, "POST /api/builds/BUILD/cancel", "Cancels queued RCP work only; does not cancel an external runner.", str("id", "Build path ID", true)),
+		entry("POST /api/builds/{id}/close", "Admin-close an active or reconciliation-required build as failed.", "Use after operator review when provider work has been handled separately.", "Closed build retaining evidence.", `HTTP 404 for missing build; validation/conflict errors mean status or authority is ineligible; inspect provider run first.`, "POST /api/builds/BUILD/close", "Does not cancel an external runner; frees RCP admission while preserving evidence.", str("id", "Build path ID", true)),
+		entry("POST /api/compositions/{id}/reconcile", "Execute the selected immutable composition in its configured environment.", "Use after validating exact composition selection and applicable release policy.", "Persistent parent operation handle; poll operation and child evidence.", `HTTP 404 for unknown composition; validation/conflict errors identify stale selection, missing mapping, or unavailable capability; correct state then explicitly retry.`, "POST /api/compositions/COMPOSITION/reconcile with {\"resolution_conflict_ids\":[]}", "Queues Git/build/GitOps work within configured policy; does not imply deployment success or runtime health.", str("id", "Composition path ID", true), Field{Name: "resolution_conflict_ids", Type: "array[string]", Meaning: "Explicit resolved conflict IDs", Required: false}),
+		entry("POST /api/connections/{id}/test", "Test a configured provider connection.", "Use to verify connection access before provider-backed operations.", "Connection test result and observed repositories/capabilities.", `HTTP 404 when connection is unknown; provider HTTP_ERROR describes access/configuration failure; correct credentials or grants.`, "POST /api/connections/CONNECTION/test", "Performs a provider read/test only; does not grant Product access or mutate remote repositories.", str("id", "Connection path ID", true)),
+		entry("POST /api/deployments", "Request deployment of an Integration to an Environment.", "Use only after reviewing current integration, environment mapping and explicit delivery authorization.", "Deployment record and operation handle.", `HTTP 404 for missing scope; validation/conflict errors indicate invalid mapping, disabled target, or stale state; resolve before retry.`, "POST /api/deployments with JSON deployment request", "Queues policy-bounded deployment; does not itself prove reconciliation or runtime health."),
+		entry("POST /api/deployments/{id}/close", "Close an eligible deployment record while preserving its evidence.", "Use after reviewing the operation and resolving or accepting its external status.", "Closed deployment record.", `HTTP 404 for unknown deployment; conflict means it cannot be closed in its current state; inspect operation.`, "POST /api/deployments/DEPLOYMENT/close", "Administrative record lifecycle only; does not cancel provider work or change runtime.", str("id", "Deployment path ID", true)),
+		entry("POST /api/deployments/{id}/reconcile", "Request reconciliation of an existing deployment.", "Use when recorded deployment state needs an explicit reconciliation attempt.", "Reconciliation operation handle and evidence.", `HTTP 404 for unknown deployment; validation/conflict errors require checking current target and operation state.`, "POST /api/deployments/DEPLOYMENT/reconcile", "Queues configured reconciliation only; does not guarantee healthy runtime.", str("id", "Deployment path ID", true)),
+	}
+}
+
 func Registry() []ToolEntry {
 	out := append([]ToolEntry(nil), documented...)
+	out = append(out, completedRoutes()...)
 	for i := range out {
 		e := &out[i]
 		if e.Kind != "execute_action" {
