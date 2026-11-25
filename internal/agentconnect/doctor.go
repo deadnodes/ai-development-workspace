@@ -141,7 +141,7 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 				}
 				name := filepath.Base(filepath.Dir(p))
 				sum := sha256.Sum256(b)
-				want := sha256.Sum256([]byte(expected[name]))
+				want := sha256.Sum256(installedSkill(expected[name]))
 				if hex.EncodeToString(sum[:]) != hex.EncodeToString(want[:]) {
 					e = fmt.Errorf("%s checksum mismatch", p)
 					break

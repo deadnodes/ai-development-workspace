@@ -303,7 +303,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		if plan.exists && !bytes.HasSuffix(plan.before, []byte(skillMarker)) && !bytes.Equal(plan.before, []byte(target.skill.Content)) {
 			return Binding{}, fmt.Errorf("unmanaged %s skill exists; no files changed", target.skill.Name)
 		}
-		plan.after = []byte(strings.TrimRight(target.skill.Content, "\n") + "\n\n" + skillMarker)
+		plan.after = installedSkill(target.skill.Content)
 	}
 	// Claude Code reads project MCP servers from .mcp.json. Decode and merge the
 	// JSON object so unrelated servers and settings survive reconnects.
@@ -399,4 +399,10 @@ func appendBlock(content, start, end, body string) string {
 		content += "\n"
 	}
 	return content + start + "\n" + strings.TrimRight(body, "\n") + "\n" + end + "\n"
+}
+
+// installedSkill is the exact file content connect writes for a managed skill;
+// doctor compares installed files against the same bytes.
+func installedSkill(content string) []byte {
+	return []byte(strings.TrimRight(content, "\n") + "\n\n" + skillMarker)
 }
