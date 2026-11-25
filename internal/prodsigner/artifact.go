@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"releasecontrol/internal/imagesigning"
+	"sort"
 	"strings"
 	"time"
 )
@@ -30,6 +31,7 @@ type Artifact struct {
 type Source struct {
 	HTTP       *http.Client
 	API, Token string
+	Namespace  string
 }
 
 func InCluster() (Source, error) {
@@ -45,12 +47,19 @@ func InCluster() (Source, error) {
 	if e != nil {
 		return Source{}, errInput
 	}
-	return Source{HTTP: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, API: "https://" + os.Getenv("KUBERNETES_SERVICE_HOST") + ":" + os.Getenv("KUBERNETES_SERVICE_PORT"), Token: strings.TrimSpace(string(token))}, nil
+	namespace, e := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if e != nil || strings.TrimSpace(string(namespace)) == "" {
+		return Source{}, errInput
+	}
+	return Source{HTTP: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, API: "https://" + os.Getenv("KUBERNETES_SERVICE_HOST") + ":" + os.Getenv("KUBERNETES_SERVICE_PORT"), Token: strings.TrimSpace(string(token)), Namespace: strings.TrimSpace(string(namespace))}, nil
 }
-func (s Source) get(ctx context.Context, u string, auth bool, limit int64) ([]byte, error) {
-	req, e := http.NewRequestWithContext(ctx, "GET", u, nil)
+func (s Source) request(ctx context.Context, method, u string, auth bool, contentType string, body io.Reader, limit int64, status func(int) bool) ([]byte, http.Header, error) {
+	req, e := http.NewRequestWithContext(ctx, method, u, body)
 	if e != nil {
-		return nil, errInput
+		return nil, nil, errInput
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if auth {
 		req.Header.Set("Authorization", "Bearer "+s.Token)
@@ -60,14 +69,74 @@ func (s Source) get(ctx context.Context, u string, auth bool, limit int64) ([]by
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	res, e := client.Do(req)
 	if e != nil {
-		return nil, errInput
+		return nil, nil, errInput
 	}
 	defer res.Body.Close()
 	b, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
-	if e != nil || int64(len(b)) > limit || res.StatusCode != 200 {
-		return nil, errInput
+	if e != nil || int64(len(b)) > limit || !status(res.StatusCode) {
+		return nil, nil, errInput
 	}
-	return b, nil
+	return b, res.Header, nil
+}
+func (s Source) get(ctx context.Context, u string, auth bool, limit int64) ([]byte, error) {
+	b, _, e := s.request(ctx, "GET", u, auth, "", nil, limit, func(code int) bool { return code == http.StatusOK })
+	return b, e
+}
+func (s Source) cacheURL(name string) string {
+	return s.API + "/api/v1/namespaces/" + s.Namespace + "/configmaps/" + name
+}
+func (s Source) LoadCache(ctx context.Context, name string) (map[string]int64, string, error) {
+	b, _, e := s.request(ctx, "GET", s.cacheURL(name), true, "", nil, 1<<20, func(code int) bool { return code == http.StatusOK })
+	if e != nil {
+		return nil, "", e
+	}
+	var v struct {
+		Metadata struct {
+			ResourceVersion string `json:"resourceVersion"`
+		} `json:"metadata"`
+		Data map[string]string `json:"data"`
+	}
+	if json.Unmarshal(b, &v) != nil {
+		return nil, "", errInput
+	}
+	entries := map[string]int64{}
+	if raw := v.Data["verified.json"]; raw != "" {
+		var parsed map[string]int64
+		if json.Unmarshal([]byte(raw), &parsed) != nil {
+			return nil, "", errInput
+		}
+		for digest, ts := range parsed {
+			if imagesigning.DigestPattern.MatchString(digest) {
+				entries[digest] = ts
+			}
+		}
+	}
+	return entries, v.Metadata.ResourceVersion, nil
+}
+func (s Source) SaveCache(ctx context.Context, name, resourceVersion string, entries map[string]int64) error {
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	ordered := make(map[string]int64, len(entries))
+	for _, key := range keys {
+		ordered[key] = entries[key]
+	}
+	data, e := json.Marshal(ordered)
+	if e != nil {
+		return errInput
+	}
+	metadata := map[string]string{}
+	if resourceVersion != "" {
+		metadata["resourceVersion"] = resourceVersion
+	}
+	body, e := json.Marshal(map[string]any{"metadata": metadata, "data": map[string]string{"verified.json": string(data)}})
+	if e != nil {
+		return errInput
+	}
+	_, _, e = s.request(ctx, "PATCH", s.cacheURL(name), true, "application/merge-patch+json", bytes.NewReader(body), 1<<20, func(code int) bool { return code >= 200 && code < 300 })
+	return e
 }
 func (s Source) Load(ctx context.Context, c Config) (Artifact, map[string][]byte, error) {
 	var a Artifact

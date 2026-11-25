@@ -51,6 +51,7 @@ JSON is strict, including nested fields. Example (replace public PEM placeholder
     "auth":{"method":"kubernetes","mount":"k8s-deadnodes-prod","role":"cosign-prod-signer","token_file":"/var/run/secrets/vault-cosign/token"}
   },
   "builder_ids":["https://rcp-dev.tail9c31db.ts.net/builders/forgejo/v1"],
+  "cache":{"configmap":"prod-signer-cache","ttl_seconds":3600},
   "backfill_file":"clusters/ovh-vpc-k3s-prod/custom-resources/supply-chain/backfill.yaml",
   "metrics_file":""
 }
@@ -171,14 +172,18 @@ spec:
 
 The normal automounted API token and CA authenticate the minimal stdlib Kubernetes
 client. The separately projected vault-cosign token is used only for Vault login.
-RBAC grants no list, watch or write access.
+The optional verified-digest cache uses a ConfigMap created and managed by GitOps;
+the signer only GETs and merge-PATCHes it. When enabled, grant `get` and `patch`
+on that named ConfigMap in the signer namespace. The signer never creates or
+deletes it. `cache.configmap` must be a DNS-1123 subdomain and
+`cache.ttl_seconds` must be 60–86400; omit `cache` to disable caching.
 
 Use default-deny ingress/egress NetworkPolicies; allow DNS, the Kubernetes API,
 Flux source-controller artifact service, production zot and production Vault
 only. Deny dev-to-prod Vault traffic independently. Account for CNI API-service
 DNAT behavior and the artifact service's actual namespace/port.
 
-Stdout contains one JSON summary: revision, total, already_signed, signed,
+Stdout contains one JSON summary: revision, total, already_signed, cached, signed,
 unapproved, errors. Unapproved refs are JSON-escaped on stderr. Remote errors
 are redacted; artifact URL query strings and credentials are never logged.
 Missing approval exits zero; infrastructure, invalid config/archive or metrics

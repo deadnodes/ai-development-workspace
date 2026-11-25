@@ -13,19 +13,52 @@ import (
 	"releasecontrol/internal/imagesigning"
 	"releasecontrol/internal/imagesigning/signingtest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+type countingTransport struct {
+	base http.RoundTripper
+	prod atomic.Int64
+}
+
+func (t *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.Path, "prod-signatures") {
+		t.prod.Add(1)
+	}
+	return t.base.RoundTrip(r)
+}
 
 type fakeSource struct {
 	base    http.RoundTripper
 	archive []byte
 	digest  string
+	cache   *fakeCache
+}
+type fakeCache struct {
+	raw   string
+	rv    string
+	patch []byte
+	fail  bool
 }
 
 func (f fakeSource) RoundTrip(r *http.Request) (*http.Response, error) {
 	w := httptest.NewRecorder()
 	switch r.URL.Host {
 	case "kube.test":
+		if strings.Contains(r.URL.Path, "/configmaps/") {
+			if f.cache == nil || f.cache.fail {
+				w.WriteHeader(500)
+				break
+			}
+			if r.Method == "PATCH" {
+				f.cache.patch, _ = io.ReadAll(r.Body)
+				w.WriteHeader(200)
+				break
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]string{"resourceVersion": f.cache.rv}, "data": map[string]string{"verified.json": f.cache.raw}})
+			break
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": map[string]any{"artifact": Artifact{URL: "http://artifact.test/archive?secret=redacted", Revision: "main@sha1:abc", Digest: f.digest}}})
 	case "artifact.test":
 		if r.Header.Get("Authorization") != "" {
@@ -158,6 +191,137 @@ func TestPromoteModeConfigIsStrictWithoutFluxFields(t *testing.T) {
 	c.RCP.URL = "http://rcp.example"
 	if err := c.ValidateMode("promote"); err == nil {
 		t.Fatal("non-HTTPS RCP accepted")
+	}
+}
+
+func TestVerifiedDigestCache(t *testing.T) {
+	for _, mode := range []string{"cold", "fresh", "expired", "pruned", "unavailable", "future"} {
+		t.Run(mode, func(t *testing.T) {
+			f := signingtest.New(t)
+			digest := f.Image("abc")
+			ref := "registry.deadnodes.internal/deadnodes/app@" + digest
+			var c Config
+			c.FluxArtifact.Namespace = "flux-system"
+			c.FluxArtifact.Name = "flux-system"
+			c.FluxArtifact.Kind = "GitRepository"
+			c.Paths = []string{"clusters/prod/"}
+			c.OwnImagePrefixes = []string{"registry.deadnodes.internal/deadnodes/"}
+			c.Registry.Origin = f.Registry.URL
+			c.Registry.InsecureHTTP = true
+			c.Registry.CredentialsFile = filepath.Join(f.Root, "registry.json")
+			c.Registry.Rewrite = map[string]string{"registry.deadnodes.internal/": ""}
+			c.SignaturesRepository = "prod-signatures"
+			c.DevPublicKeyPEM = f.Key("dev").PublicKeyPEM
+			c.ProdKey = f.Key("prod")
+			c.BuilderIDs = []string{"https://builder.test/v1"}
+			c.Cache.ConfigMap = "prod-signer-cache"
+			c.Cache.TTLSeconds = 3600
+			if err := c.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			for _, invalid := range []struct {
+				name string
+				ttl  int
+			}{{"Uppercase", 60}, {"bad/name", 60}, {"too-short", 59}, {"too-long", 86401}} {
+				c.Cache.ConfigMap, c.Cache.TTLSeconds = invalid.name, invalid.ttl
+				if c.Validate() == nil {
+					t.Fatalf("accepted invalid cache config: %+v", c.Cache)
+				}
+			}
+			c.Cache.ConfigMap, c.Cache.TTLSeconds = "", 0
+			if err := c.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			c.Cache.TTLSeconds = 60
+			if c.Validate() == nil {
+				t.Fatal("accepted TTL without ConfigMap")
+			}
+			c.Cache.ConfigMap, c.Cache.TTLSeconds = "prod-signer-cache", 3600
+			seedClient := imagesigning.NewWithClient(f.Client())
+			predicate := imagesigning.Predicate{Type: imagesigning.ProvenanceType, Body: map[string]any{
+				"buildDefinition": map[string]any{"buildType": "https://deadnodes.dev/rcp/forgejo-build/v1", "externalParameters": map[string]string{"tag": "main-abc", "source_sha": "abc"}, "internalParameters": map[string]string{"build_id": "build1"}},
+				"runDetails":      map[string]any{"builder": map[string]string{"id": c.BuilderIDs[0]}, "byproducts": []any{map[string]any{"name": "required_status_contexts", "annotations": map[string]any{"required": []string{"ci"}, "observed": map[string]string{"ci": "success"}}}}},
+			}}
+			_, err := seedClient.PublishIdentity(context.Background(), f.RegistryConfig(), "deadnodes/app", "registry.json", f.Key("dev"), digest, "build1", "abc", "registry.deadnodes.internal/deadnodes/app", predicate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]string{"clusters/prod/app.yaml": "image: " + ref}
+			b := archive(t, files)
+			cache := &fakeCache{rv: "7"}
+			ts := now().Unix()
+			if mode == "fresh" {
+				raw, _ := json.Marshal(map[string]int64{digest: ts})
+				cache.raw = string(raw)
+			}
+			if mode == "expired" {
+				raw, _ := json.Marshal(map[string]int64{digest: ts - 7200})
+				cache.raw = string(raw)
+				_, err = seedClient.PublishIdentity(context.Background(), f.RegistryConfig(), c.SignaturesRepository, "registry.json", c.ProdKey, digest, "", "", "registry.deadnodes.internal/deadnodes/app", imagesigning.Predicate{Type: ApprovalType, Body: map[string]string{}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "pruned" {
+				files = map[string]string{}
+				b = archive(t, files)
+				raw, _ := json.Marshal(map[string]int64{"sha256:" + strings.Repeat("f", 64): ts})
+				cache.raw = string(raw)
+			}
+			if mode == "unavailable" {
+				cache.fail = true
+			}
+			if mode == "future" {
+				raw, _ := json.Marshal(map[string]int64{digest: ts + 7200})
+				cache.raw = string(raw)
+			}
+			count := &countingTransport{base: f.Client().Transport}
+			client := imagesigning.NewWithClient(&http.Client{Transport: count})
+			source := Source{HTTP: &http.Client{Transport: fakeSource{base: count, archive: b, digest: imagesigning.Hash(b), cache: cache}}, API: "http://kube.test", Token: "kube-token", Namespace: "supply-chain"}
+			s, err := Reconcile(context.Background(), c, source, client, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "fresh":
+				if s.Cached != 1 || s.AlreadySigned != 1 || s.Signed != 0 || count.prod.Load() != 0 {
+					t.Fatalf("%+v prod=%d", s, count.prod.Load())
+				}
+			case "future":
+				if s.Cached != 0 || count.prod.Load() == 0 {
+					t.Fatalf("future entry trusted: %+v prod=%d", s, count.prod.Load())
+				}
+			case "unavailable":
+				if s.Errors != 0 || len(cache.patch) != 0 {
+					t.Fatalf("%+v patch=%s", s, cache.patch)
+				}
+			case "cold":
+				var body struct {
+					Data map[string]string `json:"data"`
+				}
+				if json.Unmarshal(cache.patch, &body) != nil || !strings.Contains(body.Data["verified.json"], digest) || s.Cached != 0 {
+					t.Fatalf("%+v patch=%s", s, cache.patch)
+				}
+			case "expired":
+				var body struct {
+					Data map[string]string `json:"data"`
+				}
+				json.Unmarshal(cache.patch, &body)
+				var saved map[string]int64
+				json.Unmarshal([]byte(body.Data["verified.json"]), &saved)
+				if saved[digest] <= ts-7200 || s.AlreadySigned != 1 {
+					t.Fatalf("%+v saved=%v", s, saved)
+				}
+			case "pruned":
+				var body struct {
+					Data map[string]string `json:"data"`
+				}
+				json.Unmarshal(cache.patch, &body)
+				if body.Data["verified.json"] != "{}" {
+					t.Fatalf("patch=%s", cache.patch)
+				}
+			}
+		})
 	}
 }
 
