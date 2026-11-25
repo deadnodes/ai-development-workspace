@@ -107,6 +107,13 @@ when present and otherwise connects to a local server without a credential.
 
 `--harness codex` skips Claude MCP/settings changes; `--harness claude` skips Codex MCP changes. `--codex-notify` is optional. The installer does not change global harness configuration, trust settings or global skills. Review project-local changes with Git before committing them. Binding files contain no token value but may contain a private server URL or Product ID; decide whether they belong in that repository.
 
+On orchestrator hosts running Codex with `-a never`, connect with
+`--harness both --codex-notify --codex-auto-approve --profile default`.
+`--codex-auto-approve` sets `default_tools_approval_mode = "approve"` in the
+managed MCP entry so Codex can call MCP tools. Codex notify does not inherit
+environment variables, so use a saved profile for its turn-end hook;
+`--token-env` is unsuitable for Codex notify.
+
 ## Activate in Codex
 
 Trust the project through Codex's normal trust flow, then **start a new chat or reload MCP configuration**. This command does not retroactively attach tools to an already-running chat.

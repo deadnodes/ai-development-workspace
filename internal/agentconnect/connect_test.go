@@ -138,12 +138,15 @@ func TestCodexNotifyOptionMergesProjectConfig(t *testing.T) {
 	server := kitServer(t, 1, "")
 	root := t.TempDir()
 	writeFile(t, root, ".codex/config.toml", "model = \"keep\"\n")
-	if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root, ProductID: "p0", CodexNotify: true, Harness: "codex"}); err != nil {
+	if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root, ProductID: "p0", CodexNotify: true, CodexAutoApprove: true, Harness: "codex"}); err != nil {
 		t.Fatal(err)
 	}
 	data := string(readFile(t, root, ".codex/config.toml"))
 	if !(strings.Contains(data, `model = "keep"`) || strings.Contains(data, `model = 'keep'`)) || !strings.Contains(data, `notify = [`) || !strings.Contains(data, `mcp_servers`) {
 		t.Fatal("Codex notify merge lost existing keys or MCP config", data)
+	}
+	if !strings.Contains(data, `default_tools_approval_mode = 'approve'`) && !strings.Contains(data, `default_tools_approval_mode = "approve"`) {
+		t.Fatal("Codex MCP approval mode missing", data)
 	}
 }
 func TestConnectRejectsConflictsWithoutWriting(t *testing.T) {

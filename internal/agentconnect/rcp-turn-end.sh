@@ -42,8 +42,12 @@ RCP_HARNESS_KIND=${RCP_HARNESS_KIND:-$(printf '%s\n' "$config_values" | sed -n '
 [ -n "$RCP_PRODUCT_ID" ] || fail 'missing RCP_PRODUCT_ID'
 case "$RCP_HARNESS_KIND" in codex|claude_code) ;; *) fail 'invalid RCP_HARNESS_KIND' ;; esac
 [ -n "$RCP_TOKEN_FILE" ] && { [ -r "$RCP_TOKEN_FILE" ] || fail 'token file is not readable'; token=$(cat "$RCP_TOKEN_FILE" 2>/dev/null) || fail 'could not read token file'; }
-[ -z "$RCP_TOKEN_FILE" ] && [ -n "$RCP_PROFILE" ] && { token=$("$RCP_EXECUTABLE" token --url "$RCP_URL" --profile "$RCP_PROFILE" 2>/dev/null) || fail 'saved credential unavailable'; }
+[ -z "$RCP_TOKEN_FILE" ] && [ -n "$RCP_PROFILE" ] && { token=$("$RCP_EXECUTABLE" token --url "$RCP_URL" --profile "$RCP_PROFILE" --stdout-to-fd 3 3>&1 2>/dev/null) || fail 'saved credential unavailable'; }
 [ -z "$RCP_TOKEN_FILE" ] && [ -z "$RCP_PROFILE" ] && [ -n "$RCP_TOKEN_ENV" ] && { token=$(printenv "$RCP_TOKEN_ENV" 2>/dev/null) || fail 'token environment variable unavailable'; }
+
+if [ "${1:-}" = --dry-run ]; then
+  exit 0
+fi
 
 payload=${1:-}
 if [ "$RCP_HARNESS_KIND" != codex ]; then

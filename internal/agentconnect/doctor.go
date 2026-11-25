@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"releasecontrol/internal/agentguide"
 )
 
@@ -26,13 +28,14 @@ type doctorCheck struct {
 
 // RunDoctor checks a connected agent workspace without changing it.
 func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
-	var raw, profile, product, workspace string
+	var raw, profile, product, workspace, tokenEnv string
 	f := flag.NewFlagSet("release-control doctor", flag.ContinueOnError)
 	f.SetOutput(out)
 	f.StringVar(&raw, "url", "", "Control Plane base URL")
 	f.StringVar(&profile, "profile", "default", "saved credential profile")
 	f.StringVar(&product, "product-id", "", "Product ID")
 	f.StringVar(&workspace, "workspace", ".", "project directory")
+	f.StringVar(&tokenEnv, "token-env", "", "bearer token environment variable")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -87,7 +90,7 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 			}
 		}
 		add("RCP /healthz", "start/check Control Plane at "+endpoint, e)
-		token, e := loadCredential(endpoint, profile)
+		token, e := ResolveCredential(endpoint, profile, tokenEnv)
 		if e != nil {
 			e = fmt.Errorf("credential unavailable: %w", e)
 		}
@@ -142,9 +145,15 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 			_, se := os.Stat(script)
 			add("Turn-end hook config", "release-control connect --url "+raw+" --workspace "+workspace+" --product-id "+product, ce)
 			if se == nil {
-				se = exec.CommandContext(ctx, script, "--dry-run", "--config", cfg).Run()
+				se = exec.CommandContext(ctx, script, "--config", cfg, "--dry-run").Run()
 			}
 			add("Turn-end hook runnable (dry run)", "release-control connect --url "+raw+" --workspace "+workspace+" --product-id "+product, se)
+			if hookHarness(cfg) == "codex" && hookHasTokenEnv(cfg) {
+				checks = append(checks, doctorCheck{name: "Codex hook credential", fix: "use --profile; Codex notify does not inherit env", err: errors.New("Codex notify does not inherit env; use --profile"), warn: true})
+			}
+		}
+		if !codexAutoApproveConfigured(filepath.Join(root, ".codex/config.toml")) {
+			checks = append(checks, doctorCheck{name: "Codex MCP tool approval", fix: "connect --codex-auto-approve", err: errors.New("orchestrators running codex -a never need --codex-auto-approve"), warn: true})
 		}
 	} else {
 		add("Workspace checks", "--workspace /path", rootErr)
@@ -182,6 +191,33 @@ func versionSuffix(v string) string {
 		return ""
 	}
 	return " (" + strings.ReplaceAll(v, "\n", " ") + ")"
+}
+
+func readHookConfig(path string) map[string]string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var values map[string]string
+	if json.Unmarshal(b, &values) != nil {
+		return nil
+	}
+	return values
+}
+func hookHarness(path string) string   { return readHookConfig(path)["harness_kind"] }
+func hookHasTokenEnv(path string) bool { return readHookConfig(path)["token_env"] != "" }
+func codexAutoApproveConfigured(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var root map[string]any
+	if toml.Unmarshal(b, &root) != nil {
+		return false
+	}
+	servers, _ := root["mcp_servers"].(map[string]any)
+	rc, _ := servers["release-control"].(map[string]any)
+	return rc["default_tools_approval_mode"] == "approve"
 }
 
 func productContextCheck(ctx context.Context, endpoint, token, id string) (bool, error) {

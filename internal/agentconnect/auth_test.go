@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -288,5 +289,33 @@ func TestLoginEnrollsAndSavesWithoutPrintingCredential(t *testing.T) {
 	token, err := ResolveCredential(server.URL, "default", "")
 	if err != nil || token != "new-agent-secret" {
 		t.Fatalf("persisted credential unavailable: %v", err)
+	}
+}
+
+func TestTokenProfileWritesOnlyToRequestedFD(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const endpoint = "https://control.example.test"
+	if err := saveCredential(endpoint, "default", "fd-secret"); err != nil {
+		t.Fatal(err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	var stdout bytes.Buffer
+	if err := RunToken([]string{"--url", endpoint, "--profile", "default", "--stdout-to-fd", strconv.Itoa(int(w.Fd()))}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 || string(got) != "fd-secret" {
+		t.Fatalf("stdout=%q fd=%q", stdout.String(), got)
 	}
 }

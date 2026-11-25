@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,8 +21,10 @@ func RunToken(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("release-control token", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var raw, profile string
+	var fd int
 	flags.StringVar(&raw, "url", "", "Control Plane base URL")
 	flags.StringVar(&profile, "profile", "default", "saved agent credential profile")
+	flags.IntVar(&fd, "stdout-to-fd", -1, "write credential to this file descriptor instead of stdout")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -35,6 +38,10 @@ func RunToken(args []string, out io.Writer) error {
 	token, err := loadCredential(endpoint, profile)
 	if err != nil {
 		return errors.New("saved credential unavailable")
+	}
+	if fd >= 0 {
+		_, err = syscall.Write(fd, []byte(token))
+		return err
 	}
 	_, err = io.WriteString(out, token)
 	return err

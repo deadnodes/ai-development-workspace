@@ -68,6 +68,8 @@ without typing another copy, to submit a previous pending wake. Otherwise it
 records `wake not observed`. A busy pane is acknowledged `failed` with detail
 `busy`.
 
+On the orchestrator host, install the connection with
+`release-control connect --harness both --codex-notify --codex-auto-approve --profile default`.
 When running Codex TUI with `-a never`, configure the RCP server under
 `mcp_servers.<name>.default_tools_approval_mode = "approve"`; without this,
 every MCP call fails with “requires approval, but approval policy is never”.

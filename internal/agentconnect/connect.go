@@ -34,6 +34,7 @@ const skillMarker = "<!-- release-control managed skill -->\n"
 type Options struct {
 	URL, Workspace, ProductID, TokenEnv, Name, Profile, Executable, Harness string
 	CodexNotify                                                             bool
+	CodexAutoApprove                                                        bool
 }
 type Binding struct {
 	URL        string `json:"url"`
@@ -61,6 +62,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	flags.StringVar(&o.Name, "name", "release-control", "project MCP server name")
 	flags.StringVar(&o.Harness, "harness", "both", "install for codex, claude, or both")
 	flags.BoolVar(&o.CodexNotify, "codex-notify", false, "wire the Codex turn-end hook in project config")
+	flags.BoolVar(&o.CodexAutoApprove, "codex-auto-approve", false, "allow Codex MCP tools under approval policy never")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -278,6 +280,9 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 			args += ", \"--token-env\", " + strconv.Quote(o.TokenEnv)
 		}
 		entry := "[mcp_servers." + strconv.Quote(o.Name) + "]\ncommand = " + strconv.Quote(o.Executable) + "\nargs = [" + args + "]\n"
+		if o.CodexAutoApprove {
+			entry += "default_tools_approval_mode = \"approve\"\n"
+		}
 		plans[0].after = []byte(appendBlock(outside, configStart, configEnd, entry))
 		if err = toml.Unmarshal(plans[0].after, &parsed); err != nil {
 			return Binding{}, errors.New("managed MCP entry conflicts with existing TOML")

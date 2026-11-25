@@ -32,7 +32,11 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("server stopped", "error", err)
+		name := "server"
+		if len(os.Args) > 1 {
+			name = os.Args[1]
+		}
+		slog.Error(name+" failed", "error", err)
 		os.Exit(1)
 	}
 }
