@@ -33,6 +33,7 @@ func CommandSchema() map[string]any {
 	data["expected_plan_hash"] = str()
 	data["expected_selection"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"composition_id", "operation_id", "generation"}, "properties": map[string]any{"composition_id": str(), "operation_id": str(), "generation": map[string]any{"type": "integer", "minimum": 0}}}
 	data["idempotency_key"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
+	data["execution_fence"] = map[string]any{"type": "integer", "minimum": 1}
 	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids revision_ids") {
 		data[k] = map[string]any{"type": "array", "items": str()}
 	}
@@ -192,6 +193,14 @@ func CommandSchema() map[string]any {
 			}
 			if name == "record_scenario_run" {
 				dataRule["properties"].(map[string]any)["result"] = map[string]any{"type": "string", "enum": domain.StatusCatalog()["scenario_result"]}
+			}
+			if name == "record_progress" || name == "transition_integration" {
+				if dataRule["properties"] == nil {
+					dataRule["properties"] = map[string]any{}
+				}
+				dataRule["properties"].(map[string]any)["execution_fence"] = map[string]any{"type": "integer", "minimum": 1}
+			} else {
+				dataRule["not"] = map[string]any{"required": []string{"execution_fence"}}
 			}
 			if restorationAction(name) {
 				exact := map[string]any{}

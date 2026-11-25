@@ -49,6 +49,22 @@ func TestStaleOperationThresholdDefaultAndDisable(t *testing.T) {
 	}
 }
 
+func TestExecutionDefaultsAndExplicitZero(t *testing.T) {
+	c := valid()
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if c.ReconcileInterval != 30 || c.HeartbeatInterval != 60 || c.LeaseTTL != 300 || c.StalledTimeout != 900 || c.TurnEndDebounceSeconds != 20 {
+		t.Fatalf("defaults: %+v", c)
+	}
+	b, _ := json.Marshal(valid())
+	raw := strings.TrimSuffix(string(b), "}") + `,"reconcile_interval":0,"stalled_timeout":0}`
+	decoded, err := Decode(strings.NewReader(raw))
+	if err != nil || decoded.ReconcileInterval != 0 || decoded.StalledTimeout != 0 {
+		t.Fatalf("explicit zero: %+v %v", decoded, err)
+	}
+}
+
 func TestCIGateDevModeValidation(t *testing.T) {
 	for _, mode := range []string{"observe", "block"} {
 		c := valid()

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.deadnodes.rcp-supervisor</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/OWNER/bin/rcp-supervisor</string>
+		<string>-config</string>
+		<string>/Users/OWNER/.config/release-control/supervisor.json</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict><key>PATH</key><string>/opt/homebrew/bin:/Users/OWNER/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+	<key>KeepAlive</key><true/>
+	<key>RunAtLoad</key><true/>
+	<key>StandardOutPath</key><string>/Users/OWNER/Library/Logs/rcp-supervisor.log</string>
+	<key>StandardErrorPath</key><string>/Users/OWNER/Library/Logs/rcp-supervisor.log</string>
+	<key>WorkingDirectory</key><string>/Users/OWNER</string>
+</dict>
+</plist>

@@ -97,18 +97,35 @@ type Image struct {
 	Repository string `json:"repository"`
 }
 type Config struct {
-	Signing                  *Signing      `json:"signing,omitempty"`
-	Rollout                  RolloutConfig `json:"rollout,omitempty"`
-	GitOps                   []GitOps      `json:"gitops,omitempty"`
-	Environments             []Environment `json:"environments,omitempty"`
-	Connections              []Connection  `json:"connections"`
-	Registries               []Registry    `json:"registries"`
-	Pools                    []Pool        `json:"pools"`
-	Profiles                 []Profile     `json:"profiles"`
-	TimeoutSeconds           int           `json:"timeout_seconds,omitempty"`
-	RunLookbackSeconds       int           `json:"run_lookback_seconds,omitempty"`
-	StaleOperationSeconds    int           `json:"stale_operation_seconds,omitempty"`
-	staleOperationSecondsSet bool
+	Signing                   *Signing      `json:"signing,omitempty"`
+	Rollout                   RolloutConfig `json:"rollout,omitempty"`
+	GitOps                    []GitOps      `json:"gitops,omitempty"`
+	Environments              []Environment `json:"environments,omitempty"`
+	Connections               []Connection  `json:"connections"`
+	Registries                []Registry    `json:"registries"`
+	Pools                     []Pool        `json:"pools"`
+	Profiles                  []Profile     `json:"profiles"`
+	TimeoutSeconds            int           `json:"timeout_seconds,omitempty"`
+	RunLookbackSeconds        int           `json:"run_lookback_seconds,omitempty"`
+	StaleOperationSeconds     int           `json:"stale_operation_seconds,omitempty"`
+	ReconcileInterval         int           `json:"reconcile_interval,omitempty"`
+	HeartbeatInterval         int           `json:"heartbeat_interval,omitempty"`
+	LeaseTTL                  int           `json:"lease_ttl,omitempty"`
+	StalledTimeout            int           `json:"stalled_timeout,omitempty"`
+	NotifyRetrySeconds        int           `json:"notify_retry_seconds,omitempty"`
+	MaxBackoffSeconds         int           `json:"max_backoff_seconds,omitempty"`
+	EscalateAfterAttempts     int           `json:"escalate_after_attempts,omitempty"`
+	EscalateAfterDelivered    int           `json:"escalate_after_delivered,omitempty"`
+	TurnEndDebounceSeconds    int           `json:"turn_end_debounce_seconds,omitempty"`
+	staleOperationSecondsSet  bool
+	reconcileIntervalSet      bool
+	heartbeatIntervalSet      bool
+	leaseTTLSet               bool
+	stalledTimeoutSet         bool
+	notifyRetrySecondsSet     bool
+	maxBackoffSecondsSet      bool
+	escalateAfterAttemptsSet  bool
+	turnEndDebounceSecondsSet bool
 }
 
 func (c Config) StaleTimeoutSeconds() int {
@@ -136,6 +153,14 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	}
 	*c = Config(decoded)
 	_, c.staleOperationSecondsSet = fields["stale_operation_seconds"]
+	_, c.reconcileIntervalSet = fields["reconcile_interval"]
+	_, c.heartbeatIntervalSet = fields["heartbeat_interval"]
+	_, c.leaseTTLSet = fields["lease_ttl"]
+	_, c.stalledTimeoutSet = fields["stalled_timeout"]
+	_, c.notifyRetrySecondsSet = fields["notify_retry_seconds"]
+	_, c.maxBackoffSecondsSet = fields["max_backoff_seconds"]
+	_, c.escalateAfterAttemptsSet = fields["escalate_after_attempts"]
+	_, c.turnEndDebounceSecondsSet = fields["turn_end_debounce_seconds"]
 	return nil
 }
 
@@ -363,6 +388,54 @@ func (c *Config) Validate() error {
 		c.StaleOperationSeconds = 7200
 	}
 	if c.StaleOperationSeconds < 0 || c.StaleOperationSeconds > 604800 {
+		return bad
+	}
+	if !c.reconcileIntervalSet && c.ReconcileInterval == 0 {
+		c.ReconcileInterval = 30
+	}
+	if c.ReconcileInterval < 0 || c.ReconcileInterval > 3600 {
+		return bad
+	}
+	if !c.heartbeatIntervalSet && c.HeartbeatInterval == 0 {
+		c.HeartbeatInterval = 60
+	}
+	if c.HeartbeatInterval < 1 || c.HeartbeatInterval > 3600 {
+		return bad
+	}
+	if !c.leaseTTLSet && c.LeaseTTL == 0 {
+		c.LeaseTTL = 300
+	}
+	if c.LeaseTTL < 30 || c.LeaseTTL > 86400 {
+		return bad
+	}
+	if !c.stalledTimeoutSet && c.StalledTimeout == 0 {
+		c.StalledTimeout = 900
+	}
+	if c.StalledTimeout < 0 || c.StalledTimeout > 604800 {
+		return bad
+	}
+	if !c.notifyRetrySecondsSet && c.NotifyRetrySeconds == 0 {
+		c.NotifyRetrySeconds = 30
+	}
+	if !c.maxBackoffSecondsSet && c.MaxBackoffSeconds == 0 {
+		c.MaxBackoffSeconds = 900
+	}
+	if !c.escalateAfterAttemptsSet && c.EscalateAfterAttempts == 0 {
+		c.EscalateAfterAttempts = 10
+	}
+	if c.EscalateAfterDelivered == 0 {
+		c.EscalateAfterDelivered = 3
+	}
+	if c.NotifyRetrySeconds < 1 || c.NotifyRetrySeconds > 86400 || c.MaxBackoffSeconds < 1 || c.MaxBackoffSeconds > 604800 || c.EscalateAfterAttempts < 1 || c.EscalateAfterAttempts > 1000 {
+		return bad
+	}
+	if c.EscalateAfterDelivered < 1 || c.EscalateAfterDelivered > 1000 {
+		return bad
+	}
+	if !c.turnEndDebounceSecondsSet && c.TurnEndDebounceSeconds == 0 {
+		c.TurnEndDebounceSeconds = 20
+	}
+	if c.TurnEndDebounceSeconds < 1 || c.TurnEndDebounceSeconds > 3600 {
 		return bad
 	}
 	return nil

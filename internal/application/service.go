@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"releasecontrol/internal/auth"
+	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
@@ -38,6 +39,7 @@ type Service struct {
 	runtimeObservers        []delivery.RuntimeSnapshotObserver
 	workspaceRoot           string
 	store                   Store
+	executionDefaults       *buildconfig.Config
 	provider                delivery.Provider
 	workerID                string
 }
@@ -106,6 +108,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if executionAction(c.Action) {
+		return s.executeExecutionCommand(ctx, c)
+	}
 	if c.Action == "queue_intelligence_task" || c.Action == "cancel_intelligence_task" {
 		return s.executeIntelligence(ctx, c)
 	}
@@ -160,6 +165,23 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 		}
 		var err error
 		result, err = applyAuthorizedOrigin(st, c, s.externalWorkers, origin)
+		if err == nil && (c.Action == "record_progress" || c.Action == "transition_integration") {
+			if _, ok := c.Data["execution_fence"]; ok {
+				ex := executionFor(st, c.IntegrationID)
+				if ex != nil && executionFence(c.Data, "execution_fence") == ex.Fence {
+					now := time.Now().UTC()
+					if ex.State == "lost" || ex.State == "stalled" {
+						executionCondition(st, ex, "running", false, "", now)
+					}
+					if ex.State == "running" {
+						until := now.Add(time.Duration(ex.LeaseTTLSeconds) * time.Second)
+						ex.LeaseUntil = &until
+						ex.LastHeartbeat = &now
+						ex.LastProgress = &now
+					}
+				}
+			}
+		}
 		return err
 	})
 	return result, err
@@ -453,6 +475,12 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 			return nil, invalid("field %s cannot be supplied in data", key)
 		}
 	}
+	if _, ok := c.Data["execution_unfenced"]; ok {
+		return nil, invalid("execution_unfenced is server-managed")
+	}
+	if _, ok := c.Data["execution_fence"]; ok && c.Action != "record_progress" && c.Action != "transition_integration" {
+		return nil, invalid("execution_fence is only valid for Integration progress or transition")
+	}
 	for key := range c.Data {
 		if key != strings.ToLower(key) {
 			return nil, invalid("data field %s must use snake_case", key)
@@ -469,6 +497,17 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 	}
 	operationCount := len(st.Operations)
 	m := meta(c)
+	if c.Action == "record_progress" || c.Action == "transition_integration" {
+		if ex := executionFor(st, c.IntegrationID); ex != nil {
+			if _, ok := c.Data["execution_fence"]; ok {
+				if executionFence(c.Data, "execution_fence") != ex.Fence {
+					return nil, invalid("STALE_FENCE")
+				}
+			} else if ex.State == "running" {
+				c.Data["execution_unfenced"] = true
+			}
+		}
+	}
 	var out any
 	if c.IntegrationID != "" {
 		v := integration(st, c.IntegrationID)
@@ -811,7 +850,16 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 			return nil, missing("feature", c.FeatureID)
 		}
 		v := domain.Memory{}
-		if e := decode(c.Data, &v); e != nil {
+		memoryData := c.Data
+		if c.Action == "record_progress" {
+			memoryData = map[string]any{}
+			for k, val := range c.Data {
+				if k != "execution_fence" && k != "execution_unfenced" {
+					memoryData[k] = val
+				}
+			}
+		}
+		if e := decode(memoryData, &v); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -840,6 +888,10 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 				in.Remaining = v.Remaining
 			}
 			in.UpdatedAt = m.UpdatedAt
+			if ex := executionFor(st, c.IntegrationID); ex != nil && ex.State == "running" && c.Data["execution_unfenced"] != true {
+				now := m.UpdatedAt
+				ex.LastProgress = &now
+			}
 		}
 		st.Memories = append(st.Memories, v)
 		out = v

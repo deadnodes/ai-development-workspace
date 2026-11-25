@@ -77,6 +77,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	if e = copy.Validate(); e != nil {
 		return e
 	}
+	s.executionDefaults = &copy
 	if p == nil || r == nil {
 		return invalid("build adapters required")
 	}
@@ -86,10 +87,21 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	// the legacy global fingerprint so adding/changing its threshold does not
 	// invalidate existing build and deployment authority hashes.
 	hashConfig.StaleOperationSeconds = 0
+	// Execution policy is not build authority. Keep its fields zero and omitted
+	// so legacy global fingerprints remain byte-identical to the pre-execution form.
+	hashConfig.ReconcileInterval = 0
+	hashConfig.HeartbeatInterval = 0
+	hashConfig.LeaseTTL = 0
+	hashConfig.StalledTimeout = 0
+	hashConfig.NotifyRetrySeconds = 0
+	hashConfig.MaxBackoffSeconds = 0
+	hashConfig.EscalateAfterAttempts = 0
+	hashConfig.EscalateAfterDelivered = 0
+	hashConfig.TurnEndDebounceSeconds = 0
 	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
-	}{Config: hashConfig, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
+	}{hashConfig, rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
 	// Build scope: every Profile field except Deployments, RequiredStatusContexts, CIGate, AutoDeployDev
 	// and RequireSecurityGate (enabling the gate must not orphan builds made before it);
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,

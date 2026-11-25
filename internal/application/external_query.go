@@ -2,11 +2,73 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"releasecontrol/internal/domain"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
+
+func executionNextAction(in *domain.Integration, ex *domain.IntegrationExecution, events []domain.ExecutionEvent, group *domain.ExecutionGroup) map[string]string {
+	current := in.Status
+	desired := "ready"
+	code, text := "claim", ""
+	if ex != nil {
+		desired = ex.DesiredState
+		if desired == "" {
+			desired = "ready"
+		}
+	}
+	if ex == nil || ex.State == "unassigned" || ex.State == "exited_incomplete" || ex.State == "paused" {
+		text = fmt.Sprintf("Integration status is %s; desired_state is %s. Call claim_execution to resume work. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired)
+	} else if ex.State == "completed" || ex.State == "cancelled" {
+		code, text = "none", fmt.Sprintf("Integration status is %s; desired_state is %s. No action required.", current, desired)
+	} else if ex.State == "waiting_external" || ex.State == "blocked" {
+		ref := ex.WaitingRef
+		if ref == "" {
+			ref = ex.BlockerRef
+		}
+		code, text = "wait", fmt.Sprintf("Integration status is %s; desired_state is %s. Wait for reference %s, then inspect get_execution_group.", current, desired, ref)
+	} else if ex.State == "lost" || ex.State == "stalled" {
+		code = "resume"
+		var delivered string
+		for _, ev := range events {
+			if ev.IntegrationID == in.ID && ev.Resolution.ResolvedAt == nil && (ev.Type == "execution_lost" || ev.Type == "execution_stalled") {
+				for _, ack := range ev.Acknowledgements {
+					if ack.Outcome == "delivered" {
+						delivered = ev.ID
+						break
+					}
+				}
+			}
+			if delivered != "" {
+				break
+			}
+		}
+		if delivered != "" && group.OrchestratorID != ex.OrchestratorID {
+			code = "takeover"
+			text = fmt.Sprintf("Integration status is %s; desired_state is %s. Different executor: call takeover_execution with delivered event id %s. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired, delivered)
+		} else {
+			text = fmt.Sprintf("Integration status is %s; desired_state is %s. You hold fence %d. Call heartbeat_execution(integration_id, fence=%d) to resume, finish the work, then transition_integration to %s (current: %s) with execution_fence=%d and call release_execution(outcome=completed).", current, desired, ex.Fence, ex.Fence, desired, current, ex.Fence)
+		}
+	} else {
+		code = "advance"
+		steps := remainingExecutionSteps(current, desired)
+		text = fmt.Sprintf("Integration status is %s; desired_state is %s. Remaining transition steps: %s. Transition with execution_fence=%d, then call release_execution(outcome=completed).", current, desired, strings.Join(steps, " -> "), ex.Fence)
+	}
+	return map[string]string{"code": code, "text": text}
+}
+
+func remainingExecutionSteps(current, desired string) []string {
+	order := []string{"planned", "working", "implemented", "verifying", "ready", "released"}
+	i, j := slices.Index(order, current), slices.Index(order, desired)
+	if i < 0 || j < 0 || i >= j {
+		return []string{}
+	}
+	return append([]string(nil), order[i+1:j+1]...)
+}
 
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 	if name == "test_connection" || name == "discover_repositories" {
@@ -31,6 +93,136 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 	request.runtimeFreshnessSnapshot = freshness
 	s = &request
 	switch name {
+	case "get_execution_group":
+		for _, g := range st.ExecutionGroups {
+			if g.ID == id {
+				if g.ProductID == "" {
+					return nil, invalid("SCOPE_MISMATCH")
+				}
+				members := []map[string]any{}
+				for _, iid := range g.MemberIntegrationIDs {
+					in := integration(&st, iid)
+					if in == nil {
+						continue
+					}
+					var ex *domain.IntegrationExecution
+					for j := range st.IntegrationExecutions {
+						if st.IntegrationExecutions[j].IntegrationID == iid {
+							ex = &st.IntegrationExecutions[j]
+						}
+					}
+					next := executionNextAction(in, ex, st.ExecutionEvents, &g)
+					effectiveTimeout, timeoutSource := 900, "global"
+					if ex != nil {
+						global := 900
+						if s.executionDefaults != nil {
+							global = s.executionDefaults.StalledTimeout
+						}
+						effectiveTimeout, timeoutSource = effectiveStalledTimeout(&st, ex, global)
+					}
+					openEvents := []domain.ExecutionEvent{}
+					for _, ev := range st.ExecutionEvents {
+						if ev.IntegrationID == iid && ev.Resolution.ResolvedAt == nil {
+							openEvents = append(openEvents, ev)
+						}
+					}
+					members = append(members, map[string]any{"integration": in, "execution": ex, "open_events": openEvents, "effective_stalled_timeout_seconds": effectiveTimeout, "stalled_timeout_source": timeoutSource, "desired_state": func() string {
+						if ex != nil {
+							return ex.DesiredState
+						}
+						return ""
+					}(), "action_required": ex != nil && ex.Reconciliation.ActionRequired, "reason": func() string {
+						if ex != nil {
+							return ex.Reconciliation.Reason
+						}
+						return ""
+					}(), "next_action": next})
+				}
+				return map[string]any{"group": g, "members": members}, nil
+			}
+		}
+		return nil, missing("execution_group", id)
+	case "list_execution_events":
+		var options struct {
+			Cursor         string `json:"cursor"`
+			Limit          int    `json:"limit"`
+			UnresolvedOnly bool   `json:"unresolved_only"`
+			DueOnly        bool   `json:"due_only"`
+		}
+		productID := id
+		if strings.HasPrefix(id, "{") {
+			var envelope struct {
+				ProductID      string `json:"product_id"`
+				Cursor         string `json:"cursor"`
+				Limit          int    `json:"limit"`
+				UnresolvedOnly bool   `json:"unresolved_only"`
+				DueOnly        bool   `json:"due_only"`
+			}
+			if err := json.Unmarshal([]byte(id), &envelope); err != nil {
+				return nil, invalid("invalid event query")
+			}
+			productID = envelope.ProductID
+			options.Cursor = envelope.Cursor
+			options.Limit = envelope.Limit
+			options.UnresolvedOnly = envelope.UnresolvedOnly
+			options.DueOnly = envelope.DueOnly
+		}
+		if !productExists(&st, productID) {
+			return nil, missing("product", productID)
+		}
+		if options.Limit < 0 || options.Limit > 100 {
+			return nil, invalid("limit must be between 1 and 100")
+		}
+		if options.Limit == 0 {
+			options.Limit = 100
+		}
+		items := []domain.ExecutionEvent{}
+		for _, ev := range st.ExecutionEvents {
+			if ev.ProductID != productID {
+				continue
+			}
+			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
+				continue
+			}
+			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || time.Now().UTC().Before(ev.Delivery.NextAttemptAt)) {
+				continue
+			}
+			if options.Cursor != "" {
+				cursorTime, cursorID, ok := parseExecutionEventCursor(options.Cursor)
+				if !ok {
+					return nil, invalid("invalid cursor")
+				}
+				if ev.CreatedAt.Before(cursorTime) || ev.CreatedAt.Equal(cursorTime) && ev.ID <= cursorID {
+					continue
+				}
+			}
+			items = append(items, ev)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+				return items[i].ID < items[j].ID
+			}
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		})
+		hasMore := len(items) > options.Limit
+		next := ""
+		if hasMore {
+			items = items[:options.Limit]
+			last := items[len(items)-1]
+			next = fmt.Sprintf("%s|%s", last.CreatedAt.UTC().Format(time.RFC3339Nano), last.ID)
+		}
+		return map[string]any{"items": items, "next_cursor": next}, nil
+	case "list_executions":
+		if !productExists(&st, id) {
+			return nil, missing("product", id)
+		}
+		items := []domain.IntegrationExecution{}
+		for _, ex := range st.IntegrationExecutions {
+			if ex.ProductID == id {
+				items = append(items, ex)
+			}
+		}
+		return items, nil
 	case "get_intelligence_task":
 		return s.intelligenceQuery(&st, id)
 	case "get_feature_graph":
@@ -310,6 +502,17 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items = append(items, secretWarnings...)
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
+		for _, ex := range st.IntegrationExecutions {
+			if ex.ProductID == id && ex.Reconciliation.Enabled && ex.Reconciliation.ActionRequired {
+				items = append(items, map[string]any{"id": "execution:" + ex.IntegrationID, "integration_id": ex.IntegrationID, "reason": ex.Reconciliation.Reason, "state": ex.State, "generation": ex.Reconciliation.Generation})
+			}
+		}
+		_, _, escalationThreshold := executionNotifyConfig(s)
+		for _, ev := range st.ExecutionEvents {
+			if ev.ProductID == id && ev.Resolution.ResolvedAt == nil && (ev.EscalationRequired || ev.Delivery.Attempts >= escalationThreshold) {
+				items = append(items, map[string]any{"id": "execution-event:" + ev.ID, "execution_event_id": ev.ID, "integration_id": ev.IntegrationID, "reason": "EXECUTION_EVENT_ESCALATION_REQUIRED", "type": ev.Type, "attempts": ev.Delivery.Attempts})
+			}
+		}
 		if s.builds != nil {
 			items = append(items, deploymentReconciliationAttention(st, id, time.Now().UTC(), time.Duration(s.builds.config.StaleTimeoutSeconds())*time.Second)...)
 		}
@@ -389,6 +592,15 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return items, nil
 	}
 	return nil, invalid("unknown query")
+}
+
+func parseExecutionEventCursor(cursor string) (time.Time, string, bool) {
+	parts := strings.SplitN(cursor, "|", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return time.Time{}, "", false
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	return t, parts[1], err == nil
 }
 
 func generateRegistryID() string { return id() }

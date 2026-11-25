@@ -9,6 +9,9 @@ import (
 // snapshots. Opaque provider responses and append-only event payloads retain
 // their original vocabulary and are deliberately not interpreted as our state.
 func ValidateStateStatuses(st State) error {
+	if err := ValidateExecutionRecords(st); err != nil {
+		return err
+	}
 	if err := ValidateRegistryInventories(st); err != nil {
 		return err
 	}
@@ -171,6 +174,74 @@ func ValidateStateStatuses(st State) error {
 	for _, v := range st.ScenarioRuns {
 		if err := check("scenario_result", v.ID, v.Result, false); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func ValidateExecutionRecords(st State) error {
+	known := map[string]Integration{}
+	products := map[string]bool{}
+	for _, p := range st.Products {
+		products[p.ID] = true
+	}
+	for _, in := range st.Integrations {
+		known[in.ID] = in
+	}
+	seen := map[string]bool{}
+	states := map[string]bool{"unassigned": true, "running": true, "waiting_external": true, "blocked": true, "paused": true, "cancelled": true, "exited_incomplete": true, "lost": true, "stalled": true, "completed": true}
+	for _, e := range st.IntegrationExecutions {
+		in, ok := known[e.IntegrationID]
+		if e.ID == "" || !ok || in.ProductID != e.ProductID || !products[e.ProductID] {
+			return fmt.Errorf("execution %q has invalid Integration scope", e.IntegrationID)
+		}
+		if seen[e.IntegrationID] {
+			return fmt.Errorf("duplicate execution for Integration %q", e.IntegrationID)
+		}
+		seen[e.IntegrationID] = true
+		if !states[e.State] || e.DesiredState != "ready" && e.DesiredState != "released" {
+			return fmt.Errorf("invalid execution state or desired state for %q", e.IntegrationID)
+		}
+		if e.LeaseTTLSeconds < 0 {
+			return fmt.Errorf("invalid execution lease or fence for %q", e.IntegrationID)
+		}
+		if e.StalledTimeoutSeconds != nil && *e.StalledTimeoutSeconds < 0 {
+			return fmt.Errorf("invalid stalled timeout for %q", e.IntegrationID)
+		}
+	}
+	groups := map[string]bool{}
+	for _, g := range st.ExecutionGroups {
+		if g.ID == "" || groups[g.ID] || !products[g.ProductID] {
+			return fmt.Errorf("duplicate or missing execution group id %q", g.ID)
+		}
+		groups[g.ID] = true
+		members := map[string]bool{}
+		for _, iid := range g.MemberIntegrationIDs {
+			in, ok := known[iid]
+			if !ok || in.ProductID != g.ProductID || members[iid] {
+				return fmt.Errorf("execution group %q has invalid member scope", g.ID)
+			}
+			members[iid] = true
+		}
+		if len(g.Revisions) == 0 {
+			return fmt.Errorf("execution group %q has no membership history", g.ID)
+		}
+		for i, revision := range g.Revisions {
+			if revision.Revision != uint64(i+1) {
+				return fmt.Errorf("execution group %q revision sequence mismatch", g.ID)
+			}
+			revisionMembers := map[string]bool{}
+			for _, iid := range revision.MemberIntegrationIDs {
+				in, ok := known[iid]
+				if !ok || in.ProductID != g.ProductID || revisionMembers[iid] {
+					return fmt.Errorf("execution group %q revision has invalid member scope", g.ID)
+				}
+				revisionMembers[iid] = true
+			}
+		}
+		last := g.Revisions[len(g.Revisions)-1]
+		if !slices.Equal(last.MemberIntegrationIDs, g.MemberIntegrationIDs) {
+			return fmt.Errorf("execution group %q revision membership mismatch", g.ID)
 		}
 	}
 	return nil

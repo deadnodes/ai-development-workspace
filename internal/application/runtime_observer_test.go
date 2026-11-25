@@ -200,6 +200,15 @@ func (m *racingFreshnessStore) Update(ctx context.Context, fn func(*domain.State
 	}
 	return nil
 }
+func (m *racingFreshnessStore) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
+	if err := m.memoryStore.UpdateScoped(ctx, scope, fn); err != nil {
+		return err
+	}
+	if m.afterUpdate != nil {
+		m.afterUpdate()
+	}
+	return nil
+}
 func (m *racingFreshnessStore) TouchRuntimeFreshness(_ context.Context, _, _, observationID string, at time.Time, healthy bool) error {
 	m.fresh = domain.RuntimeFreshness{ObservationID: observationID, ObservedAt: at, Healthy: healthy}
 	return nil

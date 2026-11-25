@@ -239,6 +239,27 @@ func run() error {
 		}
 	}
 	gitDone := make(chan struct{})
+	executionDone := make(chan struct{})
+	executionInterval := service.ExecutionReconcileInterval()
+	go func() {
+		defer close(executionDone)
+		if executionInterval == 0 {
+			return
+		}
+		ticker := time.NewTicker(executionInterval)
+		defer ticker.Stop()
+		for {
+			if err := service.ReconcileExecutionsOnce(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("execution reconciliation failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { stop(); <-executionDone }()
 	go func() {
 		defer close(gitDone)
 		if err := service.RunGitScheduler(ctx, gitInterval); err != nil && ctx.Err() == nil {

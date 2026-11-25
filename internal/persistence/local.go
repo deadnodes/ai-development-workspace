@@ -217,6 +217,11 @@ func (s *LocalStore) update(ctx context.Context, scope *domain.StateMutationScop
 					if len(cur) < len(old) {
 						return errors.New("append collection truncated")
 					}
+					// An empty append prefix is equivalent whether represented as nil
+					// or an allocated zero-length slice by JSON decoding/encoding.
+					if len(old) == 0 {
+						continue
+					}
 					cur = cur[:len(old)]
 				}
 				a, _ := json.Marshal(old)

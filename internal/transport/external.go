@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -14,6 +15,9 @@ import (
 // All semantic reads and mutations share the application layer with execute.
 func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
+		"GET /api/execution-groups/{id}":              "get_execution_group",
+		"GET /api/products/{id}/executions":           "list_executions",
+		"GET /api/products/{id}/execution-events":     "list_execution_events",
 		"GET /api/features/{id}/graph":                "get_feature_graph",
 		"GET /api/products/{id}/retention":            "get_artifact_retention",
 		"GET /api/products/{id}/configuration":        "get_product_configuration",
@@ -29,7 +33,21 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 		"GET /api/repositories/{id}/branches":         "list_branches",
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			v, e := service.Query(r.Context(), name, r.PathValue("id"))
+			queryID := r.PathValue("id")
+			if name == "list_execution_events" {
+				q := r.URL.Query()
+				limit := 100
+				if raw := q.Get("limit"); raw != "" {
+					if parsed, err := strconv.Atoi(raw); err != nil {
+						limit = -1
+					} else {
+						limit = parsed
+					}
+				}
+				payload, _ := json.Marshal(map[string]any{"product_id": queryID, "cursor": q.Get("cursor"), "limit": limit, "unresolved_only": q.Get("unresolved_only") == "true", "due_only": q.Get("due_only") == "true"})
+				queryID = string(payload)
+			}
+			v, e := service.Query(r.Context(), name, queryID)
 			respond(w, v, e)
 		})
 	}
@@ -109,6 +127,32 @@ func (in deployExistingInput) command() domain.Command {
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
+	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event"} {
+		registerExecutionCommandTool(server, service, action)
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "get_execution_group", Description: "Restore all execution group members and their current Integration and execution state."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		GroupID string `json:"group_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_execution_group", in.GroupID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "list_executions", Description: "List Product scoped Integration executions."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "list_executions", in.ProductID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "list_execution_events", Description: "List Product scoped execution events with a stable created_at,id cursor and delivery filters."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID      string `json:"product_id"`
+		Cursor         string `json:"cursor,omitempty"`
+		Limit          int    `json:"limit,omitempty"`
+		UnresolvedOnly bool   `json:"unresolved_only,omitempty"`
+		DueOnly        bool   `json:"due_only,omitempty"`
+	}) (*mcp.CallToolResult, any, error) {
+		payload, _ := json.Marshal(map[string]any{"product_id": in.ProductID, "cursor": in.Cursor, "limit": in.Limit, "unresolved_only": in.UnresolvedOnly, "due_only": in.DueOnly})
+		v, e := service.Query(ctx, "list_execution_events", string(payload))
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_intelligence_task", Description: "Read a scoped generated draft or bounded conflict patch with provenance, stale-input state and mandatory review. Does not publish, merge or deploy."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		TaskID string `json:"task_id"`
 	}) (*mcp.CallToolResult, any, error) {
@@ -190,6 +234,22 @@ func registerProviderTools(server *mcp.Server, service Service) {
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "deploy_integration", Description: "Request a real DEV deployment operation for exact source. May dispatch CI and modify configured DEV GitOps files. Requires explicit environment deployment policy. Returns an operation to poll; success is not inferred from submission."}, func(ctx context.Context, _ *mcp.CallToolRequest, in deployInput) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, in.command())
+		return nil, v, e
+	})
+}
+
+func registerExecutionCommandTool(server *mcp.Server, service Service, action string) {
+	description := "Record an execution lifecycle command using the shared application policy. Fence and lease times are server managed."
+	if action == "report_turn_end" {
+		description = "Report a harness turn end. Provide harness_kind and at least one of session_ref or tmux_target; matching uses either supplied identifier."
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: action, Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		Actor         string         `json:"actor,omitempty"`
+		ProductID     string         `json:"product_id,omitempty"`
+		IntegrationID string         `json:"integration_id,omitempty"`
+		Data          map[string]any `json:"data"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Execute(ctx, domain.Command{Action: action, Actor: defaultActor(in.Actor), ProductID: in.ProductID, IntegrationID: in.IntegrationID, Data: in.Data})
 		return nil, v, e
 	})
 }

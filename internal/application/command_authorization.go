@@ -34,15 +34,37 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	// derived gates). Other commands retain the fully isolated callback contract.
 	var scope *domain.StateMutationScope
 	switch s.command.Action {
+	case "claim_execution", "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+	case "report_turn_end":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
+	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_events"}, AppendCollections: []string{"events"}}
+	case "create_execution_group":
+		scope = &domain.StateMutationScope{AppendCollections: []string{"integration_executions", "execution_groups", "events", "execution_events"}}
+	case "add_execution_group_member", "remove_execution_group_member":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups"}, AppendCollections: []string{"events"}}
+	case "set_execution_group_harness":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups"}, AppendCollections: []string{"events"}}
+	case "set_product_stalled_timeout":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"products"}, AppendCollections: []string{"events"}}
 	case "record_runtime_observation":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"gates"}, AppendCollections: []string{"runtime_observations", "events"}}
 	case "record_progress":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "gates"}, AppendCollections: []string{"memories"}}
+		if _, fenced := s.command.Data["execution_fence"]; fenced {
+			scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events", "gates"}, AppendCollections: []string{"memories", "events"}}
+		} else {
+			scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "gates"}, AppendCollections: []string{"memories"}}
+		}
 	case "record_decision", "record_discovery", "add_blocker", "handoff":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"gates"}, AppendCollections: []string{"memories"}}
 	case "create_integration", "update_integration", "start_integration", "complete_integration", "transition_integration":
 		// Creating or reopening an integration can reactivate its parent.
-		scope = &domain.StateMutationScope{MutableCollections: []string{"features", "integrations", "gates"}}
+		if _, fenced := s.command.Data["execution_fence"]; fenced {
+			scope = &domain.StateMutationScope{MutableCollections: []string{"features", "integrations", "gates", "integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+		} else {
+			scope = &domain.StateMutationScope{MutableCollections: []string{"features", "integrations", "gates"}}
+		}
 	case "create_feature", "update_feature":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"features", "gates"}}
 	case "resolve_blocker":
