@@ -22,7 +22,8 @@ func TestInstructionsSeparateGeneralDevPolicyFromRestoration(t *testing.T) {
 		t.Fatal("obsolete blanket Dev merge restriction")
 	}
 	const originalRestoration = "use request_candidate_dev_restoration, inspect the complete dev_restoration_plan.hash and PR heads, then separate confirm_candidate_dev_restoration. ATTRIBUTED_CONTROL_CONFIRMATION is attribution only, not authenticated human text/voice approval. External human-only reviewed Flux merge precedes verify_candidate_dev_restoration for all original components and roles, then explicit release_candidate_dev_after_restoration. Use the current recovery selection after request advances epoch/generation; never infer TTL unlock, renewed candidate rights, functional acceptance or Prod permission. See docs/DEV_RESTORATION.md; source changes are not a live installation or stage08 trust cutover. Re-run the host connect command after an instruction-kit update."
-	if restoration != originalRestoration {
+	protocol, _, _ := strings.Cut(restoration, " The local release-control doctor command")
+	if protocol != originalRestoration {
 		t.Fatal("source-specific Dev restoration protocol changed")
 	}
 }

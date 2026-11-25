@@ -1,5 +1,19 @@
 # Connect a project to the Control Plane
 
+## Agent setup in one pass
+
+Check Go 1.24+, Node.js, Git, tmux, Codex CLI and Claude Code. Build with
+`make build` (or `GOCACHE=/private/tmp/rcp-gocache go build -o bin/release-control ./cmd/server`).
+For a protected service, run `./bin/release-control login --url https://CONTROL_HOST --profile default`
+and have the owner approve the browser sign-in. Then run
+`./bin/release-control connect --url https://CONTROL_HOST --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID --harness both`
+and `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
+Restart the agent to load MCP tools, then call `get_project_context` and
+`get_tool_guide`. Configure the optional supervisor on its orchestrator host using
+[SUPERVISOR.md](SUPERVISOR.md).
+
+Owner prompt: “Build and connect this project to Release Control Plane using the repository instructions, verify the connection, and load the project context.”
+
 Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
 
 Run once in the project that agents will edit:

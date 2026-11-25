@@ -8,6 +8,8 @@ log() {
 fail() { log "$1"; exit 0; }
 
 config=${RCP_HOOK_CONFIG:-"$HOME/.config/release-control/turn-end.json"}
+dry_run=false
+if [ "${1:-}" = --dry-run ]; then dry_run=true; shift; fi
 if [ "${1:-}" = --config ]; then
   [ -n "${2:-}" ] || fail 'missing config path'
   config=$2
@@ -41,6 +43,7 @@ RCP_HARNESS_KIND=${RCP_HARNESS_KIND:-$(printf '%s\n' "$config_values" | sed -n '
 [ -n "$RCP_URL" ] || fail 'missing RCP_URL'
 [ -n "$RCP_PRODUCT_ID" ] || fail 'missing RCP_PRODUCT_ID'
 case "$RCP_HARNESS_KIND" in codex|claude_code) ;; *) fail 'invalid RCP_HARNESS_KIND' ;; esac
+if [ "$dry_run" = true ]; then exit 0; fi
 [ -n "$RCP_TOKEN_FILE" ] && { [ -r "$RCP_TOKEN_FILE" ] || fail 'token file is not readable'; token=$(cat "$RCP_TOKEN_FILE" 2>/dev/null) || fail 'could not read token file'; }
 [ -z "$RCP_TOKEN_FILE" ] && [ -n "$RCP_PROFILE" ] && { token=$("$RCP_EXECUTABLE" token --url "$RCP_URL" --profile "$RCP_PROFILE" 2>/dev/null) || fail 'saved credential unavailable'; }
 [ -z "$RCP_TOKEN_FILE" ] && [ -z "$RCP_PROFILE" ] && [ -n "$RCP_TOKEN_ENV" ] && { token=$(printenv "$RCP_TOKEN_ENV" 2>/dev/null) || fail 'token environment variable unavailable'; }

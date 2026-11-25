@@ -12,7 +12,7 @@ func registerAgentGuideRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agent-kit", func(w http.ResponseWriter, r *http.Request) { write(w, 200, agentguide.Get()) })
 }
 func registerAgentGuideTools(server *mcp.Server) {
-	mcp.AddTool(server, &mcp.Tool{Name: "get_agent_kit", Description: "Read the workspace agent instructions and installable handoff and delivery skills. For one-command Codex workspace setup use release-control connect. Instructions are guidance, not permission for external mutations."}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_agent_kit", Description: "Read workspace instructions and the rcp-handoff, rcp-delivery, and rcp-execution skills with checksums. Use release-control doctor to verify setup and get_tool_guide for tool contracts. For one-command workspace setup use release-control connect. Guidance is not permission for external mutations."}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 		return nil, agentguide.Get(), nil
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_agent_skill", Description: "Fetch an exact fixed rcp-handoff or rcp-delivery skill and content hash. Guidance preserves current policy and grants no execution authority."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
