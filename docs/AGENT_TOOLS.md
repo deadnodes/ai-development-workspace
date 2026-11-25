@@ -270,6 +270,39 @@ Read protected roots, effective retention policy, availability evidence and bloc
 
 **Authority:** Read-only stored evidence; registry is not queried and artifact deletion is never authorized.
 
+### `POST /api/signatures` — http_route
+
+**Same operation:** `mcp_tool:sign_artifact`
+
+Queue an explicit digest-only signing/backfill request for an existing configured image.
+
+**When:** Use only with a Product/profile/image already configured for signing and an allowed repository/key; provide a durable request key and inspect GET signatures for asynchronous evidence.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `profile_id` (string, required): Configured build profile belonging to Product
+- `image_id` (string, required): Configured component image ID
+- `image_ref` (string, required): Existing registry image reference pinned by digest
+- `key_ids` (array[string], required): One or more configured signing keys (max 32)
+- `reason` (string, required): Auditable reason, 8..500 trimmed characters
+- `request_key` (string, required): Durable idempotency key, 1..128 characters
+
+**Output:** Persistent ArtifactSignature receipt, initially PENDING; poll/list signature records for per-key status and evidence.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 415 "application/json required" or HTTP 400 "invalid signing request"; correct content type/JSON.
+- `VALIDATION`: "product_id required", "signing disabled", "profile not configured for Product", "invalid signing request", "invalid image reference", "backfill repository denied", "backfill key denied", "artifact observation unavailable", or "REQUEST_KEY_CONFLICT"; correct scope/configuration, allowed digest/key, or replay the identical payload.
+- `FORBIDDEN`: Product write permission is required.
+- `UNAVAILABLE`: HTTP 501 "signing unavailable"; signing capability is not configured.
+
+**Example:** `POST /api/signatures {"product_id":"P","profile_id":"PROFILE","image_id":"web","image_ref":"ghcr.io/team/web@sha256:…","key_ids":["release"],"reason":"Backfill verified release digest","request_key":"sign-web-2026-11-25"}`
+
+**Related:** `sign_artifact`, `GET /api/signatures`, `get_build`
+
+**Authority:** Requests signing for an existing digest only; it does not build/publish source, authorize deployment, or approve production promotion.
+
 ## backup
 
 ### `create_backup` — mcp_tool
@@ -1707,6 +1740,37 @@ Read pushed runtime snapshots and cluster freshness.
 **Related:** `get_runtime_report`, `GET /api/environments/{id}/state`
 
 **Authority:** Read-only reported snapshots; no collector or rollout is invoked and stale data is not current health.
+
+### `POST /api/runtime-reports` — http_route
+
+Accept a bounded snapshot of reported cluster workloads and append change observations to the Control Plane.
+
+**When:** Use from an authorized runtime reporter after observing the configured Product/environment/cluster. Reported timestamps and workload state are caller evidence; GET reports exposes freshness.
+
+**Inputs:**
+
+- `product_id` (string, required): Product identifier (label, max 128)
+- `environment_id` (string, required): Environment identifier (label, max 128)
+- `cluster` (string, required): Cluster label (max 64)
+- `reported_at` (RFC3339 timestamp, required): Observation time; cannot be over five minutes in the future
+- `workloads` (array[Workload], required): At most 1000 unique workload observations with namespace/kind/name/generation/replica/container fields
+
+**Output:** Accepted receipt with workload and change counts; accepted snapshots are stored separately and notable deltas append events.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 "invalid report JSON" or "expected one JSON object"; send one valid object.
+- `HTTP_ERROR`: HTTP 413 for body/storage limit; reduce report size/workloads.
+- `VALIDATION`: Runtime validator messages include "invalid product/environment identifier", "invalid cluster, timestamp or workload count", "invalid or duplicate workload", and field-specific invalid container/replica errors; correct the observed snapshot.
+- `FORBIDDEN`: "reporter scope forbidden" or authorization denial; use the configured exact Product:environment:cluster scope.
+- `CONFLICT`: HTTP 429 "report rate limit" (Retry-After: 20); wait before retrying.
+- `UNAVAILABLE`: HTTP 503 "runtime reports unavailable"; retry after capability/storage recovery.
+
+**Example:** `POST /api/runtime-reports {"product_id":"P","environment_id":"E","cluster":"prod-a","reported_at":"2026-11-25T10:00:00Z","workloads":[]}`
+
+**Related:** `GET /api/runtime-reports`, `record_runtime_observation`, `get_environment_state`
+
+**Authority:** Stores attributed observations only; it does not collect telemetry, authenticate the reported facts, perform rollout, or establish functional acceptance.
 
 ### `POST /api/features/{id}/update-environment` — http_route
 
@@ -3304,7 +3368,8 @@ Append a complete immutable revision to an existing test scenario.
 
 **Errors:**
 
-- `VALIDATION`: 'scenario not found' or validation of required title/objective/mechanism/steps/expected outcomes; verify scope and submit a complete definition.
+- `VALIDATION`: "scenario must belong to product", "create assigns scenario_id from command id", "title, objective, mechanism, steps and expected_outcomes required", "steps and outcomes cannot be empty", or "unique product-scoped integration_ids required"; use an existing scenario ID and submit a complete, scoped definition.
+- `NOT_FOUND`: Product is missing; refresh Product context.
 
 **Example:** `{"action":"revise_test_scenario","product_id":"P","data":{"scenario_id":"S","title":"API regression","objective":"Preserve response contract","mechanism":"integration","steps":["Call endpoint"],"expected_outcomes":["Returns 200"]}}`
 
@@ -4113,10 +4178,9 @@ Prepare a release candidate from an exact Product/environment selection.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: "approve_main_update required for selected source merge into main", "release requires selected integrations", "selected integration must be ready: …", "native production candidate is unsupported", "another candidate is advancing main", or composition/target validation failure; choose the exact ready selected work and permitted build target.
+- `CONFLICT`: Current environment or source selection changed; reread and replan.
+- `NOT_FOUND`: Product, environment, component, revision or integration is missing; refresh scoped context.
 
 **Example:** `{"name":"prepare_release_candidate","arguments":{"product_id":"PRODUCT","name":"release-1","environment_id":"ENV"}}`
 
@@ -4142,10 +4206,9 @@ Request promotion of one exact release candidate and verified artifact digests.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: "explicit approve required", "completed main candidate required", "candidate outside product", "native production candidate is unsupported", "candidate promotion already requested; inspect existing operation", or readiness/scenario gate message; inspect the exact candidate, digest, findings and fresh passing scenarios.
+- `CONFLICT`: Environment selection or reservation prevents admission; reread current target state.
+- `NOT_FOUND`: Candidate ID is missing; verify the operation handle.
 
 **Example:** `{"name":"promote_release_candidate","arguments":{"candidate_operation_id":"CANDIDATE","approve":true}}`
 
@@ -4823,26 +4886,56 @@ Record execution evidence for one immutable scenario version against an exact co
 - `composition_id` (string, optional): Composition under test
 - `candidate_operation_id` (string, optional): Candidate under test
 - `environment_id` (string, optional): Environment
-- `components` (array, required): Per-component application/operation/source/digest evidence
-- `result` (string, required): Scenario result
+- `components` (array[ScenarioComponentEvidence], required): One entry per tested component: application_id, operation_id, source_sha and artifact_digest; optional deployment_evidence reference/assertion
+- `result` (string, required): passed, failed, or blocked
 - `observations` (array[string], optional): Observed outcomes
-- `artifacts` (array, optional): Evidence artifacts
+- `artifacts` (array[Artifact], optional): Evidence artifacts; each needs kind and url
 - `finding_ids` (array[string], optional): Linked findings
 
 **Output:** Append-only scenario run and linked evidence.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: "scenario version must belong to product", "result must be passed, failed or blocked", "execution observations or artifacts required", "exactly one composition_id or candidate_operation_id required", "successful product release candidate required", "composition must belong to product", "test environment outside product", or component/source/digest evidence coverage errors; record actual evidence for the exact completed target and every component.
+- `NOT_FOUND`: Verify Product, scenario version, target and linked finding IDs.
 
-**Example:** `{"name":"record_scenario_run","arguments":{"product_id":"PRODUCT","scenario_version_id":"VERSION","components":[],"result":"passed"}}`
+**Example:** `{"name":"record_scenario_run","arguments":{"product_id":"PRODUCT","scenario_version_id":"VERSION","composition_id":"COMPOSITION","components":[{"application_id":"APP","operation_id":"CHILD","source_sha":"FULL_SHA","artifact_digest":"sha256:DIGEST","deployment_evidence":"test report"}],"result":"passed","observations":["Observed expected response"]}}`
 
 **Related:** `create_test_scenario`, `revise_test_scenario`
 
 **Authority:** Records supplied evidence; does not execute tests or make failed evidence disappear.
+
+### `POST /api/reviews/sync` — http_route
+
+**Same operation:** `mcp_tool:sync_pull_request_review`
+
+Read a GitHub pull request review and persist selected P1/P2 comments as findings for one Integration.
+
+**When:** Use after identifying the exact Product Integration, SOURCE repository and PR. Preview first for shared or unbound PRs; no findings observed is not approval.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution; not authentication
+- `integration_id` (string, required): Integration receiving review provenance
+- `repository_id` (string, required): Product SOURCE repository associated with the PR
+- `pull_request` (integer, required): Positive GitHub pull request number
+- `comment_keys` (array[string], optional): Exact selected comment keys from preview (kind:id)
+- `preview` (boolean, optional): Read and show candidates without persisting findings
+
+**Output:** Review snapshot and candidates for preview; otherwise append-only review sync plus imported finding IDs and review_completion=UNKNOWN.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 415 "Use application/json" or HTTP 400 "Invalid review request"; correct content type/one-object JSON.
+- `VALIDATION`: "actor and positive pull_request required", "review provider not configured", "integration and SOURCE repository must belong to product", "repository outside feature/integration scope", "review synchronization failed: …", "selected comment not present in current review: …", or "shared or unbound PR requires preview and explicit comment_keys to avoid attributing unrelated findings"; fix scope/provider or preview and select current keys.
+- `FORBIDDEN`: Caller lacks Product read (preview) or write (sync) permission; use authorized scope.
+- `NOT_FOUND`: Referenced Integration/repository is missing; refresh context.
+
+**Example:** `POST /api/reviews/sync {"integration_id":"INTEGRATION","repository_id":"REPOSITORY","pull_request":42,"preview":true}`
+
+**Related:** `sync_pull_request_review`, `record_finding`, `get_integration_context`
+
+**Authority:** Reads provider review data and records findings only; does not request approval, edit comments/code, prove review completion, or authorize release.
 
 ### `POST /api/products/{id}/conflicts/verify` — http_route
 
@@ -5975,8 +6068,8 @@ Atomically import portable setup into a Product that does not already exist.
 
 **Errors:**
 
-- `VALIDATION`: Invalid workspace JSON/configuration; correct the supplied portable shape.
-- `CONFLICT`: IDs conflict with existing records; import only into an empty/new Product context.
+- `VALIDATION`: "actor, workspace format and product required", "product already exists; import into a new workspace", "invalid portable repository", "component references unknown repository", or knowledge validation messages; correct the portable snapshot and import only into an empty target.
+- `FORBIDDEN`: Administrative workspace permission is required.
 
 **Example:** `{"name":"import_workspace_configuration","arguments":{"configuration":{"product":{"id":"PRODUCT"}}}}`
 
@@ -6001,8 +6094,9 @@ Scan configured local workspace and match remotes to repositories already attach
 
 **Errors:**
 
-- `VALIDATION`: workspace unavailable or not configured; configure/recover server workspace.
-- `NOT_FOUND`: No matching attached repository; inspect Product attachments and remotes.
+- `VALIDATION`: "configure RCP_WORKSPACE_ROOT on the server first", "actor required", or "workspace scan: …"; configure root/actor or restore workspace access.
+- `NOT_FOUND`: Product not found; verify Product ID.
+- `FORBIDDEN`: Administrative workspace permission is required.
 
 **Example:** `{"name":"match_local_repositories","arguments":{"product_id":"PRODUCT"}}`
 
@@ -6056,21 +6150,65 @@ Export Product workspace configuration for agent setup.
 
 **Authority:** Read-only export; does not install files or change workspace configuration.
 
+### `POST /api/tools/{name}` — http_route
+
+Invoke one registered MCP tool through the same authenticated MCP dispatch using its tool name and arguments object.
+
+**When:** Use the generated TypeScript SDK call path when batching locally; discover the tool schema first and send only supported arguments.
+
+**Inputs:**
+
+- `name` (string, required): MCP tool name in URL path
+- `body` (JSON object, optional): Tool arguments; empty body becomes an empty object, max 12 MiB
+
+**Output:** Tool structured JSON result, valid JSON text, or text wrapper; tool errors map to HTTP 422.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 413 when body exceeds 12 MiB; HTTP 400 "Expected a JSON arguments object" for malformed/non-object JSON; HTTP 404 for "unknown tool …"; HTTP 422 for MCP tool execution errors; HTTP 500 for response decoding/dispatch failures.
+- `FORBIDDEN`: The MCP call enforces the caller's normal authorization; correct scope/permission.
+
+**Example:** `POST /api/tools/get_state {"limit":2}`
+
+**Related:** `get_code_api`, `get_tool_guide`, `GET /api/tools`, `GET /api/code-sdk/rcp.ts`
+
+**Authority:** Dispatches only a registered MCP tool under the caller's existing identity and permissions; submitted code is never executed and this endpoint grants no extra authority.
+
+### `POST /api/workspaces/scan` — http_route
+
+**Same operation:** `mcp_tool:scan_workspace`
+
+Scan the server-configured workspace root and record discovered checkout/repository-document observations for a Product.
+
+**When:** Use after configuring RCP_WORKSPACE_ROOT; scan is read-only over local checkouts and may create MIXED repository records for discoveries. Classify purpose explicitly afterward.
+
+**Inputs:**
+
+- `product_id` (string, required): Product to associate observations with
+- `actor` (string, optional): Attribution; defaults to agent
+
+**Output:** Scan result with checkout paths, branch/commit observations, repository documents and warnings.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 "Invalid workspace JSON: …" or "Expected one JSON object"; provide a valid single object.
+- `VALIDATION`: "configure RCP_WORKSPACE_ROOT on the server first", "actor required", or "workspace scan: …"; configure root/actor or correct workspace access.
+- `NOT_FOUND`: Product not found; refresh Product context.
+- `FORBIDDEN`: Administrative workspace permission is required.
+
+**Example:** `POST /api/workspaces/scan {"product_id":"PRODUCT","actor":"agent/backend"}`
+
+**Related:** `scan_workspace`, `POST /api/workspaces/match`, `get_local_git_state`
+
+**Authority:** Reads local workspace metadata and records observations; does not clone/fetch, run hooks/builds, modify source, or deploy.
+
 ## Pending documentation
 
 The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
 
 - `mcp_tool:resume`
-- `mcp_tool:scan_workspace`
 - `mcp_tool:set_project_knowledge`
-- `mcp_tool:sign_artifact`
-- `mcp_tool:sync_pull_request_review`
 - `mcp_tool:upsert_product_knowledge`
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `http_route:POST /api/reviews/sync`
-- `http_route:POST /api/runtime-reports`
-- `http_route:POST /api/signatures`
-- `http_route:POST /api/tools/{name}`
-- `http_route:POST /api/workspaces/scan`
