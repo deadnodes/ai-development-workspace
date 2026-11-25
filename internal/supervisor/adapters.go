@@ -83,7 +83,11 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux enter failed"}
 	}
-	verifyCtx, cancelVerify := context.WithTimeout(ctx, a.Config.WakeFor)
+	verifyFor := a.Config.VerifyFor
+	if verifyFor <= 0 {
+		verifyFor = a.Config.WakeFor
+	}
+	verifyCtx, cancelVerify := context.WithTimeout(ctx, verifyFor)
 	defer cancelVerify()
 	for {
 		pane, e := a.capture(verifyCtx, req.TmuxTarget)

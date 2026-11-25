@@ -126,14 +126,15 @@ func (s *Supervisor) Cycle(ctx context.Context, productID, token string) error {
 	}
 	batches := map[string]*sessionBatch{}
 	for _, ev := range events {
-		sessionKey := ev.SessionRef
-		if ev.TmuxTarget != "" {
-			sessionKey = "tmux:" + ev.TmuxTarget
+		wake := ev.WakeTarget
+		sessionKey := wake.SessionRef
+		if wake.TmuxTarget != "" {
+			sessionKey = "tmux:" + wake.TmuxTarget
 		}
-		key := ev.HarnessKind + "|" + sessionKey
+		key := wake.Kind + "|" + sessionKey
 		b := batches[key]
 		if b == nil {
-			b = &sessionBatch{key: key, kind: ev.HarnessKind, session: ev.SessionRef, target: ev.TmuxTarget}
+			b = &sessionBatch{key: key, kind: wake.Kind, session: wake.SessionRef, target: wake.TmuxTarget}
 			batches[key] = b
 		}
 		b.events = append(b.events, ev)

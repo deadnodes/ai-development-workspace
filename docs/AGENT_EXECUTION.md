@@ -151,7 +151,7 @@ verification, and dependency edges have ordering semantics. Independent
 Integrations must remain independent; group membership does not create
 dependencies or shared readiness.
 
-The group records orchestrator identity, label, created/closed timestamps,
+The group records orchestrator identity, label, the orchestrator harness registration, created/closed timestamps,
 current member set/revision, and optional overall note. `get_execution_group(id)`
 returns every member (including completed ones), each Integration target,
 execution/fence/heartbeat/progress, pending operation/blocker, action_required,
@@ -232,8 +232,7 @@ A turn-end report is advisory input; the server still derives the condition from
 stored state. Supervisors deduplicate a wake by session when lost and
 continuation-required events target the same idle orchestrator. ACK records a
 delivery receipt and never resolves the cause; acknowledged unresolved events
-become due again at their retry time until the condition clears. Every event
-exposes its `session_ref` for supervisor-side wake deduplication.
+become due again at their retry time until the condition clears. Each event stores a server-resolved `wake_target` (`kind`, `session_ref`, `tmux_target`, and source `executor` or `group_orchestrator`). The supervisor groups and wakes by this field. Running/stalled work targets its executor; other actionable states target the first open containing group with an orchestrator harness. With no registered target, the event has an empty wake target and an unsupported ACK triggers escalation. Legacy event harness fields remain compatibility projections only.
 
 ## 7. Application API contract (one policy layer)
 
@@ -251,7 +250,8 @@ fields to set `action_required`, fence, or lease expiry.
 | `release_execution` | `integration_id`, `fence`, `outcome: completed|exited_incomplete|paused|cancelled`, `reason` | State snapshot; completed only if Integration is already at desired state. |
 | `takeover_execution` | `integration_id`, `orchestrator_id`, `agent_id`, `harness`, old fence, `state_check_event_id`, idempotency key | New lease/fence; old-fence invalidation and takeover event in same transaction. Explicit action only. |
 | `set_desired_state` | `integration_id`, `fence`, target status, reason, idempotency key | Updated execution and recomputed completion. Must also pass existing Integration transition policy. |
-| `create_execution_group` | `product_id`, `orchestrator_id`, `name`, `integration_ids[]` | `{group_id, revision, members[]}`; validate all IDs share Product. No dependency edges added. |
+| `create_execution_group` | `product_id`, `orchestrator_id`, `name`, `integration_ids[]`, optional `orchestrator_harness` | `{group_id, revision, members[]}`; validate all IDs share Product. No dependency edges added. An orchestrator should register its own harness here and re-register after restart with `set_execution_group_harness`. |
+| `set_execution_group_harness` | `product_id`, `group_id`, `harness` | Update the group wake target after the orchestrator restarts in a new session. |
 | `get_execution_group` | `group_id` | Full set and per-member execution/reconciliation/next action for context restoration. |
 | `report_turn_end` | `harness_kind`, `session_ref`, optional `turn_id`, `cwd` | `{matched: [integration_id, ...], turn_id}`; unknown sessions return an empty `matched` array. Idempotent per session/turn or session/minute bucket. |
 | `list_execution_events` | `product_id`, cursor, limit, unresolved filter | `{items[], next_cursor}`. |
@@ -338,13 +338,12 @@ the underlying condition, and acknowledged unresolved events become due again
 at their persisted backoff time.
 
 `report_turn_end` records the server timestamp and turn identity against all
-matching executions. The reconciler waits `turn_end_debounce_seconds` (default
-20) and then raises continuation events for eligible members of open groups
-owned by the same orchestrator. Turn reports are idempotent by
-`(session_ref, turn_id)` or `(session_ref, minute bucket)`; events carry the
-target execution's session reference and harness kind. The supervisor
-deduplicates wakes per session when multiple events concern the same idle
-orchestrator. Idle sweeps remain read-only, and changed sweeps use scoped
+matching executions. A turn-end report matches member executor sessions and registered open-group
+orchestrator sessions. The reconciler waits `turn_end_debounce_seconds` (default
+20) and then raises continuation events for eligible members of those open groups. Turn reports are idempotent by
+`(session_ref, turn_id)` or `(session_ref, minute bucket)`; events carry a
+server-computed `wake_target`. The supervisor deduplicates wakes per target
+session when multiple events concern the same idle orchestrator. Idle sweeps remain read-only, and changed sweeps use scoped
 updates for execution/event rows plus append-only audit events.
 
 PostgreSQL event/delivery restart and concurrent claim coverage uses isolated

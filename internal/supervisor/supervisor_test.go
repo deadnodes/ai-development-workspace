@@ -78,11 +78,11 @@ func (f *fakeRCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func testEvent(id, kind, session, target, group, typ string) domain.ExecutionEvent {
-	return domain.ExecutionEvent{ID: id, ProductID: "product1", IntegrationID: "integration", GroupIDs: []string{group}, Type: typ, Reason: "UNTRUSTED reason must not enter prompt", HarnessKind: kind, SessionRef: session, TmuxTarget: target}
+	return domain.ExecutionEvent{ID: id, ProductID: "product1", IntegrationID: "integration", GroupIDs: []string{group}, Type: typ, Reason: "UNTRUSTED reason must not enter prompt", HarnessKind: kind, SessionRef: session, TmuxTarget: target, WakeTarget: domain.ExecutionWakeTarget{Kind: kind, SessionRef: session, TmuxTarget: target, Source: "executor"}}
 }
 func testConfig(t *testing.T, base string) Config {
 	t.Helper()
-	c := Config{RCPURL: base, TokenEnv: "RCP_TEST_TOKEN", SupervisorID: "test-supervisor", ProductIDs: []string{"product1"}, StateFile: filepath.Join(t.TempDir(), "state.json"), IdleWindow: "1ms", WakeTimeout: "50ms", RateLimit: "30s"}
+	c := Config{RCPURL: base, TokenEnv: "RCP_TEST_TOKEN", SupervisorID: "test-supervisor", ProductIDs: []string{"product1"}, StateFile: filepath.Join(t.TempDir(), "state.json"), IdleWindow: "1ms", WakeTimeout: "5s", VerifyWindow: "200ms", RateLimit: "30s"}
 	if err := c.Normalize(); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	}
 	post(domain.Command{Action: "create_integration", Actor: "test", FeatureID: feature.ID, Data: map[string]any{"title": "Harness", "objective": "test"}}, &integration)
 	var group domain.ExecutionGroup
-	post(domain.Command{Action: "create_execution_group", Actor: "test", ProductID: product.ID, Data: map[string]any{"name": "group", "orchestrator_id": "orch", "integration_ids": []string{integration.ID}}}, &group)
+	post(domain.Command{Action: "create_execution_group", Actor: "test", ProductID: product.ID, Data: map[string]any{"name": "group", "orchestrator_id": "orch", "orchestrator_harness": map[string]any{"kind": "codex", "tmux_target": "orch-e2e"}, "integration_ids": []string{integration.ID}}}, &group)
 	if group.ID == "" {
 		t.Fatal("group not created")
 	}
@@ -193,10 +193,10 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	if err = sup.Cycle(ctx, product.ID, "test-token"); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.requests) != 1 || a.requests[0].GroupID != group.ID {
+	if len(a.requests) != 1 || a.requests[0].GroupID != group.ID || a.requests[0].TmuxTarget != "orch-e2e" || len(a.requests[0].Events) != 1 || a.requests[0].Events[0].WakeTarget.Source != "group_orchestrator" {
 		t.Fatalf("wakes: %+v", a.requests)
 	}
-	response, e = http.Get(eventURL)
+	response, e = http.Get(strings.Replace(eventURL, "?due_only=true&", "?", 1))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -216,12 +216,53 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer response.Body.Close()
-	var got domain.ExecutionGroup
+	var got struct {
+		Group domain.ExecutionGroup `json:"group"`
+	}
 	if e = json.NewDecoder(response.Body).Decode(&got); e != nil {
 		t.Fatal(e)
 	}
-	if got.ID != group.ID {
-		t.Fatalf("group readback: %+v", got)
+	if got.Group.ID != group.ID || got.Group.OrchestratorHarness.TmuxTarget != "orch-e2e" {
+		t.Fatalf("group readback: %+v", got.Group)
+	}
+	var integration2 struct {
+		ID string `json:"id"`
+	}
+	post(domain.Command{Action: "create_integration", Actor: "test", FeatureID: feature.ID, Data: map[string]any{"title": "No orchestrator", "objective": "test"}}, &integration2)
+	var group2 domain.ExecutionGroup
+	post(domain.Command{Action: "create_execution_group", Actor: "test", ProductID: product.ID, Data: map[string]any{"name": "no orchestrator", "orchestrator_id": "orch", "integration_ids": []string{integration2.ID}}}, &group2)
+	if err = sup.Cycle(ctx, product.ID, "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.requests) != 1 {
+		t.Fatalf("empty target unexpectedly woke: %+v", a.requests)
+	}
+	response, e = http.Get(httpServer.URL + "/api/products/" + product.ID + "/execution-events?unresolved_only=true")
+	if e != nil {
+		t.Fatal(e)
+	}
+	var all struct {
+		Items []domain.ExecutionEvent `json:"items"`
+	}
+	e = json.NewDecoder(response.Body).Decode(&all)
+	response.Body.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	foundEscalated := false
+	for _, ev := range all.Items {
+		if ev.IntegrationID == integration2.ID {
+			if ev.WakeTarget != (domain.ExecutionWakeTarget{}) {
+				t.Fatalf("unexpected wake target: %+v", ev.WakeTarget)
+			}
+			if len(ev.Acknowledgements) == 0 || ev.Acknowledgements[len(ev.Acknowledgements)-1].Outcome != "unsupported" || !ev.EscalationRequired {
+				t.Fatalf("unsupported event not escalated: %+v", ev)
+			}
+			foundEscalated = true
+		}
+	}
+	if !foundEscalated {
+		t.Fatal("missing unassigned event without orchestrator harness")
 	}
 }
 
@@ -326,7 +367,7 @@ func TestHeadlessFallbackAndLiveProcessGuard(t *testing.T) {
 	t.Setenv("TMUX_LOG", tmuxLog)
 	t.Setenv("PGREP_LOG", pgrepLog)
 	t.Setenv("CODEX_LOG", codexLog)
-	c := Config{TmuxPath: filepath.Join(dir, "tmux"), PgrepPath: filepath.Join(dir, "pgrep"), CodexPath: filepath.Join(dir, "codex"), WakeFor: time.Second, IdleFor: time.Millisecond, HeadlessKinds: []string{"codex"}}
+	c := Config{TmuxPath: filepath.Join(dir, "tmux"), PgrepPath: filepath.Join(dir, "pgrep"), CodexPath: filepath.Join(dir, "codex"), WakeFor: 5 * time.Second, VerifyFor: 200 * time.Millisecond, IdleFor: time.Millisecond, HeadlessKinds: []string{"codex"}}
 	req := WakeRequest{Kind: "codex", SessionRef: "session-12345678", TmuxTarget: "orch", Message: "safe"}
 	a := ExecAdapter{Config: c}
 	if got := a.Wake(context.Background(), req); got.Outcome != Delivered {
@@ -393,7 +434,7 @@ func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) 
 			// post-Enter scripted output determines whether that line was consumed.
 			writeFake(t, filepath.Join(dir, "tmux"), "case \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'idle prompt\\nliteral safe\\n' > \"$PANE\";; *Enter*) printf '"+strings.ReplaceAll(tc.final, "\\n", "\\n")+"\\n' > \"$PANE\";; esac;; esac\n")
 			t.Setenv("PANE", pane)
-			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, WakeFor: 25 * time.Millisecond}}
+			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, WakeFor: 5 * time.Second, VerifyFor: 200 * time.Millisecond}}
 			got := a.Wake(context.Background(), WakeRequest{Kind: "codex", TmuxTarget: "orch", Message: "literal safe"})
 			if got.Outcome != tc.want {
 				t.Fatalf("got %+v", got)

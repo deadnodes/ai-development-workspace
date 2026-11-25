@@ -26,8 +26,8 @@ func TestExecutionHarnessTmuxTargetValidationAndEventFields(t *testing.T) {
 		t.Fatalf("claim lost target: %+v", got)
 	}
 	e := executionFor(&m.state, "i")
-	executionCondition(&m.state, e, "exited_incomplete", true, "test", time.Now().UTC())
-	if len(m.state.ExecutionEvents) != 1 || m.state.ExecutionEvents[0].HarnessKind != "claude_code" || m.state.ExecutionEvents[0].SessionRef != "session-12345678" || m.state.ExecutionEvents[0].TmuxTarget != "orch:0.1" {
+	executionCondition(&m.state, e, "stalled", true, "test", time.Now().UTC())
+	if len(m.state.ExecutionEvents) != 1 || m.state.ExecutionEvents[0].HarnessKind != "claude_code" || m.state.ExecutionEvents[0].SessionRef != "session-12345678" || m.state.ExecutionEvents[0].TmuxTarget != "orch:0.1" || m.state.ExecutionEvents[0].WakeTarget.Source != "executor" || m.state.ExecutionEvents[0].WakeTarget.TmuxTarget != "orch:0.1" {
 		t.Fatalf("event harness fields: %+v", m.state.ExecutionEvents)
 	}
 }

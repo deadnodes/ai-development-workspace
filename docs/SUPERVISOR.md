@@ -19,6 +19,7 @@ Create `~/.config/release-control/supervisor.json` with mode `0600`:
   "poll_interval": "15s",
   "idle_window": "5s",
   "wake_timeout": "120s",
+  "verify_for": "5s",
   "headless_kinds": [],
   "allowed_kinds": ["codex", "claude_code", "claude_desktop", "ccr", "other"]
 }
@@ -44,9 +45,12 @@ HTTP errors.
 ## tmux session convention
 
 Use one named tmux session for each orchestrator, for example `orch-backend` or
-`orch-platform`. Register the corresponding `tmux_target` on each execution
-claim, e.g. `orch-backend` or `orch-backend:0.1`. Keep the orchestrator in that
-pane and attach to the same session from another Mac:
+`orch-platform`. Register the orchestrator harness on the execution group at
+creation (`orchestrator_harness`) or with `set_execution_group_harness`. The
+registration contains `kind` and `tmux_target` (and `session_ref` when available).
+Re-register it after every restart that creates a new harness session. Member
+executor harnesses belong on execution claims. Keep the orchestrator in that pane
+and attach to the same session from another Mac:
 
 ```sh
 ssh -t <host> tmux attach -t orch-backend
@@ -65,8 +69,7 @@ registered `harness_kind`, exact `session_ref`, and turn ID when available.
 Claude Code's `Stop` hook and Codex's `agent-turn-complete` notify event are the
 expected sources. The server applies its debounce and emits
 `execution_continuation_required`; the supervisor only handles the resulting
-durable event. A tmux target is included in execution events along with harness
-kind and session reference.
+durable event. Each event has a server-computed `wake_target`. The supervisor batches by that target: running/stalled work uses its executor harness; unassigned, lost, exited-incomplete, continuation-required, and newly actionable waiting/blocked work uses the first open containing group’s registered orchestrator harness. Without one, the supervisor ACKs unsupported and RCP marks escalation. `verify_for` limits post-send verification (default: `wake_timeout`); process spawning and the complete wake remain bounded by `wake_timeout`.
 
 ## Mac mini installation runbook
 
@@ -85,6 +88,7 @@ cat > ~/.config/release-control/supervisor.json <<'JSON'
   "poll_interval": "15s",
   "idle_window": "5s",
   "wake_timeout": "120s",
+  "verify_for": "5s",
   "allowed_kinds": ["codex", "claude_code"],
   "headless_kinds": []
 }

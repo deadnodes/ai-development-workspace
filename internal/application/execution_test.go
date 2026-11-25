@@ -432,7 +432,7 @@ func TestTurnEndDebounceIdempotencyAndMemberFiltering(t *testing.T) {
 			e.Reconciliation.ActionRequired = false
 		}
 	}
-	_, err := s.Execute(context.Background(), domain.Command{Action: "create_execution_group", Actor: "agent", ProductID: "p", Data: map[string]any{"name": "g", "orchestrator_id": "orch", "integration_ids": ids}})
+	_, err := s.Execute(context.Background(), domain.Command{Action: "create_execution_group", Actor: "agent", ProductID: "p", Data: map[string]any{"name": "g", "orchestrator_id": "orch", "orchestrator_harness": map[string]any{"kind": "codex", "session_ref": "session", "tmux_target": "orch"}, "integration_ids": ids}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestTurnEndDebounceIdempotencyAndMemberFiltering(t *testing.T) {
 		t.Fatalf("unknown session result=%v err=%v", res, err)
 	}
 	res, err = s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "codex", "session_ref": "session", "turn_id": "turn-1"}})
-	if err != nil || len(res.(map[string]any)["matched"].([]string)) != 1 {
+	if err != nil || len(res.(map[string]any)["matched"].([]string)) != len(ids) {
 		t.Fatalf("turn report=%v err=%v", res, err)
 	}
 	if err = s.ReconcileExecutionsOnce(context.Background()); err != nil {
@@ -459,8 +459,8 @@ func TestTurnEndDebounceIdempotencyAndMemberFiltering(t *testing.T) {
 		t.Fatalf("expected actionable unfinished members events, got %+v", m.state.ExecutionEvents)
 	}
 	for _, ev := range m.state.ExecutionEvents {
-		if ev.SessionRef == "" || ev.HarnessKind == "" {
-			t.Fatalf("missing wake session metadata: %+v", ev)
+		if ev.WakeTarget.Source != "group_orchestrator" || ev.WakeTarget.SessionRef != "session" || ev.WakeTarget.TmuxTarget != "orch" {
+			t.Fatalf("missing group wake target: %+v", ev)
 		}
 	}
 	if err = s.ReconcileExecutionsOnce(context.Background()); err != nil {
@@ -626,5 +626,24 @@ func TestTakeoverFencesFormerExecutorAndTimeoutPrecedence(t *testing.T) {
 	}
 	if executionFor(&m.state, "i").State != "running" {
 		t.Fatal("explicit zero did not disable product stalled detection")
+	}
+}
+
+func TestExecutionEventSelectsOrchestratorGroupAndOrdersWakeContext(t *testing.T) {
+	_, m := fixture(t)
+	now := time.Now().UTC()
+	m.state.ExecutionGroups = []domain.ExecutionGroup{
+		{ID: "group-no-harness", ProductID: "p", MemberIntegrationIDs: []string{"i"}},
+		{ID: "group-orch", ProductID: "p", MemberIntegrationIDs: []string{"i"}, OrchestratorHarness: domain.ExecutionHarness{Kind: "codex", TmuxTarget: "orch-target"}},
+		{ID: "group-closed", ProductID: "p", MemberIntegrationIDs: []string{"i"}, ClosedAt: &now, OrchestratorHarness: domain.ExecutionHarness{Kind: "claude_code", TmuxTarget: "closed-target"}},
+	}
+	e := &domain.IntegrationExecution{ID: "execution", IntegrationID: "i", ProductID: "p", State: "lost", Fence: 3, Reconciliation: domain.ExecutionReconciliation{Generation: 1}}
+	createExecutionEvent(&m.state, e, "execution_lost", "lease expired", now)
+	if len(m.state.ExecutionEvents) != 1 {
+		t.Fatalf("events=%+v", m.state.ExecutionEvents)
+	}
+	ev := m.state.ExecutionEvents[0]
+	if ev.WakeTarget.Source != "group_orchestrator" || ev.WakeTarget.TmuxTarget != "orch-target" || len(ev.GroupIDs) != 2 || ev.GroupIDs[0] != "group-orch" {
+		t.Fatalf("event routing: %+v", ev)
 	}
 }

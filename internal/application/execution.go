@@ -11,6 +11,19 @@ import (
 
 var tmuxTargetPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 
+func validateExecutionHarness(h domain.ExecutionHarness) error {
+	if h.Kind != "" && h.Kind != "codex" && h.Kind != "claude_code" && h.Kind != "claude_desktop" && h.Kind != "ccr" && h.Kind != "other" {
+		return invalid("invalid harness kind")
+	}
+	if h.TmuxTarget != "" && !tmuxTargetPattern.MatchString(h.TmuxTarget) {
+		return invalid("invalid tmux target")
+	}
+	if (h.SessionRef != "" || h.TmuxTarget != "") && h.Kind == "" {
+		return invalid("harness kind required")
+	}
+	return nil
+}
+
 func resolveExecutionEvents(st *domain.State, e *domain.IntegrationExecution, now time.Time, newState string) {
 	for i := range st.ExecutionEvents {
 		ev := &st.ExecutionEvents[i]
@@ -30,21 +43,32 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 	}
 	groups := []string{}
 	for _, g := range st.ExecutionGroups {
-		if g.ProductID == e.ProductID && slices.Contains(g.MemberIntegrationIDs, e.IntegrationID) {
+		if g.ProductID == e.ProductID && g.ClosedAt == nil && slices.Contains(g.MemberIntegrationIDs, e.IntegrationID) {
 			groups = append(groups, g.ID)
 		}
 	}
-	sessionRef, harnessKind := e.Harness.SessionRef, e.Harness.Kind
-	if typ == "execution_continuation_required" && reason == "turn ended with unfinished group work" && (sessionRef == "" || harnessKind == "") {
-		for _, candidate := range st.IntegrationExecutions {
-			if candidate.ProductID == e.ProductID && candidate.OrchestratorID == e.OrchestratorID && candidate.TurnEndID != "" && candidate.Harness.SessionRef != "" && candidate.Harness.Kind != "" {
-				sessionRef, harnessKind = candidate.Harness.SessionRef, candidate.Harness.Kind
+	wake := domain.ExecutionWakeTarget{}
+	wakeGroupID := ""
+	if (e.State == "running" || e.State == "stalled") && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") && e.Harness.Kind != "" {
+		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
+	} else {
+		for _, g := range st.ExecutionGroups {
+			if g.ProductID == e.ProductID && g.ClosedAt == nil && slices.Contains(g.MemberIntegrationIDs, e.IntegrationID) && (g.OrchestratorHarness.SessionRef != "" || g.OrchestratorHarness.TmuxTarget != "") && g.OrchestratorHarness.Kind != "" {
+				wake = domain.ExecutionWakeTarget{Kind: g.OrchestratorHarness.Kind, SessionRef: g.OrchestratorHarness.SessionRef, TmuxTarget: g.OrchestratorHarness.TmuxTarget, Source: "group_orchestrator"}
+				wakeGroupID = g.ID
 				break
 			}
 		}
 	}
-	tmuxTarget := e.Harness.TmuxTarget
-	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: sessionRef, HarnessKind: harnessKind, TmuxTarget: tmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	if wakeGroupID != "" {
+		for i, groupID := range groups {
+			if groupID == wakeGroupID && i > 0 {
+				groups = append([]string{wakeGroupID}, append(groups[:i], groups[i+1:]...)...)
+				break
+			}
+		}
+	}
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
 }
@@ -116,7 +140,7 @@ func effectiveStalledTimeout(st *domain.State, e *domain.IntegrationExecution, g
 
 func executionAction(a string) bool {
 	switch a {
-	case "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
+	case "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
 		return true
 	}
 	return false
@@ -243,7 +267,30 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					matched = append(matched, e.IntegrationID)
 				}
 			}
+			// The orchestrator session is registered on its group and can differ
+			// from every member executor. Fan its turn-end signal into the open
+			// group's member execution records so reconciliation can debounce it.
+			for _, g := range st.ExecutionGroups {
+				if g.ProductID != c.ProductID || g.ClosedAt != nil || g.OrchestratorHarness.SessionRef != x.SessionRef || g.OrchestratorHarness.Kind != x.HarnessKind {
+					continue
+				}
+				for _, iid := range g.MemberIntegrationIDs {
+					e := executionFor(st, iid)
+					if e == nil || e.ProductID != c.ProductID {
+						continue
+					}
+					if e.TurnEndID != key {
+						e.TurnEndAt = &now
+						e.TurnEndID = key
+					}
+					if e.OrchestratorID == "" {
+						e.OrchestratorID = g.OrchestratorID
+					}
+					matched = append(matched, e.IntegrationID)
+				}
+			}
 			slices.Sort(matched)
+			matched = slices.Compact(matched)
 			out = map[string]any{"matched": matched, "turn_id": key}
 		case "claim_execution_event_delivery":
 			var x struct {
@@ -608,15 +655,19 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			out = *e
 		case "create_execution_group":
 			var x struct {
-				Name           string   `json:"name"`
-				OrchestratorID string   `json:"orchestrator_id"`
-				IntegrationIDs []string `json:"integration_ids"`
+				Name           string                  `json:"name"`
+				OrchestratorID string                  `json:"orchestrator_id"`
+				IntegrationIDs []string                `json:"integration_ids"`
+				Harness        domain.ExecutionHarness `json:"orchestrator_harness"`
 			}
 			if err := decode(c.Data, &x); err != nil {
 				return err
 			}
 			if x.Name == "" || x.OrchestratorID == "" || len(x.IntegrationIDs) == 0 {
 				return invalid("group fields required")
+			}
+			if err := validateExecutionHarness(x.Harness); err != nil {
+				return err
 			}
 			for _, iid := range x.IntegrationIDs {
 				in := integration(st, iid)
@@ -638,7 +689,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					st.IntegrationExecutions = append(st.IntegrationExecutions, domain.IntegrationExecution{ID: id(), IntegrationID: iid, ProductID: in.ProductID, DesiredState: "ready", State: state, Reconciliation: domain.ExecutionReconciliation{Enabled: true, ActionRequired: required, Reason: reason, Since: &now}})
 				}
 			}
-			g := domain.ExecutionGroup{ID: id(), ProductID: c.ProductID, Name: x.Name, OrchestratorID: x.OrchestratorID, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now}}}
+			g := domain.ExecutionGroup{ID: id(), ProductID: c.ProductID, Name: x.Name, OrchestratorID: x.OrchestratorID, OrchestratorHarness: x.Harness, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now}}}
 			st.ExecutionGroups = append(st.ExecutionGroups, g)
 			for _, iid := range x.IntegrationIDs {
 				if e := executionFor(st, iid); e != nil && e.Reconciliation.ActionRequired {
@@ -647,6 +698,34 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 			}
 			out = g
+		case "set_execution_group_harness":
+			gid, _ := c.Data["group_id"].(string)
+			var harness domain.ExecutionHarness
+			harnessData, ok := c.Data["harness"].(map[string]any)
+			if !ok {
+				return invalid("harness required")
+			}
+			if err := decode(harnessData, &harness); err != nil {
+				return err
+			}
+			if err := validateExecutionHarness(harness); err != nil {
+				return err
+			}
+			var g *domain.ExecutionGroup
+			for i := range st.ExecutionGroups {
+				if st.ExecutionGroups[i].ID == gid {
+					g = &st.ExecutionGroups[i]
+					break
+				}
+			}
+			if g == nil {
+				return missing("execution_group", gid)
+			}
+			if c.ProductID != g.ProductID {
+				return invalid("SCOPE_MISMATCH")
+			}
+			g.OrchestratorHarness = harness
+			out = *g
 		case "add_execution_group_member", "remove_execution_group_member":
 			gid, _ := c.Data["group_id"].(string)
 			iid, _ := c.Data["integration_id"].(string)
@@ -833,6 +912,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 				e.TurnEndAt = source.TurnEndAt
 				e.TurnEndID = source.TurnEndID
 				executionCondition(st, e, "exited_incomplete", true, "turn ended with unfinished group work", now)
+				e.TurnEndAt = nil // consume this debounced report; later claims must not replay it
 				changed = true
 			}
 		}
