@@ -15,7 +15,7 @@ import (
 	"releasecontrol/internal/persistence"
 )
 
-const maxIdenticalErrorGroup = 33
+const maxIdenticalErrorGroup = 16
 
 func TestAgentGuideNoBoilerplateErrors(t *testing.T) {
 	groups := map[string][]string{}

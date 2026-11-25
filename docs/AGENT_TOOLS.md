@@ -2487,10 +2487,12 @@ Record waiting, blocked, paused, or active execution status and its next action.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Execution is absent for this Integration; inspect execution group membership and initialize it before reporting.
+- `SCOPE_MISMATCH`: Execution belongs to another Product or the referenced wait/blocker item is out of scope; use an item from this Product.
+- `STALE_FENCE`: The lease fence changed; reread the execution and report with its current fence.
+- `INVALID_STATE`: State is unsupported or completion has not reached desired_state; use a supported state and complete the required work first.
+- `WAITING_REFERENCE_REQUIRED`: waiting_external requires waiting_ref; provide the current operation, build, or deployment ID.
+- `BLOCKER_REFERENCE_REQUIRED`: blocked requires blocker_ref; create or select an open blocker in this Product.
 
 **Example:** `{"actor":"agent/worker","data":{"execution_fence":1,"executor":"agent/worker","next_action":"wait for review","outcome":"blocked","status":"waiting"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2520,10 +2522,10 @@ Release the active execution lease with its outcome.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Execution is absent for this Integration; inspect group membership and initialize it first.
+- `SCOPE_MISMATCH`: Execution belongs to another Product; use its owning Product scope.
+- `STALE_FENCE`: The lease fence changed; reread the execution and release with its current fence.
+- `INVALID_STATE`: Completion is invalid before desired_state is reached; keep the lease active or release with an incomplete outcome.
 
 **Example:** `{"actor":"agent/worker","data":{"execution_fence":1,"executor":"agent/worker","outcome":"completed"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2551,10 +2553,10 @@ Set the target lifecycle state for an Integration execution.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: No execution exists for this Integration; add it to an execution group, then retry.
+- `SCOPE_MISMATCH`: Execution belongs to another Product; pass the owning Product ID.
+- `STALE_FENCE`: The execution fence is stale; reread the execution and use the current fence.
+- `DESIRED_STATE_INVALID`: Only ready or released is accepted; choose one of those lifecycle targets.
 
 **Example:** `{"actor":"agent/orchestrator","data":{"desired_state":"complete"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
@@ -2581,10 +2583,8 @@ Configure the Product's stalled-execution timeout.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Product does not exist; refresh Product state and use its current ID.
+- `VALIDATION`: Timeout seconds must be numeric from 0 through 604800; correct the value or set clear=true.
 
 **Example:** `{"actor":"operator","data":{"timeout_seconds":3600},"product_id":"PRODUCT"}`
 
@@ -2742,10 +2742,8 @@ Queue a provider refresh of one Integration's Git observation.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Integration does not exist; reread Feature context and use its current Integration ID.
+- `VALIDATION`: Integration must belong to the supplied Product; pass the Integration's actual Product scope.
 
 **Example:** `{"action":"refresh_integration_git","integration_id":"INTEGRATION","data":{}}`
 
@@ -2771,10 +2769,8 @@ Queue repository branch/commit discovery for an attached code repository.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: repository_id is required and must identify an attached code repository in this Product; inspect repository context and connection grants.
+- `NOT_FOUND`: Scoped GitHub connection is unavailable; restore the Product grant or connection, then retry.
 
 **Example:** `{"action":"refresh_repository_git","product_id":"PRODUCT","data":{"repository_id":"REPOSITORY"}}`
 
@@ -3033,10 +3029,7 @@ Read failed/blocked operations and other product-scoped attention items.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Product does not exist; refresh Product state and retry with a current Product ID.
 
 **Example:** `{"name":"get_attention_required","arguments":{"product_id":"PRODUCT"}}`
 
@@ -3060,10 +3053,7 @@ Read persisted operation status, step evidence, child handles and attention need
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Operation does not exist; check the exact operation ID returned by the command.
 
 **Example:** `{"name":"get_operation","arguments":{"operation_id":"OPERATION"}}`
 
@@ -4037,10 +4027,8 @@ Explicitly release an unchanged candidate Dev preparation reservation.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: Reservation owner, request key, or expected selection is invalid; reread candidate state and use the owning actor plus exact current selection.
+- `CONFLICT`: Reservation effects or restoration state prevent direct release; inspect the reservation and use the restoration workflow when required.
 
 **Example:** `{"name":"release_candidate_dev","arguments":{"actor":"operator","product_id":"PRODUCT","reservation_operation_id":"RESERVATION","request_key":"release-key-000001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}}`
 
@@ -4069,10 +4057,8 @@ Unlock a candidate Dev reservation after confirmed complete restoration and fres
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: Restoration confirmation, successful fresh verification, owner, key, or selection prerequisite is missing; inspect restoration state and complete the required steps.
+- `CONFLICT`: Restoration or selection state changed; reread the latest restoration operation and submit a fresh request only when its proof is current.
 
 **Example:** `{"name":"release_candidate_dev_after_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","restoration_operation_id":"RESTORE","restoration_verification_operation_id":"PROOF","request_key":"unlock-key-000001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
 
@@ -4841,10 +4827,10 @@ Submit one action through the shared domain command application layer.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: The selected action rejected a field, value, or scope; read GET /api/schema and the action-specific tool guide, then correct that exact input.
+- `NOT_FOUND`: A referenced record is missing; reread scoped context and replace the stale ID.
+- `CONFLICT`: The requested state transition conflicts with current state; inspect the referenced record and follow its recovery workflow.
+- `STALE_FENCE`: Execution lease fence is stale; reread execution state and use its current fence.
 
 **Example:** `{"action":"execute","actor":"agent/backend","feature_id":"FEATURE","data":{"action":"record_progress","body":"Implemented parser"}}`
 
@@ -4923,10 +4909,8 @@ Append a progress update to a Feature or Integration record.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Feature does not exist; reread Product context and use its current Feature ID.
+- `VALIDATION`: Progress content is empty or the Integration is immutable after release; provide content or choose an active Integration.
 
 **Example:** `{"action":"record_progress","actor":"agent/backend","feature_id":"FEATURE","integration_id":"INTEGRATION","data":{"body":"Implemented parser","execution_fence":1}}`
 
@@ -4955,10 +4939,8 @@ Append a durable engineering decision to a Feature.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Feature does not exist; reread Product context and use its current Feature ID.
+- `VALIDATION`: Decision requires content and a reason; provide both before retrying.
 
 **Example:** `{"action":"record_decision","actor":"agent/backend","feature_id":"FEATURE","data":{"reason":"Keep v1","rationale":"Existing clients cannot migrate atomically"}}`
 
@@ -4987,10 +4969,8 @@ Append a discovery or observed fact to a Feature's history.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Feature does not exist; reread Product context and use its current Feature ID.
+- `VALIDATION`: Discovery content is required; provide a title, body, current checkpoint, or completed item.
 
 **Example:** `{"action":"record_discovery","actor":"agent/backend","feature_id":"FEATURE","data":{"title":"Legacy path exists","body":"Found callers in the compatibility package"}}`
 
@@ -5020,10 +5000,8 @@ Record a blocker on a Feature or Integration.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Feature does not exist; reread Product context and use its current Feature ID.
+- `VALIDATION`: Blocker content is required; provide a title or body describing the blocking condition.
 
 **Example:** `{"action":"add_blocker","actor":"agent/backend","feature_id":"FEATURE","data":{"title":"Waiting on API access","body":"Need the staging credential reference"}}`
 
@@ -5049,10 +5027,8 @@ Append a resolution for an existing blocker.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Blocker does not exist; reread Feature history and use the exact blocker ID.
+- `VALIDATION`: Blocker is already resolved or resolution body is empty; provide evidence for an open blocker.
 
 **Example:** `{"action":"resolve_blocker","actor":"agent/backend","id":"BLOCKER","data":{"body":"Access was granted"}}`
 
@@ -5083,10 +5059,8 @@ Append a structured checkpoint for the next agent or session.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `NOT_FOUND`: Feature does not exist; reread Product context and use its current Feature ID.
+- `VALIDATION`: Handoff content is required; provide current work, completed items, or next actions.
 
 **Example:** `{"action":"handoff","actor":"agent/backend","feature_id":"FEATURE","integration_id":"INTEGRATION","data":{"completed":["parser"],"current":"tests pending","remaining":["run checks"],"next":["run go test"],"warnings":[]}}`
 
