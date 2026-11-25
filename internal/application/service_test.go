@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"releasecontrol/internal/domain"
 	"testing"
 )
@@ -20,8 +22,46 @@ func (m *memoryStore) Update(_ context.Context, fn func(*domain.State) error) er
 	m.state = copy
 	return nil
 }
-func (m *memoryStore) UpdateScoped(ctx context.Context, _ domain.StateMutationScope, fn func(*domain.State) error) error {
-	return m.Update(ctx, fn)
+func (m *memoryStore) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
+	b, _ := json.Marshal(m.state)
+	var before domain.State
+	_ = json.Unmarshal(b, &before)
+	copyState := before
+	if err := fn(&copyState); err != nil {
+		return err
+	}
+	a, z := reflect.ValueOf(before), reflect.ValueOf(copyState)
+	mutable, appendOnly := map[string]bool{"events": true}, map[string]bool{}
+	for _, name := range scope.MutableCollections {
+		mutable[name] = true
+	}
+	for _, name := range scope.AppendCollections {
+		appendOnly[name] = true
+	}
+	for i := 0; i < a.NumField(); i++ {
+		name := a.Type().Field(i).Tag.Get("json")
+		if scope.AllCollections || mutable[name] {
+			continue
+		}
+		old, cur := a.Field(i), z.Field(i)
+		if appendOnly[name] {
+			if cur.Len() < old.Len() {
+				return fmt.Errorf("append collection truncated: %s", name)
+			}
+			if old.Len() == 0 {
+				continue
+			}
+			if !reflect.DeepEqual(old.Interface(), cur.Slice(0, old.Len()).Interface()) {
+				return fmt.Errorf("append collection rewritten: %s", name)
+			}
+			continue
+		}
+		if !reflect.DeepEqual(old.Interface(), cur.Interface()) {
+			return fmt.Errorf("collection outside mutation scope: %s", name)
+		}
+	}
+	m.state = copyState
+	return nil
 }
 func fixture(t *testing.T) (*Service, *memoryStore) {
 	t.Helper()
