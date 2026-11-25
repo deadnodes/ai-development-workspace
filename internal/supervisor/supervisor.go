@@ -193,7 +193,7 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 				break
 			}
 		}
-		if groupID == "" {
+		if groupID == "" || !idPattern.MatchString(groupID) {
 			result = WakeResult{Outcome: Unsupported, Detail: "missing valid execution group"}
 		} else if !ValidSessionRef(session) && target == "" {
 			result = WakeResult{Outcome: Unsupported, Detail: "invalid session_ref"}
@@ -202,7 +202,7 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			for _, c := range claimed {
 				types = append(types, safeEventType(c.ev.Type))
 			}
-			message := fmt.Sprintf("[RCP supervisor] Unfinished work in execution group %s (%d events: %s). Call get_execution_group with group_id=%s, continue every member that is not completed, keep heartbeats, report state; do not restart completed members.", groupID, len(claimed), strings.Join(types, ", "), groupID)
+			message := fmt.Sprintf("[RCP supervisor] Unfinished work in execution group %s (%d events: %s). Call get_execution_group with group_id=%s and continue every member. Work counts as done only when each Integration reaches its desired_state. For every member: follow its next_action from get_execution_group (resume with your fence if lost, claim if unassigned), transition with execution_fence, release_execution(outcome=completed) at the end.", groupID, len(claimed), strings.Join(types, ", "), groupID)
 			s.mu.Lock()
 			last := s.wakes[key]
 			now := s.Now()

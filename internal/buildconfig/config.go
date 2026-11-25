@@ -115,6 +115,7 @@ type Config struct {
 	NotifyRetrySeconds        int           `json:"notify_retry_seconds,omitempty"`
 	MaxBackoffSeconds         int           `json:"max_backoff_seconds,omitempty"`
 	EscalateAfterAttempts     int           `json:"escalate_after_attempts,omitempty"`
+	EscalateAfterDelivered    int           `json:"escalate_after_delivered,omitempty"`
 	TurnEndDebounceSeconds    int           `json:"turn_end_debounce_seconds,omitempty"`
 	staleOperationSecondsSet  bool
 	reconcileIntervalSet      bool
@@ -422,7 +423,13 @@ func (c *Config) Validate() error {
 	if !c.escalateAfterAttemptsSet && c.EscalateAfterAttempts == 0 {
 		c.EscalateAfterAttempts = 10
 	}
+	if c.EscalateAfterDelivered == 0 {
+		c.EscalateAfterDelivered = 3
+	}
 	if c.NotifyRetrySeconds < 1 || c.NotifyRetrySeconds > 86400 || c.MaxBackoffSeconds < 1 || c.MaxBackoffSeconds > 604800 || c.EscalateAfterAttempts < 1 || c.EscalateAfterAttempts > 1000 {
+		return bad
+	}
+	if c.EscalateAfterDelivered < 1 || c.EscalateAfterDelivered > 1000 {
 		return bad
 	}
 	if !c.turnEndDebounceSecondsSet && c.TurnEndDebounceSeconds == 0 {

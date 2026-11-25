@@ -7,38 +7,64 @@ log() {
 }
 fail() { log "$1"; exit 0; }
 
-[ -n "${RCP_URL:-}" ] || fail 'missing RCP_URL'
-[ -n "${RCP_TOKEN_FILE:-}" ] || fail 'missing RCP_TOKEN_FILE'
-[ -n "${RCP_PRODUCT_ID:-}" ] || fail 'missing RCP_PRODUCT_ID'
-case "${RCP_HARNESS_KIND:-}" in codex|claude_code) ;; *) fail 'invalid RCP_HARNESS_KIND' ;; esac
+config=${RCP_HOOK_CONFIG:-"$HOME/.config/release-control/turn-end.json"}
+if [ "${1:-}" = --config ]; then
+  [ -n "${2:-}" ] || fail 'missing config path'
+  config=$2
+  shift 2
+fi
+config_values=
+if [ -r "$config" ]; then
+  config_values=$(python3 - "$config" <<'PYCONFIG'
+import json,sys
+try:
+ d=json.load(open(sys.argv[1]))
+ for k in ('rcp_url','token_file','product_id','harness_kind'):
+  v=d.get(k,'')
+  if not isinstance(v,str) or any(c in v for c in '\t\r\n'):
+   raise ValueError('invalid '+k)
+  print(v)
+except Exception:
+ sys.exit(1)
+PYCONFIG
+  ) || fail 'invalid hook config'
+elif [ -z "${RCP_URL:-}" ] || [ -z "${RCP_TOKEN_FILE:-}" ] || [ -z "${RCP_PRODUCT_ID:-}" ] || [ -z "${RCP_HARNESS_KIND:-}" ]; then
+  fail 'hook config is not readable'
+fi
+RCP_URL=${RCP_URL:-$(printf '%s\n' "$config_values" | sed -n '1p')}
+RCP_TOKEN_FILE=${RCP_TOKEN_FILE:-$(printf '%s\n' "$config_values" | sed -n '2p')}
+RCP_PRODUCT_ID=${RCP_PRODUCT_ID:-$(printf '%s\n' "$config_values" | sed -n '3p')}
+RCP_HARNESS_KIND=${RCP_HARNESS_KIND:-$(printf '%s\n' "$config_values" | sed -n '4p')}
+[ -n "$RCP_URL" ] || fail 'missing RCP_URL'
+[ -n "$RCP_TOKEN_FILE" ] || fail 'missing RCP_TOKEN_FILE'
+[ -n "$RCP_PRODUCT_ID" ] || fail 'missing RCP_PRODUCT_ID'
+case "$RCP_HARNESS_KIND" in codex|claude_code) ;; *) fail 'invalid RCP_HARNESS_KIND' ;; esac
 [ -r "$RCP_TOKEN_FILE" ] || fail 'token file is not readable'
 token=$(cat "$RCP_TOKEN_FILE" 2>/dev/null) || fail 'could not read token file'
 [ -n "$token" ] || fail 'token file is empty'
 
-payload=
-if [ "$RCP_HARNESS_KIND" = codex ]; then
-  payload=${1:-}
-else
+payload=${1:-}
+if [ "$RCP_HARNESS_KIND" != codex ]; then
   payload=$(cat 2>/dev/null) || payload=
 fi
 session_ref=
-if command -v python3 >/dev/null 2>&1 && [ -n "$payload" ]; then
-  if [ "$RCP_HARNESS_KIND" = codex ]; then
-    parsed=$(printf '%s' "$payload" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\t" + str(d.get("thread-id", "")) if d.get("type") == "agent-turn-complete" else "\tIGNORE")' 2>/dev/null) || parsed=
-  else
-    parsed=$(printf '%s' "$payload" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\t" + str(d.get("session_id", "")))' 2>/dev/null) || parsed=
-  fi
-  case "$parsed" in *IGNORE) exit 0 ;; esac
-  session_ref=${parsed#$(printf '\t')}
+if [ -n "$payload" ]; then
+  parsed=$(printf '%s' "$payload" | python3 -c 'import json,sys; d=json.load(sys.stdin); typ=d.get("type",""); v=d.get("thread-id","") if typ=="agent-turn-complete" else "IGNORE" if typ else d.get("session_id",""); print(v)' 2>/dev/null) || parsed=
+  [ "$parsed" != IGNORE ] || exit 0
+  session_ref=$parsed
 fi
 tmux_target=
 if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
   tmux_target=$(tmux display-message -p '#S' 2>/dev/null) || tmux_target=
 fi
 [ -n "$session_ref" ] || [ -n "$tmux_target" ] || fail 'no session_ref or tmux_target available'
-
 body=$(RCP_SESSION_REF="$session_ref" RCP_TMUX_TARGET="$tmux_target" RCP_PRODUCT_ID="$RCP_PRODUCT_ID" RCP_HARNESS_KIND="$RCP_HARNESS_KIND" python3 -c 'import json,os; d={"action":"report_turn_end","actor":"agent/harness-hook","product_id":os.environ["RCP_PRODUCT_ID"],"data":{"harness_kind":os.environ["RCP_HARNESS_KIND"]}}; s=os.environ.get("RCP_SESSION_REF"); t=os.environ.get("RCP_TMUX_TARGET"); d["data"].update(({"session_ref":s} if s else {})); d["data"].update(({"tmux_target":t} if t else {})); print(json.dumps(d))' 2>/dev/null) || fail 'python3 is required to encode request'
-if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 5 -X POST "${RCP_URL%/}/api/commands" -H 'Content-Type: application/json' -H "Authorization: Bearer $token" --data-binary "$body" >/dev/null 2>&1; then
+header_file=$(mktemp "${TMPDIR:-/tmp}/rcp-auth.XXXXXX") || fail 'could not create authorization header file'
+trap 'rm -f "$header_file"' EXIT HUP INT TERM
+chmod 600 "$header_file" || fail 'could not secure authorization header file'
+printf 'Authorization: Bearer %s\n' "$token" >"$header_file" || fail 'could not write authorization header'
+unset token
+if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 5 -X POST "${RCP_URL%/}/api/commands" -H 'Content-Type: application/json' -H "@$header_file" --data-binary "$body" >/dev/null 2>&1; then
   log 'reported turn end'
 else
   fail 'request failed'

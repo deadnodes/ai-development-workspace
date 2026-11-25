@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -119,12 +118,10 @@ func runExecutionLifecycle(t *testing.T, store Store) {
 	}
 	lost := findEventFrom(st, "execution_lost")
 	ackEvent(lost, "delivered")
-	run(domain.Command{Action: "takeover_execution", ProductID: "life-p", IntegrationID: "life-i", Data: map[string]any{"orchestrator_id": "orch", "agent_id": "agent2", "fence": float64(2), "state_check_reference": lost.ID, "harness": map[string]any{"kind": "codex", "session_ref": "session-orch-1234", "tmux_target": "orch"}}})
-	if _, err = s.Execute(ctx, domain.Command{Action: "record_progress", Actor: "agent/old", ProductID: "life-p", FeatureID: "life-f", IntegrationID: "life-i", Data: map[string]any{"title": "stale", "execution_fence": float64(2)}}); err == nil || !strings.Contains(err.Error(), "STALE_FENCE") {
-		t.Fatalf("old fence progress error=%v", err)
-	}
-	run(domain.Command{Action: "transition_integration", ProductID: "life-p", IntegrationID: "life-i", Data: map[string]any{"status": "working", "execution_fence": float64(3)}})
-	run(domain.Command{Action: "transition_integration", ProductID: "life-p", IntegrationID: "life-i", Data: map[string]any{"status": "ready", "execution_fence": float64(3)}})
+	run(domain.Command{Action: "heartbeat_execution", ProductID: "life-p", IntegrationID: "life-i", Data: map[string]any{"fence": float64(2)}})
+	run(domain.Command{Action: "record_progress", ProductID: "life-p", FeatureID: "life-f", IntegrationID: "life-i", Data: map[string]any{"title": "resumed", "execution_fence": float64(2)}})
+	run(domain.Command{Action: "transition_integration", ProductID: "life-p", IntegrationID: "life-i", Data: map[string]any{"status": "working", "execution_fence": float64(2)}})
+	run(domain.Command{Action: "transition_integration", ProductID: "life-p", IntegrationID: "life-i", Data: map[string]any{"status": "ready", "execution_fence": float64(2)}})
 	if err = s.ReconcileExecutionsOnce(ctx); err != nil {
 		t.Fatal(err)
 	}

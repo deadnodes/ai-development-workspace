@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"releasecontrol/internal/domain"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -190,6 +191,27 @@ func executionFence(data map[string]any, key string) uint64 {
 		return v
 	}
 	return 0
+}
+
+func validateExecutionInput(data map[string]any, action string, accepted ...string) error {
+	allowed := map[string]bool{}
+	for _, key := range accepted {
+		allowed[key] = true
+	}
+	for key := range data {
+		if !allowed[key] {
+			return invalid("unknown field %s; accepted: %s", key, strings.Join(accepted, ", "))
+		}
+	}
+	for _, key := range []string{"reason", "note"} {
+		if value, ok := data[key]; ok {
+			text, valid := value.(string)
+			if !valid || len(text) > 500 {
+				return invalid("%s must be a string of at most 500 characters", key)
+			}
+		}
+	}
+	return nil
 }
 func executionCondition(st *domain.State, e *domain.IntegrationExecution, state string, required bool, reason string, now time.Time) {
 	if e.State == state && e.Reconciliation.ActionRequired == required && e.Reconciliation.Reason == reason {
@@ -380,6 +402,24 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				ev.Delivery.AcknowledgedAt = &t
 				ev.Delivery.AcknowledgedBy = x.SupervisorID
 				ev.Acknowledgements = append(ev.Acknowledgements, domain.ExecutionEventAck{DeliveryID: x.DeliveryID, SupervisorID: x.SupervisorID, Outcome: x.Outcome, Detail: x.Detail, At: now})
+				if x.Outcome == "delivered" && ev.Resolution.ResolvedAt == nil {
+					ex := executionFor(st, ev.IntegrationID)
+					if ex != nil && ex.Reconciliation.ActionRequired && ex.Reconciliation.Generation == ev.ConditionGeneration {
+						threshold := 3
+						if s.executionDefaults != nil && s.executionDefaults.EscalateAfterDelivered > 0 {
+							threshold = s.executionDefaults.EscalateAfterDelivered
+						}
+						delivered := 0
+						for _, ack := range ev.Acknowledgements {
+							if ack.Outcome == "delivered" {
+								delivered++
+							}
+						}
+						if delivered >= threshold {
+							ev.EscalationRequired = true
+						}
+					}
+				}
 				if x.Outcome == "unsupported" {
 					ev.EscalationRequired = true
 				}
@@ -424,6 +464,13 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			return missing("execution_event", x.EventID)
 		case "claim_execution", "takeover_execution":
+			if c.Action == "claim_execution" {
+				if err := validateExecutionInput(c.Data, c.Action, "orchestrator_id", "agent_id", "harness", "desired_state", "lease_ttl_seconds", "stalled_timeout_seconds", "reason", "note"); err != nil {
+					return err
+				}
+			} else if err := validateExecutionInput(c.Data, c.Action, "orchestrator_id", "agent_id", "harness", "desired_state", "state_check_reference", "fence", "lease_ttl_seconds", "stalled_timeout_seconds", "reason", "note"); err != nil {
+				return err
+			}
 			in := integration(st, c.IntegrationID)
 			if in == nil {
 				return missing("integration", c.IntegrationID)
@@ -493,6 +540,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					if e.State != "lost" && e.State != "stalled" {
 						return invalid("INVALID_STATE")
 					}
+					if (x.OrchestratorID == "" || x.OrchestratorID == e.OrchestratorID) && (x.AgentID == "" || x.AgentID == e.AgentID) {
+						return invalid("TAKEOVER_NOT_REQUIRED")
+					}
 				}
 				e.Fence++
 				e.LeaseUntil = nil
@@ -547,11 +597,14 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if executionFence(c.Data, "fence") != e.Fence {
 				return invalid("STALE_FENCE")
 			}
-			if e.State != "running" && e.State != "stalled" {
+			if e.State != "running" && e.State != "stalled" && e.State != "lost" {
 				return invalid("INVALID_STATE")
 			}
-			if e.LeaseUntil == nil || !now.Before(*e.LeaseUntil) {
+			if e.State == "running" && (e.LeaseUntil == nil || !now.Before(*e.LeaseUntil)) {
 				return invalid("LEASE_EXPIRED")
+			}
+			if e.State == "lost" || e.State == "stalled" {
+				executionCondition(st, e, "running", false, "", now)
 			}
 			nowp := now
 			e.LastHeartbeat = &nowp
@@ -566,6 +619,15 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			out = *e
 		case "report_execution", "release_execution":
+			var inputErr error
+			if c.Action == "report_execution" {
+				inputErr = validateExecutionInput(c.Data, c.Action, "fence", "state", "waiting_ref", "blocker_ref", "reason", "note")
+			} else {
+				inputErr = validateExecutionInput(c.Data, c.Action, "fence", "outcome", "reason", "note")
+			}
+			if inputErr != nil {
+				return inputErr
+			}
 			e := executionFor(st, c.IntegrationID)
 			if e == nil {
 				return missing("execution", c.IntegrationID)
@@ -583,7 +645,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					state = "exited_incomplete"
 				}
 			}
-			if state != "waiting_external" && state != "blocked" && state != "paused" && state != "cancelled" && state != "exited_incomplete" && state != "completed" {
+			if state != "running" && state != "waiting_external" && state != "blocked" && state != "paused" && state != "cancelled" && state != "exited_incomplete" && state != "completed" {
 				return invalid("INVALID_STATE")
 			}
 			if state == "completed" {
@@ -644,7 +706,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			reason, _ := c.Data["reason"].(string)
 			executionCondition(st, e, state, required, reason, now)
 			e.ExitReason, e.WaitingRef, e.BlockerRef = reason, waitingRef, blockerRef
-			if state == "paused" || state == "cancelled" || state == "exited_incomplete" || state == "completed" {
+			if state == "running" {
+				until := now.Add(time.Duration(e.LeaseTTLSeconds) * time.Second)
+				e.LeaseUntil = &until
+				e.LastHeartbeat = &now
+				e.LastProgress = &now
+			} else if state == "paused" || state == "cancelled" || state == "exited_incomplete" || state == "completed" {
 				e.LeaseUntil = nil
 			}
 			out = *e

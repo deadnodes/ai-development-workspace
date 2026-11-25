@@ -400,6 +400,21 @@ func TestExecutionEventAckDoesNotResolveAndUnsupportedEscalates(t *testing.T) {
 	}
 }
 
+func TestDeliveredWakesEscalateUnchangedCondition(t *testing.T) {
+	s, m := fixture(t)
+	s.executionDefaults = &buildconfig.Config{EscalateAfterDelivered: 3}
+	m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex", ProductID: "p", IntegrationID: "i", Fence: 1, State: "lost", Reconciliation: domain.ExecutionReconciliation{ActionRequired: true, Generation: 4}})
+	m.state.ExecutionEvents = append(m.state.ExecutionEvents, domain.ExecutionEvent{ID: "ev", ProductID: "p", IntegrationID: "i", Type: "execution_lost", Fence: 1, ConditionGeneration: 4, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: time.Now().Add(-time.Second)}})
+	for i := 0; i < 3; i++ {
+		delivery := exec(t, s, domain.Command{Action: "claim_execution_event_delivery", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup"}}).(string)
+		exec(t, s, domain.Command{Action: "ack_execution_event", ProductID: "p", Data: map[string]any{"event_id": "ev", "delivery_id": delivery, "supervisor_id": "sup", "outcome": "delivered"}})
+		m.state.ExecutionEvents[0].Delivery.NextAttemptAt = time.Now().Add(-time.Second)
+	}
+	if !m.state.ExecutionEvents[0].EscalationRequired || len(m.state.ExecutionEvents[0].Acknowledgements) != 3 {
+		t.Fatalf("unchanged delivered wake condition did not escalate: %+v", m.state.ExecutionEvents[0])
+	}
+}
+
 func TestUnacknowledgedExecutionEventCanBeReclaimedAfterBackoff(t *testing.T) {
 	s, m := fixture(t)
 	event := domain.ExecutionEvent{ID: "ev", ProductID: "p", IntegrationID: "i", Delivery: domain.ExecutionEventDelivery{NextAttemptAt: time.Now().UTC().Add(-time.Second)}}

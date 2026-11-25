@@ -96,6 +96,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	hashConfig.NotifyRetrySeconds = 0
 	hashConfig.MaxBackoffSeconds = 0
 	hashConfig.EscalateAfterAttempts = 0
+	hashConfig.EscalateAfterDelivered = 0
 	hashConfig.TurnEndDebounceSeconds = 0
 	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
 		buildconfig.Config

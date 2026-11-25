@@ -165,6 +165,23 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 		}
 		var err error
 		result, err = applyAuthorizedOrigin(st, c, s.externalWorkers, origin)
+		if err == nil && (c.Action == "record_progress" || c.Action == "transition_integration") {
+			if _, ok := c.Data["execution_fence"]; ok {
+				ex := executionFor(st, c.IntegrationID)
+				if ex != nil && executionFence(c.Data, "execution_fence") == ex.Fence {
+					now := time.Now().UTC()
+					if ex.State == "lost" || ex.State == "stalled" {
+						executionCondition(st, ex, "running", false, "", now)
+					}
+					if ex.State == "running" {
+						until := now.Add(time.Duration(ex.LeaseTTLSeconds) * time.Second)
+						ex.LeaseUntil = &until
+						ex.LastHeartbeat = &now
+						ex.LastProgress = &now
+					}
+				}
+			}
+		}
 		return err
 	})
 	return result, err

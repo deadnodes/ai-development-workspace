@@ -184,24 +184,26 @@ or use a configured supervisor credential.
 # Harness turn-end hook
 
 The optional `scripts/hooks/rcp-turn-end.sh` reports completed agent turns to
-`POST /api/commands`. Give it `RCP_URL`, `RCP_TOKEN_FILE` (a bearer-token file
-with mode `600`), `RCP_PRODUCT_ID`, and `RCP_HARNESS_KIND` (`codex` or
-`claude_code`). It reads Codex's `thread-id` from the notify JSON argument and
-Claude Code's `session_id` from Stop-hook JSON on stdin. If `$TMUX` is set, it
-also reports the current tmux session name. Failures are logged to
-`$RCP_HOOK_LOG`, defaulting to `~/Library/Logs/rcp-turn-end.log`, and do not
-interrupt the agent.
-
-For Codex, add a notify command:
+`POST /api/commands`. Configure `rcp_url`, `token_file`, `product_id`, and
+`harness_kind` (`codex` or `claude_code`) in JSON. Codex accepts a config path
+before its appended JSON payload:
 
 ```sh
-codex -c 'notify=["/path/to/rcp-turn-end.sh"]'
+codex -c 'notify=["/path/rcp-turn-end.sh", "--config", "/path/turn-end.json"]'
 ```
 
-Or put this in Codex `config.toml`:
+Without `--config`, it reads `${RCP_HOOK_CONFIG:-$HOME/.config/release-control/turn-end.json}`.
+The `RCP_URL`, `RCP_TOKEN_FILE`, `RCP_PRODUCT_ID`, and `RCP_HARNESS_KIND`
+environment variables override config values. The token file should have mode
+`600`. Codex's `thread-id` is read from the notify JSON argument; Claude Code's
+`session_id` is read from Stop-hook JSON on stdin. If `$TMUX` is set, it also
+reports the current tmux session name. Failures are logged to `$RCP_HOOK_LOG`,
+defaulting to `~/Library/Logs/rcp-turn-end.log`, and do not interrupt the agent.
+
+Codex config example:
 
 ```toml
-notify = ["/path/to/rcp-turn-end.sh"]
+notify = ["/path/rcp-turn-end.sh", "--config", "/path/turn-end.json"]
 ```
 
 For Claude Code, add a Stop hook to `.claude/settings.json`:
@@ -216,5 +218,10 @@ For Claude Code, add a Stop hook to `.claude/settings.json`:
 }
 ```
 
-The same script reads configuration from the hook process environment. Codex
-notify reports are ignored unless their `type` is `agent-turn-complete`.
+Codex notify reports are ignored unless their `type` is `agent-turn-complete`.
+
+
+Execution completion means each Integration reaches its `desired_state` and then
+`release_execution(outcome=completed)` is recorded. After idle expiry, the same
+executor resumes with its current fence; a different executor uses takeover.
+Every fenced progress write and transition must include `execution_fence`.

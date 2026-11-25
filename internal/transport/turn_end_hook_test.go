@@ -64,3 +64,36 @@ func TestTurnEndHookPayloadShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestTurnEndHookKeepsTokenOutOfCurlArgv(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	argv := filepath.Join(dir, "argv")
+	curl := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + argv + "\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(curl), 0700); err != nil {
+		t.Fatal(err)
+	}
+	token := filepath.Join(dir, "token")
+	secret := "never-on-argv"
+	if err := os.WriteFile(token, []byte(secret), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join("..", "..", "scripts", "hooks", "rcp-turn-end.sh"), `{"type":"agent-turn-complete","thread-id":"thread-123"}`)
+	cmd.Env = append(os.Environ(), "RCP_URL=http://example.invalid", "RCP_TOKEN_FILE="+token, "RCP_PRODUCT_ID=product", "RCP_HARNESS_KIND=codex", "RCP_HOOK_LOG="+filepath.Join(dir, "hook.log"), "PATH="+bin+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("hook failed: %v: %s", err, out)
+	}
+	got, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), secret) {
+		t.Fatalf("token leaked in curl argv: %s", got)
+	}
+	if !strings.Contains(string(got), "@") {
+		t.Fatalf("curl did not receive header file argument: %s", got)
+	}
+}

@@ -11,6 +11,65 @@ import (
 	"time"
 )
 
+func executionNextAction(in *domain.Integration, ex *domain.IntegrationExecution, events []domain.ExecutionEvent, group *domain.ExecutionGroup) map[string]string {
+	current := in.Status
+	desired := "ready"
+	code, text := "claim", ""
+	if ex != nil {
+		desired = ex.DesiredState
+		if desired == "" {
+			desired = "ready"
+		}
+	}
+	if ex == nil || ex.State == "unassigned" || ex.State == "exited_incomplete" || ex.State == "paused" {
+		text = fmt.Sprintf("Integration status is %s; desired_state is %s. Call claim_execution to resume work. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired)
+	} else if ex.State == "completed" || ex.State == "cancelled" {
+		code, text = "none", fmt.Sprintf("Integration status is %s; desired_state is %s. No action required.", current, desired)
+	} else if ex.State == "waiting_external" || ex.State == "blocked" {
+		ref := ex.WaitingRef
+		if ref == "" {
+			ref = ex.BlockerRef
+		}
+		code, text = "wait", fmt.Sprintf("Integration status is %s; desired_state is %s. Wait for reference %s, then inspect get_execution_group.", current, desired, ref)
+	} else if ex.State == "lost" || ex.State == "stalled" {
+		code = "resume"
+		var delivered string
+		for _, ev := range events {
+			if ev.IntegrationID == in.ID && ev.Resolution.ResolvedAt == nil && (ev.Type == "execution_lost" || ev.Type == "execution_stalled") {
+				for _, ack := range ev.Acknowledgements {
+					if ack.Outcome == "delivered" {
+						delivered = ev.ID
+						break
+					}
+				}
+			}
+			if delivered != "" {
+				break
+			}
+		}
+		if delivered != "" && group.OrchestratorID != ex.OrchestratorID {
+			code = "takeover"
+			text = fmt.Sprintf("Integration status is %s; desired_state is %s. Different executor: call takeover_execution with delivered event id %s. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired, delivered)
+		} else {
+			text = fmt.Sprintf("Integration status is %s; desired_state is %s. You hold fence %d. Call heartbeat_execution(integration_id, fence=%d) to resume, finish the work, then transition_integration to %s (current: %s) with execution_fence=%d and call release_execution(outcome=completed).", current, desired, ex.Fence, ex.Fence, desired, current, ex.Fence)
+		}
+	} else {
+		code = "advance"
+		steps := remainingExecutionSteps(current, desired)
+		text = fmt.Sprintf("Integration status is %s; desired_state is %s. Remaining transition steps: %s. Transition with execution_fence=%d, then call release_execution(outcome=completed).", current, desired, strings.Join(steps, " -> "), ex.Fence)
+	}
+	return map[string]string{"code": code, "text": text}
+}
+
+func remainingExecutionSteps(current, desired string) []string {
+	order := []string{"planned", "working", "implemented", "verifying", "ready", "released"}
+	i, j := slices.Index(order, current), slices.Index(order, desired)
+	if i < 0 || j < 0 || i >= j {
+		return []string{}
+	}
+	return append([]string(nil), order[i+1:j+1]...)
+}
+
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 	if name == "test_connection" || name == "discover_repositories" {
 		if err := authorize(ctx, "admin", ""); err != nil {
@@ -52,16 +111,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 							ex = &st.IntegrationExecutions[j]
 						}
 					}
-					next := "continue execution"
-					if ex == nil {
-						next = "claim execution"
-					} else if ex.Reconciliation.ActionRequired {
-						next = "inspect execution and continue"
-					} else if ex.State == "completed" || ex.State == "paused" || ex.State == "cancelled" {
-						next = "no action"
-					} else if ex.State == "waiting_external" || ex.State == "blocked" {
-						next = "wait for external condition"
-					}
+					next := executionNextAction(in, ex, st.ExecutionEvents, &g)
 					effectiveTimeout, timeoutSource := 900, "global"
 					if ex != nil {
 						global := 900
