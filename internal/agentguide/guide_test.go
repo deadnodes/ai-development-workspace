@@ -36,17 +36,21 @@ func TestCanonicalSkillProvenance(t *testing.T) {
 		Name, Repository, Commit, Path, SHA256 string
 		LocalAmendments                        string `json:"local_amendments"`
 	}
-	if json.Unmarshal(raw, &sources) != nil || len(sources) != 2 {
+	if json.Unmarshal(raw, &sources) != nil || len(sources) != 3 {
 		t.Fatal("invalid skill provenance")
 	}
-	expected := map[string]string{SkillName: "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179", DeliverySkillName: "3c85ce4fae453b099f38f0b032cbcefa85d69d5e64940664a1fc3ea8d3cb737b"}
+	expected := map[string]string{SkillName: "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179", DeliverySkillName: "3c85ce4fae453b099f38f0b032cbcefa85d69d5e64940664a1fc3ea8d3cb737b", ExecutionSkillName: "14a0b90de7bcf966b746875d883c3194521bd5112420dd26e5a61cc1e8ef8f4e"}
 	for _, source := range sources {
 		sha, ok := expected[source.Name]
 		if !ok {
 			t.Fatal("unknown/duplicate skill provenance")
 		}
 		delete(expected, source.Name)
-		if source.Repository != "https://github.com/deadnodes/ai-tools" || source.Commit != "4a25d7edcdda49aa550d73967f156a9e572cd284" || source.Path != ".workspace/skills/"+source.Name+"/SKILL.md" || source.SHA256 != sha {
+		if source.Name == ExecutionSkillName {
+			if source.LocalAmendments == "" || source.Path != "internal/agentguide/skills/rcp-execution/SKILL.md" || source.SHA256 != sha {
+				t.Fatal("local execution skill provenance changed")
+			}
+		} else if source.Repository != "https://github.com/deadnodes/ai-tools" || source.Commit != "4a25d7edcdda49aa550d73967f156a9e572cd284" || source.Path != ".workspace/skills/"+source.Name+"/SKILL.md" || source.SHA256 != sha {
 			t.Fatal("canonical source changed without deliberate snapshot update")
 		}
 		skill, ok := Lookup(source.Name)

@@ -40,7 +40,7 @@ Go modular monolith. One process serves the embedded UI, HTTP API and MCP; embed
 
 One-command workspace setup: `./bin/release-control connect --url http://127.0.0.1:8090 --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID`. Installs project MCP configuration, instructions and the handoff skill; see [agent connection](docs/AGENT_CONNECT.md).
 
-**Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Start there for MCP connection, exact setup commands, GitHub App credentials, repository attachment and the first DEV operation.
+**Agent entry point: [docs/AGENT_QUICKSTART.md](docs/AGENT_QUICKSTART.md).** Connect once, then use MCP `get_tool_guide` for the live agent-facing catalog and [docs/AGENT_TOOLS.md](docs/AGENT_TOOLS.md) for tool, execute-action and HTTP-route instructions. The guide is not an authorization grant.
 
 ## Product-independent by design
 

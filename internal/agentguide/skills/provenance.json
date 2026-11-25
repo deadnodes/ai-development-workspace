@@ -13,5 +13,13 @@
     "path": ".workspace/skills/rcp-delivery/SKILL.md",
     "sha256": "3c85ce4fae453b099f38f0b032cbcefa85d69d5e64940664a1fc3ea8d3cb737b",
     "local_amendments": "Forgejo build queue and Dev deployment guidance maintained in this repository; upstream locator identifies original snapshot."
+  },
+  {
+    "name": "rcp-execution",
+    "repository": "https://github.com/deadnodes/ai-tools",
+    "commit": "local-amendment",
+    "path": "internal/agentguide/skills/rcp-execution/SKILL.md",
+    "sha256": "14a0b90de7bcf966b746875d883c3194521bd5112420dd26e5a61cc1e8ef8f4e",
+    "local_amendments": "New execution protocol maintained in this repository."
   }
 ]

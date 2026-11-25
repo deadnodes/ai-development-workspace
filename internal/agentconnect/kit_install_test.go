@@ -164,7 +164,7 @@ func TestAllSevenFixedPathsRollbackAtEveryReplacement(t *testing.T) {
 				}
 				return nil
 			})
-			if err != nil || regular != 7 {
+			if err != nil || regular != len(installPaths()) {
 				t.Fatal("rollback left unexpected files", regular, err)
 			}
 		})

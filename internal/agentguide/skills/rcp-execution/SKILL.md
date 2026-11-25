@@ -1,0 +1,17 @@
+---
+name: rcp-execution
+description: Run fenced, resumable multi-Integration work through Release Control Plane execution groups.
+---
+
+# RCP execution protocol
+
+1. At the start of multi-Feature work, create one execution group with `create_execution_group`. Set `orchestrator_harness` and `tmux_target` when available; add each Integration as a member with its own desired state.
+2. Claim each Integration you work on with `claim_execution`. Keep its returned fence. Send `heartbeat_execution` while working and before the lease expires.
+3. Include `execution_fence` in every `record_progress` and `transition_integration` write. A `STALE_FENCE` means stop writes and restore current state; never retry using an old fence.
+4. After an idle expiry, resume your own execution with a fresh `claim_execution` and use the newly returned fence. Take over another executor's work only after a delivered event identifies lost or stalled work and you have checked current state.
+5. When an Integration reaches its `desired_state`, release it with `release_execution(outcome="completed")`. If blocked or interrupted, report the truthful outcome and reference the blocker or operation. `ready` does not mean released.
+6. On a `[RCP supervisor]` wake message, call `get_execution_group`, inspect every member's `next_action`, and follow it. Never restart a completed member.
+7. At turn end, report the turn with `report_turn_end` when configured. The supervisor hook expects a genuine completed-turn notification; it does not grant permission or prove work finished.
+8. After restarting in a new session, call `set_execution_group_harness` with the current harness/session and tmux target before continuing.
+
+Execution fences protect RCP writes only. They do not stop direct Git writes, authorize source changes outside the user's task, or authorize builds, deployments, merges, or production operations.

@@ -42,7 +42,7 @@ type Binding struct {
 type kit = agentguide.Kit
 
 func installPaths() []string {
-	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md"}
+	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md", ".agents/skills/rcp-execution/SKILL.md", ".claude/skills/rcp-execution/SKILL.md"}
 }
 
 func Run(ctx context.Context, args []string, out io.Writer) error {
@@ -176,10 +176,10 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return binding, errors.New("invalid agent kit JSON")
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "instructions") {
+	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "execution_skill", "instructions") {
 		return binding, errors.New("invalid agent kit fields")
 	}
-	for _, role := range []string{"skill", "delivery_skill"} {
+	for _, role := range []string{"skill", "delivery_skill", "execution_skill"} {
 		var identity map[string]json.RawMessage
 		if json.Unmarshal(fields[role], &identity) != nil || !exactFields(identity, "name", "content", "sha256") {
 			return binding, errors.New("invalid agent skill fields")
@@ -188,7 +188,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	for _, expected := range []struct {
 		skill agentguide.Skill
 		name  string
-	}{{agentKit.Skill, agentguide.SkillName}, {agentKit.DeliverySkill, agentguide.DeliverySkillName}} {
+	}{{agentKit.Skill, agentguide.SkillName}, {agentKit.DeliverySkill, agentguide.DeliverySkillName}, {agentKit.ExecutionSkill, agentguide.ExecutionSkillName}} {
 		digest := sha256.Sum256([]byte(expected.skill.Content))
 		if expected.skill.Name != expected.name || expected.skill.Content == "" || expected.skill.SHA256 != hex.EncodeToString(digest[:]) {
 			return binding, errors.New("agent kit identity or checksum is invalid")
@@ -266,7 +266,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	for _, target := range []struct {
 		index int
 		skill agentguide.Skill
-	}{{1, agentKit.Skill}, {4, agentKit.DeliverySkill}, {5, agentKit.Skill}, {6, agentKit.DeliverySkill}} {
+	}{{1, agentKit.Skill}, {4, agentKit.DeliverySkill}, {5, agentKit.Skill}, {6, agentKit.DeliverySkill}, {7, agentKit.ExecutionSkill}, {8, agentKit.ExecutionSkill}} {
 		plan := &plans[target.index]
 		if plan.exists && !bytes.HasSuffix(plan.before, []byte(skillMarker)) && !bytes.Equal(plan.before, []byte(target.skill.Content)) {
 			return Binding{}, fmt.Errorf("unmanaged %s skill exists; no files changed", target.skill.Name)

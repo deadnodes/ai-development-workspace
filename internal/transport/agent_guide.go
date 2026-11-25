@@ -24,7 +24,12 @@ func registerAgentGuideTools(server *mcp.Server) {
 		}
 		return nil, skill, nil
 	})
-	for _, resource := range []struct{ name, uri string }{{agentguide.SkillName, agentguide.SkillURI}, {agentguide.DeliverySkillName, agentguide.DeliverySkillURI}} {
+	mcp.AddTool(server, &mcp.Tool{Name: "get_tool_guide", Description: "Read the generated agent tool reference index or one exact tool, execute action, or HTTP route guide. Documentation does not grant authority."}, func(_ context.Context, _ *mcp.CallToolRequest, in struct {
+		Name string `json:"name,omitempty"`
+	}) (*mcp.CallToolResult, any, error) {
+		return nil, agentguide.ToolGuide(in.Name), nil
+	})
+	for _, resource := range []struct{ name, uri string }{{agentguide.SkillName, agentguide.SkillURI}, {agentguide.DeliverySkillName, agentguide.DeliverySkillURI}, {agentguide.ExecutionSkillName, agentguide.ExecutionSkillURI}} {
 		skill, _ := agentguide.Lookup(resource.name)
 		meta := mcp.Meta{"sha256": skill.SHA256}
 		server.AddResource(&mcp.Resource{URI: resource.uri, Name: resource.name, Description: "Canonical workflow skill; guidance grants no external authority", MIMEType: "text/markdown", Size: int64(len(skill.Content)), Meta: meta}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
