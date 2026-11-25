@@ -52,11 +52,11 @@ func render() string {
 			b.WriteString("\n**Example:** `" + strings.ReplaceAll(e.Example, "`", "\\`") + "`\n\n**Related:** `" + strings.Join(e.Related, "`, `") + "`\n\n**Authority:** " + e.Authority + "\n\n")
 		}
 	}
-	b.WriteString("## Pending documentation\n\nThe registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.\n\n")
+	b.WriteString("## Pending documentation\n\nAll registered tools and routes have a documented brief.\n\n")
 	for _, p := range agentguide.PendingDocumentation() {
 		b.WriteString("- `" + p + "`\n")
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
 var _ = fmt.Sprintf

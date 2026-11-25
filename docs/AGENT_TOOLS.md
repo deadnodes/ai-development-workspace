@@ -338,6 +338,7 @@ Read supported backup format, limits and restore policy.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Backup/restore capabilities and format bounds.
 
@@ -352,6 +353,57 @@ Read supported backup format, limits and restore policy.
 **Authority:** Read only; does not create, restore or authorize a backup.
 
 ## context read
+
+### `set_project_knowledge` — mcp_tool
+
+Set the current Product overview, agent instructions, areas and typed relationships.
+
+**When:** Use to maintain concise durable project context that applies across Features; keep credentials and executable requests out.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `knowledge` (object, required): Overview, instructions, areas and relationships
+
+**Output:** Updated project knowledge snapshot with audit history.
+
+**Errors:**
+
+- `VALIDATION`: Invalid knowledge structure or relationship; use supported fields and Product-scoped references.
+- `NOT_FOUND`: Product or referenced repository is missing; refresh Product context.
+
+**Example:** `{"product_id":"PRODUCT","knowledge":{"overview":"Payments platform","instructions":"Preserve API compatibility","areas":[],"relationships":[]}}`
+
+**Related:** `upsert_product_knowledge`, `search_product_knowledge`
+
+**Authority:** Records nonsecret context only; does not grant execution or release authority.
+
+### `upsert_product_knowledge` — mcp_tool
+
+Create or revise one stable Product knowledge graph node and its relationships.
+
+**When:** Use for durable facts, decisions, contracts or constraints; reuse the node ID to supersede a prior snapshot.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+- `node` (object, required): Stable ID, kind, title, content and optional keywords/status
+- `edges` (array[object], optional): Typed relationships to existing nodes
+
+**Output:** Persisted node revision and relationship result; prior snapshots remain in history.
+
+**Errors:**
+
+- `VALIDATION`: Node or relationship fields are invalid or out of scope; correct IDs and supported values.
+- `NOT_FOUND`: Product or referenced node is missing; refresh Product knowledge.
+
+**Example:** `{"product_id":"PRODUCT","node":{"id":"api-contract","kind":"contract","title":"API contract","content":"Keep callbacks compatible","keywords":["api"],"status":"active"}}`
+
+**Related:** `set_project_knowledge`, `search_product_knowledge`
+
+**Authority:** Records context only; nodes are not tasks, permissions, or commands and must not contain secrets.
 
 ### `create_external_system` — execute_action
 
@@ -628,6 +680,7 @@ Return embedded workspace instructions and installable agent skills.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Agent kit JSON with instructions and skills.
 
@@ -671,6 +724,7 @@ List configured native build profiles.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Build profile array.
 
@@ -741,6 +795,7 @@ Return the generated TypeScript client SDK source.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** TypeScript source text.
 
@@ -1023,13 +1078,10 @@ Configure how one application component is built and which image repository it u
 - `data` (object, required): Action fields
 - `application_id` (string, required): Application component
 - `connection_id` (string, required): Granted GitHub connection
-- `mode` (string, optional): GITHUB_ACTIONS (default) or NATIVE
 - `workflow` (string, optional): GitHub Actions workflow path; required for GITHUB_ACTIONS
 - `workflow_ref` (string, optional): Optional safe workflow branch/ref
 - `image_repository` (string, required): Configured image repository
-- `profile` (string, optional): Native delivery profile
 - `rebuild_missing` (boolean, optional): Whether a missing artifact may be rebuilt
-- `native` (object, optional): Native build/publication recipe binding
 - `inputs` (object, optional): Nonreserved string workflow inputs
 
 **Output:** Persisted component build configuration.
@@ -1473,7 +1525,7 @@ Queue execution of one selected immutable composition in its configured environm
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"name":"reconcile_composition","arguments":{"id":"COMPOSITION"}}`
+**Example:** `{"name":"reconcile_composition","arguments":{"composition_id":"COMPOSITION"}}`
 
 **Related:** `get_operation`, `get_environment_state`
 
@@ -1945,6 +1997,7 @@ Return controlled status values and allowed lifecycle transitions.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Status catalog and transition table.
 
@@ -2055,9 +2108,9 @@ List Product-scoped execution events with cursor and delivery filters.
 
 ### `report_turn_end` — mcp_tool
 
-Report a harness turn end for supervisor continuation handling.
+Report that a registered Codex or tmux harness turn ended so the service can reconcile its execution group and emit any due supervisor event.
 
-**When:** Call from the harness turn-end hook with stable session and turn identity when available.
+**When:** Call from the harness turn-end hook after the turn finishes; provide the stable session or tmux target identity configured on the execution group.
 
 **Inputs:**
 
@@ -2065,20 +2118,19 @@ Report a harness turn end for supervisor continuation handling.
 - `actor` (string, optional): Attribution
 - `data` (object, required): harness_kind plus session_ref or tmux_target; turn_id and cwd optional
 
-**Output:** Persisted turn-end report and reconciliation status.
+**Output:** Reconciliation result including the matched execution group and any newly recorded event IDs.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: Invalid harness kind, missing harness target, or malformed turn identity; use the registered harness_kind and its matching session_ref/tmux_target.
+- `NOT_FOUND`: No execution group matches this Product and harness identity; verify group registration.
+- `CONFLICT`: The turn report conflicts with current execution-group state; read the group and report the actual completed turn.
 
 **Example:** `{"product_id":"PRODUCT","data":{"harness_kind":"codex","session_ref":"SESSION","turn_id":"TURN"}}`
 
 **Related:** `get_execution_group`, `list_execution_events`
 
-**Authority:** Reporting a turn end does not request arbitrary work or grant execution authority.
+**Authority:** Reports a completed harness turn for reconciliation; it does not request arbitrary work or grant execution authority.
 
 ### `claim_execution_event_delivery` — mcp_tool
 
@@ -2089,18 +2141,17 @@ Claim a due supervisor event before waking its registered target.
 **Inputs:**
 
 - `product_id` (string, required): Product ID
-- `data` (object, required): event_id and supervisor identity
+- `data` (object, required): event_id and supervisor_id
 
 **Output:** Delivery claim with delivery_id and wake target.
 
 **Errors:**
 
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+- `VALIDATION`: Event must be due, unresolved and routed to the stated supervisor_id; retry after due_at or refresh event state.
+- `NOT_FOUND`: Event or supervisor member was not found in this Product; refresh execution events and group membership.
+- `CONFLICT`: Event delivery was already claimed; use the existing delivery receipt instead of claiming again.
 
-**Example:** `{"product_id":"PRODUCT","data":{"event_id":"EVENT","supervisor":"worker-1"}}`
+**Example:** `{"product_id":"PRODUCT","data":{"event_id":"EVENT","supervisor_id":"worker-1"}}`
 
 **Related:** `list_execution_events`, `ack_execution_event`
 
@@ -2228,7 +2279,9 @@ List Product execution events with cursor and event filters.
 
 **Authority:** Read only.
 
-### `create_execution_group` — execute_action
+### `create_execution_group` — mcp_tool
+
+**Same operation:** `execute_action:create_execution_group`
 
 Create an orchestrator-owned group for coordinating multiple Integration members.
 
@@ -2238,9 +2291,8 @@ Create an orchestrator-owned group for coordinating multiple Integration members
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `orchestrator_harness` (object, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `name` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `orchestrator_harness` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `name` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Created execution group with group_id and initial state.
@@ -2252,13 +2304,15 @@ Create an orchestrator-owned group for coordinating multiple Integration members
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"create_execution_group","actor":"agent/orchestrator","product_id":"PRODUCT","data":{"name":"release","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}}}`
+**Example:** `{"actor":"agent/orchestrator","data":{"name":"release","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}},"product_id":"PRODUCT"}`
 
 **Related:** `add_execution_group_member`, `set_execution_group_harness`, `get_execution_group`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `add_execution_group_member` — execute_action
+### `add_execution_group_member` — mcp_tool
+
+**Same operation:** `execute_action:add_execution_group_member`
 
 Add an Integration to an execution group with its desired completion state.
 
@@ -2268,10 +2322,9 @@ Add an Integration to an execution group with its desired completion state.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `desired_state` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `desired_state` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Updated group member and desired state.
@@ -2283,13 +2336,15 @@ Add an Integration to an execution group with its desired completion state.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"add_execution_group_member","actor":"agent/orchestrator","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"group_id":"GROUP","desired_state":"complete"}}`
+**Example:** `{"actor":"agent/orchestrator","data":{"desired_state":"complete","group_id":"GROUP"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `create_execution_group`, `claim_execution`, `get_execution_group`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `remove_execution_group_member` — execute_action
+### `remove_execution_group_member` — mcp_tool
+
+**Same operation:** `execute_action:remove_execution_group_member`
 
 Remove a member from an execution group.
 
@@ -2299,9 +2354,8 @@ Remove a member from an execution group.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Updated execution group.
@@ -2313,13 +2367,15 @@ Remove a member from an execution group.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"remove_execution_group_member","actor":"agent/orchestrator","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"group_id":"GROUP"}}`
+**Example:** `{"actor":"agent/orchestrator","data":{"group_id":"GROUP"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `get_execution_group`, `add_execution_group_member`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `set_execution_group_harness` — execute_action
+### `set_execution_group_harness` — mcp_tool
+
+**Same operation:** `execute_action:set_execution_group_harness`
 
 Register or replace the orchestrator harness target for a group.
 
@@ -2329,10 +2385,9 @@ Register or replace the orchestrator harness target for a group.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `orchestrator_harness` (object, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `orchestrator_harness` (object, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `orchestrator_harness` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Updated harness registration.
 
@@ -2343,13 +2398,15 @@ Register or replace the orchestrator harness target for a group.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"set_execution_group_harness","actor":"agent/orchestrator","product_id":"PRODUCT","data":{"group_id":"GROUP","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}}}`
+**Example:** `{"actor":"agent/orchestrator","data":{"group_id":"GROUP","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}},"product_id":"PRODUCT"}`
 
 **Related:** `create_execution_group`, `get_execution_group`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `claim_execution` — execute_action
+### `claim_execution` — mcp_tool
+
+**Same operation:** `execute_action:claim_execution`
 
 Claim an Integration execution and obtain its current fencing token.
 
@@ -2359,10 +2416,9 @@ Claim an Integration execution and obtain its current fencing token.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `execution_group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `execution_group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Execution claim including execution_fence and lease state.
@@ -2374,13 +2430,15 @@ Claim an Integration execution and obtain its current fencing token.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"claim_execution","actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"executor":"agent/worker","execution_group_id":"GROUP"}}`
+**Example:** `{"actor":"agent/worker","data":{"execution_group_id":"GROUP","executor":"agent/worker"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `heartbeat_execution`, `record_progress`, `transition_integration`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `heartbeat_execution` — execute_action
+### `heartbeat_execution` — mcp_tool
+
+**Same operation:** `execute_action:heartbeat_execution`
 
 Renew the current executor's active execution lease using its fence.
 
@@ -2390,10 +2448,10 @@ Renew the current executor's active execution lease using its fence.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `execution_fence` (integer, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `execution_fence` (integer, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `execution_fence` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Updated lease and execution state.
 
@@ -2404,13 +2462,15 @@ Renew the current executor's active execution lease using its fence.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"heartbeat_execution","actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"execution_fence":1}}`
+**Example:** `{"actor":"agent/worker","data":{"execution_fence":1,"executor":"agent/worker"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `claim_execution`, `takeover_execution`, `release_execution`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `takeover_execution` — execute_action
+### `takeover_execution` — mcp_tool
+
+**Same operation:** `execute_action:takeover_execution`
 
 Take over another executor's lost or stalled execution after the delivered event supports takeover.
 
@@ -2420,9 +2480,8 @@ Take over another executor's lost or stalled execution after the delivered event
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** New claim and incremented execution fence.
@@ -2434,13 +2493,15 @@ Take over another executor's lost or stalled execution after the delivered event
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"takeover_execution","actor":"agent/recovery","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"executor":"agent/recovery"}}`
+**Example:** `{"actor":"agent/recovery","data":{"executor":"agent/recovery"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `get_execution_group`, `heartbeat_execution`, `claim_execution`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `report_execution` — execute_action
+### `report_execution` — mcp_tool
+
+**Same operation:** `execute_action:report_execution`
 
 Record waiting, blocked, paused, or active execution status and its next action.
 
@@ -2450,10 +2511,12 @@ Record waiting, blocked, paused, or active execution status and its next action.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `execution_fence` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `outcome` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `status` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `next_action` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `next_action` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Persisted execution status event.
@@ -2465,13 +2528,15 @@ Record waiting, blocked, paused, or active execution status and its next action.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"report_execution","actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"status":"waiting","next_action":"wait for review"}}`
+**Example:** `{"actor":"agent/worker","data":{"execution_fence":1,"executor":"agent/worker","next_action":"wait for review","outcome":"blocked","status":"waiting"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `get_execution_group`, `release_execution`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `release_execution` — execute_action
+### `release_execution` — mcp_tool
+
+**Same operation:** `execute_action:release_execution`
 
 Release the active execution lease with its outcome.
 
@@ -2481,9 +2546,10 @@ Release the active execution lease with its outcome.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `outcome` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `execution_fence` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `outcome` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Persisted release event and execution state.
@@ -2495,13 +2561,15 @@ Release the active execution lease with its outcome.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"release_execution","actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"outcome":"completed"}}`
+**Example:** `{"actor":"agent/worker","data":{"execution_fence":1,"executor":"agent/worker","outcome":"completed"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `heartbeat_execution`, `get_execution_group`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `set_desired_state` — execute_action
+### `set_desired_state` — mcp_tool
+
+**Same operation:** `execute_action:set_desired_state`
 
 Set the target lifecycle state for an Integration execution.
 
@@ -2511,9 +2579,8 @@ Set the target lifecycle state for an Integration execution.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `desired_state` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 - `desired_state` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Updated desired state.
@@ -2525,13 +2592,15 @@ Set the target lifecycle state for an Integration execution.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"set_desired_state","actor":"agent/orchestrator","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"desired_state":"complete"}}`
+**Example:** `{"actor":"agent/orchestrator","data":{"desired_state":"complete"},"integration_id":"INTEGRATION","product_id":"PRODUCT"}`
 
 **Related:** `add_execution_group_member`, `complete_integration`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
-### `set_product_stalled_timeout` — execute_action
+### `set_product_stalled_timeout` — mcp_tool
+
+**Same operation:** `execute_action:set_product_stalled_timeout`
 
 Configure the Product's stalled-execution timeout.
 
@@ -2541,9 +2610,8 @@ Configure the Product's stalled-execution timeout.
 
 - `actor` (string, optional): Attribution; not authentication
 - `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `timeout_seconds` (integer, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `timeout_seconds` (integer, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `timeout_seconds` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
 
 **Output:** Updated timeout setting.
 
@@ -2554,328 +2622,7 @@ Configure the Product's stalled-execution timeout.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"set_product_stalled_timeout","actor":"operator","product_id":"PRODUCT","data":{"timeout_seconds":3600}}`
-
-**Related:** `get_execution_group`, `list_executions`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `create_execution_group` — mcp_tool
-
-Named MCP wrapper for the create_execution_group execution command. Create an orchestrator-owned group for coordinating multiple Integration members.
-
-**When:** Start multi-feature work when one orchestrator coordinates member executions.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `orchestrator_harness` (object, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `name` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Created execution group with group_id and initial state.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/orchestrator","product_id":"PRODUCT","data":{"name":"release","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}}}`
-
-**Related:** `add_execution_group_member`, `set_execution_group_harness`, `get_execution_group`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `add_execution_group_member` — mcp_tool
-
-Named MCP wrapper for the add_execution_group_member execution command. Add an Integration to an execution group with its desired completion state.
-
-**When:** Use once per member selected for the coordinated work.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `desired_state` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Updated group member and desired state.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/orchestrator","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"group_id":"GROUP","desired_state":"complete"}}`
-
-**Related:** `create_execution_group`, `claim_execution`, `get_execution_group`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `remove_execution_group_member` — mcp_tool
-
-Named MCP wrapper for the remove_execution_group_member execution command. Remove a member from an execution group.
-
-**When:** Use when the group scope changes before the member is complete.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Updated execution group.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/orchestrator","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"group_id":"GROUP"}}`
-
-**Related:** `get_execution_group`, `add_execution_group_member`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `set_execution_group_harness` — mcp_tool
-
-Named MCP wrapper for the set_execution_group_harness execution command. Register or replace the orchestrator harness target for a group.
-
-**When:** Set at group creation or after the orchestrator restarts in a new session.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `orchestrator_harness` (object, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Updated harness registration.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/orchestrator","product_id":"PRODUCT","data":{"group_id":"GROUP","orchestrator_harness":{"kind":"tmux","target":"session:window.pane"}}}`
-
-**Related:** `create_execution_group`, `get_execution_group`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `claim_execution` — mcp_tool
-
-Named MCP wrapper for the claim_execution execution command. Claim an Integration execution and obtain its current fencing token.
-
-**When:** Claim before doing member work; retain the returned fence for fenced writes.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `execution_group_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Execution claim including execution_fence and lease state.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"executor":"agent/worker","execution_group_id":"GROUP"}}`
-
-**Related:** `heartbeat_execution`, `record_progress`, `transition_integration`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `heartbeat_execution` — mcp_tool
-
-Named MCP wrapper for the heartbeat_execution execution command. Renew the current executor's active execution lease using its fence.
-
-**When:** Call while actively working and before the lease expires.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `execution_fence` (integer, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Updated lease and execution state.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"execution_fence":1}}`
-
-**Related:** `claim_execution`, `takeover_execution`, `release_execution`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `takeover_execution` — mcp_tool
-
-Named MCP wrapper for the takeover_execution execution command. Take over another executor's lost or stalled execution after the delivered event supports takeover.
-
-**When:** Use only after checking current execution/group state and the relevant delivered event.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `executor` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** New claim and incremented execution fence.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/recovery","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"executor":"agent/recovery"}}`
-
-**Related:** `get_execution_group`, `heartbeat_execution`, `claim_execution`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `report_execution` — mcp_tool
-
-Named MCP wrapper for the report_execution execution command. Record waiting, blocked, paused, or active execution status and its next action.
-
-**When:** Use to explain a nonterminal state to the orchestrator and supervisor.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `status` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-- `next_action` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Persisted execution status event.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"status":"waiting","next_action":"wait for review"}}`
-
-**Related:** `get_execution_group`, `release_execution`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `release_execution` — mcp_tool
-
-Named MCP wrapper for the release_execution execution command. Release the active execution lease with its outcome.
-
-**When:** Release when stopping; use completed only after the member reaches desired_state.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `outcome` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Persisted release event and execution state.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/worker","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"outcome":"completed"}}`
-
-**Related:** `heartbeat_execution`, `get_execution_group`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `set_desired_state` — mcp_tool
-
-Named MCP wrapper for the set_desired_state execution command. Set the target lifecycle state for an Integration execution.
-
-**When:** Set the completion target before coordinating member execution.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `integration_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `desired_state` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Updated desired state.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"agent/orchestrator","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"desired_state":"complete"}}`
-
-**Related:** `add_execution_group_member`, `complete_integration`
-
-**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
-
-### `set_product_stalled_timeout` — mcp_tool
-
-Named MCP wrapper for the set_product_stalled_timeout execution command. Configure the Product's stalled-execution timeout.
-
-**When:** Use only when the operator has selected a Product-specific timeout policy.
-
-**Inputs:**
-
-- `actor` (string, optional): Attribution; not authentication
-- `data` (object, required): Action-specific values; see GET /api/schema
-- `product_id` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
-- `timeout_seconds` (integer, optional): Action-specific value; exact constraints are enforced by GET /api/schema
-
-**Output:** Updated timeout setting.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"actor":"operator","product_id":"PRODUCT","data":{"timeout_seconds":3600}}`
+**Example:** `{"actor":"operator","data":{"timeout_seconds":3600},"product_id":"PRODUCT"}`
 
 **Related:** `get_execution_group`, `list_executions`
 
@@ -3225,6 +2972,87 @@ Queue a bounded model task for an allowed summary, annotation, release note or c
 
 ## operations
 
+### `cancel_intelligence_task` — execute_action
+
+Cancel a queued or running intelligence task operation.
+
+**When:** Use when the requested model-assisted task should stop; inspect the operation first and retain its evidence.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated operation/task cancellation state.
+
+**Errors:**
+
+- `NOT_FOUND`: Operation or Product was not found; verify IDs.
+- `CONFLICT`: Operation is no longer cancellable; inspect its terminal state.
+
+**Example:** `{"action":"cancel_intelligence_task","product_id":"PRODUCT","id":"OPERATION","data":{}}`
+
+**Related:** `get_operation`, `request_intelligence_task`
+
+**Authority:** Stops eligible Control Plane task work; does not undo external effects already performed.
+
+### `cancel_native_delivery` — execute_action
+
+Cancel eligible queued native delivery work for a Product.
+
+**When:** Use when a queued native build/publication should not proceed; inspect its operation state first.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated delivery operation cancellation state.
+
+**Errors:**
+
+- `NOT_FOUND`: Operation or Product was not found; verify IDs.
+- `CONFLICT`: Operation is already running or terminal and cannot be cancelled; inspect child evidence.
+
+**Example:** `{"action":"cancel_native_delivery","product_id":"PRODUCT","id":"OPERATION","data":{}}`
+
+**Related:** `get_operation`, `configure_component`
+
+**Authority:** Cancels eligible queued work only; does not roll back provider or registry effects.
+
+### `cancel_worker_job` — execute_action
+
+Cancel a queued native worker check job.
+
+**When:** Use when a queued check job is no longer needed; inspect job and attempt history before cancellation.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Updated worker job state and cancellation evidence.
+
+**Errors:**
+
+- `NOT_FOUND`: Worker job or Product was not found; verify IDs.
+- `CONFLICT`: Job has started or reached a terminal state and cannot be cancelled; inspect its attempts.
+
+**Example:** `{"action":"cancel_worker_job","product_id":"PRODUCT","id":"JOB","data":{}}`
+
+**Related:** `get_worker_history`, `get_operation`
+
+**Authority:** Cancels eligible queued Control Plane work; does not terminate arbitrary processes or undo completed checks.
+
 ### `get_attention_required` — mcp_tool
 
 **Same operation:** `http_route:GET /api/attention`
@@ -3548,7 +3376,7 @@ Request fresh server-owned proof that original candidate Dev images are availabl
 
 - `VALIDATION`: Errors include stale selection, wrong restoration owner/operation, incomplete confirmation or incomplete component scope; reconcile the same operation and satisfy all original-component checks.
 
-**Example:** `{"action":"verify_candidate_dev_restoration","product_id":"P","data":{"restoration_operation_id":"RESTORE","request_key":"verify-restore-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":3}}}`
+**Example:** `{"action":"verify_candidate_dev_restoration","actor":"operator","product_id":"P","data":{"restoration_operation_id":"RESTORE","request_key":"verify-restore-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":3}}}`
 
 **Related:** `request_candidate_dev_restoration`, `get_operation`
 
@@ -3669,6 +3497,7 @@ Return the JSON Schema for execute commands.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Command schema with per-action payload constraints.
 
@@ -3690,6 +3519,7 @@ Return the complete persisted state snapshot.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Serialized State including records and history.
 
@@ -3711,6 +3541,7 @@ Return domain status catalogs.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Status catalog by domain entity.
 
@@ -3732,6 +3563,7 @@ Return tool and execution schema metadata.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Tool descriptions and input schemas.
 
@@ -3753,6 +3585,7 @@ Return the UI-oriented state projection.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** UI projection of current state.
 
@@ -3874,6 +3707,7 @@ Report HTTP service liveness.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** {"status":"ok"}
 
@@ -3895,6 +3729,7 @@ Export a complete instance backup as gzip.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Binary gzip attachment and X-Backup-SHA256 response header.
 
@@ -3942,6 +3777,7 @@ Queue a component build request.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Build record and operation status.
 
@@ -4060,6 +3896,7 @@ Request deployment of an Integration to an Environment.
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Deployment record and operation handle.
 
@@ -4965,6 +4802,29 @@ Verify passing evidence for every affected Integration and blocking check on the
 
 ## work tracking
 
+### `resume` — mcp_tool
+
+Read the bounded summary and recent memory excerpts for a Feature.
+
+**When:** Use when taking over work; follow the handoff and inspect linked Integration context before changing anything.
+
+**Inputs:**
+
+- `feature_id` (string, required): Feature to resume
+
+**Output:** Feature summary and recent memory excerpts, limited to 32 KiB.
+
+**Errors:**
+
+- `NOT_FOUND`: Feature ID does not exist; discover current IDs with get_state.
+- `UNAVAILABLE`: A bounded summary reader is unavailable; ask the operator to inspect the service.
+
+**Example:** `{"feature_id":"FEATURE"}`
+
+**Related:** `get_state`, `get_integration_context`, `get_tool_guide`
+
+**Authority:** Read-only context; does not prove readiness or authorize source changes.
+
 ### `create_hotfix` — execute_action
 
 **Same operation:** `mcp_tool:create_hotfix`, `http_route:POST /api/features/{id}/hotfix`
@@ -5491,7 +5351,7 @@ Request a lifecycle transition for an Integration.
 - `CONFLICT`: Re-read current state; do not replay with changed intent.
 - `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
 
-**Example:** `{"action":"transition_integration","actor":"agent/backend","integration_id":"INTEGRATION","data":{"status":"active","execution_fence":1}}`
+**Example:** `{"action":"transition_integration","actor":"agent/backend","integration_id":"INTEGRATION","data":{"status":"planned","execution_fence":1}}`
 
 **Related:** `start_integration`, `complete_integration`
 
@@ -5967,6 +5827,7 @@ Read the bundled workspace instructions and handoff/delivery skills with checksu
 
 **Inputs:**
 
+- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
 
 **Output:** Instructions and named skill content/checksums.
 
@@ -6204,11 +6065,4 @@ Scan the server-configured workspace root and record discovered checkout/reposit
 
 ## Pending documentation
 
-The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
-
-- `mcp_tool:resume`
-- `mcp_tool:set_project_knowledge`
-- `mcp_tool:upsert_product_knowledge`
-- `execute_action:cancel_intelligence_task`
-- `execute_action:cancel_native_delivery`
-- `execute_action:cancel_worker_job`
+All registered tools and routes have a documented brief.
