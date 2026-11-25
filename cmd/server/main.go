@@ -43,6 +43,8 @@ func run() error {
 			return agentconnect.RunLogin(context.Background(), os.Args[2:], os.Stdout)
 		case "mcp":
 			return agentconnect.RunMCP(context.Background(), os.Args[2:], os.Stdin, os.Stdout)
+		case "token":
+			return agentconnect.RunToken(os.Args[2:], os.Stdout)
 		}
 	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {

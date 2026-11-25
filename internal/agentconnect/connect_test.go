@@ -83,8 +83,8 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, ".codex/config.toml", "# My settings\nmodel = \"example\"\n[mcp_servers.other]\nurl = \"https://other.test/mcp\"\n")
 	writeFile(t, root, "AGENTS.md", "# Existing project instructions\nKeep these exactly.\n")
-	writeFile(t, root, ".claude/settings.json", "{\"existing\":true}\n")
-	writeFile(t, root, ".mcp.json", "{\"existing\":true}\n")
+	writeFile(t, root, ".claude/settings.json", `{"existing":true,"hooks":{"Stop":[{"matcher":"existing","hooks":[{"type":"command","command":"echo keep"}]}]}}`)
+	writeFile(t, root, ".mcp.json", `{"existing":true,"mcpServers":{"other":{"type":"stdio","command":"other"}}}`)
 	t.Setenv("RCP_CONNECT_TEST_TOKEN", "secret-not-written")
 	server := kitServer(t, 1, "secret-not-written")
 	options := Options{URL: server.URL, Workspace: root, TokenEnv: "RCP_CONNECT_TEST_TOKEN"}
@@ -124,10 +124,26 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 	if info.Mode().Perm() != 0640 {
 		t.Fatal("existing file mode changed")
 	}
-	for _, path := range []string{".claude/settings.json", ".mcp.json"} {
-		if string(readFile(t, root, path)) != "{\"existing\":true}\n" {
-			t.Fatal("unrelated Claude/MCP config changed", path)
-		}
+	var mcpConfig, claudeSettings map[string]any
+	if json.Unmarshal(readFile(t, root, ".mcp.json"), &mcpConfig) != nil || mcpConfig["existing"] != true || mcpConfig["mcpServers"].(map[string]any)["other"] == nil || mcpConfig["mcpServers"].(map[string]any)["release-control"] == nil {
+		t.Fatal("Claude MCP merge lost existing config or server")
+	}
+	if json.Unmarshal(readFile(t, root, ".claude/settings.json"), &claudeSettings) != nil || claudeSettings["existing"] != true || len(claudeSettings["hooks"].(map[string]any)["Stop"].([]any)) != 2 {
+		t.Fatal("Claude Stop hook merge lost existing settings")
+	}
+}
+
+func TestCodexNotifyOptionMergesProjectConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := kitServer(t, 1, "")
+	root := t.TempDir()
+	writeFile(t, root, ".codex/config.toml", "model = \"keep\"\n")
+	if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root, ProductID: "p0", CodexNotify: true, Harness: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	data := string(readFile(t, root, ".codex/config.toml"))
+	if !(strings.Contains(data, `model = "keep"`) || strings.Contains(data, `model = 'keep'`)) || !strings.Contains(data, `notify = [`) || !strings.Contains(data, `mcp_servers`) {
+		t.Fatal("Codex notify merge lost existing keys or MCP config", data)
 	}
 }
 func TestConnectRejectsConflictsWithoutWriting(t *testing.T) {
@@ -261,7 +277,7 @@ func TestRunHelpAndCLI(t *testing.T) {
 	if err := Run(context.Background(), []string{"--url", server.URL, "--workspace", t.TempDir()}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "new chat") {
+	if !strings.Contains(out.String(), "notify = [") {
 		t.Fatal("reload requirement omitted")
 	}
 }
