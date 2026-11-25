@@ -77,6 +77,7 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	if e = copy.Validate(); e != nil {
 		return e
 	}
+	s.executionDefaults = &copy
 	if p == nil || r == nil {
 		return invalid("build adapters required")
 	}
@@ -87,9 +88,16 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	// invalidate existing build and deployment authority hashes.
 	hashConfig.StaleOperationSeconds = 0
 	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
-		buildconfig.Config
-		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
-	}{Config: hashConfig, Rollout: rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
+		GitOps             []buildconfig.GitOps       `json:"gitops,omitempty"`
+		Environments       []buildconfig.Environment  `json:"environments,omitempty"`
+		Connections        []buildconfig.Connection   `json:"connections"`
+		Registries         []buildconfig.Registry     `json:"registries"`
+		Pools              []buildconfig.Pool         `json:"pools"`
+		Profiles           []buildconfig.Profile      `json:"profiles"`
+		TimeoutSeconds     int                        `json:"timeout_seconds,omitempty"`
+		RunLookbackSeconds int                        `json:"run_lookback_seconds,omitempty"`
+		Rollout            *buildconfig.RolloutConfig `json:"rollout,omitempty"`
+	}{copy.GitOps, copy.Environments, copy.Connections, copy.Registries, copy.Pools, copy.Profiles, copy.TimeoutSeconds, copy.RunLookbackSeconds, rolloutAuthority(copy.Profiles, copy.Rollout)}), buildHashes: map[string]string{}, deploymentHashes: map[string]string{}, config: &copy, provider: p, registry: r}
 	// Build scope: every Profile field except Deployments, RequiredStatusContexts, CIGate, AutoDeployDev
 	// and RequireSecurityGate (enabling the gate must not orphan builds made before it);
 	// Connection ID, Kind, APIURL, Owner, TokenRef; Pool ID and MaxInFlight; Registry ID, Origin,

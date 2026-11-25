@@ -14,6 +14,8 @@ import (
 // All semantic reads and mutations share the application layer with execute.
 func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
+		"GET /api/execution-groups/{id}":              "get_execution_group",
+		"GET /api/products/{id}/executions":           "list_executions",
 		"GET /api/features/{id}/graph":                "get_feature_graph",
 		"GET /api/products/{id}/retention":            "get_artifact_retention",
 		"GET /api/products/{id}/configuration":        "get_product_configuration",
@@ -109,6 +111,21 @@ func (in deployExistingInput) command() domain.Command {
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
+	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout"} {
+		registerExecutionCommandTool(server, service, action)
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "get_execution_group", Description: "Restore all execution group members and their current Integration and execution state."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		GroupID string `json:"group_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "get_execution_group", in.GroupID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "list_executions", Description: "List Product scoped Integration executions."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID string `json:"product_id"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Query(ctx, "list_executions", in.ProductID)
+		return nil, v, e
+	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_intelligence_task", Description: "Read a scoped generated draft or bounded conflict patch with provenance, stale-input state and mandatory review. Does not publish, merge or deploy."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		TaskID string `json:"task_id"`
 	}) (*mcp.CallToolResult, any, error) {
@@ -190,6 +207,19 @@ func registerProviderTools(server *mcp.Server, service Service) {
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "deploy_integration", Description: "Request a real DEV deployment operation for exact source. May dispatch CI and modify configured DEV GitOps files. Requires explicit environment deployment policy. Returns an operation to poll; success is not inferred from submission."}, func(ctx context.Context, _ *mcp.CallToolRequest, in deployInput) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, in.command())
+		return nil, v, e
+	})
+}
+
+func registerExecutionCommandTool(server *mcp.Server, service Service, action string) {
+	description := "Record an execution lifecycle command using the shared application policy. Fence and lease times are server managed."
+	mcp.AddTool(server, &mcp.Tool{Name: action, Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		Actor         string         `json:"actor,omitempty"`
+		ProductID     string         `json:"product_id,omitempty"`
+		IntegrationID string         `json:"integration_id,omitempty"`
+		Data          map[string]any `json:"data"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Execute(ctx, domain.Command{Action: action, Actor: defaultActor(in.Actor), ProductID: in.ProductID, IntegrationID: in.IntegrationID, Data: in.Data})
 		return nil, v, e
 	})
 }

@@ -1,6 +1,6 @@
 # Agent execution and continuation contract
 
-Status: Stage 0 design, 2026-11-25. This document proposes a control loop for
+Status: Stage 1 implementation in progress, 2026-11-25. The first implementation adds typed execution/group state and a reconciliation entry point; stage 1 acceptance and full transport/configuration coverage remain in progress. This document specifies a control loop for
 external coding-agent orchestrators. RCP records intent and authority, detects
 conditions requiring continuation, and exposes durable wake events. A separate
 supervisor delivers a prompt to an already registered harness session. RCP never
@@ -304,6 +304,10 @@ and isolated test schema; verify all listed commands from AGENTS.md for the
 implementation stage. Done: above proof is captured and linked to the Product
 acceptance record; Desktop/Remote remain explicitly incomplete until a working
 bridge is tested.
+
+## Stage 1 implementation notes
+
+Current implementation uses the ordinary typed State collections so embedded and PostgreSQL stores persist executions and groups through their existing schema-derived record codec. Execution condition changes increment reconciliation.generation and append an audit Event, providing the stage 2 hook without adding the event/outbox model in this stage. Takeover stage 1 accepts a required state_check_reference string; stage 2 will bind it to durable event evidence.
 
 ## Open questions
 

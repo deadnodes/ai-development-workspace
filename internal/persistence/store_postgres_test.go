@@ -127,3 +127,58 @@ func TestPostgresHistoricalUpdatePreservesRecordsAndTransactions(t *testing.T) {
 		t.Fatal("product deletion changed retained product/audit policy", err)
 	}
 }
+
+func TestPostgresExecutionRecordsSurviveReopen(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || !strings.HasSuffix(strings.TrimPrefix(parsed.Path, "/"), "_tests") {
+		t.Fatal("TEST_DATABASE_URL must be a dedicated *_tests database URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	schema := fmt.Sprintf("execution_test_%d", time.Now().UnixNano())
+	if _, err = pool.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(context.Background(), "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE")
+	q := parsed.Query()
+	q.Set("search_path", schema)
+	parsed.RawQuery = q.Encode()
+	isolated := parsed.String()
+	store, err := Open(ctx, isolated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Update(ctx, func(st *domain.State) error {
+		now := time.Now().UTC()
+		st.Products = []domain.Product{{Meta: domain.Meta{ID: "p"}, Name: "Product"}}
+		st.Integrations = []domain.Integration{{Meta: domain.Meta{ID: "i", ProductID: "p"}, Title: "Integration", Status: "planned"}}
+		st.IntegrationExecutions = []domain.IntegrationExecution{{ID: "execution-i", IntegrationID: "i", ProductID: "p", DesiredState: "ready", State: "lost", Fence: 4, Reconciliation: domain.ExecutionReconciliation{Enabled: true, ActionRequired: true, Generation: 3}}}
+		st.ExecutionGroups = []domain.ExecutionGroup{{ID: "g", ProductID: "p", Name: "group", MemberIntegrationIDs: []string{"i"}, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: []string{"i"}, CreatedAt: now}}, CreatedAt: now}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(ctx, isolated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.IntegrationExecutions) != 1 || got.IntegrationExecutions[0].Fence != 4 || got.IntegrationExecutions[0].Reconciliation.Generation != 3 || len(got.ExecutionGroups) != 1 {
+		t.Fatalf("execution state was not restored: %+v", got.IntegrationExecutions)
+	}
+}

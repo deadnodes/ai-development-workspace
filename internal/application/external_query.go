@@ -31,6 +31,61 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 	request.runtimeFreshnessSnapshot = freshness
 	s = &request
 	switch name {
+	case "get_execution_group":
+		for _, g := range st.ExecutionGroups {
+			if g.ID == id {
+				if g.ProductID == "" {
+					return nil, invalid("SCOPE_MISMATCH")
+				}
+				members := []map[string]any{}
+				for _, iid := range g.MemberIntegrationIDs {
+					in := integration(&st, iid)
+					if in == nil {
+						continue
+					}
+					var ex *domain.IntegrationExecution
+					for j := range st.IntegrationExecutions {
+						if st.IntegrationExecutions[j].IntegrationID == iid {
+							ex = &st.IntegrationExecutions[j]
+						}
+					}
+					next := "continue execution"
+					if ex == nil {
+						next = "claim execution"
+					} else if ex.Reconciliation.ActionRequired {
+						next = "inspect execution and continue"
+					} else if ex.State == "completed" || ex.State == "paused" || ex.State == "cancelled" {
+						next = "no action"
+					} else if ex.State == "waiting_external" || ex.State == "blocked" {
+						next = "wait for external condition"
+					}
+					members = append(members, map[string]any{"integration": in, "execution": ex, "desired_state": func() string {
+						if ex != nil {
+							return ex.DesiredState
+						}
+						return ""
+					}(), "action_required": ex != nil && ex.Reconciliation.ActionRequired, "reason": func() string {
+						if ex != nil {
+							return ex.Reconciliation.Reason
+						}
+						return ""
+					}(), "next_action": next})
+				}
+				return map[string]any{"group": g, "members": members}, nil
+			}
+		}
+		return nil, missing("execution_group", id)
+	case "list_executions":
+		if !productExists(&st, id) {
+			return nil, missing("product", id)
+		}
+		items := []domain.IntegrationExecution{}
+		for _, ex := range st.IntegrationExecutions {
+			if ex.ProductID == id {
+				items = append(items, ex)
+			}
+		}
+		return items, nil
 	case "get_intelligence_task":
 		return s.intelligenceQuery(&st, id)
 	case "get_feature_graph":
@@ -310,6 +365,11 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items = append(items, secretWarnings...)
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
+		for _, ex := range st.IntegrationExecutions {
+			if ex.ProductID == id && ex.Reconciliation.Enabled && ex.Reconciliation.ActionRequired {
+				items = append(items, map[string]any{"id": "execution:" + ex.IntegrationID, "integration_id": ex.IntegrationID, "reason": ex.Reconciliation.Reason, "state": ex.State, "generation": ex.Reconciliation.Generation})
+			}
+		}
 		if s.builds != nil {
 			items = append(items, deploymentReconciliationAttention(st, id, time.Now().UTC(), time.Duration(s.builds.config.StaleTimeoutSeconds())*time.Second)...)
 		}

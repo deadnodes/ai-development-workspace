@@ -12,8 +12,9 @@ type Meta struct {
 }
 type Product struct {
 	Meta
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	StalledTimeoutSeconds *int   `json:"stalled_timeout_seconds,omitempty"`
 }
 type Feature struct {
 	Meta
@@ -60,6 +61,56 @@ type Integration struct {
 	Remaining          []string      `json:"remaining"`
 	WorkingAreas       []string      `json:"working_areas"`
 	Position           int           `json:"position"`
+}
+
+type ExecutionHarness struct {
+	Kind       string `json:"kind"`
+	SessionRef string `json:"session_ref"`
+	CWD        string `json:"cwd"`
+	Host       string `json:"host"`
+}
+type ExecutionReconciliation struct {
+	Enabled        bool       `json:"enabled"`
+	ActionRequired bool       `json:"action_required"`
+	Reason         string     `json:"reason,omitempty"`
+	Since          *time.Time `json:"since,omitempty"`
+	Generation     uint64     `json:"generation"`
+}
+type IntegrationExecution struct {
+	ID                    string                  `json:"id"`
+	IntegrationID         string                  `json:"integration_id"`
+	ProductID             string                  `json:"product_id"`
+	DesiredState          string                  `json:"desired_state"`
+	State                 string                  `json:"state"`
+	OrchestratorID        string                  `json:"orchestrator_id,omitempty"`
+	AgentID               string                  `json:"agent_id,omitempty"`
+	Harness               ExecutionHarness        `json:"harness"`
+	Fence                 uint64                  `json:"fence"`
+	LeaseTTLSeconds       int                     `json:"lease_ttl_seconds"`
+	LeaseUntil            *time.Time              `json:"lease_until,omitempty"`
+	LastHeartbeat         *time.Time              `json:"last_heartbeat,omitempty"`
+	LastProgress          *time.Time              `json:"last_progress,omitempty"`
+	ClaimedAt             *time.Time              `json:"claimed_at,omitempty"`
+	ExitReason            string                  `json:"exit_reason,omitempty"`
+	WaitingRef            string                  `json:"waiting_ref,omitempty"`
+	BlockerRef            string                  `json:"blocker_ref,omitempty"`
+	StalledTimeoutSeconds *int                    `json:"stalled_timeout_seconds,omitempty"`
+	Reconciliation        ExecutionReconciliation `json:"reconciliation"`
+}
+type ExecutionGroupRevision struct {
+	Revision             uint64    `json:"revision"`
+	MemberIntegrationIDs []string  `json:"member_integration_ids"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+type ExecutionGroup struct {
+	ID                   string                   `json:"id"`
+	ProductID            string                   `json:"product_id"`
+	Name                 string                   `json:"name"`
+	OrchestratorID       string                   `json:"orchestrator_id"`
+	MemberIntegrationIDs []string                 `json:"member_integration_ids"`
+	Revisions            []ExecutionGroupRevision `json:"revisions"`
+	CreatedAt            time.Time                `json:"created_at"`
+	ClosedAt             *time.Time               `json:"closed_at,omitempty"`
 }
 type Memory struct {
 	Meta
@@ -216,6 +267,8 @@ type Event struct {
 	Data      Command   `json:"data"`
 }
 type State struct {
+	IntegrationExecutions  []IntegrationExecution `json:"integration_executions"`
+	ExecutionGroups        []ExecutionGroup       `json:"execution_groups"`
 	ArtifactSignatures     []ArtifactSignature    `json:"artifact_signatures"`
 	Deployments            []Deployment           `json:"deployments"`
 	DeploymentReceipts     []DeploymentReceipt    `json:"deployment_receipts"`
@@ -269,7 +322,7 @@ type State struct {
 }
 
 func EmptyState() State {
-	return State{ArtifactSignatures: []ArtifactSignature{}, Deployments: []Deployment{}, DeploymentReceipts: []DeploymentReceipt{}, BuildReceipts: []BuildReceipt{}, Builds: []Build{}, RegistryInventories: []RegistryInventory{}, ArtifactPins: []ArtifactPin{}, WorkerJobs: []WorkerJob{}, WorkerAttempts: []WorkerAttempt{}, RuntimeSnapshots: []RuntimeSnapshot{}, ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
+	return State{IntegrationExecutions: []IntegrationExecution{}, ExecutionGroups: []ExecutionGroup{}, ArtifactSignatures: []ArtifactSignature{}, Deployments: []Deployment{}, DeploymentReceipts: []DeploymentReceipt{}, BuildReceipts: []BuildReceipt{}, Builds: []Build{}, RegistryInventories: []RegistryInventory{}, ArtifactPins: []ArtifactPin{}, WorkerJobs: []WorkerJob{}, WorkerAttempts: []WorkerAttempt{}, RuntimeSnapshots: []RuntimeSnapshot{}, ProjectKnowledge: []ProjectKnowledge{}, LocalCheckouts: []LocalCheckout{}, WorkspaceDocuments: []WorkspaceDocument{}, PublicationTargets: []PublicationTarget{}, PackageArtifacts: []PackageArtifact{}, ScenarioVersions: []ScenarioVersion{}, ScenarioRuns: []ScenarioRun{}, RuntimeObservations: []RuntimeObservation{}, ReviewSyncs: []ReviewSync{}, DeliveryArtifacts: []DeliveryArtifact{}, DeliveryBuildRuns: []DeliveryBuildRun{}, ExternalSystems: []ExternalSystem{}, SystemRelationships: []SystemRelationship{}, ExternalScopes: []ExternalScope{}, RegisteredRepositories: []RegisteredRepository{}, ConnectionGrants: []ConnectionGrant{}, GitHubConnections: []GitHubConnection{}, RepositoryBindings: []RepositoryBinding{}, ComponentBuilds: []ComponentBuild{}, EnvironmentBindings: []EnvironmentBinding{}, Operations: []ExternalOperation{}, OperationSteps: []OperationStep{}, GitObservations: []GitObservation{}, Applications: []Application{}, IntegrationRevisions: []IntegrationRevision{}, Compositions: []Composition{}, Products: []Product{}, Features: []Feature{}, Integrations: []Integration{}, Gates: []Gate{}, Checks: []Check{}, Results: []CheckResult{}, Findings: []Finding{}, Memories: []Memory{}, Environments: []Environment{}, Repositories: []Repository{}, Releases: []Release{}, Events: []Event{}}
 }
 
 type Command struct {
@@ -285,4 +338,4 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-var Actions = []string{"queue_intelligence_task", "cancel_intelligence_task", "request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration", "capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "reserve_candidate_dev", "release_candidate_dev", "refresh_registry_inventory", "pin_artifact", "release_artifact_pin", "cancel_native_delivery", "queue_worker_publication", "reconcile_worker_publication", "queue_worker_job", "cancel_worker_job", "reconcile_worker_job", "refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}
+var Actions = []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout", "queue_intelligence_task", "cancel_intelligence_task", "request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration", "capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "reserve_candidate_dev", "release_candidate_dev", "refresh_registry_inventory", "pin_artifact", "release_artifact_pin", "cancel_native_delivery", "queue_worker_publication", "reconcile_worker_publication", "queue_worker_job", "cancel_worker_job", "reconcile_worker_job", "refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}

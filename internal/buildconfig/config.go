@@ -108,7 +108,15 @@ type Config struct {
 	TimeoutSeconds           int           `json:"timeout_seconds,omitempty"`
 	RunLookbackSeconds       int           `json:"run_lookback_seconds,omitempty"`
 	StaleOperationSeconds    int           `json:"stale_operation_seconds,omitempty"`
+	ReconcileInterval        int           `json:"reconcile_interval,omitempty"`
+	HeartbeatInterval        int           `json:"heartbeat_interval,omitempty"`
+	LeaseTTL                 int           `json:"lease_ttl,omitempty"`
+	StalledTimeout           int           `json:"stalled_timeout,omitempty"`
 	staleOperationSecondsSet bool
+	reconcileIntervalSet     bool
+	heartbeatIntervalSet     bool
+	leaseTTLSet              bool
+	stalledTimeoutSet        bool
 }
 
 func (c Config) StaleTimeoutSeconds() int {
@@ -136,6 +144,10 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	}
 	*c = Config(decoded)
 	_, c.staleOperationSecondsSet = fields["stale_operation_seconds"]
+	_, c.reconcileIntervalSet = fields["reconcile_interval"]
+	_, c.heartbeatIntervalSet = fields["heartbeat_interval"]
+	_, c.leaseTTLSet = fields["lease_ttl"]
+	_, c.stalledTimeoutSet = fields["stalled_timeout"]
 	return nil
 }
 
@@ -363,6 +375,30 @@ func (c *Config) Validate() error {
 		c.StaleOperationSeconds = 7200
 	}
 	if c.StaleOperationSeconds < 0 || c.StaleOperationSeconds > 604800 {
+		return bad
+	}
+	if !c.reconcileIntervalSet && c.ReconcileInterval == 0 {
+		c.ReconcileInterval = 30
+	}
+	if c.ReconcileInterval < 0 || c.ReconcileInterval > 3600 {
+		return bad
+	}
+	if !c.heartbeatIntervalSet && c.HeartbeatInterval == 0 {
+		c.HeartbeatInterval = 60
+	}
+	if c.HeartbeatInterval < 1 || c.HeartbeatInterval > 3600 {
+		return bad
+	}
+	if !c.leaseTTLSet && c.LeaseTTL == 0 {
+		c.LeaseTTL = 300
+	}
+	if c.LeaseTTL < 30 || c.LeaseTTL > 86400 {
+		return bad
+	}
+	if !c.stalledTimeoutSet && c.StalledTimeout == 0 {
+		c.StalledTimeout = 900
+	}
+	if c.StalledTimeout < 0 || c.StalledTimeout > 604800 {
 		return bad
 	}
 	return nil
