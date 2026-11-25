@@ -2395,6 +2395,7 @@ Claim an Integration execution and obtain its current fencing token.
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: `integration not found`; refresh Product integration context.
 - `VALIDATION`: `actor required`, `SCOPE_MISMATCH`, `LEASE_HELD`, `INVALID_STATE`, `DESIRED_STATE_INVALID`, `executor identity required`, `invalid lease ttl`, `invalid stalled timeout`, or invalid harness values; use the correct Product, inspect current lease/state, then claim only unassigned/exited_incomplete/paused work with valid executor and options.
 
@@ -2425,6 +2426,7 @@ Renew the current executor's active execution lease using its fence.
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: `execution not found`; refresh execution group/state and claim the Integration first.
 - `VALIDATION`: `actor required`, `SCOPE_MISMATCH`, `STALE_FENCE`, `INVALID_STATE`, `LEASE_EXPIRED`, or `progress receipt exceeds limit`; use the current fence, valid active execution and receipt no longer than 256 characters.
 
@@ -2454,6 +2456,7 @@ Take over another executor's lost or stalled execution after the delivered event
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: `integration not found` or `execution not found`; refresh execution state and verify the Integration.
 - `VALIDATION`: `actor required`, `TAKEOVER_CHECK_REQUIRED`, `STALE_FENCE`, `INVALID_STATE`, `TAKEOVER_NOT_REQUIRED`, or invalid executor/harness values; use a delivered lost/stalled event, current fence, changed executor identity and current state.
 
@@ -2522,6 +2525,7 @@ Release the active execution lease with its outcome.
 
 **Errors:**
 
+- `FORBIDDEN`: `NOT_ASSIGNEE`: the Integration is assigned to another human; pick other work and never retry or take it over. `AGENT_OWNER_UNKNOWN`: this agent token has no owning human; re-enroll with `release-control login`.
 - `NOT_FOUND`: Execution is absent for this Integration; inspect group membership and initialize it first.
 - `SCOPE_MISMATCH`: Execution belongs to another Product; use its owning Product scope.
 - `STALE_FENCE`: The lease fence changed; reread the execution and release with its current fence.
