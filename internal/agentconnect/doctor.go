@@ -174,6 +174,17 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 	} else {
 		add("Workspace checks", "--workspace /path", rootErr)
 	}
+	if rootErr == nil {
+		name := "release-control"
+		var b Binding
+		if raw, err := os.ReadFile(filepath.Join(root, ".release-control.json")); err == nil && json.Unmarshal(raw, &b) == nil && b.ServerName != "" {
+			name = b.ServerName
+		}
+		add("Codex user config does not shadow project MCP", "rerun connect with --name "+name+"-project or remove the url table from ~/.codex/config.toml", userCodexConflict(name))
+	}
+	if plaintextCodexBearer() {
+		checks = append(checks, doctorCheck{name: "Codex user config credential", fix: "move the token to bearer_token_env_var or use release-control connect --profile", err: errors.New("~/.codex/config.toml contains a literal Authorization header"), warn: true})
+	}
 	home, _ := os.UserHomeDir()
 	_, binErr := os.Stat(filepath.Join(home, "bin", "rcp-supervisor"))
 	_, cfgErr := os.Stat(filepath.Join(home, ".config/release-control/supervisor.json"))

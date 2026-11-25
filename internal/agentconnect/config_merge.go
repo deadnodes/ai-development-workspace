@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func claudeEntry(o Options, endpoint string) map[string]any {
@@ -89,3 +91,59 @@ func hookConfigPath(product string) string {
 	return filepath.Join(homeDir(), ".config/release-control/turn-end-"+product+".json")
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+
+// userCodexConflict reports a user-level Codex MCP server with the same name
+// that uses a URL transport. Codex merges user and project tables, so the
+// project's stdio entry would become invalid ("url is not supported for stdio").
+func userCodexConflict(name string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	path := filepath.Join(home, ".codex", "config.toml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		MCPServers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	if toml.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	if entry, ok := cfg.MCPServers[name]; ok {
+		if _, hasURL := entry["url"]; hasURL {
+			return fmt.Errorf("%s already defines MCP server %q with a url; Codex would merge it with the project stdio entry and fail. Rerun with --name %s-project, or remove that table from %s; no files changed", path, name, name, path)
+		}
+	}
+	return nil
+}
+
+// plaintextCodexBearer reports whether the user-level Codex config stores a
+// literal Authorization header. The value is never read into output.
+func plaintextCodexBearer() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Headers map[string]string `toml:"http_headers"`
+		} `toml:"mcp_servers"`
+	}
+	if toml.Unmarshal(raw, &cfg) != nil {
+		return false
+	}
+	for _, server := range cfg.MCPServers {
+		for key, value := range server.Headers {
+			if strings.EqualFold(key, "Authorization") && value != "" {
+				return true
+			}
+		}
+	}
+	return false
+}

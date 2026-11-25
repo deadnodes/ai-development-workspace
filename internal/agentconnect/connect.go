@@ -107,6 +107,11 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if !regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(o.Name) {
 		return binding, errors.New("MCP name must contain only letters, digits, underscore or hyphen")
 	}
+	if o.Harness != "claude" {
+		if err := userCodexConflict(o.Name); err != nil {
+			return binding, err
+		}
+	}
 	token := ""
 	if o.TokenEnv != "" && o.Profile != "" {
 		return binding, errors.New("choose --profile or --token-env")
