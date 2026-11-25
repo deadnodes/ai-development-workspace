@@ -14,6 +14,7 @@ func resolveExecutionEvents(st *domain.State, e *domain.IntegrationExecution, no
 		if ev.IntegrationID == e.IntegrationID && ev.Resolution.ResolvedAt == nil && (ev.Fence != e.Fence || ev.ConditionGeneration != e.Reconciliation.Generation+1 || !e.Reconciliation.ActionRequired) {
 			t := now
 			ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &t, ResolvedBy: "system", Evidence: newState}
+			appendExecutionEventAudit(st, *ev, "execution_event_resolved", "system/execution-reconciler", now, map[string]any{"evidence": newState})
 		}
 	}
 }
@@ -32,6 +33,27 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 	}
 	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: e.Harness.SessionRef, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
+	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
+}
+
+func appendExecutionEventAudit(st *domain.State, ev domain.ExecutionEvent, action, actor string, now time.Time, data map[string]any) {
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: actor, At: now, EntityID: ev.ID, ProductID: ev.ProductID, Data: domain.Command{Action: action, Actor: actor, ProductID: ev.ProductID, IntegrationID: ev.IntegrationID, ID: ev.ID, Data: data}})
+}
+
+func executionNotifyConfig(s *Service) (retry, cap, escalate int) {
+	retry, cap, escalate = 30, 900, 10
+	if s.executionDefaults != nil {
+		if s.executionDefaults.NotifyRetrySeconds > 0 {
+			retry = s.executionDefaults.NotifyRetrySeconds
+		}
+		if s.executionDefaults.MaxBackoffSeconds > 0 {
+			cap = s.executionDefaults.MaxBackoffSeconds
+		}
+		if s.executionDefaults.EscalateAfterAttempts > 0 {
+			escalate = s.executionDefaults.EscalateAfterAttempts
+		}
+	}
+	return
 }
 
 func statusReachedIntegration(actual, desired string) bool {
@@ -206,7 +228,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			out = map[string]any{"matched": n, "turn_id": key}
 		case "claim_execution_event_delivery":
-			var x struct{ EventID, SupervisorID string }
+			var x struct {
+				EventID      string `json:"event_id"`
+				SupervisorID string `json:"supervisor_id"`
+			}
 			if err := decode(c.Data, &x); err != nil {
 				return err
 			}
@@ -218,29 +243,47 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || (ev.Delivery.AcknowledgedAt == nil && ev.Delivery.Attempts > 0) {
+				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || (ev.Delivery.AcknowledgedAt == nil && ev.Delivery.Attempts > 0) {
 					return invalid("INVALID_STATE")
 				}
+				beforeEscalation := ev.EscalationRequired
 				ev.Delivery.Attempts++
 				ev.Delivery.LastAttemptAt = &now
 				ev.Delivery.DeliveryID = id()
-				delay := 30
-				for j := 1; j < ev.Delivery.Attempts; j++ {
-					delay *= 2
-					if delay >= 900 {
-						delay = 900
-						break
+				retry, cap, escalate := executionNotifyConfig(s)
+				delay := retry
+				for j := 1; j < ev.Delivery.Attempts && delay < cap; j++ {
+					if delay > cap/2 {
+						delay = cap
+					} else {
+						delay *= 2
 					}
 				}
+				if delay > cap {
+					delay = cap
+				}
 				ev.Delivery.NextAttemptAt = now.Add(time.Duration(delay) * time.Second)
+				if ev.Delivery.Attempts >= escalate {
+					ev.EscalationRequired = true
+				}
 				ev.Delivery.AcknowledgedAt = nil
 				ev.Delivery.AcknowledgedBy = ""
 				out = ev.Delivery.DeliveryID
+				appendExecutionEventAudit(st, *ev, "execution_event_delivery_claimed", x.SupervisorID, now, map[string]any{"attempt": ev.Delivery.Attempts, "delivery_id": ev.Delivery.DeliveryID, "next_attempt_at": ev.Delivery.NextAttemptAt})
+				if !beforeEscalation && ev.EscalationRequired {
+					appendExecutionEventAudit(st, *ev, "execution_event_escalated", x.SupervisorID, now, map[string]any{"attempts": ev.Delivery.Attempts})
+				}
 				return nil
 			}
 			return missing("execution_event", x.EventID)
 		case "ack_execution_event":
-			var x struct{ EventID, DeliveryID, SupervisorID, Outcome, Detail string }
+			var x struct {
+				EventID      string `json:"event_id"`
+				DeliveryID   string `json:"delivery_id"`
+				SupervisorID string `json:"supervisor_id"`
+				Outcome      string `json:"outcome"`
+				Detail       string `json:"detail"`
+			}
 			if err := decode(c.Data, &x); err != nil {
 				return err
 			}
@@ -252,9 +295,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if ev.Delivery.DeliveryID != x.DeliveryID {
+				if ev.Delivery.Attempts == 0 || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported") || ev.Delivery.AcknowledgedAt != nil {
 					return invalid("INVALID_STATE")
 				}
+				wasEscalated := ev.EscalationRequired
 				t := now
 				ev.Delivery.AcknowledgedAt = &t
 				ev.Delivery.AcknowledgedBy = x.SupervisorID
@@ -263,13 +307,19 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					ev.EscalationRequired = true
 				}
 				out = *ev
+				appendExecutionEventAudit(st, *ev, "execution_event_acknowledged", x.SupervisorID, now, map[string]any{"delivery_id": x.DeliveryID, "outcome": x.Outcome, "detail": x.Detail})
+				if !wasEscalated && ev.EscalationRequired {
+					appendExecutionEventAudit(st, *ev, "execution_event_escalated", x.SupervisorID, now, map[string]any{"reason": "unsupported delivery"})
+				}
 				return nil
 			}
 			return missing("execution_event", x.EventID)
 		case "resolve_execution_event":
 			var x struct {
-				EventID, SupervisorID, Evidence string
-				Fence                           uint64
+				EventID      string `json:"event_id"`
+				SupervisorID string `json:"supervisor_id"`
+				Evidence     string `json:"evidence"`
+				Fence        uint64 `json:"fence"`
 			}
 			if err := decode(c.Data, &x); err != nil {
 				return err
@@ -282,6 +332,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
+				if ev.Resolution.ResolvedAt != nil || x.SupervisorID == "" || x.Evidence == "" {
+					return invalid("INVALID_STATE")
+				}
 				ex := executionFor(st, ev.IntegrationID)
 				if ex == nil || ex.Fence != x.Fence || ex.Reconciliation.ActionRequired && ex.Reconciliation.Generation == ev.ConditionGeneration {
 					return invalid("INVALID_STATE")
@@ -289,6 +342,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				t := now
 				ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &t, ResolvedBy: x.SupervisorID, Evidence: x.Evidence}
 				out = *ev
+				appendExecutionEventAudit(st, *ev, "execution_event_resolved", x.SupervisorID, now, map[string]any{"fence": x.Fence, "evidence": x.Evidence})
 				return nil
 			}
 			return missing("execution_event", x.EventID)
@@ -339,7 +393,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if c.Action == "takeover_execution" {
 					validEvidence := false
 					for _, ev := range st.ExecutionEvents {
-						if ev.ID == x.StateCheckReference && ev.IntegrationID == in.ID && (ev.Type == "execution_lost" || ev.Type == "execution_stalled") {
+						if ev.ID == x.StateCheckReference && ev.ProductID == in.ProductID && ev.IntegrationID == in.ID && (ev.Type == "execution_lost" || ev.Type == "execution_stalled") {
 							for _, ack := range ev.Acknowledgements {
 								if ack.Outcome == "delivered" {
 									validEvidence = true
@@ -562,6 +616,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			g := domain.ExecutionGroup{ID: id(), ProductID: c.ProductID, Name: x.Name, OrchestratorID: x.OrchestratorID, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now}}}
 			st.ExecutionGroups = append(st.ExecutionGroups, g)
+			for _, iid := range x.IntegrationIDs {
+				if e := executionFor(st, iid); e != nil && e.Reconciliation.ActionRequired {
+					typ := "execution_unassigned"
+					createExecutionEvent(st, e, typ, e.Reconciliation.Reason, now)
+				}
+			}
 			out = g
 		case "add_execution_group_member", "remove_execution_group_member":
 			gid, _ := c.Data["group_id"].(string)

@@ -93,6 +93,9 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	hashConfig.HeartbeatInterval = 0
 	hashConfig.LeaseTTL = 0
 	hashConfig.StalledTimeout = 0
+	hashConfig.NotifyRetrySeconds = 0
+	hashConfig.MaxBackoffSeconds = 0
+	hashConfig.EscalateAfterAttempts = 0
 	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`

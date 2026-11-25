@@ -2,9 +2,11 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/domain"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -12,6 +14,22 @@ import (
 type executionCountingStore struct {
 	*memoryStore
 	writes int
+}
+
+type executionSerialStore struct {
+	*memoryStore
+	mu sync.Mutex
+}
+
+func (m *executionSerialStore) Read(ctx context.Context) (domain.State, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.memoryStore.Read(ctx)
+}
+func (m *executionSerialStore) Update(ctx context.Context, fn func(*domain.State) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.memoryStore.Update(ctx, fn)
 }
 
 func (m *executionCountingStore) Update(ctx context.Context, fn func(*domain.State) error) error {
@@ -46,6 +64,16 @@ func TestExecutionDefaultsWithoutBuildConfiguration(t *testing.T) {
 	}
 	if got, source := effectiveStalledTimeout(&m.state, ex); got != 900 || source != "global" {
 		t.Fatalf("stalled timeout=%d source=%s", got, source)
+	}
+}
+
+func TestExecutionNotificationConfigDefaultsAndOverrides(t *testing.T) {
+	if retry, cap, escalate := executionNotifyConfig(&Service{}); retry != 30 || cap != 900 || escalate != 10 {
+		t.Fatalf("defaults=%d/%d/%d", retry, cap, escalate)
+	}
+	s := &Service{executionDefaults: &buildconfig.Config{NotifyRetrySeconds: 12, MaxBackoffSeconds: 75, EscalateAfterAttempts: 4}}
+	if retry, cap, escalate := executionNotifyConfig(s); retry != 12 || cap != 75 || escalate != 4 {
+		t.Fatalf("overrides=%d/%d/%d", retry, cap, escalate)
 	}
 }
 
@@ -134,8 +162,13 @@ func TestClaimAndTakeoverStateRules(t *testing.T) {
 	for _, state := range []string{"lost", "stalled"} {
 		t.Run("takeover_"+state, func(t *testing.T) {
 			s, m := fixture(t)
+			typ := "execution_lost"
+			if state == "stalled" {
+				typ = "execution_stalled"
+			}
 			m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "e", IntegrationID: "i", ProductID: "p", State: state, Fence: 3})
-			data := map[string]any{"orchestrator_id": "o", "agent_id": "a", "fence": float64(3), "state_check_reference": "checked"}
+			m.state.ExecutionEvents = append(m.state.ExecutionEvents, domain.ExecutionEvent{ID: "check", ProductID: "p", IntegrationID: "i", Type: typ, Acknowledgements: []domain.ExecutionEventAck{{Outcome: "delivered"}}})
+			data := map[string]any{"orchestrator_id": "o", "agent_id": "a", "fence": float64(3), "state_check_reference": "check"}
 			if _, err := s.Execute(context.Background(), domain.Command{Action: "takeover_execution", Actor: "agent", ProductID: "p", IntegrationID: "i", Data: data}); err != nil {
 				t.Fatal(err)
 			}
@@ -277,6 +310,172 @@ func TestStalledTimeoutPrecedence(t *testing.T) {
 }
 func ptrTime(t time.Time) *time.Time { return &t }
 
+func TestExecutionEventDedupeAuditAndDeliveryLifecycle(t *testing.T) {
+	s, m := fixture(t)
+	exec(t, s, domain.Command{Action: "claim_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "a"}})
+	e := executionFor(&m.state, "i")
+	now := time.Now().UTC()
+	executionCondition(&m.state, e, "lost", true, "lease expired", now)
+	if len(m.state.ExecutionEvents) != 1 {
+		t.Fatalf("events=%d", len(m.state.ExecutionEvents))
+	}
+	executionCondition(&m.state, e, "lost", true, "lease expired", now.Add(time.Second))
+	if len(m.state.ExecutionEvents) != 1 {
+		t.Fatalf("duplicate event: %d", len(m.state.ExecutionEvents))
+	}
+	ev := m.state.ExecutionEvents[0]
+	if !hasAuditAction(m.state.Events, "execution_event_created") {
+		t.Fatal("creation audit absent")
+	}
+	delays := []int{30, 60, 120, 240, 480, 900, 900, 900}
+	for i, want := range delays {
+		if i > 0 {
+			ev.Delivery.NextAttemptAt = time.Now().Add(-time.Second)
+			ev.Delivery.AcknowledgedAt = ptrTime(time.Now().Add(-time.Second))
+		}
+		m.state.ExecutionEvents[0] = ev
+		delivery := exec(t, s, domain.Command{Action: "claim_execution_event_delivery", ProductID: "p", Data: map[string]any{"event_id": ev.ID, "supervisor_id": "sup"}}).(string)
+		ev = m.state.ExecutionEvents[0]
+		got := int(ev.Delivery.NextAttemptAt.Sub(*ev.Delivery.LastAttemptAt).Seconds())
+		if got != want {
+			t.Fatalf("attempt %d delay=%d want %d", i+1, got, want)
+		}
+		if i == 0 {
+			exec(t, s, domain.Command{Action: "ack_execution_event", ProductID: "p", Data: map[string]any{"event_id": ev.ID, "delivery_id": delivery, "supervisor_id": "sup", "outcome": "delivered"}})
+		}
+	}
+	if !hasAuditAction(m.state.Events, "execution_event_delivery_claimed") || !hasAuditAction(m.state.Events, "execution_event_acknowledged") {
+		t.Fatal("delivery lifecycle audit absent")
+	}
+}
+
+func TestExecutionEventAckDoesNotResolveAndUnsupportedEscalates(t *testing.T) {
+	s, m := fixture(t)
+	m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex", ProductID: "p", IntegrationID: "i", Fence: 1, State: "unassigned", Reconciliation: domain.ExecutionReconciliation{ActionRequired: true, Generation: 1}})
+	ev := domain.ExecutionEvent{ID: "ev", ProductID: "p", IntegrationID: "i", Type: "execution_unassigned", Fence: 1, ConditionGeneration: 1, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: time.Now().Add(-time.Second)}}
+	m.state.ExecutionEvents = append(m.state.ExecutionEvents, ev)
+	delivery := exec(t, s, domain.Command{Action: "claim_execution_event_delivery", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup"}}).(string)
+	exec(t, s, domain.Command{Action: "ack_execution_event", ProductID: "p", Data: map[string]any{"event_id": "ev", "delivery_id": delivery, "supervisor_id": "sup", "outcome": "unsupported"}})
+	if m.state.ExecutionEvents[0].Resolution.ResolvedAt != nil || !m.state.ExecutionEvents[0].EscalationRequired {
+		t.Fatalf("ack state: %+v", m.state.ExecutionEvents[0])
+	}
+	m.state.ExecutionEvents[0].Delivery.NextAttemptAt = time.Now().Add(-time.Second)
+	if _, err := s.Execute(context.Background(), domain.Command{Action: "claim_execution_event_delivery", Actor: "agent", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Execute(context.Background(), domain.Command{Action: "resolve_execution_event", Actor: "agent", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup", "fence": float64(0), "evidence": "cleared"}}); err == nil || !strings.Contains(err.Error(), "INVALID_STATE") {
+		t.Fatalf("resolved active condition: %v", err)
+	}
+	items, err := s.Query(context.Background(), "list_attention", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range items.([]map[string]any) {
+		if item["execution_event_id"] == "ev" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("escalation missing from attention")
+	}
+	m.state.IntegrationExecutions[0].Reconciliation.ActionRequired = false
+	if _, err := s.Execute(context.Background(), domain.Command{Action: "resolve_execution_event", Actor: "agent", ProductID: "p", Data: map[string]any{"event_id": "ev", "supervisor_id": "sup", "fence": float64(1), "evidence": "condition cleared"}}); err != nil {
+		t.Fatalf("resolve after condition cleared: %v", err)
+	}
+	if !hasAuditAction(m.state.Events, "execution_event_acknowledged") || !hasAuditAction(m.state.Events, "execution_event_escalated") {
+		t.Fatal("ack/escalation audit absent")
+	}
+	if !hasAuditAction(m.state.Events, "execution_event_resolved") {
+		t.Fatal("resolution audit absent")
+	}
+}
+
+func TestExecutionEventCursorDueFiltersAndClaimCAS(t *testing.T) {
+	s, m := fixture(t)
+	s.store = &executionSerialStore{memoryStore: m}
+	base := time.Now().UTC().Add(-time.Minute)
+	for i := 0; i < 3; i++ {
+		m.state.ExecutionEvents = append(m.state.ExecutionEvents, domain.ExecutionEvent{ID: []string{"a", "b", "c"}[i], ProductID: "p", CreatedAt: base, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: base}})
+	}
+	query := func(cursor string, limit int, due bool) map[string]any {
+		b, _ := json.Marshal(map[string]any{"product_id": "p", "cursor": cursor, "limit": limit, "due_only": due})
+		v, e := s.Query(context.Background(), "list_execution_events", string(b))
+		if e != nil {
+			t.Fatal(e)
+		}
+		return v.(map[string]any)
+	}
+	page := query("", 1, false)
+	first := page["items"].([]domain.ExecutionEvent)
+	if len(first) != 1 || first[0].ID != "a" {
+		t.Fatalf("first page: %+v", first)
+	}
+	cur := page["next_cursor"].(string)
+	m.state.ExecutionEvents = append(m.state.ExecutionEvents, domain.ExecutionEvent{ID: "d", ProductID: "p", CreatedAt: base.Add(time.Second), Delivery: domain.ExecutionEventDelivery{NextAttemptAt: base}})
+	page2 := query(cur, 10, false)
+	got := page2["items"].([]domain.ExecutionEvent)
+	if len(got) != 3 || got[0].ID != "b" || got[1].ID != "c" || got[2].ID != "d" {
+		t.Fatalf("stable second page: %+v", got)
+	}
+	pageDue := query("", 100, true)
+	if len(pageDue["items"].([]domain.ExecutionEvent)) != 4 {
+		t.Fatal("due events omitted")
+	}
+	var wg sync.WaitGroup
+	successes := 0
+	var mu sync.Mutex
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, e := s.Execute(context.Background(), domain.Command{Action: "claim_execution_event_delivery", Actor: "agent", ProductID: "p", Data: map[string]any{"event_id": "a", "supervisor_id": "sup"}})
+			if e == nil {
+				mu.Lock()
+				successes++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if successes != 1 {
+		t.Fatalf("concurrent winners=%d", successes)
+	}
+	pageDue = query("", 100, true)
+	for _, item := range pageDue["items"].([]domain.ExecutionEvent) {
+		if item.ID == "a" {
+			t.Fatal("unacknowledged current attempt shown due")
+		}
+	}
+}
+
+func TestTakeoverRequiresDeliveredLostOrStalledEvidenceForSameIntegration(t *testing.T) {
+	for _, tc := range []struct{ name, typ, integration, outcome string }{
+		{"not_delivered", "execution_lost", "i", "failed"},
+		{"wrong_type", "execution_unassigned", "i", "delivered"},
+		{"wrong_integration", "execution_lost", "other", "delivered"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, m := fixture(t)
+			m.state.IntegrationExecutions = append(m.state.IntegrationExecutions, domain.IntegrationExecution{ID: "ex", ProductID: "p", IntegrationID: "i", State: "lost", Fence: 3})
+			m.state.ExecutionEvents = append(m.state.ExecutionEvents, domain.ExecutionEvent{ID: "ev", ProductID: "p", IntegrationID: tc.integration, Type: tc.typ, Acknowledgements: []domain.ExecutionEventAck{{Outcome: tc.outcome}}})
+			_, err := s.Execute(context.Background(), domain.Command{Action: "takeover_execution", Actor: "agent", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "new", "fence": float64(3), "state_check_reference": "ev"}})
+			if err == nil || !strings.Contains(err.Error(), "TAKEOVER_CHECK_REQUIRED") {
+				t.Fatalf("takeover error=%v", err)
+			}
+		})
+	}
+}
+
+func hasAuditAction(events []domain.Event, action string) bool {
+	for _, e := range events {
+		if e.Action == action {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStalledKeepsLeaseAndLostDoesNotReassign(t *testing.T) {
 	s, m := fixture(t)
 	exec(t, s, domain.Command{Action: "claim_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "a"}})
@@ -318,7 +517,10 @@ func TestTakeoverFencesFormerExecutorAndTimeoutPrecedence(t *testing.T) {
 	if err := s.ReconcileExecutionsOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	exec(t, s, domain.Command{Action: "takeover_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "new", "fence": float64(1), "state_check_reference": "checked"}})
+	event := m.state.ExecutionEvents[0]
+	delivery := exec(t, s, domain.Command{Action: "claim_execution_event_delivery", ProductID: "p", Data: map[string]any{"event_id": event.ID, "supervisor_id": "sup"}}).(string)
+	exec(t, s, domain.Command{Action: "ack_execution_event", ProductID: "p", Data: map[string]any{"event_id": event.ID, "delivery_id": delivery, "supervisor_id": "sup", "outcome": "delivered"}})
+	exec(t, s, domain.Command{Action: "takeover_execution", ProductID: "p", IntegrationID: "i", Data: map[string]any{"orchestrator_id": "o", "agent_id": "new", "fence": float64(1), "state_check_reference": event.ID}})
 	for _, action := range []string{"heartbeat_execution", "record_progress", "transition_integration"} {
 		data := map[string]any{"execution_fence": float64(1), "fence": float64(1), "progress_receipt": "old"}
 		c := domain.Command{Action: action, ProductID: "p", FeatureID: "f", IntegrationID: "i", Data: data}

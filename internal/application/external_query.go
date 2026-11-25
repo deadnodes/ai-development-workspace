@@ -2,9 +2,12 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"releasecontrol/internal/domain"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -90,14 +93,60 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		}
 		return nil, missing("execution_group", id)
 	case "list_execution_events":
-		if !productExists(&st, id) {
-			return nil, missing("product", id)
+		var options struct {
+			Cursor         string `json:"cursor"`
+			Limit          int    `json:"limit"`
+			UnresolvedOnly bool   `json:"unresolved_only"`
+			DueOnly        bool   `json:"due_only"`
+		}
+		productID := id
+		if strings.HasPrefix(id, "{") {
+			var envelope struct {
+				ProductID      string `json:"product_id"`
+				Cursor         string `json:"cursor"`
+				Limit          int    `json:"limit"`
+				UnresolvedOnly bool   `json:"unresolved_only"`
+				DueOnly        bool   `json:"due_only"`
+			}
+			if err := json.Unmarshal([]byte(id), &envelope); err != nil {
+				return nil, invalid("invalid event query")
+			}
+			productID = envelope.ProductID
+			options.Cursor = envelope.Cursor
+			options.Limit = envelope.Limit
+			options.UnresolvedOnly = envelope.UnresolvedOnly
+			options.DueOnly = envelope.DueOnly
+		}
+		if !productExists(&st, productID) {
+			return nil, missing("product", productID)
+		}
+		if options.Limit < 0 || options.Limit > 100 {
+			return nil, invalid("limit must be between 1 and 100")
+		}
+		if options.Limit == 0 {
+			options.Limit = 100
 		}
 		items := []domain.ExecutionEvent{}
 		for _, ev := range st.ExecutionEvents {
-			if ev.ProductID == id {
-				items = append(items, ev)
+			if ev.ProductID != productID {
+				continue
 			}
+			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
+				continue
+			}
+			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || time.Now().UTC().Before(ev.Delivery.NextAttemptAt) || (ev.Delivery.Attempts > 0 && ev.Delivery.AcknowledgedAt == nil)) {
+				continue
+			}
+			if options.Cursor != "" {
+				cursorTime, cursorID, ok := parseExecutionEventCursor(options.Cursor)
+				if !ok {
+					return nil, invalid("invalid cursor")
+				}
+				if ev.CreatedAt.Before(cursorTime) || ev.CreatedAt.Equal(cursorTime) && ev.ID <= cursorID {
+					continue
+				}
+			}
+			items = append(items, ev)
 		}
 		sort.Slice(items, func(i, j int) bool {
 			if items[i].CreatedAt.Equal(items[j].CreatedAt) {
@@ -105,7 +154,14 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 			return items[i].CreatedAt.Before(items[j].CreatedAt)
 		})
-		return map[string]any{"items": items}, nil
+		hasMore := len(items) > options.Limit
+		next := ""
+		if hasMore {
+			items = items[:options.Limit]
+			last := items[len(items)-1]
+			next = fmt.Sprintf("%s|%s", last.CreatedAt.UTC().Format(time.RFC3339Nano), last.ID)
+		}
+		return map[string]any{"items": items, "next_cursor": next}, nil
 	case "list_executions":
 		if !productExists(&st, id) {
 			return nil, missing("product", id)
@@ -401,6 +457,12 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				items = append(items, map[string]any{"id": "execution:" + ex.IntegrationID, "integration_id": ex.IntegrationID, "reason": ex.Reconciliation.Reason, "state": ex.State, "generation": ex.Reconciliation.Generation})
 			}
 		}
+		_, _, escalationThreshold := executionNotifyConfig(s)
+		for _, ev := range st.ExecutionEvents {
+			if ev.ProductID == id && ev.Resolution.ResolvedAt == nil && (ev.EscalationRequired || ev.Delivery.Attempts >= escalationThreshold) {
+				items = append(items, map[string]any{"id": "execution-event:" + ev.ID, "execution_event_id": ev.ID, "integration_id": ev.IntegrationID, "reason": "EXECUTION_EVENT_ESCALATION_REQUIRED", "type": ev.Type, "attempts": ev.Delivery.Attempts})
+			}
+		}
 		if s.builds != nil {
 			items = append(items, deploymentReconciliationAttention(st, id, time.Now().UTC(), time.Duration(s.builds.config.StaleTimeoutSeconds())*time.Second)...)
 		}
@@ -480,6 +542,15 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return items, nil
 	}
 	return nil, invalid("unknown query")
+}
+
+func parseExecutionEventCursor(cursor string) (time.Time, string, bool) {
+	parts := strings.SplitN(cursor, "|", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return time.Time{}, "", false
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	return t, parts[1], err == nil
 }
 
 func generateRegistryID() string { return id() }

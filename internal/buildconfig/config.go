@@ -112,11 +112,17 @@ type Config struct {
 	HeartbeatInterval        int           `json:"heartbeat_interval,omitempty"`
 	LeaseTTL                 int           `json:"lease_ttl,omitempty"`
 	StalledTimeout           int           `json:"stalled_timeout,omitempty"`
+	NotifyRetrySeconds       int           `json:"notify_retry_seconds,omitempty"`
+	MaxBackoffSeconds        int           `json:"max_backoff_seconds,omitempty"`
+	EscalateAfterAttempts    int           `json:"escalate_after_attempts,omitempty"`
 	staleOperationSecondsSet bool
 	reconcileIntervalSet     bool
 	heartbeatIntervalSet     bool
 	leaseTTLSet              bool
 	stalledTimeoutSet        bool
+	notifyRetrySecondsSet    bool
+	maxBackoffSecondsSet     bool
+	escalateAfterAttemptsSet bool
 }
 
 func (c Config) StaleTimeoutSeconds() int {
@@ -148,6 +154,9 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	_, c.heartbeatIntervalSet = fields["heartbeat_interval"]
 	_, c.leaseTTLSet = fields["lease_ttl"]
 	_, c.stalledTimeoutSet = fields["stalled_timeout"]
+	_, c.notifyRetrySecondsSet = fields["notify_retry_seconds"]
+	_, c.maxBackoffSecondsSet = fields["max_backoff_seconds"]
+	_, c.escalateAfterAttemptsSet = fields["escalate_after_attempts"]
 	return nil
 }
 
@@ -399,6 +408,18 @@ func (c *Config) Validate() error {
 		c.StalledTimeout = 900
 	}
 	if c.StalledTimeout < 0 || c.StalledTimeout > 604800 {
+		return bad
+	}
+	if !c.notifyRetrySecondsSet && c.NotifyRetrySeconds == 0 {
+		c.NotifyRetrySeconds = 30
+	}
+	if !c.maxBackoffSecondsSet && c.MaxBackoffSeconds == 0 {
+		c.MaxBackoffSeconds = 900
+	}
+	if !c.escalateAfterAttemptsSet && c.EscalateAfterAttempts == 0 {
+		c.EscalateAfterAttempts = 10
+	}
+	if c.NotifyRetrySeconds < 1 || c.NotifyRetrySeconds > 86400 || c.MaxBackoffSeconds < 1 || c.MaxBackoffSeconds > 604800 || c.EscalateAfterAttempts < 1 || c.EscalateAfterAttempts > 1000 {
 		return bad
 	}
 	return nil

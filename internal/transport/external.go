@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -32,7 +33,21 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 		"GET /api/repositories/{id}/branches":         "list_branches",
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			v, e := service.Query(r.Context(), name, r.PathValue("id"))
+			queryID := r.PathValue("id")
+			if name == "list_execution_events" {
+				q := r.URL.Query()
+				limit := 100
+				if raw := q.Get("limit"); raw != "" {
+					if parsed, err := strconv.Atoi(raw); err != nil {
+						limit = -1
+					} else {
+						limit = parsed
+					}
+				}
+				payload, _ := json.Marshal(map[string]any{"product_id": queryID, "cursor": q.Get("cursor"), "limit": limit, "unresolved_only": q.Get("unresolved_only") == "true", "due_only": q.Get("due_only") == "true"})
+				queryID = string(payload)
+			}
+			v, e := service.Query(r.Context(), name, queryID)
 			respond(w, v, e)
 		})
 	}
@@ -125,6 +140,17 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		ProductID string `json:"product_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "list_executions", in.ProductID)
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "list_execution_events", Description: "List Product scoped execution events with a stable created_at,id cursor and delivery filters."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID      string `json:"product_id"`
+		Cursor         string `json:"cursor,omitempty"`
+		Limit          int    `json:"limit,omitempty"`
+		UnresolvedOnly bool   `json:"unresolved_only,omitempty"`
+		DueOnly        bool   `json:"due_only,omitempty"`
+	}) (*mcp.CallToolResult, any, error) {
+		payload, _ := json.Marshal(map[string]any{"product_id": in.ProductID, "cursor": in.Cursor, "limit": in.Limit, "unresolved_only": in.UnresolvedOnly, "due_only": in.DueOnly})
+		v, e := service.Query(ctx, "list_execution_events", string(payload))
 		return nil, v, e
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_intelligence_task", Description: "Read a scoped generated draft or bounded conflict patch with provenance, stale-input state and mandatory review. Does not publish, merge or deploy."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
