@@ -16,6 +16,7 @@ type filePlan struct {
 	before, after []byte
 	exists        bool
 	mode          os.FileMode
+	installMode   os.FileMode
 }
 
 func safePath(root *os.Root, relative string) error {
@@ -127,7 +128,11 @@ func commitPlans(ctx context.Context, root *os.Root, plans []filePlan) error {
 		}
 		s := &staged{plan: plan, temp: filepath.Join(filepath.Dir(plan.relative), filepath.Base(f.Name()))}
 		stagedFiles = append(stagedFiles, s)
-		if err = f.Chmod(plan.mode); err == nil {
+		mode := plan.mode
+		if plan.installMode != 0 {
+			mode = plan.installMode
+		}
+		if err = f.Chmod(mode); err == nil {
 			_, err = f.Write(plan.after)
 		}
 		if err == nil {
@@ -157,7 +162,7 @@ func commitPlans(ctx context.Context, root *os.Root, plans []filePlan) error {
 		if err != nil {
 			return err
 		}
-		if now.exists != s.plan.exists || !bytes.Equal(now.before, s.plan.before) || now.mode != s.plan.mode {
+		if now.exists != s.plan.exists || !bytes.Equal(now.before, s.plan.before) || (now.exists && now.mode != s.plan.mode) {
 			return errors.New("project files changed during connect; retry")
 		}
 	}

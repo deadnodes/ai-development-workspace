@@ -31,7 +31,11 @@ const agentsStart = "<!-- BEGIN release-control managed agent instructions -->"
 const agentsEnd = "<!-- END release-control managed agent instructions -->"
 const skillMarker = "<!-- release-control managed skill -->\n"
 
-type Options struct{ URL, Workspace, ProductID, TokenEnv, Name, Profile, Executable string }
+type Options struct {
+	URL, Workspace, ProductID, TokenEnv, Name, Profile, Executable, Harness string
+	CodexNotify                                                             bool
+	CodexAutoApprove                                                        bool
+}
 type Binding struct {
 	URL        string `json:"url"`
 	ProductID  string `json:"product_id"`
@@ -42,7 +46,7 @@ type Binding struct {
 type kit = agentguide.Kit
 
 func installPaths() []string {
-	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md"}
+	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md", ".agents/skills/rcp-execution/SKILL.md", ".claude/skills/rcp-execution/SKILL.md", ".mcp.json", ".claude/settings.json"}
 }
 
 func Run(ctx context.Context, args []string, out io.Writer) error {
@@ -56,6 +60,9 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	flags.StringVar(&o.Profile, "profile", "", "saved agent credential profile (default if available)")
 	flags.StringVar(&o.Executable, "executable", "", "absolute release-control executable for the MCP subprocess (defaults to this executable)")
 	flags.StringVar(&o.Name, "name", "release-control", "project MCP server name")
+	flags.StringVar(&o.Harness, "harness", "both", "install for codex, claude, or both")
+	flags.BoolVar(&o.CodexNotify, "codex-notify", false, "wire the Codex turn-end hook in project config")
+	flags.BoolVar(&o.CodexAutoApprove, "codex-auto-approve", false, "allow Codex MCP tools under approval policy never")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -65,11 +72,17 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	if o.Harness == "" {
+		o.Harness = "both"
+	}
 	binding, err := Install(ctx, o)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled project MCP configuration, rcp-handoff and rcp-delivery skills for Codex/Claude and AGENTS.md instructions.\nTrust this project in Codex, then start a new chat or reload MCP configuration.\n", binding.ProductID, binding.URL)
+	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled MCP configuration and all three skills for %s, plus turn-end hook wiring and AGENTS.md instructions.\n", binding.ProductID, binding.URL, o.Harness)
+	if err == nil && (o.Harness == "codex" || o.Harness == "both") {
+		_, err = fmt.Fprintf(out, "Codex turn-end hook line: %s\n", codexNotifyLine(o))
+	}
 	return err
 }
 
@@ -85,8 +98,19 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if o.Name == "" {
 		o.Name = "release-control"
 	}
+	if o.Harness == "" {
+		o.Harness = "both"
+	}
+	if o.Harness != "codex" && o.Harness != "claude" && o.Harness != "both" {
+		return binding, errors.New("--harness must be codex, claude, or both")
+	}
 	if !regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(o.Name) {
 		return binding, errors.New("MCP name must contain only letters, digits, underscore or hyphen")
+	}
+	if o.Harness != "claude" {
+		if err := userCodexConflict(o.Name); err != nil {
+			return binding, err
+		}
 	}
 	token := ""
 	if o.TokenEnv != "" && o.Profile != "" {
@@ -109,20 +133,18 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if err != nil {
 		return binding, err
 	}
-	if o.Profile != "" {
-		if o.Executable == "" {
-			o.Executable, err = os.Executable()
-			if err != nil {
-				return binding, err
-			}
+	if o.Executable == "" {
+		o.Executable, err = os.Executable()
+		if err != nil {
+			return binding, err
 		}
-		if !filepath.IsAbs(o.Executable) || strings.ContainsAny(o.Executable, "\r\n") {
-			return binding, errors.New("MCP executable must be an absolute path")
-		}
-		info, statErr := os.Stat(o.Executable)
-		if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
-			return binding, errors.New("MCP executable must be an existing executable file")
-		}
+	}
+	if !filepath.IsAbs(o.Executable) || strings.ContainsAny(o.Executable, "\r\n") {
+		return binding, errors.New("MCP executable must be an absolute path")
+	}
+	info, statErr := os.Stat(o.Executable)
+	if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+		return binding, errors.New("MCP executable must be an existing executable file")
 	}
 	absolute, err := filepath.Abs(o.Workspace)
 	if err != nil {
@@ -132,7 +154,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if err != nil {
 		return binding, err
 	}
-	info, err := os.Stat(root)
+	info, err = os.Stat(root)
 	if err != nil || !info.IsDir() {
 		return binding, errors.New("workspace must be an existing directory")
 	}
@@ -176,10 +198,10 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return binding, errors.New("invalid agent kit JSON")
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "instructions") {
+	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "execution_skill", "instructions") {
 		return binding, errors.New("invalid agent kit fields")
 	}
-	for _, role := range []string{"skill", "delivery_skill"} {
+	for _, role := range []string{"skill", "delivery_skill", "execution_skill"} {
 		var identity map[string]json.RawMessage
 		if json.Unmarshal(fields[role], &identity) != nil || !exactFields(identity, "name", "content", "sha256") {
 			return binding, errors.New("invalid agent skill fields")
@@ -188,7 +210,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	for _, expected := range []struct {
 		skill agentguide.Skill
 		name  string
-	}{{agentKit.Skill, agentguide.SkillName}, {agentKit.DeliverySkill, agentguide.DeliverySkillName}} {
+	}{{agentKit.Skill, agentguide.SkillName}, {agentKit.DeliverySkill, agentguide.DeliverySkillName}, {agentKit.ExecutionSkill, agentguide.ExecutionSkillName}} {
 		digest := sha256.Sum256([]byte(expected.skill.Content))
 		if expected.skill.Name != expected.name || expected.skill.Content == "" || expected.skill.SHA256 != hex.EncodeToString(digest[:]) {
 			return binding, errors.New("agent kit identity or checksum is invalid")
@@ -228,6 +250,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	binding = Binding{URL: endpoint, ProductID: o.ProductID, ServerName: o.Name, TokenEnv: o.TokenEnv, Profile: o.Profile}
 	paths := installPaths()
 	plans := make([]filePlan, 0, len(paths))
+	var outside string
 	for _, path := range paths {
 		plan, err := readPlan(rootFS, path)
 		if err != nil {
@@ -235,43 +258,81 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		}
 		plans = append(plans, plan)
 	}
-	outside, err := stripBlock(string(plans[0].before), configStart, configEnd)
-	if err != nil {
-		return Binding{}, err
-	}
-	var parsed map[string]any
-	if err = toml.Unmarshal([]byte(outside), &parsed); err != nil {
-		return Binding{}, errors.New("existing project TOML is invalid; no files changed")
-	}
-	if servers, exists := parsed["mcp_servers"]; exists {
-		table, ok := servers.(map[string]any)
-		if !ok {
-			return Binding{}, errors.New("existing mcp_servers is not a TOML table")
+	plans[0].after = plans[0].before
+	if o.Harness != "claude" {
+		outside, err = stripBlock(string(plans[0].before), configStart, configEnd)
+		if err != nil {
+			return Binding{}, err
 		}
-		if _, exists = table[o.Name]; exists {
-			return Binding{}, errors.New("unmanaged MCP server already uses requested name")
+		var parsed map[string]any
+		if err = toml.Unmarshal([]byte(outside), &parsed); err != nil {
+			return Binding{}, errors.New("existing project TOML is invalid; no files changed")
 		}
-	}
-	entry := "[mcp_servers." + strconv.Quote(o.Name) + "]\nurl = " + strconv.Quote(endpoint+"/mcp") + "\n"
-	if o.Profile != "" {
-		entry = "[mcp_servers." + strconv.Quote(o.Name) + "]\ncommand = " + strconv.Quote(o.Executable) + "\nargs = [\"mcp\", \"--url\", " + strconv.Quote(endpoint) + ", \"--profile\", " + strconv.Quote(o.Profile) + "]\n"
-	}
-	if o.TokenEnv != "" {
-		entry += "bearer_token_env_var = " + strconv.Quote(o.TokenEnv) + "\n"
-	}
-	plans[0].after = []byte(appendBlock(outside, configStart, configEnd, entry))
-	if err = toml.Unmarshal(plans[0].after, &parsed); err != nil {
-		return Binding{}, errors.New("managed MCP entry conflicts with existing TOML")
+		if servers, exists := parsed["mcp_servers"]; exists {
+			table, ok := servers.(map[string]any)
+			if !ok {
+				return Binding{}, errors.New("existing mcp_servers is not a TOML table")
+			}
+			if _, exists = table[o.Name]; exists {
+				return Binding{}, errors.New("unmanaged MCP server already uses requested name")
+			}
+		}
+		args := "\"mcp\", \"--url\", " + strconv.Quote(endpoint)
+		if o.Profile != "" {
+			args += ", \"--profile\", " + strconv.Quote(o.Profile)
+		}
+		if o.TokenEnv != "" {
+			args += ", \"--token-env\", " + strconv.Quote(o.TokenEnv)
+		}
+		entry := "[mcp_servers." + strconv.Quote(o.Name) + "]\ncommand = " + strconv.Quote(o.Executable) + "\nargs = [" + args + "]\n"
+		if o.TokenEnv != "" {
+			// Codex reads the env token itself; a direct URL entry keeps
+			// default_tools_approval_mode effective in `codex exec`, which
+			// ignores it for stdio servers (verified with codex-cli 0.167).
+			entry = "[mcp_servers." + strconv.Quote(o.Name) + "]\nurl = " + strconv.Quote(endpoint+"/mcp") + "\nbearer_token_env_var = " + strconv.Quote(o.TokenEnv) + "\n"
+		}
+		if o.CodexAutoApprove {
+			entry += "default_tools_approval_mode = \"approve\"\n"
+		}
+		plans[0].after = []byte(appendBlock(outside, configStart, configEnd, entry))
+		if err = toml.Unmarshal(plans[0].after, &parsed); err != nil {
+			return Binding{}, errors.New("managed MCP entry conflicts with existing TOML")
+		}
+		if o.CodexNotify {
+			parsed["notify"] = []string{filepath.Join(homeDir(), ".local/share/release-control/hooks/rcp-turn-end.sh"), "--config", hookConfigPath(o.ProductID)}
+			plans[0].after, err = toml.Marshal(parsed)
+			if err != nil {
+				return Binding{}, errors.New("could not merge Codex notify setting")
+			}
+		}
 	}
 	for _, target := range []struct {
 		index int
 		skill agentguide.Skill
-	}{{1, agentKit.Skill}, {4, agentKit.DeliverySkill}, {5, agentKit.Skill}, {6, agentKit.DeliverySkill}} {
+	}{{1, agentKit.Skill}, {4, agentKit.DeliverySkill}, {5, agentKit.Skill}, {6, agentKit.DeliverySkill}, {7, agentKit.ExecutionSkill}, {8, agentKit.ExecutionSkill}} {
 		plan := &plans[target.index]
 		if plan.exists && !bytes.HasSuffix(plan.before, []byte(skillMarker)) && !bytes.Equal(plan.before, []byte(target.skill.Content)) {
 			return Binding{}, fmt.Errorf("unmanaged %s skill exists; no files changed", target.skill.Name)
 		}
-		plan.after = []byte(strings.TrimRight(target.skill.Content, "\n") + "\n\n" + skillMarker)
+		plan.after = installedSkill(target.skill.Content)
+	}
+	// Claude Code reads project MCP servers from .mcp.json. Decode and merge the
+	// JSON object so unrelated servers and settings survive reconnects.
+	plans[9].after = plans[9].before
+	if o.Harness != "codex" {
+		claudeMCP, err := mergeClaudeMCP(plans[9].before, o, endpoint)
+		if err != nil {
+			return Binding{}, err
+		}
+		plans[9].after = claudeMCP
+	}
+	plans[10].after = plans[10].before
+	if o.Harness != "codex" {
+		claudeSettings, err := mergeStopHook(plans[10].before, o, endpoint)
+		if err != nil {
+			return Binding{}, err
+		}
+		plans[10].after = claudeSettings
 	}
 	outside, err = stripBlock(string(plans[2].before), agentsStart, agentsEnd)
 	if err != nil {
@@ -295,7 +356,14 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return Binding{}, err
 	}
 	plans[3].after = append(plans[3].after, '\n')
+	hookSnapshot, hookErr := installHookFiles(ctx, o, endpoint)
+	if hookErr != nil {
+		return Binding{}, hookErr
+	}
 	if err = commitPlans(ctx, rootFS, plans); err != nil {
+		if rollbackErr := rollbackHookFiles(context.Background(), hookSnapshot); rollbackErr != nil {
+			return Binding{}, fmt.Errorf("connect failed and hook rollback was incomplete: %w", errors.Join(err, rollbackErr))
+		}
 		return Binding{}, err
 	}
 	return binding, nil
@@ -342,4 +410,10 @@ func appendBlock(content, start, end, body string) string {
 		content += "\n"
 	}
 	return content + start + "\n" + strings.TrimRight(body, "\n") + "\n" + end + "\n"
+}
+
+// installedSkill is the exact file content connect writes for a managed skill;
+// doctor compares installed files against the same bytes.
+func installedSkill(content string) []byte {
+	return []byte(strings.TrimRight(content, "\n") + "\n\n" + skillMarker)
 }

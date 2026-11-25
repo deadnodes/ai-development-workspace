@@ -1,5 +1,23 @@
 # Connect a project to the Control Plane
 
+## Agent setup in one pass
+
+Check Go 1.24+, Node.js, Git, tmux, Codex CLI and Claude Code. Build with
+`make build` (or `GOCACHE=/private/tmp/rcp-gocache go build -o bin/release-control ./cmd/server`).
+For a protected service, run `./bin/release-control login --url https://CONTROL_HOST --profile default`
+and have the owner approve the browser sign-in. Then run
+`./bin/release-control connect --url https://CONTROL_HOST --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID --harness both`
+and `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
+
+Connect writes `.codex/`, `.claude/`, `.mcp.json` and `~/.config/release-control`. An agent sandbox (Codex `workspace-write`) denies writes to `.codex/`; ask the owner to approve running this one command outside the sandbox.
+
+Orchestrators driven by `codex exec` or `codex -a never` need `--token-env NAME --codex-auto-approve`: Codex then connects to `/mcp` directly with `bearer_token_env_var`. Codex ignores auto-approval for stdio MCP servers, so a `--profile` (stdio proxy) connection works only in interactive sessions.
+Restart the agent to load MCP tools, then call `get_project_context` and
+`get_tool_guide`. Configure the optional supervisor on its orchestrator host using
+[SUPERVISOR.md](SUPERVISOR.md).
+
+Owner prompt: “Build and connect this project to Release Control Plane using the repository instructions, verify the connection, and load the project context.”
+
 Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
 
 Run once in the project that agents will edit:
@@ -8,7 +26,8 @@ Run once in the project that agents will edit:
 ./bin/release-control connect \
   --url http://127.0.0.1:8090 \
   --workspace /absolute/path/to/project \
-  --product-id PRODUCT_ID
+  --product-id PRODUCT_ID \
+  --harness both
 ```
 
 The `connect` command does not start a server or open a database. The server must already be running. Without `--product-id`, automatic selection uses only the existing bounded MCP `get_state {"limit":2}` query. It requires exactly one valid Product, Product scope with no foreign parents, a present `has_more:false` and consistent count/cursor metadata. Unavailable, ambiguous or malformed discovery requires an explicit Product ID; there is no `/api/state` fallback. The installer checks `/api/agent-kit`, validates both fixed skill names, frontmatter and content checksums, then checks the selected Product's scoped context identity before any file writes. Explicit Product selection skips listing and retains the 2-MiB scoped context response limit. Duplicate JSON fields and invalid encoding in discovery or context are refused before installation.
@@ -37,7 +56,9 @@ it from **Your account → Independent agents** when access should end. Add `dep
 to the requested scope only when the agent needs deployment permission and your
 account is allowed to grant it.
 
-The token is never printed or written to project configuration. It is encrypted
+Login and connect never print or write the token to project configuration. The
+local `token` subcommand emits the saved credential on stdout for the hook process;
+it does not log or persist that value. The token is encrypted
 with AES-GCM in a profile bound to the exact server URL, under
 `~/.release-control/`. The directory is private (`0700`); encrypted profiles and
 the independent per-user encryption key are `0600` files. Symlinks and insecure
@@ -45,9 +66,9 @@ permissions are rejected. Keep that directory outside repositories and backups
 shared with other users. Encryption protects copied credential records; someone
 who can read both the key and records as your OS user can decrypt them.
 
-The generated Codex entry launches the absolute `release-control` executable
-with `mcp --url … --profile …`. That subprocess loads its credential on every
-start and uses the official MCP SDK for stdio and authenticated Streamable HTTP.
+The generated Codex and Claude entries launch the absolute `release-control` executable
+with `mcp --url … --profile …` when using a saved profile. Both subprocesses load
+their credential on every start and use stdio MCP with authenticated Streamable HTTP.
 This works after restarting Codex and does not depend on its inherited shell
 environment or an active human login. Keep the executable at its installed path,
 or pass `connect --executable /absolute/path/to/release-control` for a permanent
@@ -65,7 +86,7 @@ For an existing environment-managed token, the explicit alternative is:
 ```
 
 `RC_TOKEN` must already be set. This mode saves only the environment variable name
-and generates a direct HTTP entry; Codex must inherit that variable when it starts.
+and generates a stdio entry; the MCP process and hook must inherit that variable.
 Do not combine `--token-env` and `--profile`, and avoid raw credentials in URLs or
 shell arguments. Without either flag, `connect` uses the saved default profile
 when present and otherwise connects to a local server without a credential.
@@ -74,17 +95,28 @@ when present and otherwise connects to a local server without a credential.
 
 | File | Purpose |
 | --- | --- |
-| `.codex/config.toml` | Project-scoped MCP entry: credential-loading stdio subprocess for a saved profile, or direct HTTP for local/environment-token mode. |
+| `.codex/config.toml` | Project-scoped MCP entry that launches the credential-loading stdio subprocess. |
 | `.agents/skills/rcp-handoff/SKILL.md` | Canonical handoff/checkpoint skill for project agents. |
 | `.agents/skills/rcp-delivery/SKILL.md` | Distinct Feature-delivery skill preserving repository adoption and existing execution policy. |
 | `.claude/skills/rcp-handoff/SKILL.md` | The same canonical handoff skill for the project skill directory. |
 | `.claude/skills/rcp-delivery/SKILL.md` | The same canonical delivery skill for the project skill directory. |
+| `.agents/skills/rcp-execution/SKILL.md` | Execution lifecycle and orchestration guidance. |
+| `.claude/skills/rcp-execution/SKILL.md` | The same canonical execution skill for Claude Code. |
+| `.mcp.json` | Project-scoped Claude Code stdio MCP server entry. |
+| `.claude/settings.json` | Merged Claude Code `Stop` hook configuration. |
 | `AGENTS.md` | Managed block binding this project to the Product and instructing agents to resume, record progress, and hand off. |
 | `.release-control.json` | Binding: base URL, Product ID, MCP server name and optional credential profile or token environment reference. |
 
-The default MCP server name is `release-control`; change it with `--name` if needed. Existing unrelated TOML settings and AGENTS.md content are preserved. Re-running the command updates only its marked blocks and owned skills/binding. All seven target paths are fixed by the installer, never supplied by the server. An unmanaged raw skill may be adopted only when its bytes exactly match the incoming canonical snapshot; differing user content refuses the entire installation. It also refuses conflicting unmanaged MCP entries, malformed configuration and symlinked installation paths, while preserving existing file modes. All output is staged before replacement; ordinary write failures roll back prior replacements. This is not a multi-file crash transaction: an interrupted process can leave temporary staging/backup files.
+`--harness` accepts `codex`, `claude`, or `both` (default). Skills are installed for both harnesses. The installer also writes `~/.config/release-control/turn-end-PRODUCT_ID.json` with mode 0600 and installs the shared hook under `~/.local/share/release-control/hooks/`. The hook config stores a profile, environment-variable name, or token-file reference, never the credential value. Codex always prints the exact `notify = [...]` line; pass `--codex-notify` to merge it into the project's `.codex/config.toml`. Existing unrelated TOML/JSON keys, hooks and AGENTS.md content are preserved. An unmanaged raw skill may be adopted only when its bytes exactly match the incoming canonical snapshot; differing user content refuses the entire installation. Conflicting unmanaged MCP entries, malformed configuration and symlinked installation paths are refused. Project and hook writes roll back on ordinary failures; this is not a multi-file crash transaction.
 
-The `.claude/skills` copies do not configure Claude MCP. The installer changes no Claude settings/MCP configuration, global Codex configuration, trust settings or global skills. Review the project-local changes with Git before committing them. Binding files contain no token value but may contain a private server URL or Product ID; decide whether they belong in that repository.
+`--harness codex` skips Claude MCP/settings changes; `--harness claude` skips Codex MCP changes. `--codex-notify` is optional. The installer does not change global harness configuration, trust settings or global skills. Review project-local changes with Git before committing them. Binding files contain no token value but may contain a private server URL or Product ID; decide whether they belong in that repository.
+
+On orchestrator hosts running Codex with `-a never`, connect with
+`--harness both --codex-notify --codex-auto-approve --profile default`.
+`--codex-auto-approve` sets `default_tools_approval_mode = "approve"` in the
+managed MCP entry so Codex can call MCP tools. Codex notify does not inherit
+environment variables, so use a saved profile for its turn-end hook;
+`--token-env` is unsuitable for Codex notify.
 
 ## Activate in Codex
 

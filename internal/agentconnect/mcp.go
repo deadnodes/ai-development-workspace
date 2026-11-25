@@ -5,11 +5,47 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// RunToken is intended for local hooks that need authenticated HTTP access.
+// It emits only the credential bytes on stdout and never includes them in errors.
+func RunToken(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("release-control token", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var raw, profile string
+	var fd int
+	flags.StringVar(&raw, "url", "", "Control Plane base URL")
+	flags.StringVar(&profile, "profile", "default", "saved agent credential profile")
+	flags.IntVar(&fd, "stdout-to-fd", -1, "write credential to this file descriptor instead of stdout")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	endpoint, err := secureEndpoint(raw)
+	if err != nil {
+		return err
+	}
+	token, err := loadCredential(endpoint, profile)
+	if err != nil {
+		return errors.New("saved credential unavailable")
+	}
+	if fd >= 0 {
+		_, err = syscall.Write(fd, []byte(token))
+		return err
+	}
+	_, err = io.WriteString(out, token)
+	return err
+}
 
 type bearerTransport struct {
 	token string
@@ -48,11 +84,28 @@ func RunMCP(ctx context.Context, args []string, in io.Reader, out io.Writer) err
 	if err != nil {
 		return err
 	}
-	token, err := ResolveCredential(endpoint, profile, tokenEnv)
+	var token string
+	if tokenEnv != "" {
+		token, err = ResolveCredential(endpoint, "", tokenEnv)
+	} else {
+		if profile == "" {
+			profile = "default"
+		}
+		token, err = loadCredential(endpoint, profile)
+		if errors.Is(err, os.ErrNotExist) && profile == "default" && isLoopbackEndpoint(endpoint) {
+			err = nil
+		} else if errors.Is(err, os.ErrNotExist) {
+			return errors.New("saved credential unavailable; run release-control login")
+		}
+	}
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Transport: bearerTransport{token: token, next: http.DefaultTransport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	transport := http.RoundTripper(http.DefaultTransport)
+	if token != "" {
+		transport = bearerTransport{token: token, next: http.DefaultTransport}
+	}
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	bootstrap, cancelBootstrap := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelBootstrap()
 	remote, err := mcp.NewClient(&mcp.Implementation{Name: "release-control-agent", Version: "1"}, nil).Connect(bootstrap, &mcp.StreamableClientTransport{Endpoint: endpoint + "/mcp", HTTPClient: client}, nil)
@@ -95,4 +148,13 @@ func RunMCP(ctx context.Context, args []string, in io.Reader, out io.Writer) err
 		reader = io.NopCloser(in)
 	}
 	return proxy.Run(ctx, &mcp.IOTransport{Reader: reader, Writer: nopWriteCloser{out}})
+}
+
+func isLoopbackEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(u.Hostname())
+	return u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback())
 }

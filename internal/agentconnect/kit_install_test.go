@@ -18,7 +18,7 @@ import (
 )
 
 func TestBothSkillsAdoptIdenticalRawAndRejectUnmanagedDifferences(t *testing.T) {
-	for _, path := range []string{".agents/skills/rcp-handoff/SKILL.md", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md"} {
+	for _, path := range []string{".agents/skills/rcp-handoff/SKILL.md", ".agents/skills/rcp-delivery/SKILL.md", ".agents/skills/rcp-execution/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-execution/SKILL.md"} {
 		for _, identical := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/identical=%t", path, identical), func(t *testing.T) {
 				server := kitServer(t, 1, "")
@@ -65,6 +65,59 @@ func TestBothSkillsAdoptIdenticalRawAndRejectUnmanagedDifferences(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestProjectHarnessConfigsAndGlobalHookAreInstalled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := kitServer(t, 1, "")
+	workspace := t.TempDir()
+	home, _ := os.UserHomeDir()
+	priorConfig := filepath.Join(home, ".config/release-control/turn-end-p0.json")
+	if err := os.MkdirAll(filepath.Dir(priorConfig), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(priorConfig, []byte("{}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"--url", server.URL, "--workspace", workspace, "--product-id", "p0", "--harness", "both"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var mcp map[string]any
+	if json.Unmarshal(readFile(t, workspace, ".mcp.json"), &mcp) != nil {
+		t.Fatal("Claude MCP config missing")
+	}
+	entry := mcp["mcpServers"].(map[string]any)["release-control"].(map[string]any)
+	if entry["command"] == nil || len(entry["args"].([]any)) < 3 || entry["args"].([]any)[0] != "mcp" {
+		t.Fatal("Claude server does not launch the stdio MCP subprocess")
+	}
+	var settings map[string]any
+	if json.Unmarshal(readFile(t, workspace, ".claude/settings.json"), &settings) != nil || settings["hooks"] == nil {
+		t.Fatal("Claude Stop hook missing")
+	}
+	for _, dir := range []string{".agents/skills", ".claude/skills"} {
+		if _, err := os.Stat(filepath.Join(workspace, dir, "rcp-execution/SKILL.md")); err != nil {
+			t.Fatal("execution skill missing", dir, err)
+		}
+	}
+	configPath := filepath.Join(home, ".config/release-control/turn-end-p0.json")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(config, []byte("secret")) || !bytes.Contains(config, []byte(`"product_id": "p0"`)) {
+		t.Fatal("invalid hook config")
+	}
+	info, _ := os.Stat(configPath)
+	if info.Mode().Perm() != 0600 {
+		t.Fatal("hook config is not private")
+	}
+	if _, err = os.Stat(filepath.Join(home, ".local/share/release-control/hooks/rcp-turn-end.sh")); err != nil {
+		t.Fatal("hook script missing", err)
+	}
+	if !strings.Contains(out.String(), "notify = [") {
+		t.Fatal("Codex notify line not printed")
 	}
 }
 
@@ -119,7 +172,7 @@ func TestBothSkillIdentitiesAndChecksumsValidatedBeforeWrites(t *testing.T) {
 	}
 }
 
-func TestAllSevenFixedPathsRollbackAtEveryReplacement(t *testing.T) {
+func TestAllProjectPathsRollbackAtEveryReplacement(t *testing.T) {
 	for failure := 8; failure <= 14; failure++ {
 		t.Run(fmt.Sprint(failure), func(t *testing.T) {
 			directory := t.TempDir()
@@ -144,7 +197,7 @@ func TestAllSevenFixedPathsRollbackAtEveryReplacement(t *testing.T) {
 			}
 			for _, path := range installPaths() {
 				if string(readFile(t, directory, path)) != "original" {
-					t.Fatal("partial seven-file replacement survived", path)
+					t.Fatal("partial project install survived", path)
 				}
 				info, _ := os.Stat(filepath.Join(directory, path))
 				if info.Mode().Perm() != 0640 {
@@ -164,7 +217,7 @@ func TestAllSevenFixedPathsRollbackAtEveryReplacement(t *testing.T) {
 				}
 				return nil
 			})
-			if err != nil || regular != 7 {
+			if err != nil || regular != len(installPaths()) {
 				t.Fatal("rollback left unexpected files", regular, err)
 			}
 		})
@@ -214,7 +267,7 @@ func TestSkillTargetSymlinkRefusesAllWrites(t *testing.T) {
 	}
 }
 
-func TestFreshSevenPathInstallRollsBackAllDirectories(t *testing.T) {
+func TestFreshProjectInstallRollsBackAllDirectories(t *testing.T) {
 	for failure := 8; failure <= 14; failure++ {
 		t.Run(fmt.Sprint(failure), func(t *testing.T) {
 			directory := t.TempDir()

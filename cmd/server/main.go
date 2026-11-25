@@ -32,7 +32,11 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("server stopped", "error", err)
+		name := "server"
+		if len(os.Args) > 1 {
+			name = os.Args[1]
+		}
+		slog.Error(name+" failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -43,6 +47,10 @@ func run() error {
 			return agentconnect.RunLogin(context.Background(), os.Args[2:], os.Stdout)
 		case "mcp":
 			return agentconnect.RunMCP(context.Background(), os.Args[2:], os.Stdin, os.Stdout)
+		case "token":
+			return agentconnect.RunToken(os.Args[2:], os.Stdout)
+		case "doctor":
+			return agentconnect.RunDoctor(context.Background(), os.Args[2:], os.Stdout)
 		}
 	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {
