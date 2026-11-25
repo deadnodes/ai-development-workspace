@@ -152,6 +152,100 @@ List Product-scoped signing request handles and per-key signature evidence.
 
 **Authority:** Read only; a signature record alone does not authorize deployment or promotion.
 
+### `refresh_registry_inventory` — execute_action
+
+Queue a bounded read-only registry observation for configured retention roots.
+
+**When:** Use only with a current registry observer grant and configured observation recipe; poll its operation.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Observation request
+- `application_id` (string, optional): Component scope
+- `recipe_id` (string, optional): Observation recipe
+- `recipe_revision` (string, optional): Recipe revision
+- `recipe_hash` (string, optional): Recipe hash
+- `config_revision` (string, optional): Worker configuration revision
+- `request_key` (string, optional): Replay key
+- `deadline` (string, optional): Within one hour
+
+**Output:** Persistent read-only registry observation operation.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'explicit registry observation scope required', 'bounded registry observation request key required', 'conflicting registry observation request replay', 'registry recipe/configuration/deadline mismatch', 'registry component/repository scope unavailable', 'no current registry observer grant', and 'known roots exceed registry observation bounds'; fix current scope/configuration.
+- `NOT_FOUND`: Verify Product and configured component/recipe.
+
+**Example:** `{"action":"refresh_registry_inventory","product_id":"PRODUCT","data":{"application_id":"APP","recipe_id":"registry","recipe_revision":"v1","recipe_hash":"HASH","config_revision":"CFG","request_key":"registry-scan-001","deadline":"2030-01-01T00:30:00Z"}}`
+
+**Related:** `get_artifact_retention`, `get_operation`
+
+**Authority:** Queues observation only; does not mutate or delete registry artifacts or authorize deletion.
+
+### `record_package_artifact` — execute_action
+
+Append immutable provenance for an externally published library package artifact.
+
+**When:** Use after publication and verify source, target, checksum and HTTPS artifact URI from actual evidence.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Artifact provenance
+- `application_id` (string, optional): LIBRARY component
+- `publication_target_id` (string, optional): Target for this component/Product
+- `source_commit` (string, optional): Full lowercase SHA40 or SHA64
+- `version` (string, optional): Nonblank immutable package version
+- `checksum` (string, optional): sha256:64hex or sha512:128hex
+- `uri` (string, optional): Credential-free HTTPS artifact URI
+- `build_url` (string, optional): Optional credential-free HTTPS build URL
+
+**Output:** Append-only PackageArtifact provenance record.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'publication requires a product-scoped LIBRARY component', 'publication target must belong to component and product', 'full lowercase source SHA and canonical sha256/sha512 checksum required', 'nonempty version without surrounding whitespace required', 'artifact uri and optional build_url must be HTTPS without credentials, query or fragment', and immutable-version/scope conflicts; correct provenance.
+- `NOT_FOUND`: Verify Product, component, target and optional Integration.
+
+**Example:** `{"action":"record_package_artifact","product_id":"PRODUCT","data":{"application_id":"LIB","publication_target_id":"TARGET","source_commit":"FULL_SHA","version":"1.0.0","checksum":"sha256:CHECKSUM","uri":"https://registry.example/pkg.tgz"}}`
+
+**Related:** `configure_publication`, `record_release`
+
+**Authority:** Records supplied publication evidence; does not publish package or handle credentials.
+
+### `release_artifact_pin` — execute_action
+
+Release one artifact retention pin belonging to the exact Product and component.
+
+**When:** Use when protection is no longer required after checking why the digest was pinned.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `id` (string, optional): Pin ID
+- `actor` (string, optional): Attribution
+- `data` (object, required): Scope fields
+- `application_id` (string, optional): Owning component
+
+**Output:** Pin with ReleasedAt recorded; repeated release returns existing released record.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'artifact pin requires exact product/component/ID', 'pin release requires exact product/component/ID', and 'artifact pin outside requested scope'; verify exact scope.
+- `NOT_FOUND`: Verify Product, component and pin ID.
+
+**Example:** `{"action":"release_artifact_pin","product_id":"PRODUCT","id":"PIN","data":{"application_id":"APP"}}`
+
+**Related:** `pin_artifact`, `get_artifact_retention`
+
+**Authority:** Updates pin metadata only; does not delete registry bytes or authorize image deletion.
+
 ## backup
 
 ### `create_backup` — mcp_tool
@@ -1011,6 +1105,36 @@ Queue read-only Kubernetes/Flux and GitOps/Actions inventory for an environment.
 **Related:** `get_runtime_report`, `get_operation`
 
 **Authority:** Read-only observation; does not change cluster resources or advance deployment readiness.
+
+### `plan_composition` — execute_action
+
+Capture a named immutable composition of exact component bases and ordered Integration revisions for an environment.
+
+**When:** Use to plan a disposable DEV/TEST composition after verifying the exact component/revision selection; planning alone does not execute it.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Owning Product
+- `actor` (string, optional): Attribution
+- `data` (object, required): Plan fields
+- `environment_id` (string, optional): Product environment
+- `name` (string, optional): Composition name
+- `components` (array[object], optional): Each application_id, base_ref, full base_commit, generated target_branch, ordered revision_ids
+- `auto_refresh` (boolean, optional): Whether to refresh captured data
+
+**Output:** Persisted planned Composition with captured application, revision and environment snapshots.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'environment must belong to product', 'composition name and components required', 'component applications must be unique and belong to product', 'component base_ref and full base_commit required', 'target_branch must be a separate generated/ branch', and revision/repository consistency errors; correct the exact plan.
+- `NOT_FOUND`: Verify Product, environment, component and revision identifiers.
+
+**Example:** `{"action":"plan_composition","product_id":"PRODUCT","data":{"environment_id":"ENV","name":"smoke","components":[{"application_id":"APP","base_ref":"main","base_commit":"FULL_SHA","target_branch":"generated/smoke","revision_ids":["REV"]}]}}`
+
+**Related:** `select_composition`, `reconcile_composition`, `assemble_environment`
+
+**Authority:** Records intent only; does not merge source, build, deploy, resolve conflicts or authorize production release.
 
 ## discovery
 
@@ -2265,6 +2389,41 @@ Read a scoped generated draft or bounded conflict patch with provenance, stale-i
 
 **Authority:** Read only; generated text/patch is untrusted proposal and does not publish, merge, edit source or deploy.
 
+### `queue_intelligence_task` — execute_action
+
+Queue a bounded model task for an allowed summary, annotation, release note or conflict proposal.
+
+**When:** Use when a supported task can help; provide scoped inputs and inspect output as untrusted, review-required content.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Task request
+- `task_kind` (string, optional): Supported task kind
+- `request_key` (string, optional): Stable unique replay key
+- `excerpts` (array[string], optional): Selected bounded context
+- `candidate_operation_id` (string, optional): Candidate for release notes
+- `previous_release_id` (string, optional): Prior release context
+- `conflict_id` (string, optional): Conflict proposal target
+- `head_sha` (string, optional): Exact source head
+- `files` (array[object], optional): Bounded conflict inputs
+
+**Output:** Persistent intelligence task/operation handle; inspect get_intelligence_task or get_operation.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'unsupported task kind', invalid task payload/request key or task-specific scope/evidence errors; conform to GET /api/schema.
+- `FORBIDDEN`: Task kind or provider operation is not authorized; use a supported configured task.
+- `NOT_FOUND`: Verify Product and referenced task context.
+
+**Example:** `{"action":"queue_intelligence_task","product_id":"PRODUCT","data":{"task_kind":"summary","request_key":"summary-request-001"}}`
+
+**Related:** `get_intelligence_task`, `get_operation`
+
+**Authority:** Queues bounded model work only; output is untrusted and does not edit source, merge, publish, deploy or authorize conflict resolution.
+
 ## operations
 
 ### `get_attention_required` — mcp_tool
@@ -2511,6 +2670,69 @@ Request bounded restoration of every original baseline component under recovery 
 **Related:** `verify_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
 
 **Authority:** Requests a plan only; does not confirm, merge Flux changes, verify runtime, or unlock.
+
+### `plan_release` — execute_action
+
+Capture a release plan from ready/released Integrations and their dependency/readiness evidence.
+
+**When:** Use to plan a selected release after reviewing readiness and including unreleased dependencies.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Release fields
+- `name` (string, optional): Release name
+- `integration_ids` (array[string], optional): Selected ready/released Integrations
+- `excluded_integration_ids` (array[string], optional): Explicitly excluded Product Integrations
+
+**Output:** Persisted planned Release with snapshots of selected Integrations.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'name and integration_ids required', 'integration outside product', 'release integration must be ready', 'release excludes unreleased dependency', plus readiness errors; correct selection and evidence.
+- `NOT_FOUND`: Refresh Product context and verify Integration IDs.
+
+**Example:** `{"action":"plan_release","product_id":"PRODUCT","data":{"name":"release-1","integration_ids":["INTEGRATION"]}}`
+
+**Related:** `prepare_release_candidate`, `record_release`
+
+**Authority:** Plans only; does not merge, build, promote or deploy.
+
+### `record_release` — execute_action
+
+Record an externally performed release in append-only Product history.
+
+**When:** Use after an external release; record actual environment and Integration scope rather than attributing execution to RCP.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Release record
+- `name` (string, optional): Release name
+- `environment_id` (string, optional): Release environment
+- `integration_ids` (array[string], optional): Released Product Integrations
+- `source_commits` (array[object], optional): Observed source commit provenance
+- `artifact_digests` (array[string], optional): Observed artifact digests
+- `gitops_commits` (array[string], optional): Observed GitOps commits
+- `evidence` (array[string], optional): External evidence references
+- `notes` (string, optional): Release notes
+
+**Output:** Release record marked released and recorded_externally=true.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'name, environment_id and integration_ids required', 'release environment outside product', 'integration outside product', or provenance validation errors; correct Product scope and evidence.
+- `NOT_FOUND`: Verify Product, environment and Integration identifiers.
+
+**Example:** `{"action":"record_release","product_id":"PRODUCT","data":{"name":"v1","environment_id":"ENV","integration_ids":["INTEGRATION"],"evidence":["https://ci.example/run/1"]}}`
+
+**Related:** `plan_release`, `get_operation`
+
+**Authority:** Records an external assertion; does not run a release, merge, build, promote or deploy.
 
 ## repositories
 
@@ -3458,6 +3680,132 @@ Read one bounded native worker job and its attempts.
 
 **Authority:** Read only; does not run, retry, or authorize a worker job.
 
+### `queue_worker_job` — execute_action
+
+Queue a bounded external worker job against one exact captured Integration revision and configured recipe.
+
+**When:** Use only when external workers are configured and the recipe, revision, source SHA and deadline are current.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `integration_id` (string, optional): Integration scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Worker request
+- `request_key` (string, optional): 16..128 identifier-character replay key
+- `recipe_id` (string, optional): Configured recipe
+- `recipe_revision` (string, optional): Exact recipe revision
+- `recipe_hash` (string, optional): Exact recipe hash
+- `config_revision` (string, optional): Current worker configuration revision
+- `revision_id` (string, optional): Captured IntegrationRevision
+- `source_sha` (string, optional): Full source SHA matching captured revision
+- `deadline` (string, optional): RFC3339 deadline within one hour
+- `max_attempts` (integer, optional): 1..10
+- `parameters` (object, optional): Recipe-typed parameters
+
+**Output:** Persistent WorkerJob and operation for external execution.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'external workers disabled', 'actor required', 'request_key must contain 16..128 identifier characters', 'request_key already names different immutable inputs', 'recipe or configuration identity mismatch', 'invalid typed recipe parameters', 'worker bounds: deadline within one hour, attempts 1..10', and 'captured source identity mismatch'; refresh exact configuration/evidence.
+- `NOT_FOUND`: Verify Product, Integration, revision and recipe scope.
+
+**Example:** `{"action":"queue_worker_job","product_id":"PRODUCT","integration_id":"INTEGRATION","data":{"request_key":"worker-job-request-01","recipe_id":"check","recipe_revision":"v1","recipe_hash":"HASH","config_revision":"CFG","revision_id":"REV","source_sha":"FULL_SHA","deadline":"2030-01-01T00:30:00Z","max_attempts":2,"parameters":{}}}`
+
+**Related:** `reconcile_worker_job`, `get_operation`
+
+**Authority:** Queues configured bounded worker execution; does not grant arbitrary shell/SQL, source edits, deployment or business-data access.
+
+### `queue_worker_publication` — execute_action
+
+Queue configured native package publication from an exact build job and recipe identity.
+
+**When:** Use only for an eligible library build after checking product/component and current recipe/configuration identity.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `actor` (string, optional): Attribution
+- `data` (object, required): Publication request
+- `build_job_id` (string, optional): Completed eligible build job
+- `component_id` (string, optional): Library component
+- `recipe_id` (string, optional): Publication recipe
+- `recipe_revision` (string, optional): Recipe revision
+- `recipe_hash` (string, optional): Recipe hash
+- `config_revision` (string, optional): Worker config revision
+- `request_key` (string, optional): Idempotency key
+- `deadline` (string, optional): Bounded RFC3339 deadline
+
+**Output:** Persistent publication worker job/operation.
+
+**Errors:**
+
+- `VALIDATION`: Messages include worker disabled, invalid request key, recipe/config mismatch, ineligible build/component or deadline bounds; correct current scoped inputs.
+- `CONFLICT`: Replay with changed immutable inputs is rejected; inspect the original job.
+
+**Example:** `{"action":"queue_worker_publication","product_id":"PRODUCT","data":{"build_job_id":"BUILD","component_id":"LIB","recipe_id":"publish","recipe_revision":"v1","recipe_hash":"HASH","config_revision":"CFG","request_key":"publication-request-01","deadline":"2030-01-01T00:30:00Z"}}`
+
+**Related:** `reconcile_worker_publication`, `record_package_artifact`
+
+**Authority:** Queues configured package publication only; does not grant arbitrary registry credentials or source modification.
+
+### `reconcile_worker_job` — execute_action
+
+Explicitly close a worker job left requiring reconciliation after uncertain external execution.
+
+**When:** Use after independently determining the exact external job outcome is FAILED or CANCELLED.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `id` (string, optional): Worker job ID
+- `actor` (string, optional): Attribution
+- `data` (object, required): Reconciliation result
+- `outcome` (string, optional): FAILED or CANCELLED
+
+**Output:** Updated WorkerJob and linked operation status/history.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'worker job outside product' and 'explicit reconciliation requires FAILED or CANCELLED'; verify scope and observed terminal outcome.
+- `NOT_FOUND`: Refresh Product and verify worker job ID.
+
+**Example:** `{"action":"reconcile_worker_job","product_id":"PRODUCT","id":"JOB","data":{"outcome":"FAILED"}}`
+
+**Related:** `queue_worker_job`, `get_operation`
+
+**Authority:** Records explicit external outcome; does not replay work or authorize source edits/deployment.
+
+### `reconcile_worker_publication` — execute_action
+
+Reconcile a worker package-publication job after uncertain external execution.
+
+**When:** Use after inspecting that exact publication worker job and establishing its supported terminal outcome.
+
+**Inputs:**
+
+- `action` (string, required): Exact action
+- `product_id` (string, optional): Product scope
+- `id` (string, optional): Worker job ID
+- `actor` (string, optional): Attribution
+- `data` (object, required): Reconciliation fields
+
+**Output:** Updated worker job and operation history.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'worker job outside product' or publication reconciliation state/outcome errors; inspect the same job and follow its allowed outcome.
+- `NOT_FOUND`: Verify Product and worker job ID.
+
+**Example:** `{"action":"reconcile_worker_publication","product_id":"PRODUCT","id":"JOB","data":{}}`
+
+**Related:** `queue_worker_publication`, `get_operation`
+
+**Authority:** Reconciles recorded external publication state; does not republish or grant registry access.
+
 ## workspace
 
 ### `create_application` — execute_action
@@ -3714,17 +4062,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `execute_action:plan_composition`
-- `execute_action:plan_release`
-- `execute_action:queue_intelligence_task`
-- `execute_action:queue_worker_job`
-- `execute_action:queue_worker_publication`
-- `execute_action:reconcile_worker_job`
-- `execute_action:reconcile_worker_publication`
-- `execute_action:record_package_artifact`
-- `execute_action:record_release`
-- `execute_action:refresh_registry_inventory`
-- `execute_action:release_artifact_pin`
 - `execute_action:reserve_candidate_dev`
 - `execute_action:revise_test_scenario`
 - `execute_action:select_composition`
