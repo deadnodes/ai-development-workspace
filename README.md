@@ -171,7 +171,7 @@ for the separate operator recipe, credential and runner configuration.
 # Для агента: собери и подключи
 
 1. Установи Go 1.24+, Node.js, Git, tmux и Codex/Claude CLI; войди в CLI.
-2. Собери бинарники: `make build` (или `GOCACHE=/private/tmp/rcp-gocache go build -o bin/release-control ./cmd/server`).
+2. Собери бинарники: `make build` (или `go build -o bin/release-control ./cmd/server`).
 3. Для защищённого сервера запусти `./bin/release-control login --url https://CONTROL_HOST --profile default` и попроси владельца одобрить вход в браузере.
 4. Подключи проект: `./bin/release-control connect --url https://CONTROL_HOST --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID --harness both`.
 5. Проверь установку: `./bin/release-control doctor --url https://CONTROL_HOST --profile default --product-id PRODUCT_ID --workspace /PATH/TO/PROJECT`.
