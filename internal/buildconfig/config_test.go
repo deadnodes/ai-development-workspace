@@ -32,6 +32,23 @@ func TestStrictAuthority(t *testing.T) {
 	}
 }
 
+func TestStaleOperationThresholdDefaultAndDisable(t *testing.T) {
+	if got := valid().StaleTimeoutSeconds(); got != 7200 {
+		t.Fatalf("default threshold %d", got)
+	}
+	b, _ := json.Marshal(valid())
+	raw := strings.TrimSuffix(string(b), "}") + `,"stale_operation_seconds":0}`
+	decoded, err := Decode(strings.NewReader(raw))
+	if err != nil || decoded.StaleTimeoutSeconds() != 0 {
+		t.Fatalf("explicit disable: %+v %v", decoded, err)
+	}
+	c := valid()
+	c.StaleOperationSeconds = 1
+	if err = c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCIGateDevModeValidation(t *testing.T) {
 	for _, mode := range []string{"observe", "block"} {
 		c := valid()

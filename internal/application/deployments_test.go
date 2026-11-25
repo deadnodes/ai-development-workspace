@@ -29,20 +29,24 @@ type deploymentFake struct {
 	ancestorCalls int
 	ancestorHook  func()
 
-	status                           forgejo.CommitStatus
-	registryErr                      error
-	statusErr                        error
-	proposals, merges, heads         int
-	proposalErr, mergeErr, verifyErr error
-	findErr, branchHeadErr           error
-	branchHead                       string
-	pr                               github.DeployPR
-	already                          bool
-	plan                             github.DeployPlan
-	advanceBase                      bool
-	verifyPlans                      []github.DeployPlan
-	content, proposedContent         string
-	openedPRs                        int
+	status                                forgejo.CommitStatus
+	registryErr                           error
+	statusErr                             error
+	proposals, merges, heads              int
+	proposalErr, mergeErr, verifyErr      error
+	findErr, branchHeadErr                error
+	branchHead                            string
+	pr                                    github.DeployPR
+	already                               bool
+	plan                                  github.DeployPlan
+	advanceBase                           bool
+	verifyPlans                           []github.DeployPlan
+	content, proposedContent              string
+	openedPRs                             int
+	appliedOnMain                         bool
+	applyErr, closePRErr, deleteBranchErr error
+	closedPR, deletedBranch               bool
+	mergeOnCloseRace                      bool
 }
 
 func (f *deploymentFake) IsAncestor(ctx context.Context, cn buildconfig.Connection, repo, ancestor, descendant string) (bool, error) {
@@ -98,6 +102,21 @@ func (f *deploymentFake) ReadDeployment(context.Context, buildconfig.GitOps, int
 		f.pr.Base.SHA = strings.Repeat("9", 40)
 	}
 	return f.pr, nil
+}
+func (f *deploymentFake) DeploymentAppliedOnMain(context.Context, buildconfig.GitOps, github.DeployPlan) (string, bool, error) {
+	return strings.Repeat("e", 40), f.appliedOnMain, f.applyErr
+}
+func (f *deploymentFake) CloseDeployment(context.Context, buildconfig.GitOps, int) error {
+	f.closedPR = true
+	if f.mergeOnCloseRace {
+		f.pr.Merged = true
+		f.pr.MergeSHA = strings.Repeat("d", 40)
+	}
+	return f.closePRErr
+}
+func (f *deploymentFake) DeleteDeploymentBranch(context.Context, buildconfig.GitOps, string) error {
+	f.deletedBranch = true
+	return f.deleteBranchErr
 }
 func (f *deploymentFake) VerifyDeployment(_ context.Context, _ buildconfig.GitOps, plan github.DeployPlan, pr github.DeployPR) error {
 	f.verifyPlans = append(f.verifyPlans, plan)

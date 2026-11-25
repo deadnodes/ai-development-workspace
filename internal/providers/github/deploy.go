@@ -271,6 +271,57 @@ func (p *Provider) ReadDeployment(ctx context.Context, g buildconfig.GitOps, n i
 	return out, e
 }
 
+// DeploymentAppliedOnMain confirms every configured image field already has the planned value.
+func (p *Provider) DeploymentAppliedOnMain(ctx context.Context, g buildconfig.GitOps, d DeployPlan) (string, bool, error) {
+	if e := validateDeployPlan(d); e != nil {
+		return "", false, e
+	}
+	c, e := deployConnection(g)
+	if e != nil {
+		return "", false, e
+	}
+	sha, e := p.deployHead(ctx, c, g.Repository, "main")
+	if e != nil {
+		return "", false, e
+	}
+	for _, f := range d.Files {
+		content, _, err := p.deployContent(ctx, c, g.Repository, f.Path, sha)
+		if err != nil {
+			return "", false, err
+		}
+		rendered, err := RenderDeployment(content, f.Tags)
+		if err != nil {
+			return "", false, err
+		}
+		if rendered != content {
+			return sha, false, nil
+		}
+	}
+	return sha, true, nil
+}
+
+func (p *Provider) CloseDeployment(ctx context.Context, g buildconfig.GitOps, n int) error {
+	if n <= 0 {
+		return ErrConflict
+	}
+	c, e := deployConnection(g)
+	if e != nil {
+		return e
+	}
+	return p.request(ctx, c, "PATCH", fmt.Sprintf("/repos/%s/pulls/%d", g.Repository, n), map[string]string{"state": "closed"}, nil)
+}
+
+func (p *Provider) DeleteDeploymentBranch(ctx context.Context, g buildconfig.GitOps, branch string) error {
+	if !strings.HasPrefix(branch, "rcp/deploy/") || len(branch) <= len("rcp/deploy/") {
+		return ErrConflict
+	}
+	c, e := deployConnection(g)
+	if e != nil {
+		return e
+	}
+	return p.request(ctx, c, "DELETE", "/repos/"+g.Repository+"/git/refs/heads/"+url.PathEscape(branch), nil, nil)
+}
+
 // VerifyDeployment checks the complete tree diff and exact rendered file bytes.
 func (p *Provider) VerifyDeployment(ctx context.Context, g buildconfig.GitOps, d DeployPlan, pr DeployPR) error {
 	if e := validateDeployPlan(d); e != nil {

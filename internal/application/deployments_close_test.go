@@ -2,12 +2,154 @@ package application
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/providers/github"
 	"strings"
 	"testing"
+	"time"
 )
+
+func prepareReconcile(t *testing.T, status string) (*Service, *memoryStore, *deploymentFake, domain.Deployment) {
+	t.Helper()
+	s, m, f, in := deploymentFixture(t)
+	d, err := s.DeployBuild(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Status = status
+	d.PRNumber = 42
+	d.HeadSHA = strings.Repeat("b", 40)
+	d.ProposalBaseSHA = strings.Repeat("a", 40)
+	d.UncertainAction = "merge"
+	m.state.Deployments[0] = d
+	f.pr.Number, f.pr.State = 42, "open"
+	f.pr.Head.SHA, f.pr.Head.Ref, f.pr.Head.Repo.FullName = d.HeadSHA, d.Branch, "o/flux"
+	f.pr.Base.Ref, f.pr.Base.Repo.FullName = "main", "o/flux"
+	return s, m, f, d
+}
+
+func TestReconcileDeploymentAdoptsMergedPR(t *testing.T) {
+	s, m, f, d := prepareReconcile(t, "MERGE_UNCERTAIN")
+	f.pr.Merged, f.pr.MergeSHA = true, strings.Repeat("c", 40)
+	out, err := s.ReconcileDeployment(context.Background(), domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "recover merged deployment"})
+	if err != nil || out.Resolution != "merged" || out.Deployment.Status != "SUCCEEDED" || out.Deployment.MergeCommitSHA != f.pr.MergeSHA {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if m.state.Deployments[0].Status != "SUCCEEDED" {
+		t.Fatal(m.state.Deployments[0])
+	}
+}
+
+func TestReconcileDeploymentAppliedOnMainClosesPRAndReleasesLock(t *testing.T) {
+	s, m, f, d := prepareReconcile(t, "MERGE_UNCERTAIN")
+	f.appliedOnMain = true
+	out, err := s.ReconcileDeployment(context.Background(), domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "recover applied deployment"})
+	if err != nil || out.Resolution != "applied_on_main" || out.Deployment.Status != "SUCCEEDED" || !f.closedPR {
+		t.Fatalf("%+v %v closed=%v", out, err, f.closedPR)
+	}
+	if _, err = s.DeployBuild(context.Background(), domain.DeployBuildRequest{ProductID: "p", BuildID: "build", EnvironmentID: "dev"}); err != nil {
+		t.Fatalf("retry admission: %v", err)
+	}
+	if len(m.state.Deployments) != 2 {
+		t.Fatal(len(m.state.Deployments))
+	}
+}
+
+func TestReconcileDeploymentClosesPRAndBranch(t *testing.T) {
+	s, _, f, d := prepareReconcile(t, "RECONCILIATION_REQUIRED")
+	out, err := s.ReconcileDeployment(context.Background(), domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "abandon stuck deployment"})
+	if err != nil || out.Resolution != "closed" || out.Deployment.Status != "FAILED" || out.Deployment.FailureCode != "OPERATOR_CLOSED" || !f.closedPR || !f.deletedBranch {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if _, err = s.DeployBuild(context.Background(), domain.DeployBuildRequest{ProductID: "p", BuildID: "build", EnvironmentID: "dev"}); err != nil {
+		t.Fatalf("retry admission after close: %v", err)
+	}
+}
+
+func TestReconcileDeploymentProviderErrorLeavesState(t *testing.T) {
+	s, m, f, d := prepareReconcile(t, "RECONCILIATION_REQUIRED")
+	f.applyErr = errors.New("provider unavailable")
+	before := m.state.Deployments[0]
+	_, err := s.ReconcileDeployment(context.Background(), domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "retry provider resolution"})
+	if err == nil || !reflect.DeepEqual(before, m.state.Deployments[0]) {
+		t.Fatalf("changed on provider error: %v", err)
+	}
+}
+
+func TestReconcileDeploymentRechecksAfterCloseRace(t *testing.T) {
+	s, _, f, d := prepareReconcile(t, "RECONCILIATION_REQUIRED")
+	f.closePRErr = &github.APIError{Status: 409, Operation: "already merged"}
+	f.mergeOnCloseRace = true
+	out, err := s.ReconcileDeployment(context.Background(), domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "recover merge race"})
+	if err != nil || out.Resolution != "merged" || out.Deployment.Status != "SUCCEEDED" || out.Deployment.MergeCommitSHA != f.pr.MergeSHA {
+		t.Fatalf("%+v %v", out, err)
+	}
+}
+
+func TestReconcileDeploymentRequestKeyIdempotency(t *testing.T) {
+	s, _, _, d := prepareReconcile(t, "RECONCILIATION_REQUIRED")
+	req := domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "close stuck deployment", RequestKey: "rk"}
+	first, err := s.ReconcileDeployment(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.ReconcileDeployment(context.Background(), req)
+	if err != nil || second.Resolution != first.Resolution {
+		t.Fatalf("%+v %v", second, err)
+	}
+	req.Reason = "different reason"
+	if _, err = s.ReconcileDeployment(context.Background(), req); err == nil || !strings.Contains(err.Error(), "REQUEST_KEY_CONFLICT") {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcileDeploymentRequiresAdmin(t *testing.T) {
+	s, _, _, d := prepareReconcile(t, "RECONCILIATION_REQUIRED")
+	writer := auth.WithPrincipal(context.Background(), auth.Principal{ID: "writer", Products: []string{"p"}, Permissions: []string{"read", "write"}})
+	if _, err := s.ReconcileDeployment(writer, domain.ReconcileDeploymentRequest{ProductID: "p", DeploymentID: d.ID, Reason: "reconcile stale deployment"}); err == nil {
+		t.Fatal("non-admin reconciled deployment")
+	}
+}
+
+func TestDeploymentWatchdogThresholdAndStatusTimer(t *testing.T) {
+	for _, age := range []time.Duration{2*time.Hour + time.Minute, 2*time.Hour - time.Minute} {
+		s, m, f, in := deploymentFixture(t)
+		d, err := s.DeployBuild(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Status = "RECONCILIATION_REQUIRED"
+		d.UpdatedAt = time.Now().Add(-age)
+		d.StatusChangedAt = time.Now().Add(-age)
+		d.PRNumber = 0
+		m.state.Deployments[0] = d
+		if age > 2*time.Hour {
+			f.findErr = github.ErrNotFound
+		}
+		deployTick(t, s)
+		got := m.state.Deployments[0]
+		if age > 2*time.Hour && (got.Status != "FAILED" || got.FailureCode != "STALE_TIMEOUT") {
+			t.Fatalf("stale not closed: %+v", got)
+		}
+		if age > 2*time.Hour {
+			ev := m.state.Events[len(m.state.Events)-1]
+			if ev.Action != "stale_close_deployment" || ev.Actor != "system/stale-watchdog" || ev.Data.Data["previous_status"] != "RECONCILIATION_REQUIRED" || ev.Data.Data["resolution"] != "closed" {
+				t.Fatalf("incorrect stale audit: %+v", ev)
+			}
+		}
+		if age < 2*time.Hour && got.Status != "RECONCILIATION_REQUIRED" {
+			t.Fatalf("fresh changed: %+v", got)
+		}
+	}
+	old := domain.Deployment{Status: "RUNNING", StatusChangedAt: time.Now().Add(-3 * time.Hour)}
+	old.Status = "FAILED"
+	if !old.StatusChangedAt.Before(time.Now().Add(-2 * time.Hour)) {
+		t.Fatal("test setup")
+	}
+}
 
 func TestCloseDeployment(t *testing.T) {
 	ctx := context.Background()

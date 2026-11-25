@@ -68,6 +68,12 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	if json.Unmarshal(raw, &copy) != nil {
 		return invalid("invalid build authority")
 	}
+	// Marshal omits an explicit zero from the optional JSON field; retain its
+	// presence marker so zero continues to disable the watchdog after copying.
+	copy.StaleOperationSeconds = c.StaleOperationSeconds
+	if c.StaleOperationSecondsConfigured() {
+		copy.MarkStaleOperationSecondsConfigured()
+	}
 	if e = copy.Validate(); e != nil {
 		return e
 	}
@@ -76,6 +82,10 @@ func (s *Service) ConfigureBuilds(c *buildconfig.Config, p ForgejoBuildProvider,
 	}
 	hashConfig := copy
 	hashConfig.Signing = nil
+	// The watchdog is lifecycle policy, not provider authority. Keep it out of
+	// the legacy global fingerprint so adding/changing its threshold does not
+	// invalidate existing build and deployment authority hashes.
+	hashConfig.StaleOperationSeconds = 0
 	a := &buildRuntime{legacyGlobal: buildFingerprint(struct {
 		buildconfig.Config
 		Rollout *buildconfig.RolloutConfig `json:"rollout,omitempty"`
@@ -380,6 +390,7 @@ func (s *Service) CancelBuild(ctx context.Context, in domain.BuildLookup) (domai
 			}
 			now := time.Now().UTC()
 			b.Status = "CANCELLED"
+			b.StatusChangedAt = now
 			b.UpdatedAt = now
 			b.FinishedAt = &now
 			out = *b
@@ -449,6 +460,7 @@ func (s *Service) CloseBuild(ctx context.Context, in domain.CloseBuildRequest) (
 			now := time.Now().UTC()
 			next := b
 			next.Status, next.FailureCode, next.FailureMessage = "FAILED", "OPERATOR_CLOSED", in.Reason
+			next.StatusChangedAt = now
 			next.UpdatedAt, next.FinishedAt = now, &now
 			st.Builds[i] = next
 			audit := next
@@ -587,6 +599,11 @@ func (s *Service) advanceBuild(ctx context.Context, old, next domain.Build, admi
 				next.SigningStartedAt = time.Now().UTC()
 			}
 			next.UpdatedAt = time.Now().UTC()
+			if b.Status != next.Status {
+				next.StatusChangedAt = next.UpdatedAt
+			} else if next.StatusChangedAt.IsZero() {
+				next.StatusChangedAt = next.UpdatedAt
+			}
 			st.Builds[i] = next
 			buildEvent(st, next, "observe_build")
 			return nil
@@ -681,6 +698,7 @@ func artifactBuild(b domain.Build, images []domain.BuildImage) domain.Build {
 func failedBuild(b domain.Build, code string) domain.Build {
 	now := time.Now().UTC()
 	b.Status = "FAILED"
+	b.StatusChangedAt = now
 	b.FailureCode = code
 	b.FailureMessage = code
 	b.FinishedAt = &now
@@ -826,6 +844,41 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 		}
 		if b.RestoreQuarantined {
 			continue
+		}
+		if b.Status == "QUEUED" || buildActive(b) {
+			threshold := time.Duration(a.config.StaleTimeoutSeconds()) * time.Second
+			changed := b.StatusChangedAt
+			if changed.IsZero() {
+				changed = b.UpdatedAt
+			}
+			if threshold > 0 && !changed.IsZero() && time.Since(changed) >= threshold {
+				next := b
+				code := "STALE_TIMEOUT"
+				if b.Status == "QUEUED" {
+					next.Status = "CANCELLED"
+				} else {
+					next.Status = "FAILED"
+				}
+				next.FailureCode = code
+				now := time.Now().UTC()
+				next.FinishedAt = &now
+				if e = s.advanceBuild(ctx, b, next, false); e != nil {
+					return e
+				}
+				if e = s.store.Update(ctx, func(state *domain.State) error {
+					copy := next
+					copy.Actor = "system/stale-watchdog"
+					buildEvent(state, copy, "stale_close_build")
+					ev := &state.Events[len(state.Events)-1]
+					ev.Data.Data["previous_status"] = b.Status
+					ev.Data.Data["age_seconds"] = int64(time.Since(changed).Seconds())
+					ev.Data.Data["resolution"] = next.Status
+					return nil
+				}); e != nil {
+					return e
+				}
+				continue
+			}
 		}
 		p, ok := a.config.Profile(b.ProfileID)
 		if !ok || p.ProductID != b.ProductID || p.Repository != b.Repository || p.Workflow != b.Workflow || p.PoolID != b.PoolID || !a.buildAuthorityMatches(b.ProfileID, b.AuthorityHash) {
@@ -1162,12 +1215,13 @@ func buildReconciliationAttention(st domain.State, productID string, now time.Ti
 	}
 	items := []map[string]any{}
 	for _, b := range builds {
-		since := b.QueuedAt
-		if b.DispatchedAt != nil {
-			since = *b.DispatchedAt
+		since := b.StatusChangedAt
+		if since.IsZero() {
+			since = b.UpdatedAt
 		}
 		age := max(int64(0), int64(now.Sub(since)/time.Second))
-		items = append(items, map[string]any{"id": b.ID, "reason": "BUILD_RECONCILIATION_REQUIRED", "profile_id": b.ProfileID, "failure_code": b.FailureCode, "age_seconds": age})
+		item := map[string]any{"id": b.ID, "reason": "BUILD_RECONCILIATION_REQUIRED", "profile_id": b.ProfileID, "failure_code": b.FailureCode, "age_seconds": age}
+		items = append(items, item)
 	}
 	return items
 }

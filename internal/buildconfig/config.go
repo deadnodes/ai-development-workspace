@@ -2,6 +2,7 @@
 package buildconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,16 +97,46 @@ type Image struct {
 	Repository string `json:"repository"`
 }
 type Config struct {
-	Signing            *Signing      `json:"signing,omitempty"`
-	Rollout            RolloutConfig `json:"rollout,omitempty"`
-	GitOps             []GitOps      `json:"gitops,omitempty"`
-	Environments       []Environment `json:"environments,omitempty"`
-	Connections        []Connection  `json:"connections"`
-	Registries         []Registry    `json:"registries"`
-	Pools              []Pool        `json:"pools"`
-	Profiles           []Profile     `json:"profiles"`
-	TimeoutSeconds     int           `json:"timeout_seconds,omitempty"`
-	RunLookbackSeconds int           `json:"run_lookback_seconds,omitempty"`
+	Signing                  *Signing      `json:"signing,omitempty"`
+	Rollout                  RolloutConfig `json:"rollout,omitempty"`
+	GitOps                   []GitOps      `json:"gitops,omitempty"`
+	Environments             []Environment `json:"environments,omitempty"`
+	Connections              []Connection  `json:"connections"`
+	Registries               []Registry    `json:"registries"`
+	Pools                    []Pool        `json:"pools"`
+	Profiles                 []Profile     `json:"profiles"`
+	TimeoutSeconds           int           `json:"timeout_seconds,omitempty"`
+	RunLookbackSeconds       int           `json:"run_lookback_seconds,omitempty"`
+	StaleOperationSeconds    int           `json:"stale_operation_seconds,omitempty"`
+	staleOperationSecondsSet bool
+}
+
+func (c Config) StaleTimeoutSeconds() int {
+	if c.StaleOperationSeconds == 0 && !c.staleOperationSecondsSet {
+		return 7200
+	}
+	return c.StaleOperationSeconds
+}
+
+func (c Config) StaleOperationSecondsConfigured() bool { return c.staleOperationSecondsSet }
+
+func (c *Config) MarkStaleOperationSecondsConfigured() { c.staleOperationSecondsSet = true }
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type configJSON Config
+	var decoded configJSON
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	_, c.staleOperationSecondsSet = fields["stale_operation_seconds"]
+	return nil
 }
 
 var ident = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
@@ -326,6 +357,12 @@ func (c *Config) Validate() error {
 		c.TimeoutSeconds = 7200
 	}
 	if c.TimeoutSeconds < 1 || c.TimeoutSeconds > 604800 {
+		return bad
+	}
+	if !c.staleOperationSecondsSet && c.StaleOperationSeconds == 0 {
+		c.StaleOperationSeconds = 7200
+	}
+	if c.StaleOperationSeconds < 0 || c.StaleOperationSeconds > 604800 {
 		return bad
 	}
 	return nil

@@ -119,7 +119,7 @@ func TestDeploymentHTTPMCPWithoutSockets(t *testing.T) {
 	for _, tool := range tools.Tools {
 		found[tool.Name] = true
 	}
-	for _, name := range []string{"deploy_build", "get_deployment", "list_deployments", "close_deployment"} {
+	for _, name := range []string{"deploy_build", "get_deployment", "list_deployments", "close_deployment", "reconcile_deployment"} {
 		if !found[name] {
 			t.Fatal("missing", name)
 		}
@@ -159,6 +159,9 @@ func TestDeploymentHTTPMCPWithoutSockets(t *testing.T) {
 		}
 	}
 	if code, raw := call("POST", "/api/deployments/"+d.ID+"/close", `{"product_id":"p","reason":"short"}`, true); code != 422 {
+		t.Fatal(code, string(raw))
+	}
+	if code, raw := call("POST", "/api/deployments/"+d.ID+"/reconcile", `{"product_id":"p","reason":"short"}`, true); code != 422 {
 		t.Fatal(code, string(raw))
 	}
 	result, e = session.CallTool(ctx, &mcp.CallToolParams{Name: "close_deployment", Arguments: map[string]any{"product_id": "p", "deployment_id": d.ID, "reason": "operator abandoned deployment", "request_key": "close"}})

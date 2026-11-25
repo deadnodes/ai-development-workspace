@@ -56,6 +56,7 @@ No API can modify this configuration. Restart is required for changes.
 
 | MCP | HTTP |
 | --- | --- |
+| `reconcile_deployment {product_id,deployment_id,reason,request_key?}` | `POST /api/deployments/{id}/reconcile` with `{product_id,reason,request_key?}` |
 | `close_deployment {product_id,deployment_id,reason,request_key?}` | `POST /api/deployments/{id}/close` with `{product_id,reason,request_key?}` |
 | `deploy_build {product_id,build_id,environment_id:"dev",request_key?,allow_rollback?,reason?}` | `POST /api/deployments` with the same JSON |
 | `get_deployment {product_id,deployment_id}` | `GET /api/deployments/{id}?product_id=…` |
@@ -149,6 +150,19 @@ request. Uncertain handles retain exclusive ownership of overlapping Dev files.
 Normal process restart resumes stored phases; backup restore quarantines unfinished
 deployments. Authority changes prevent old intents from executing and require
 operator reconciliation. No timeout silently releases uncertain file ownership.
+An administrator can use `reconcile_deployment` with a reason to make one immediate
+provider-backed resolution: RCP adopts a merged PR, recognizes planned image refs
+already present on main, or closes the PR and its `rcp/deploy/<id>` branch before
+marking the deployment `OPERATOR_CLOSED`. Use `close_deployment` only before a PR
+exists or during rollout verification. Re-run `deploy_build` after reconciliation
+releases the profile lock.
+
+Active deployments and builds whose status has not changed for 7,200 seconds are
+automatically closed with `STALE_TIMEOUT`; set `stale_operation_seconds` in the
+build configuration to change the threshold or `0` to disable the watchdog.
+Reconciliation-required deployments remain in attention with their age and the
+calculated auto-close time. A stale active Forgejo run is closed in RCP but may
+continue at Forgejo; cancel it there if it is still running.
 
 Offline tests use in-memory transports and fake adapters, never real GitHub,
 Forgejo or zot. PostgreSQL persistence tests require TEST_DATABASE_URL and an

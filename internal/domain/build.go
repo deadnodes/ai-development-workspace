@@ -4,6 +4,7 @@ import "time"
 
 // Build is its own durable asynchronous handle, independent of delivery Operations.
 type Build struct {
+	StatusChangedAt      time.Time            `json:"status_changed_at"`
 	SecurityStatus       string               `json:"security_status,omitempty"`
 	Security             []BuildImageSecurity `json:"security,omitempty"`
 	SigningStatus        string               `json:"signing_status"`

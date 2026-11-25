@@ -4,6 +4,7 @@ import "time"
 
 // Deployment records GitOps completion and optional read-only runtime rollout verification.
 type Deployment struct {
+	StatusChangedAt          time.Time  `json:"status_changed_at"`
 	SignatureVerified        bool       `json:"signature_verified"`
 	Trigger                  string     `json:"trigger"`
 	SupersededBy             string     `json:"superseded_by,omitempty"`
@@ -88,4 +89,16 @@ type CloseDeploymentRequest struct {
 	DeploymentID string `json:"deployment_id"`
 	Reason       string `json:"reason"`
 	RequestKey   string `json:"request_key,omitempty"`
+}
+
+type ReconcileDeploymentRequest struct {
+	ProductID    string `json:"product_id"`
+	DeploymentID string `json:"deployment_id"`
+	Reason       string `json:"reason"`
+	RequestKey   string `json:"request_key,omitempty"`
+}
+
+type ReconcileDeploymentResult struct {
+	Deployment Deployment `json:"deployment"`
+	Resolution string     `json:"resolution"`
 }
