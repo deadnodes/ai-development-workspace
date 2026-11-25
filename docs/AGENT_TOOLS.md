@@ -923,6 +923,57 @@ Search curated Product knowledge nodes and links.
 
 **Authority:** Read-only curated knowledge; does not turn knowledge into tasks or permissions.
 
+### `POST /api/products/{id}/knowledge` — http_route
+
+Append a project knowledge snapshot for this Product.
+
+**When:** Use to maintain the structured overview, instructions, parameters and area relationships; read current knowledge before replacing it.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `knowledge` (object, required): ProjectKnowledge fields: overview, instructions, parameters, areas and relationships
+
+**Output:** Persisted project knowledge snapshot.
+
+**Errors:**
+
+- `VALIDATION`: Knowledge fields or relationships invalid; correct payload using application validation.
+- `NOT_FOUND`: Product not found; verify path ID.
+
+**Example:** `POST /api/products/PRODUCT/knowledge {"knowledge":{"overview":"Service context","instructions":"Preserve API compatibility"}}`
+
+**Related:** `POST /api/products/{id}/knowledge/nodes`, `search_product_knowledge`
+
+**Authority:** Stores context only; does not create tasks, permissions, or execution commands.
+
+### `POST /api/products/{id}/knowledge/nodes` — http_route
+
+Create or append a versioned Product knowledge node and optional relationships.
+
+**When:** Use for durable scoped decisions, constraints, contracts or discoveries; reuse node ID to supersede while preserving history.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `node` (object, required): Node ID, kind, title, content, keywords, status and optional area
+- `edges` (array[object], optional): Knowledge relationships
+
+**Output:** Persisted knowledge node snapshot and relationship result.
+
+**Errors:**
+
+- `VALIDATION`: Node or edge fields invalid or out of scope; correct IDs and allowed values.
+- `NOT_FOUND`: Product or referenced node/area not found; refresh Product knowledge.
+
+**Example:** `POST /api/products/PRODUCT/knowledge/nodes {"node":{"id":"api-v1","kind":"contract","title":"API v1","content":"Keep existing clients working","keywords":["api"],"status":"active"}}`
+
+**Related:** `search_product_knowledge`, `POST /api/products/{id}/knowledge`
+
+**Authority:** Records knowledge only; nodes are not tasks, authorization, or commands and must not contain secrets.
+
 ## delivery
 
 ### `configure_component` — execute_action
@@ -1656,6 +1707,169 @@ Read pushed runtime snapshots and cluster freshness.
 **Related:** `get_runtime_report`, `GET /api/environments/{id}/state`
 
 **Authority:** Read-only reported snapshots; no collector or rollout is invoked and stale data is not current health.
+
+### `POST /api/features/{id}/update-environment` — http_route
+
+Patch explicit revisions for one Feature into its current pinned DEV or TEST composition.
+
+**When:** Use when updating one feature while preserving the other selected features; supply current selection CAS and idempotency key.
+
+**Inputs:**
+
+- `id` (string, required): Feature path ID
+- `actor` (string, optional): Attribution
+- `environment_id` (string, required): Target DEV/TEST environment
+- `revision_ids` (array[string], required): Explicit revisions to include for this Feature
+- `idempotency_key` (string, required): Durable deduplication key
+- `expected_selection` (object, required): Current composition ID, operation ID and generation CAS
+
+**Output:** Persistent COMPOSE operation handle for the updated selection.
+
+**Errors:**
+
+- `VALIDATION`: Messages include invalid feature/environment scope, revision mismatch, or missing idempotency/CAS; refresh selection and correct fields.
+- `CONFLICT`: Selection changed or idempotency key was reused with different intent; re-read desired composition.
+
+**Example:** `POST /api/features/FEATURE/update-environment {"actor":"agent","environment_id":"ENV","revision_ids":["REV"],"idempotency_key":"patch-feature-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}`
+
+**Related:** `POST /api/compositions/{id}/reconcile`, `get_operation`
+
+**Authority:** Queues only the configured composition workflow; does not edit source, merge PRs, or prove deployment/runtime health.
+
+### `POST /api/integrations/{id}/deploy` — http_route
+
+Request delivery of an Integration revision to a configured environment.
+
+**When:** Use after reviewing the exact Integration, revision, environment mapping and deploy policy.
+
+**Inputs:**
+
+- `id` (string, required): Integration path ID
+- `actor` (string, optional): Attribution
+- `environment_id` (string, required): Configured target environment
+
+**Output:** Deployment record and persistent operation handle.
+
+**Errors:**
+
+- `NOT_FOUND`: Integration or environment not found; refresh scoped context.
+- `VALIDATION`: Integration/environment scope or target mapping invalid; correct the selected IDs/configuration.
+- `CONFLICT`: Delivery is disabled, stale, or blocked by current policy; inspect current state before retry.
+
+**Example:** `POST /api/integrations/INTEGRATION/deploy {"actor":"agent","environment_id":"ENV"}`
+
+**Related:** `deploy_integration`, `get_operation`, `GET /api/environments/{id}/state`
+
+**Authority:** Requests configured delivery only; does not guarantee provider success or healthy runtime.
+
+### `POST /api/operations/{id}/runtime` — http_route
+
+Record attributed runtime evidence for an operation child and exact deployed artifact.
+
+**When:** Use after observing the target runtime; bind evidence to the operation, environment, GitOps commit and digest.
+
+**Inputs:**
+
+- `id` (string, required): Operation child path ID
+- `actor` (string, optional): Attribution
+- `environment_id` (string, required): Observed environment
+- `gitops_commit` (string, required): Exact GitOps commit
+- `artifact_digest` (string, required): Exact deployed artifact digest
+- `healthy` (boolean, required): Observed health result
+- `details` (string, optional): Evidence details
+
+**Output:** Persisted runtime observation attached to operation.
+
+**Errors:**
+
+- `VALIDATION`: Messages include missing exact target identity or invalid environment/artifact association; verify evidence against child operation.
+- `NOT_FOUND`: Operation or environment not found; refresh operation context.
+
+**Example:** `POST /api/operations/CHILD/runtime {"environment_id":"ENV","gitops_commit":"SHA","artifact_digest":"sha256:DIGEST","healthy":true}`
+
+**Related:** `record_runtime_observation`, `get_operation`
+
+**Authority:** Stores caller-supplied observation; does not collect telemetry, deploy, or authenticate the observer.
+
+### `POST /api/products/{id}/assemble-environment` — http_route
+
+Create and queue an environment composition from captured active Integration revisions.
+
+**When:** Use to assemble selected current work for a configured environment; inspect selection and include explicit integration_ids when narrowing scope.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `environment_id` (string, required): Target environment
+- `name` (string, optional): Optional composition label
+- `integration_ids` (array[string], optional): Selected Integrations; omitted/empty selects captured active work
+- `expected_selection` (object, optional): Optional desired-selection CAS
+
+**Output:** Composition record and durable COMPOSE operation handle.
+
+**Errors:**
+
+- `VALIDATION`: Invalid scope, selection or environment mapping; correct IDs and configured target.
+- `CONFLICT`: Selection changed or a policy fence blocks composition; inspect current state.
+
+**Example:** `POST /api/products/PRODUCT/assemble-environment {"environment_id":"DEV","integration_ids":["INTEGRATION"]}`
+
+**Related:** `POST /api/compositions/{id}/reconcile`, `get_operation`
+
+**Authority:** Queues configured Git/build/GitOps orchestration; does not merge source or establish runtime health.
+
+### `POST /api/products/{id}/conflicts/claim` — http_route
+
+Claim responsibility for externally resolving a composition conflict.
+
+**When:** Use when assigned to resolve a specific unresolved conflict; existing claims must belong to caller.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Claiming agent attribution
+- `conflict_id` (string, required): Product-scoped conflict ID
+
+**Output:** Updated conflict claim/owner state.
+
+**Errors:**
+
+- `NOT_FOUND`: Conflict or Product not found; refresh composition context.
+- `CONFLICT`: Conflict is already claimed by another actor; coordinate with owner.
+
+**Example:** `POST /api/products/PRODUCT/conflicts/claim {"conflict_id":"CONFLICT"}`
+
+**Related:** `POST /api/products/{id}/conflicts/resolution`, `POST /api/products/{id}/conflicts/verify`
+
+**Authority:** Claims coordination only; does not edit source or resolve the conflict.
+
+### `POST /api/products/{id}/conflicts/resolution` — http_route
+
+Record the claimed conflict owner's externally produced resolution commit and rationale.
+
+**When:** Use after external source resolution; ensure the commit is exact and claim belongs to actor.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Claim owner attribution
+- `conflict_id` (string, required): Conflict ID
+- `commit` (string, required): Resolution commit SHA
+- `rationale` (string, required): Resolution explanation
+
+**Output:** Recorded resolution commit and verification-required state.
+
+**Errors:**
+
+- `VALIDATION`: Commit or rationale invalid, or conflict not claimed by actor; satisfy claim and exact commit requirements.
+- `NOT_FOUND`: Conflict not found; refresh Product context.
+
+**Example:** `POST /api/products/PRODUCT/conflicts/resolution {"conflict_id":"CONFLICT","commit":"FULL_SHA","rationale":"Preserved both contracts"}`
+
+**Related:** `claim_composition_conflict`, `verify_conflict_resolution`
+
+**Authority:** Records provenance only; does not edit source, merge, deploy, or imply verification.
 
 ## discovery
 
@@ -4065,6 +4279,252 @@ Record an externally performed release in append-only Product history.
 
 **Authority:** Records an external assertion; does not run a release, merge, build, promote or deploy.
 
+### `POST /api/products/{id}/candidate-dev/capture-baseline` — http_route
+
+Capture server-owned evidence for the complete shared DEV baseline under an active candidate reservation.
+
+**When:** Use before candidate effects, with the reservation owner and current exact selection.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Reservation owner attribution
+- `reservation_operation_id` (string, required): Active reservation handle
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact composition/operation/generation CAS
+
+**Output:** Persistent baseline capture operation and evidence.
+
+**Errors:**
+
+- `VALIDATION`: Reservation, owner, selection or complete target validation failed; inspect current reservation and mappings.
+- `CONFLICT`: Stale selection or conflicting capture; inspect existing operation.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/capture-baseline {"reservation_operation_id":"RESERVATION","request_key":"baseline-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}`
+
+**Related:** `reserve_candidate_dev`, `get_operation`
+
+**Authority:** Captures restoration availability evidence only; does not grant build provenance, approval, unlock, or production rights.
+
+### `POST /api/products/{id}/candidate-dev/confirm-restoration` — http_route
+
+Record attributed control confirmation for the exact stable restoration plan.
+
+**When:** Use only after reviewing the complete plan and its hash and after externally reviewed Flux merges are complete.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, required): Attribution, not authenticated human approval
+- `restoration_operation_id` (string, required): Restoration operation handle
+- `expected_plan_hash` (string, required): Hash of complete stable plan
+- `request_key` (string, required): Unique idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent confirmation receipt/operation.
+
+**Errors:**
+
+- `VALIDATION`: Messages include exact scope/actor, selection, owner, plan, or prior external merge requirement; satisfy each prerequisite.
+- `CONFLICT`: Confirmation is immutable; inspect existing receipt instead of changing intent.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/confirm-restoration {"actor":"operator","restoration_operation_id":"RESTORE","expected_plan_hash":"HASH","request_key":"confirm-restoration-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}`
+
+**Related:** `request_candidate_dev_restoration`, `verify_candidate_dev_restoration`
+
+**Authority:** Records attributed confirmation only; does not authenticate a human or merge Flux changes.
+
+### `POST /api/products/{id}/candidate-dev/deploy` — http_route
+
+Prepare PR-only DEV/TEST delivery of existing exact main-candidate artifacts under reservation.
+
+**When:** Use after reservation and fresh complete baseline verification for the same owner and current selection.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `reservation_operation_id` (string, required): Active reservation handle
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent candidate activation operation and child delivery evidence.
+
+**Errors:**
+
+- `VALIDATION`: Invalid reservation, baseline, artifact or target; inspect operation and prerequisite evidence.
+- `CONFLICT`: Selection/fence changed or another admission is active; stop and re-read.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/deploy {"reservation_operation_id":"RESERVATION","request_key":"deploy-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}`
+
+**Related:** `reserve_candidate_dev`, `verify_candidate_dev_runtime`
+
+**Authority:** Does not rebuild or edit source, merge PRs, accept runtime, or promote production; later blind release is fenced.
+
+### `POST /api/products/{id}/candidate-dev/release` — http_route
+
+Release an unchanged candidate DEV reservation using owner attribution and exact CAS.
+
+**When:** Use only when reservation is unchanged and no effects require restoration.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Reservation owner attribution
+- `reservation_operation_id` (string, required): Reservation handle
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Reservation release receipt and updated fence state.
+
+**Errors:**
+
+- `VALIDATION`: Owner, reservation, or exact selection invalid; inspect current hold.
+- `CONFLICT`: Effects/restoration uncertainty prohibit direct release; use restoration protocol.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/release {"reservation_operation_id":"RESERVATION","request_key":"release-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}`
+
+**Related:** `request_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
+
+**Authority:** Does not restore workloads, revive operations, or physically garbage-collect resources.
+
+### `POST /api/products/{id}/candidate-dev/release-after-restoration` — http_route
+
+Unlock a reservation after exact restoration confirmation and complete fresh runtime proof.
+
+**When:** Use only after the latest restoration verification succeeded and all effects settled.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `restoration_operation_id` (string, required): Restoration handle
+- `restoration_verification_operation_id` (string, required): Successful proof operation
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Scoped unlock receipt.
+
+**Errors:**
+
+- `VALIDATION`: Confirmation, freshness, proof coverage or settlement prerequisite missing; inspect restoration evidence.
+- `CONFLICT`: Stale selection or fence; re-read latest state.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/release-after-restoration {"restoration_operation_id":"RESTORE","restoration_verification_operation_id":"VERIFY","request_key":"unlock-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":3}}`
+
+**Related:** `confirm_candidate_dev_restoration`, `verify_candidate_dev_restoration`
+
+**Authority:** Unlocks only the scoped reservation after prerequisites; no TTL unlock or physical cleanup.
+
+### `POST /api/products/{id}/candidate-dev/request-restoration` — http_route
+
+Request bounded restoration of every original baseline component and advance recovery fencing.
+
+**When:** Use when candidate effects must be restored; inspect the complete asynchronous plan before confirmation.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `reservation_operation_id` (string, required): Reservation handle
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent restoration plan operation.
+
+**Errors:**
+
+- `VALIDATION`: Invalid reservation or selection; refresh current hold and baseline.
+- `CONFLICT`: Conflicting recovery request or stale fence; inspect existing operation.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/request-restoration {"reservation_operation_id":"RESERVATION","request_key":"restore-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}`
+
+**Related:** `confirm_candidate_dev_restoration`, `verify_candidate_dev_restoration`
+
+**Authority:** Requests bounded restoration planning; does not merge Flux, confirm, verify runtime, or unlock.
+
+### `POST /api/products/{id}/candidate-dev/reserve` — http_route
+
+Reserve a DEV/TEST selection for preparation of an exact native main candidate.
+
+**When:** Use before candidate preparation after checking selected candidate and current environment selection.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `candidate_operation_id` (string, required): Candidate operation handle
+- `environment_id` (string, required): DEV/TEST environment
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Reservation operation that fences managed deployments.
+
+**Errors:**
+
+- `VALIDATION`: Candidate, environment, or CAS invalid; verify exact candidate and target.
+- `CONFLICT`: Existing reservation or selection change blocks admission; inspect current hold.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/reserve {"candidate_operation_id":"CANDIDATE","environment_id":"DEV","request_key":"reserve-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}`
+
+**Related:** `capture_candidate_dev_baseline`, `deploy_candidate_dev`
+
+**Authority:** Reserves/fences selection only; does not deploy or accept candidate runtime.
+
+### `POST /api/products/{id}/candidate-dev/verify-restoration` — http_route
+
+Request fresh server-owned availability and complete original-image runtime proof.
+
+**When:** Use after separately confirmed external reviewed Flux restoration merges.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `restoration_operation_id` (string, required): Restoration operation handle
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent verification operation with per-component proof.
+
+**Errors:**
+
+- `VALIDATION`: Confirmation, merge, scope or exact selection prerequisite missing; correct recovery state.
+- `CONFLICT`: Stale plan/fence; inspect latest restoration operation.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/verify-restoration {"restoration_operation_id":"RESTORE","request_key":"verify-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}`
+
+**Related:** `confirm_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
+
+**Authority:** Requests point-in-time restoration proof; does not unlock the reservation.
+
+### `POST /api/products/{id}/candidate-dev/verify-runtime` — http_route
+
+Read configured complete runtime groups and exact Flux/GitOps/image identity for an activated candidate.
+
+**When:** Use for point-in-time runtime verification of the same owner's active candidate.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Attribution
+- `activation_operation_id` (string, required): Candidate activation operation
+- `request_key` (string, required): Idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent verification operation and server-owned runtime evidence.
+
+**Errors:**
+
+- `VALIDATION`: Activation, owner, scope or runtime coverage invalid; inspect target configuration.
+- `CONFLICT`: Activation is not current or selection/fence changed; refresh state.
+
+**Example:** `POST /api/products/PRODUCT/candidate-dev/verify-runtime {"activation_operation_id":"ACTIVATION","request_key":"runtime-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}`
+
+**Related:** `deploy_candidate_dev`, `get_operation`
+
+**Authority:** Reports runtime identity/health only; does not establish functional acceptance, restoration, unlock, merge, or production promotion.
+
 ## repositories
 
 ### `classify_repository` — execute_action
@@ -4255,6 +4715,60 @@ List branches visible for an attached repository connection.
 
 **Authority:** Read-only provider query; does not create, delete or switch branches.
 
+### `POST /api/local-git/plan` — http_route
+
+Persist a bounded local checkout FETCH or FAST_FORWARD plan for an external host agent.
+
+**When:** Use after reading checkout state and choosing an exact expected HEAD; FAST_FORWARD requires a clean attached branch behind cached origin.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `checkout_id` (string, required): Configured local checkout
+- `actor` (string, optional): Attribution
+- `action` (string, required): FETCH or FAST_FORWARD
+- `expected_head` (string, required): Exact currently observed checkout HEAD
+
+**Output:** Recorded plan with target branch/ref and plan identity.
+
+**Errors:**
+
+- `VALIDATION`: Messages include unsupported action, checkout outside Product/workspace, dirty checkout or stale expected_head; refresh state and re-plan.
+- `NOT_FOUND`: Product or checkout not found; verify identifiers.
+
+**Example:** `POST /api/local-git/plan {"product_id":"PRODUCT","checkout_id":"CHECKOUT","action":"FETCH","expected_head":"FULL_SHA"}`
+
+**Related:** `get_local_git_state`, `POST /api/local-git/record`
+
+**Authority:** Records a plan only; does not execute Git, use credentials, or edit source.
+
+### `POST /api/local-git/record` — http_route
+
+Re-read checkout state and append the observed result of a previously recorded local Git plan.
+
+**When:** Use after an external host agent attempted the plan; report actual state rather than presumed success.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `checkout_id` (string, required): Configured local checkout
+- `actor` (string, optional): Attribution
+- `plan_id` (string, required): Previously recorded plan ID
+- `expected_head` (string, required): Expected pre-operation HEAD
+
+**Output:** Appended local Git observation linked to the plan.
+
+**Errors:**
+
+- `VALIDATION`: State differs from exact plan, branch/target, or FAST_FORWARD cleanliness; inspect checkout and retain discrepancy.
+- `NOT_FOUND`: Product, checkout, or plan not found; verify IDs.
+
+**Example:** `POST /api/local-git/record {"product_id":"PRODUCT","checkout_id":"CHECKOUT","plan_id":"PLAN","expected_head":"FULL_SHA"}`
+
+**Related:** `POST /api/local-git/plan`, `get_local_git_state`
+
+**Authority:** Records observed state only; FETCH is not proof of network execution and this endpoint never executes Git.
+
 ## verification
 
 ### `create_test_scenario` — execute_action
@@ -4329,6 +4843,32 @@ Record execution evidence for one immutable scenario version against an exact co
 **Related:** `create_test_scenario`, `revise_test_scenario`
 
 **Authority:** Records supplied evidence; does not execute tests or make failed evidence disappear.
+
+### `POST /api/products/{id}/conflicts/verify` — http_route
+
+Verify passing evidence for every affected Integration and blocking check on the exact resolution commit.
+
+**When:** Use after recording resolution and collecting current evidence tied to that commit.
+
+**Inputs:**
+
+- `id` (string, required): Product path ID
+- `actor` (string, optional): Verifier attribution
+- `conflict_id` (string, required): Conflict ID
+- `result_ids` (array[string], required): Exact passing result IDs covering affected work
+
+**Output:** Conflict verification state and evidence links.
+
+**Errors:**
+
+- `VALIDATION`: Evidence is missing, failing, stale, or does not cover every affected Integration/check; collect valid exact-commit results.
+- `NOT_FOUND`: Conflict or result not found; verify identifiers.
+
+**Example:** `POST /api/products/PRODUCT/conflicts/verify {"conflict_id":"CONFLICT","result_ids":["RESULT_A","RESULT_B"]}`
+
+**Related:** `record_conflict_resolution`, `get_operation`
+
+**Authority:** Records verification outcome only; does not resolve source or authorize deployment/release.
 
 ## work tracking
 
@@ -5529,10 +6069,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `http_route:POST /api/local-git/plan`
-- `http_route:POST /api/local-git/record`
-- `http_route:POST /api/products/{id}/knowledge`
-- `http_route:POST /api/products/{id}/knowledge/nodes`
 - `http_route:POST /api/reviews/sync`
 - `http_route:POST /api/runtime-reports`
 - `http_route:POST /api/signatures`
