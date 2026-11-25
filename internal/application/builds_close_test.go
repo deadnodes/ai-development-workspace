@@ -38,6 +38,7 @@ func TestCloseBuildActiveAndAdmission(t *testing.T) {
 			expected := b
 			expected.Status, expected.FailureCode, expected.FailureMessage = "FAILED", "OPERATOR_CLOSED", "abandoned by operator"
 			expected.UpdatedAt, expected.FinishedAt = closed.UpdatedAt, closed.FinishedAt
+			expected.StatusChangedAt = closed.StatusChangedAt
 			if closed.FinishedAt == nil || !reflect.DeepEqual(expected, closed) || buildActive(closed) {
 				t.Fatalf("evidence changed: %+v", closed)
 			}

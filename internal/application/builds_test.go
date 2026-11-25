@@ -1347,6 +1347,7 @@ func TestBuildReconciliationAttention(t *testing.T) {
 	b := queue(t, s, "")
 	old := time.Now().Add(-time.Hour)
 	m.state.Builds[0].Status = "RECONCILIATION_REQUIRED"
+	m.state.Builds[0].StatusChangedAt = old
 	m.state.Builds[0].FailureCode = "RUN_SOURCE_MISMATCH"
 	m.state.Builds[0].DispatchedAt = &old
 	result, err := s.Query(context.Background(), "list_attention", "p")

@@ -14,6 +14,7 @@ import (
 
 type deploymentService interface {
 	CloseDeployment(context.Context, domain.CloseDeploymentRequest) (domain.Deployment, error)
+	ReconcileDeployment(context.Context, domain.ReconcileDeploymentRequest) (domain.ReconcileDeploymentResult, error)
 	DeployBuild(context.Context, domain.DeployBuildRequest) (domain.Deployment, error)
 	GetDeployment(context.Context, domain.DeploymentLookup) (domain.Deployment, error)
 	ListDeployments(context.Context, domain.ListDeploymentsRequest) (domain.DeploymentPage, error)
@@ -68,6 +69,22 @@ func registerDeploymentRoutes(mux *http.ServeMux, service Service) {
 		v, e := s.CloseDeployment(r.Context(), domain.CloseDeploymentRequest{ProductID: in.ProductID, DeploymentID: r.PathValue("id"), Reason: in.Reason, RequestKey: in.RequestKey})
 		respond(w, v, e)
 	})
+	mux.HandleFunc("POST /api/deployments/{id}/reconcile", func(w http.ResponseWriter, r *http.Request) {
+		s, ok := get(w)
+		if !ok {
+			return
+		}
+		var in struct {
+			ProductID  string `json:"product_id"`
+			Reason     string `json:"reason"`
+			RequestKey string `json:"request_key,omitempty"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		v, e := s.ReconcileDeployment(r.Context(), domain.ReconcileDeploymentRequest{ProductID: in.ProductID, DeploymentID: r.PathValue("id"), Reason: in.Reason, RequestKey: in.RequestKey})
+		respond(w, v, e)
+	})
 	mux.HandleFunc("GET /api/deployments/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := get(w)
 		if !ok {
@@ -108,12 +125,20 @@ func registerDeploymentTools(server *mcp.Server, service Service) {
 		v, e := s.DeployBuild(ctx, in)
 		return nil, v, e
 	})
-	mcp.AddTool(server, deploymentTool("close_deployment", "Admin only: close a Dev deployment before GitOps proposal side effects or in VERIFYING_ROLLOUT, with an audit reason."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.CloseDeploymentRequest) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(server, deploymentTool("close_deployment", "Admin only: close a Dev deployment before GitOps proposal side effects or in VERIFYING_ROLLOUT. For any deployment with a PR or uncertain GitOps state, use reconcile_deployment."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.CloseDeploymentRequest) (*mcp.CallToolResult, any, error) {
 		s, ok := service.(deploymentService)
 		if !ok {
 			return nil, nil, unavailable
 		}
 		v, e := s.CloseDeployment(ctx, in)
+		return nil, v, e
+	})
+	mcp.AddTool(server, deploymentTool("reconcile_deployment", "Admin only: perform one provider-backed resolution of an active Dev deployment. Adopts a merged PR or image refs already on main; otherwise closes its PR and deployment branch and records OPERATOR_CLOSED. Requires an audit reason."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.ReconcileDeploymentRequest) (*mcp.CallToolResult, any, error) {
+		s, ok := service.(deploymentService)
+		if !ok {
+			return nil, nil, unavailable
+		}
+		v, e := s.ReconcileDeployment(ctx, in)
 		return nil, v, e
 	})
 	mcp.AddTool(server, deploymentTool("get_deployment", "Read one Product-scoped Deployment including CI and registry evidence, PR and merge SHA. GitOps completion does not claim runtime health."), func(ctx context.Context, _ *mcp.CallToolRequest, in domain.DeploymentLookup) (*mcp.CallToolResult, any, error) {
@@ -151,6 +176,11 @@ func deploymentTool(name, description string) *mcp.Tool {
 	case "close_deployment":
 		fields["deployment_id"] = str(128)
 		fields["reason"] = map[string]any{"type": "string", "maxLength": 2000}
+		fields["request_key"] = str(128)
+		required = append(required, "deployment_id", "reason")
+	case "reconcile_deployment":
+		fields["deployment_id"] = str(128)
+		fields["reason"] = map[string]any{"type": "string", "minLength": 8, "maxLength": 500}
 		fields["request_key"] = str(128)
 		required = append(required, "deployment_id", "reason")
 	case "get_deployment":

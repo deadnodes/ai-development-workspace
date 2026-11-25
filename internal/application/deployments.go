@@ -38,6 +38,11 @@ type DeploymentGitOps interface {
 	VerifyDeployment(context.Context, buildconfig.GitOps, github.DeployPlan, github.DeployPR) error
 	MergeDeployment(context.Context, buildconfig.GitOps, int, string) (string, error)
 }
+type deploymentReconcilerProvider interface {
+	DeploymentAppliedOnMain(context.Context, buildconfig.GitOps, github.DeployPlan) (string, bool, error)
+	CloseDeployment(context.Context, buildconfig.GitOps, int) error
+	DeleteDeploymentBranch(context.Context, buildconfig.GitOps, string) error
+}
 type deployRuntime struct {
 	runtime  DeploymentRuntime
 	source   DeploymentSource
@@ -58,6 +63,25 @@ func (s *Service) ConfigureDeployments(source DeploymentSource, registry Deploym
 }
 func deploymentTerminal(d domain.Deployment) bool {
 	return d.Status == "SUCCEEDED" || d.Status == "FAILED"
+}
+
+func deploymentReconciliationAttention(st domain.State, productID string, now time.Time, threshold time.Duration) []map[string]any {
+	var items []map[string]any
+	for _, d := range st.Deployments {
+		if d.ProductID != productID || d.Status != "RECONCILIATION_REQUIRED" {
+			continue
+		}
+		changed := d.StatusChangedAt
+		if changed.IsZero() {
+			changed = d.UpdatedAt
+		}
+		item := map[string]any{"id": d.ID, "reason": "DEPLOYMENT_RECONCILIATION_REQUIRED", "profile_id": d.ProfileID, "failure_code": d.FailureCode, "age_seconds": max(int64(0), int64(now.Sub(changed).Seconds()))}
+		if threshold > 0 {
+			item["auto_closes_at"] = changed.Add(threshold)
+		}
+		items = append(items, item)
+	}
+	return items
 }
 func deploymentEvent(st *domain.State, d domain.Deployment, action string) {
 	st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: d.Actor, At: d.UpdatedAt, EntityID: d.ID, ProductID: d.ProductID, Data: domain.Command{Action: action, ProductID: d.ProductID, ID: d.ID, Actor: d.Actor, Data: map[string]any{"ci_evidence": d.CIEvidence, "ci_pr_number": d.CIPRNumber, "ci_pr_head_sha": d.CIPRHeadSHA, "status": d.Status, "failure_code": d.FailureCode, "rollout_verified": d.RolloutVerified, "rollout_failure": d.RolloutFailure, "rollout_deadline": d.RolloutDeadline, "merged_at": d.MergedAt, "pr_url": d.PRURL, "merge_commit_sha": d.MergeCommitSHA}}})
@@ -389,7 +413,14 @@ func (s *Service) advanceDeployment(ctx context.Context, old domain.Deployment, 
 					}
 				}
 			}
-			next.UpdatedAt = time.Now().UTC()
+			now := time.Now().UTC()
+			if current.Status != next.Status {
+				next.StatusChangedAt = now
+			}
+			if next.StatusChangedAt.IsZero() {
+				next.StatusChangedAt = now
+			}
+			next.UpdatedAt = now
 			st.Deployments[i] = *next
 			deploymentEvent(st, *next, "observe_deployment")
 			return nil
@@ -482,6 +513,7 @@ func failedDeployment(d domain.Deployment, code string) domain.Deployment {
 	d.Status = "FAILED"
 	d.FailureCode = code
 	now := time.Now().UTC()
+	d.StatusChangedAt = now
 	d.FinishedAt = &now
 	return d
 }
@@ -490,6 +522,7 @@ func succeededDeployment(d domain.Deployment) domain.Deployment {
 	d.FailureCode = ""
 	d.UncertainAction = ""
 	now := time.Now().UTC()
+	d.StatusChangedAt = now
 	d.FinishedAt = &now
 	return d
 }
@@ -528,6 +561,44 @@ func (s *Service) DispatchDeploymentsOnce(ctx context.Context) error {
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		changed := d.StatusChangedAt
+		if changed.IsZero() {
+			changed = d.UpdatedAt
+		}
+		threshold := time.Duration(s.builds.config.StaleTimeoutSeconds()) * time.Second
+		if threshold > 0 && !changed.IsZero() && time.Since(changed) >= threshold {
+			p, ok := s.builds.config.Profile(d.ProfileID)
+			g, gok := s.builds.config.DevGitOps()
+			if !ok || !gok || p.ProductID != d.ProductID || d.EnvironmentID != "dev" || !s.builds.deploymentAuthorityMatches(d.ProfileID, d.AuthorityHash) {
+				continue
+			}
+			durationText := threshold.String()
+			if threshold == 2*time.Hour {
+				durationText = "2h"
+			}
+			reason := fmt.Sprintf("status %s unchanged for %s", d.Status, durationText)
+			next, resolution, err := s.resolveDeployment(ctx, d, p, g, reason, "STALE_TIMEOUT")
+			if err != nil {
+				// Provider errors are transient; leave the current handle untouched.
+				slog.Warn("stale deployment resolution failed", "deployment_id", d.ID, "error", delivery.SafeRolloutReason(err.Error()))
+				continue
+			}
+			next.Actor = "system/stale-watchdog"
+			if err = s.advanceDeployment(ctx, d, &next, false); err != nil {
+				return err
+			}
+			if err = s.store.Update(ctx, func(state *domain.State) error {
+				deploymentEvent(state, next, "stale_close_deployment")
+				ev := &state.Events[len(state.Events)-1]
+				ev.Data.Data["previous_status"] = d.Status
+				ev.Data.Data["age_seconds"] = int64(time.Since(changed).Seconds())
+				ev.Data.Data["resolution"] = resolution
+				return nil
+			}); err != nil {
+				return err
+			}
+			continue
 		}
 		p, ok := s.builds.config.Profile(d.ProfileID)
 		g, gok := s.builds.config.DevGitOps()

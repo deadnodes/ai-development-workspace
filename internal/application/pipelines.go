@@ -166,6 +166,9 @@ func deploymentPipelineStage(d domain.Deployment, canClose bool) domain.Pipeline
 	if canClose && deploymentSafeToClose(d) {
 		s.AllowedActions = append(s.AllowedActions, "close_deployment")
 	}
+	if canClose && !deploymentTerminal(d) {
+		s.AllowedActions = append(s.AllowedActions, "reconcile_deployment")
+	}
 	return s
 }
 func failureHint(code string) string {
@@ -206,7 +209,7 @@ func failureHint(code string) string {
 		"GITOPS_SCOPE_CHANGED":         "The GitOps target changed while RCP was preparing the update. Review the current target and retry.",
 		"GITOPS_TARGET_MISSING":        "The configured image target was not found. Correct the GitOps file selector and retry.",
 		"DEPLOYMENT_AUTHORITY_CHANGED": "Deployment authority changed during this request. An administrator must review the configuration and reconcile this deployment.",
-		"SUPERSEDED":                   "A newer deployment replaced this one.", "OPERATOR_CLOSED": "An operator closed this deployment.", "REQUEST_KEY_CONFLICT": "This request key was already used for different deployment inputs. Use a fresh key."}
+		"SUPERSEDED":                   "A newer deployment replaced this one.", "OPERATOR_CLOSED": "An operator closed this operation. Re-run deploy_build / queue_build when ready.", "STALE_TIMEOUT": "This operation was closed after remaining unchanged for two hours. The Forgejo run may continue; cancel it there if needed. Re-run deploy_build / queue_build when ready.", "REQUEST_KEY_CONFLICT": "This request key was already used for different deployment inputs. Use a fresh key."}
 	if h, ok := hints[code]; ok {
 		return h
 	}

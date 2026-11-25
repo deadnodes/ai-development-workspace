@@ -310,6 +310,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items = append(items, secretWarnings...)
 		items = append(items, unlinkedGitCommits(st, id)...)
 		items = append(items, buildReconciliationAttention(st, id, time.Now().UTC())...)
+		if s.builds != nil {
+			items = append(items, deploymentReconciliationAttention(st, id, time.Now().UTC(), time.Duration(s.builds.config.StaleTimeoutSeconds())*time.Second)...)
+		}
 		ciBuilds := buildCIAttention(st, id)
 		items = append(items, ciBuilds...)
 		items = append(items, mainCIAttention(st, id)...)
