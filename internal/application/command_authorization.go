@@ -35,9 +35,13 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	var scope *domain.StateMutationScope
 	switch s.command.Action {
 	case "claim_execution", "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
+	case "report_turn_end":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}}
+	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_events"}, AppendCollections: []string{"events"}}
 	case "create_execution_group":
-		scope = &domain.StateMutationScope{AppendCollections: []string{"integration_executions", "execution_groups", "events"}}
+		scope = &domain.StateMutationScope{AppendCollections: []string{"integration_executions", "execution_groups", "events", "execution_events"}}
 	case "add_execution_group_member", "remove_execution_group_member":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups"}, AppendCollections: []string{"events"}}
 	case "set_product_stalled_timeout":

@@ -212,14 +212,21 @@ between turns, so heartbeat expiry alone would mark every idle orchestrator
   the same endpoint.
 
 On turn end RCP looks up every execution whose harness `session_ref` matches,
-renews nothing, and for each member of that orchestrator's groups that is not
+renews nothing, and after the configured turn-end debounce (default 20 seconds,
+evaluated by the reconciler rather than by delaying the request) checks every
+member of every open group for the matched orchestrator IDs. Reports are
+idempotent per `(session_ref, turn_id)`; when `turn_id` is absent, per
+`(session_ref, minute bucket)`. For each member that is not
 `completed`/`paused`/`cancelled`/`waiting_external`/`blocked` and has not
-reached `desired_state`, raises `execution_continuation_required` (after a short
-debounce so the agent's own final RCP writes land first). Liveness while a turn
+reached `desired_state`, raises `execution_continuation_required`. Liveness while a turn
 runs comes from hook-driven heartbeats (Claude `PostToolUse`, Codex progress
 events) or from the supervisor observing the harness process for that session.
 A turn-end report is advisory input; the server still derives the condition from
-stored state.
+stored state. Supervisors deduplicate a wake by session when lost and
+continuation-required events target the same idle orchestrator. ACK records a
+delivery receipt and never resolves the cause; acknowledged unresolved events
+become due again at their retry time until the condition clears. Every event
+exposes its `session_ref` for supervisor-side wake deduplication.
 
 ## 7. Application API contract (one policy layer)
 

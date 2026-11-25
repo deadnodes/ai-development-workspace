@@ -76,6 +76,43 @@ type ExecutionReconciliation struct {
 	Since          *time.Time `json:"since,omitempty"`
 	Generation     uint64     `json:"generation"`
 }
+type ExecutionEventDelivery struct {
+	Attempts       int        `json:"attempts"`
+	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
+	NextAttemptAt  time.Time  `json:"next_attempt_at"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy string     `json:"acknowledged_by,omitempty"`
+	DeliveryID     string     `json:"delivery_id,omitempty"`
+}
+type ExecutionEventResolution struct {
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	ResolvedBy string     `json:"resolved_by,omitempty"`
+	Evidence   string     `json:"evidence,omitempty"`
+}
+type ExecutionEvent struct {
+	ID                  string                   `json:"id"`
+	ProductID           string                   `json:"product_id"`
+	IntegrationID       string                   `json:"integration_id"`
+	GroupIDs            []string                 `json:"group_ids"`
+	Type                string                   `json:"type"`
+	Fence               uint64                   `json:"fence"`
+	ConditionGeneration uint64                   `json:"condition_generation"`
+	Reason              string                   `json:"reason"`
+	DedupeKey           string                   `json:"dedupe_key"`
+	SessionRef          string                   `json:"session_ref,omitempty"`
+	CreatedAt           time.Time                `json:"created_at"`
+	Delivery            ExecutionEventDelivery   `json:"delivery"`
+	Resolution          ExecutionEventResolution `json:"resolution"`
+	EscalationRequired  bool                     `json:"escalation_required,omitempty"`
+	Acknowledgements    []ExecutionEventAck      `json:"acknowledgements,omitempty"`
+}
+type ExecutionEventAck struct {
+	DeliveryID   string    `json:"delivery_id"`
+	SupervisorID string    `json:"supervisor_id"`
+	Outcome      string    `json:"outcome"`
+	Detail       string    `json:"detail,omitempty"`
+	At           time.Time `json:"at"`
+}
 type IntegrationExecution struct {
 	ID                    string                  `json:"id"`
 	IntegrationID         string                  `json:"integration_id"`
@@ -96,6 +133,8 @@ type IntegrationExecution struct {
 	BlockerRef            string                  `json:"blocker_ref,omitempty"`
 	StalledTimeoutSeconds *int                    `json:"stalled_timeout_seconds,omitempty"`
 	Reconciliation        ExecutionReconciliation `json:"reconciliation"`
+	TurnEndAt             *time.Time              `json:"turn_end_at,omitempty"`
+	TurnEndID             string                  `json:"turn_end_id,omitempty"`
 }
 type ExecutionGroupRevision struct {
 	Revision             uint64    `json:"revision"`
@@ -268,6 +307,7 @@ type Event struct {
 }
 type State struct {
 	IntegrationExecutions  []IntegrationExecution `json:"integration_executions"`
+	ExecutionEvents        []ExecutionEvent       `json:"execution_events"`
 	ExecutionGroups        []ExecutionGroup       `json:"execution_groups"`
 	ArtifactSignatures     []ArtifactSignature    `json:"artifact_signatures"`
 	Deployments            []Deployment           `json:"deployments"`

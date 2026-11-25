@@ -67,7 +67,13 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 						}
 						effectiveTimeout, timeoutSource = effectiveStalledTimeout(&st, ex, global)
 					}
-					members = append(members, map[string]any{"integration": in, "execution": ex, "effective_stalled_timeout_seconds": effectiveTimeout, "stalled_timeout_source": timeoutSource, "desired_state": func() string {
+					openEvents := []domain.ExecutionEvent{}
+					for _, ev := range st.ExecutionEvents {
+						if ev.IntegrationID == iid && ev.Resolution.ResolvedAt == nil {
+							openEvents = append(openEvents, ev)
+						}
+					}
+					members = append(members, map[string]any{"integration": in, "execution": ex, "open_events": openEvents, "effective_stalled_timeout_seconds": effectiveTimeout, "stalled_timeout_source": timeoutSource, "desired_state": func() string {
 						if ex != nil {
 							return ex.DesiredState
 						}
@@ -83,6 +89,23 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 		}
 		return nil, missing("execution_group", id)
+	case "list_execution_events":
+		if !productExists(&st, id) {
+			return nil, missing("product", id)
+		}
+		items := []domain.ExecutionEvent{}
+		for _, ev := range st.ExecutionEvents {
+			if ev.ProductID == id {
+				items = append(items, ev)
+			}
+		}
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+				return items[i].ID < items[j].ID
+			}
+			return items[i].CreatedAt.Before(items[j].CreatedAt)
+		})
+		return map[string]any{"items": items}, nil
 	case "list_executions":
 		if !productExists(&st, id) {
 			return nil, missing("product", id)

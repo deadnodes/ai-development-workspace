@@ -16,6 +16,7 @@ func registerQueryRoutes(mux *http.ServeMux, service Service) {
 	for pattern, name := range map[string]string{
 		"GET /api/execution-groups/{id}":              "get_execution_group",
 		"GET /api/products/{id}/executions":           "list_executions",
+		"GET /api/products/{id}/execution-events":     "list_execution_events",
 		"GET /api/features/{id}/graph":                "get_feature_graph",
 		"GET /api/products/{id}/retention":            "get_artifact_retention",
 		"GET /api/products/{id}/configuration":        "get_product_configuration",
@@ -111,7 +112,7 @@ func (in deployExistingInput) command() domain.Command {
 }
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerBranchTools(server, service)
-	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout"} {
+	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event"} {
 		registerExecutionCommandTool(server, service, action)
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "get_execution_group", Description: "Restore all execution group members and their current Integration and execution state."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {

@@ -2,10 +2,37 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"releasecontrol/internal/domain"
 	"slices"
 	"time"
 )
+
+func resolveExecutionEvents(st *domain.State, e *domain.IntegrationExecution, now time.Time, newState string) {
+	for i := range st.ExecutionEvents {
+		ev := &st.ExecutionEvents[i]
+		if ev.IntegrationID == e.IntegrationID && ev.Resolution.ResolvedAt == nil && (ev.Fence != e.Fence || ev.ConditionGeneration != e.Reconciliation.Generation+1 || !e.Reconciliation.ActionRequired) {
+			t := now
+			ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &t, ResolvedBy: "system", Evidence: newState}
+		}
+	}
+}
+func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ, reason string, now time.Time) {
+	key := fmt.Sprintf("%s|%d|%s|%d", e.IntegrationID, e.Fence, typ, e.Reconciliation.Generation)
+	for _, ev := range st.ExecutionEvents {
+		if ev.DedupeKey == key {
+			return
+		}
+	}
+	groups := []string{}
+	for _, g := range st.ExecutionGroups {
+		if g.ProductID == e.ProductID && slices.Contains(g.MemberIntegrationIDs, e.IntegrationID) {
+			groups = append(groups, g.ID)
+		}
+	}
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, SessionRef: e.Harness.SessionRef, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	st.ExecutionEvents = append(st.ExecutionEvents, event)
+}
 
 func statusReachedIntegration(actual, desired string) bool {
 	order := map[string]int{"planned": 0, "working": 1, "implemented": 2, "verifying": 3, "ready": 4, "released": 5}
@@ -54,7 +81,7 @@ func effectiveStalledTimeout(st *domain.State, e *domain.IntegrationExecution, g
 
 func executionAction(a string) bool {
 	switch a {
-	case "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout":
+	case "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
 		return true
 	}
 	return false
@@ -114,6 +141,23 @@ func executionCondition(st *domain.State, e *domain.IntegrationExecution, state 
 	e.Reconciliation.Reason = reason
 	e.Reconciliation.Since = &now
 	e.Reconciliation.Generation++
+	resolveExecutionEvents(st, e, now, state)
+	if required {
+		typ := ""
+		switch state {
+		case "lost":
+			typ = "execution_lost"
+		case "stalled":
+			typ = "execution_stalled"
+		case "unassigned":
+			typ = "execution_unassigned"
+		case "exited_incomplete", "waiting_external", "blocked":
+			typ = "execution_continuation_required"
+		}
+		if typ != "" {
+			createExecutionEvent(st, e, typ, reason, now)
+		}
+	}
 	st.Events = append(st.Events, domain.Event{ID: id(), Action: "execution_condition_changed", Actor: "system/execution-reconciler", At: now, EntityID: e.IntegrationID, ProductID: e.ProductID, Data: domain.Command{Action: "execution_condition_changed", Actor: "system/execution-reconciler", IntegrationID: e.IntegrationID, ProductID: e.ProductID, Data: map[string]any{"state": state, "action_required": required, "reason": reason, "generation": e.Reconciliation.Generation}}})
 }
 func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command) (any, error) {
@@ -133,6 +177,121 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 		}
 		switch c.Action {
+		case "report_turn_end":
+			var x struct {
+				HarnessKind string `json:"harness_kind"`
+				SessionRef  string `json:"session_ref"`
+				TurnID      string `json:"turn_id"`
+				CWD         string `json:"cwd"`
+			}
+			if err := decode(c.Data, &x); err != nil {
+				return err
+			}
+			if x.SessionRef == "" {
+				return invalid("session_ref required")
+			}
+			bucket := now.Truncate(time.Minute).Format(time.RFC3339)
+			key := x.TurnID
+			if key == "" {
+				key = bucket
+			}
+			n := 0
+			for i := range st.IntegrationExecutions {
+				e := &st.IntegrationExecutions[i]
+				if e.ProductID == c.ProductID && e.Harness.SessionRef == x.SessionRef && (x.HarnessKind == "" || e.Harness.Kind == x.HarnessKind) {
+					e.TurnEndAt = &now
+					e.TurnEndID = key
+					n++
+				}
+			}
+			out = map[string]any{"matched": n, "turn_id": key}
+		case "claim_execution_event_delivery":
+			var x struct{ EventID, SupervisorID string }
+			if err := decode(c.Data, &x); err != nil {
+				return err
+			}
+			for i := range st.ExecutionEvents {
+				ev := &st.ExecutionEvents[i]
+				if ev.ID != x.EventID {
+					continue
+				}
+				if ev.ProductID != c.ProductID {
+					return invalid("SCOPE_MISMATCH")
+				}
+				if ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || (ev.Delivery.AcknowledgedAt == nil && ev.Delivery.Attempts > 0) {
+					return invalid("INVALID_STATE")
+				}
+				ev.Delivery.Attempts++
+				ev.Delivery.LastAttemptAt = &now
+				ev.Delivery.DeliveryID = id()
+				delay := 30
+				for j := 1; j < ev.Delivery.Attempts; j++ {
+					delay *= 2
+					if delay >= 900 {
+						delay = 900
+						break
+					}
+				}
+				ev.Delivery.NextAttemptAt = now.Add(time.Duration(delay) * time.Second)
+				ev.Delivery.AcknowledgedAt = nil
+				ev.Delivery.AcknowledgedBy = ""
+				out = ev.Delivery.DeliveryID
+				return nil
+			}
+			return missing("execution_event", x.EventID)
+		case "ack_execution_event":
+			var x struct{ EventID, DeliveryID, SupervisorID, Outcome, Detail string }
+			if err := decode(c.Data, &x); err != nil {
+				return err
+			}
+			for i := range st.ExecutionEvents {
+				ev := &st.ExecutionEvents[i]
+				if ev.ID != x.EventID {
+					continue
+				}
+				if ev.ProductID != c.ProductID {
+					return invalid("SCOPE_MISMATCH")
+				}
+				if ev.Delivery.DeliveryID != x.DeliveryID {
+					return invalid("INVALID_STATE")
+				}
+				t := now
+				ev.Delivery.AcknowledgedAt = &t
+				ev.Delivery.AcknowledgedBy = x.SupervisorID
+				ev.Acknowledgements = append(ev.Acknowledgements, domain.ExecutionEventAck{DeliveryID: x.DeliveryID, SupervisorID: x.SupervisorID, Outcome: x.Outcome, Detail: x.Detail, At: now})
+				if x.Outcome == "unsupported" {
+					ev.EscalationRequired = true
+				}
+				out = *ev
+				return nil
+			}
+			return missing("execution_event", x.EventID)
+		case "resolve_execution_event":
+			var x struct {
+				EventID, SupervisorID, Evidence string
+				Fence                           uint64
+			}
+			if err := decode(c.Data, &x); err != nil {
+				return err
+			}
+			for i := range st.ExecutionEvents {
+				ev := &st.ExecutionEvents[i]
+				if ev.ID != x.EventID {
+					continue
+				}
+				if ev.ProductID != c.ProductID {
+					return invalid("SCOPE_MISMATCH")
+				}
+				ex := executionFor(st, ev.IntegrationID)
+				if ex == nil || ex.Fence != x.Fence || ex.Reconciliation.ActionRequired && ex.Reconciliation.Generation == ev.ConditionGeneration {
+					return invalid("INVALID_STATE")
+				}
+				t := now
+				ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &t, ResolvedBy: x.SupervisorID, Evidence: x.Evidence}
+				out = *ev
+				return nil
+			}
+			return missing("execution_event", x.EventID)
 		case "claim_execution", "takeover_execution":
 			in := integration(st, c.IntegrationID)
 			if in == nil {
@@ -178,7 +337,17 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					return invalid("INVALID_STATE")
 				}
 				if c.Action == "takeover_execution" {
-					if x.StateCheckReference == "" {
+					validEvidence := false
+					for _, ev := range st.ExecutionEvents {
+						if ev.ID == x.StateCheckReference && ev.IntegrationID == in.ID && (ev.Type == "execution_lost" || ev.Type == "execution_stalled") {
+							for _, ack := range ev.Acknowledgements {
+								if ack.Outcome == "delivered" {
+									validEvidence = true
+								}
+							}
+						}
+					}
+					if !validEvidence {
 						return invalid("TAKEOVER_CHECK_REQUIRED")
 					}
 					if x.Fence != e.Fence {
@@ -576,7 +745,7 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	if !ok {
 		return s.store.Update(ctx, func(st *domain.State) error { reconcileExecutions(st, now, globalTimeout); return nil })
 	}
-	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
+	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
 		reconcileExecutions(st, now, globalTimeout)
 		return nil
 	})
