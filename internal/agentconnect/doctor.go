@@ -55,7 +55,14 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 		_, e := exec.LookPath(x.bin)
 		v := ""
 		if e == nil {
-			b, er := exec.CommandContext(ctx, x.bin, "--version").CombinedOutput()
+			args := []string{"--version"}
+			switch x.bin {
+			case "go":
+				args = []string{"version"}
+			case "tmux":
+				args = []string{"-V"}
+			}
+			b, er := exec.CommandContext(ctx, x.bin, args...).CombinedOutput()
 			if er == nil {
 				v = strings.TrimSpace(string(b))
 			} else {
@@ -76,6 +83,7 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 	} else {
 		add("Codex authentication", "codex login", e)
 	}
+	var serverKit *kit
 	if endpointErr != nil {
 		add("RCP health", "./bin/release-control doctor --url URL", endpointErr)
 		add("MCP initialize + tools/list", "./bin/release-control login --url URL --profile "+profile, endpointErr)
@@ -101,6 +109,11 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 			}
 		}
 		add("MCP initialize + tools/list", "./bin/release-control login --url "+endpoint+" --profile "+profile, e)
+		if e == nil {
+			if k, ke := fetchAgentKit(ctx, endpoint, token); ke == nil {
+				serverKit = &k
+			}
+		}
 		if product != "" {
 			_, pe := productContextCheck(ctx, endpoint, token, product)
 			add("Product exists", "./bin/release-control doctor --url "+endpoint+" --product-id "+product, pe)
@@ -116,6 +129,9 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 			}
 			var e error
 			kit := agentguide.Get()
+			if serverKit != nil { // connect installs the server's kit; compare against the same source.
+				kit = *serverKit
+			}
 			expected := map[string]string{kit.Skill.Name: kit.Skill.Content, kit.DeliverySkill.Name: kit.DeliverySkill.Content, kit.ExecutionSkill.Name: kit.ExecutionSkill.Content}
 			for _, p := range paths {
 				b, er := os.ReadFile(filepath.Join(root, p))
@@ -239,4 +255,30 @@ func productContextCheck(ctx context.Context, endpoint, token, id string) (bool,
 		return false, fmt.Errorf("HTTP %d", r.StatusCode)
 	}
 	return true, nil
+}
+
+func fetchAgentKit(ctx context.Context, endpoint, token string) (kit, error) {
+	var k kit
+	request, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/api/agent-kit", nil)
+	if err != nil {
+		return k, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		return k, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return k, fmt.Errorf("agent kit HTTP %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, 2<<20+1))
+	if err != nil || len(data) > 2<<20 {
+		return k, errors.New("agent kit unreadable or oversized")
+	}
+	err = decodeUniqueJSON(data, &k)
+	return k, err
 }
