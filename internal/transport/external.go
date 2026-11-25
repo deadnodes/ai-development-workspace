@@ -240,6 +240,9 @@ func registerProviderTools(server *mcp.Server, service Service) {
 
 func registerExecutionCommandTool(server *mcp.Server, service Service, action string) {
 	description := "Record an execution lifecycle command using the shared application policy. Fence and lease times are server managed."
+	if action == "report_turn_end" {
+		description = "Report a harness turn end. Provide harness_kind and at least one of session_ref or tmux_target; matching uses either supplied identifier."
+	}
 	mcp.AddTool(server, &mcp.Tool{Name: action, Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Actor         string         `json:"actor,omitempty"`
 		ProductID     string         `json:"product_id,omitempty"`

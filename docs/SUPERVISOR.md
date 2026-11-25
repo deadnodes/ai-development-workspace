@@ -180,3 +180,41 @@ remains unresolved until its cause clears.
 On the Mac mini, run `scripts/supervisor-smoke.sh orch-backend:0.1`. The script
 prints the pane before and after sending a harmless prompt. It does not call RCP
 or use a configured supervisor credential.
+
+# Harness turn-end hook
+
+The optional `scripts/hooks/rcp-turn-end.sh` reports completed agent turns to
+`POST /api/commands`. Give it `RCP_URL`, `RCP_TOKEN_FILE` (a bearer-token file
+with mode `600`), `RCP_PRODUCT_ID`, and `RCP_HARNESS_KIND` (`codex` or
+`claude_code`). It reads Codex's `thread-id` from the notify JSON argument and
+Claude Code's `session_id` from Stop-hook JSON on stdin. If `$TMUX` is set, it
+also reports the current tmux session name. Failures are logged to
+`$RCP_HOOK_LOG`, defaulting to `~/Library/Logs/rcp-turn-end.log`, and do not
+interrupt the agent.
+
+For Codex, add a notify command:
+
+```sh
+codex -c 'notify=["/path/to/rcp-turn-end.sh"]'
+```
+
+Or put this in Codex `config.toml`:
+
+```toml
+notify = ["/path/to/rcp-turn-end.sh"]
+```
+
+For Claude Code, add a Stop hook to `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{ "type": "command", "command": "/path/to/rcp-turn-end.sh" }]
+    }]
+  }
+}
+```
+
+The same script reads configuration from the hook process environment. Codex
+notify reports are ignored unless their `type` is `agent-turn-complete`.

@@ -240,24 +240,36 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			var x struct {
 				HarnessKind string `json:"harness_kind"`
 				SessionRef  string `json:"session_ref"`
+				TmuxTarget  string `json:"tmux_target"`
 				TurnID      string `json:"turn_id"`
 				CWD         string `json:"cwd"`
 			}
 			if err := decode(c.Data, &x); err != nil {
 				return err
 			}
-			if x.SessionRef == "" || x.HarnessKind == "" {
-				return invalid("harness_kind and session_ref required")
+			if x.SessionRef == "" && x.TmuxTarget == "" || x.HarnessKind == "" {
+				return invalid("harness_kind and session_ref or tmux_target required")
+			}
+			if err := validateExecutionHarness(domain.ExecutionHarness{Kind: x.HarnessKind, SessionRef: x.SessionRef, TmuxTarget: x.TmuxTarget}); err != nil {
+				return err
 			}
 			bucket := now.Truncate(time.Minute).Format(time.RFC3339)
-			key := x.TurnID
-			if key == "" {
-				key = bucket
+			identity := x.SessionRef
+			if identity == "" {
+				identity = x.TmuxTarget
 			}
+			if x.SessionRef != "" && x.TmuxTarget != "" {
+				identity += "|" + x.TmuxTarget
+			}
+			turn := x.TurnID
+			if turn == "" {
+				turn = bucket
+			}
+			key := x.HarnessKind + "|" + identity + "|" + turn
 			matched := []string{}
 			for i := range st.IntegrationExecutions {
 				e := &st.IntegrationExecutions[i]
-				if e.ProductID == c.ProductID && e.Harness.SessionRef == x.SessionRef && (x.HarnessKind == "" || e.Harness.Kind == x.HarnessKind) {
+				if e.ProductID == c.ProductID && e.Harness.Kind == x.HarnessKind && ((x.SessionRef != "" && e.Harness.SessionRef == x.SessionRef) || (x.TmuxTarget != "" && e.Harness.TmuxTarget == x.TmuxTarget)) {
 					if e.TurnEndID == key {
 						matched = append(matched, e.IntegrationID)
 						continue
@@ -271,7 +283,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			// from every member executor. Fan its turn-end signal into the open
 			// group's member execution records so reconciliation can debounce it.
 			for _, g := range st.ExecutionGroups {
-				if g.ProductID != c.ProductID || g.ClosedAt != nil || g.OrchestratorHarness.SessionRef != x.SessionRef || g.OrchestratorHarness.Kind != x.HarnessKind {
+				if g.ProductID != c.ProductID || g.ClosedAt != nil || g.OrchestratorHarness.Kind != x.HarnessKind || !((x.SessionRef != "" && g.OrchestratorHarness.SessionRef == x.SessionRef) || (x.TmuxTarget != "" && g.OrchestratorHarness.TmuxTarget == x.TmuxTarget)) {
 					continue
 				}
 				for _, iid := range g.MemberIntegrationIDs {

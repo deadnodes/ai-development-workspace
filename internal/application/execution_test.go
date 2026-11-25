@@ -440,6 +440,18 @@ func TestTurnEndDebounceIdempotencyAndMemberFiltering(t *testing.T) {
 	if err != nil || len(res.(map[string]any)["matched"].([]string)) != 0 {
 		t.Fatalf("unknown session result=%v err=%v", res, err)
 	}
+	res, err = s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "claude_code", "tmux_target": "orch"}})
+	if err != nil || len(res.(map[string]any)["matched"].([]string)) != 0 {
+		t.Fatalf("kind mismatch result=%v err=%v", res, err)
+	}
+	res, err = s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "codex", "tmux_target": "unknown"}})
+	if err != nil || len(res.(map[string]any)["matched"].([]string)) != 0 {
+		t.Fatalf("unknown target result=%v err=%v", res, err)
+	}
+	res, err = s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "codex", "tmux_target": "orch", "turn_id": "tmux-turn"}})
+	if err != nil || len(res.(map[string]any)["matched"].([]string)) != len(ids) {
+		t.Fatalf("tmux target report=%v err=%v", res, err)
+	}
 	res, err = s.Execute(context.Background(), domain.Command{Action: "report_turn_end", Actor: "agent", ProductID: "p", Data: map[string]any{"harness_kind": "codex", "session_ref": "session", "turn_id": "turn-1"}})
 	if err != nil || len(res.(map[string]any)["matched"].([]string)) != len(ids) {
 		t.Fatalf("turn report=%v err=%v", res, err)
