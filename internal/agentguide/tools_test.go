@@ -9,7 +9,7 @@ func TestRegistryActionsExist(t *testing.T) {
 }
 
 func TestPendingDocumentationOnlyShrinks(t *testing.T) {
-	if got := len(PendingDocumentation()); got > 209 {
-		t.Fatalf("pendingDocumentation grew: got %d; Stage 5A baseline is 209", got)
+	if got := len(PendingDocumentation()); got > 192 {
+		t.Fatalf("pendingDocumentation grew: got %d; updated bound is 192", got)
 	}
 }

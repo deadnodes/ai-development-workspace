@@ -3,6 +3,191 @@
 
 Use `get_tool_guide {}` for the compact index and `get_tool_guide {"name":"…"}` for a full entry. This guide describes interfaces; it grants no authority.
 
+## context read
+
+### `search_context` — mcp_tool
+
+Search indexed authored Feature, Integration, Memory, and Repository text within a Product.
+
+**When:** Use to find relevant recorded text before following graph links or reading an excerpt; do not use it as release acceptance evidence.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `feature_id` (string, optional): Optional Feature scope
+- `query` (string, required): Search text, 1..256 UTF-8 characters
+- `limit` (integer, optional): 1..20, default 10
+
+**Output:** Bounded matching source cards with snippets, recorded status, scores, truncation, has_more, and guidance.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'exact product_id required', 'query must contain 1..256 UTF-8 characters', 'invalid feature_id', 'search limit must be 1..20'; correct inputs.
+- `FORBIDDEN`: Product read is not permitted; use an authorized scope.
+- `NOT_FOUND`: Refresh Product/Feature context and verify IDs.
+
+**Example:** `{"product_id":"PRODUCT","query":"retry policy","limit":5}`
+
+**Related:** `graph_neighbors`, `get_context_excerpt`, `get_project_context`
+
+**Authority:** Read only. Matching text is historical evidence and grants no source-edit, shell, deployment, or release authority.
+
+### `get_context_excerpt` — mcp_tool
+
+Read a bounded Unicode-character window from one curated authored context source.
+
+**When:** Use after search_context or graph_neighbors identifies an exact source ID; paginate with next_offset.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `id` (string, required): Exact source ID
+- `offset` (integer, optional): Unicode character offset, 0..10000000, default 0
+- `max_chars` (integer, optional): Window size 1..8000, default 2000
+
+**Output:** Source card plus text window, offset, and optional next_offset.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'exact product_id required', 'exact source id required', and 'excerpt offset must be 0..10000000 and max_chars 1..8000'; correct inputs.
+- `NOT_FOUND`: Source is unavailable; search again or verify Product and ID.
+- `FORBIDDEN`: Use an authorized Product scope.
+- `VALIDATION`: 'context result exceeds byte budget; use a smaller limit or text window'; reduce max_chars.
+
+**Example:** `{"product_id":"PRODUCT","id":"SOURCE","max_chars":500}`
+
+**Related:** `search_context`, `graph_neighbors`
+
+**Authority:** Read only; curated context is not raw provider data, audit history, credentials, or authorization.
+
+### `graph_neighbors` — mcp_tool
+
+Traverse stored Product, Feature, Integration, Memory, and Repository relationships.
+
+**When:** Use to explore typed recorded links around a source; then read relevant sources with get_context_excerpt.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `id` (string, required): Exact seed source ID
+- `depth` (integer, optional): 1..2, default 1
+- `limit` (integer, optional): 1..30 nodes/edges, default 15
+
+**Output:** Seed card, bounded related nodes and typed edges, truncation flag, and guidance.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'exact product_id required', 'exact source id required', 'graph depth must be 1..2 and limit 1..30'; correct inputs.
+- `NOT_FOUND`: Seed source is unavailable; search again.
+- `FORBIDDEN`: Use an authorized Product scope.
+- `VALIDATION`: 'context result exceeds byte budget; use a smaller limit or text window'; lower limit.
+
+**Example:** `{"product_id":"PRODUCT","id":"FEATURE","depth":1}`
+
+**Related:** `search_context`, `get_context_excerpt`, `get_integration_context`
+
+**Authority:** Read only. Edges are stored links, not inferred claims or permission to change linked records.
+
+### `get_integration_context` — mcp_tool
+
+Read implementation context, provider observations, and deployment operations for one Integration.
+
+**When:** Use when resuming implementation or checking the Integration's recorded delivery context.
+
+**Inputs:**
+
+- `integration_id` (string, required): Exact Integration ID
+
+**Output:** Application query projection of Integration context and related observations/operations.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify Integration ID and parent scope.
+- `VALIDATION`: Correct malformed or out-of-scope identifier; refresh context.
+- `FORBIDDEN`: Use an authorized Integration scope.
+
+**Example:** `{"integration_id":"INTEGRATION"}`
+
+**Related:** `resume`, `get_git_state`, `get_operation`
+
+**Authority:** Read only; recorded context does not establish current readiness or authorize source changes, deployment, or release.
+
+### `get_project_context` — mcp_tool
+
+Read bounded Product overview, installation parameters, repository/component/environment cards, and knowledge-node metadata.
+
+**When:** Use as a Product entry point; search text or graph links for specific authored facts.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+
+**Output:** Project summary capped at 32 KiB; full AGENTS/source documents are omitted.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify Product ID.
+- `VALIDATION`: 'bounded project summary reader required'; operator must update service implementation.
+- `FORBIDDEN`: Use authorized Product scope.
+
+**Example:** `{"product_id":"PRODUCT"}`
+
+**Related:** `get_state`, `search_context`, `graph_neighbors`
+
+**Authority:** Read only; project guidance documents do not grant execution or release authority.
+
+### `get_state` — mcp_tool
+
+Navigate compact bounded Product, Feature, or Integration cards.
+
+**When:** Use initially to discover IDs, then use scoped context/query tools for details.
+
+**Inputs:**
+
+- `product_id` (string, optional): List Features under Product; max 128 chars
+- `feature_id` (string, optional): List Integrations under Feature; max 128 chars; must match product_id if both given
+- `limit` (integer, optional): 1..100, default 25
+- `cursor` (string, optional): Opaque cursor from same scope, 1..2048 chars
+
+**Output:** Compact cards with pagination; projection <=32 KiB and complete MCP result <=128 KiB.
+
+**Errors:**
+
+- `VALIDATION`: 'Invalid get_state arguments: use exact product_id/feature_id, limit 1..100 and a cursor from the same scope'; pass exact allowed keys and values.
+- `VALIDATION`: 'get_state requires a bounded metadata reader; update the service implementation'; operator action required.
+- `VALIDATION`: 'get_state metadata read failed; ask the owning operator to inspect the store'; report unavailable metadata reader/store.
+- `VALIDATION`: Projection/result exceeded navigation/wire budget; narrow scope or limit.
+
+**Example:** `{"product_id":"PRODUCT","limit":25}`
+
+**Related:** `get_project_context`, `resume`, `get_integration_context`
+
+**Authority:** Read only navigation. Status is not readiness or deployment proof; cursor is not authorization.
+
+### `get_feature_graph` — mcp_tool
+
+Read a Feature delivery graph of repository-scoped PRs, source revisions, compositions, artifacts, and deployment observations.
+
+**When:** Use to inspect recorded delivery relationships and separate historical reports from observed runtime.
+
+**Inputs:**
+
+- `feature_id` (string, required): Exact Feature ID
+
+**Output:** Feature delivery graph projection.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify Feature ID and refresh scoped context.
+- `VALIDATION`: Correct identifier or scope.
+- `FORBIDDEN`: Use authorized Feature scope.
+
+**Example:** `{"feature_id":"FEATURE"}`
+
+**Related:** `get_integration_context`, `get_git_state`, `get_operation`
+
+**Authority:** Read only; missing runtime is unknown and graph history does not authorize merge, deploy, or release.
+
 ## execution
 
 ### `get_execution_group` — mcp_tool
@@ -903,6 +1088,285 @@ Named MCP wrapper for the set_product_stalled_timeout execution command. Configu
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+## git
+
+### `get_git_state` — mcp_tool
+
+Read recorded provider observations for an Integration's branch, pull request, and checks.
+
+**When:** Use to inspect last observed Git state; request refresh_integration_git when a new observation is needed.
+
+**Inputs:**
+
+- `integration_id` (string, required): Exact Integration ID
+
+**Output:** Stored Git observation; unknown means no synchronized observation, not synchronized state.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify Integration ID and refresh scoped context.
+- `VALIDATION`: Correct malformed identifier or scope.
+- `FORBIDDEN`: Use an authorized Integration scope.
+
+**Example:** `{"integration_id":"INTEGRATION"}`
+
+**Related:** `get_integration_context`, `execute`
+
+**Authority:** Read only; observations can be stale and do not authorize Git mutations, merge, deployment, or release.
+
+### `get_unlinked_git_commits` — mcp_tool
+
+List discovered commits in attached repositories that are not linked to a Feature or Integration.
+
+**When:** Use to identify repository work that needs explicit linking in project context.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+
+**Output:** Product scoped unlinked commit observations.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify Product ID.
+- `VALIDATION`: Correct Product scope.
+- `FORBIDDEN`: Use authorized Product scope.
+
+**Example:** `{"product_id":"PRODUCT"}`
+
+**Related:** `get_git_state`, `get_project_context`, `execute`
+
+**Authority:** Read only; listing a commit does not link it, validate its source, or authorize merge/release.
+
+### `get_local_git_state` — mcp_tool
+
+Observe branch, HEAD, dirty state, cached upstream SHA, and ahead/behind for a registered local checkout.
+
+**When:** Use before planning local Git synchronization; cached refs are not live remote evidence.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `checkout_id` (string, required): Registered checkout ID
+
+**Output:** Observed local Git state for the configured workspace checkout.
+
+**Errors:**
+
+- `VALIDATION`: 'server workspace not configured' or 'workspace unavailable'; configure/recover the server workspace.
+- `NOT_FOUND`: 'local checkout' missing; rematch workspace or verify ID.
+- `VALIDATION`: 'origin no longer matches registered repository; rematch workspace'; rematch before proceeding.
+- `FORBIDDEN`: Use an authorized Product scope.
+
+**Example:** `{"product_id":"PRODUCT","checkout_id":"CHECKOUT"}`
+
+**Related:** `match_local_repositories`, `plan_local_git_sync`, `record_local_git_sync`
+
+**Authority:** Read only; does not fetch or prove remote freshness.
+
+### `plan_local_git_sync` — mcp_tool
+
+Persist a bounded FETCH or FAST_FORWARD plan for an external host agent.
+
+**When:** Use only after inspecting local checkout state and exact expected HEAD; external executor must review Git configuration and preconditions.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `checkout_id` (string, required): Registered checkout ID
+- `actor` (string, optional): Attribution, not identity
+- `mode` (string, required): FETCH or FAST_FORWARD
+- `expected_head` (string, required): Exact current HEAD SHA
+
+**Output:** Persisted plan with PLANNED status, executor EXTERNAL_AGENT, observed state, Git arguments, and preconditions.
+
+**Errors:**
+
+- `VALIDATION`: 'actor and mode FETCH or FAST_FORWARD required' or 'expected_head must match current exact HEAD'; correct request.
+- `VALIDATION`: 'fast-forward requires a clean attached branch without submodules strictly behind origin upstream'; use FETCH or refresh/review checkout.
+- `NOT_FOUND`: Verify Product/checkout registration.
+- `FORBIDDEN`: Use authorized Product write scope.
+
+**Example:** `{"product_id":"PRODUCT","checkout_id":"CHECKOUT","mode":"FETCH","expected_head":"FULL_SHA"}`
+
+**Related:** `get_local_git_state`, `record_local_git_sync`
+
+**Authority:** Records a plan only. The Control Plane does not execute Git, edit source, push, reset, rebase, or run hooks; external agent must enforce listed guards.
+
+### `record_local_git_sync` — mcp_tool
+
+Re-observe a checkout and append the observed result of an external agent's local Git plan.
+
+**When:** Call after the external agent has completed its planned operation; provide the exact plan ID.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `checkout_id` (string, required): Registered checkout ID
+- `actor` (string, optional): Attribution
+- `plan_id` (string, required): Previously recorded plan ID
+
+**Output:** Append-only OBSERVED result with plan, mode, current state, and FETCH evidence limitation.
+
+**Errors:**
+
+- `VALIDATION`: 'actor and plan_id required'; supply both.
+- `NOT_FOUND`: 'local sync plan' missing; verify plan ID, checkout, and Product.
+- `VALIDATION`: 'fast-forward result does not match planned clean branch and target SHA'; inspect checkout and do not claim completion.
+- `FORBIDDEN`: Use authorized Product write scope.
+
+**Example:** `{"product_id":"PRODUCT","checkout_id":"CHECKOUT","plan_id":"PLAN"}`
+
+**Related:** `plan_local_git_sync`, `get_local_git_state`
+
+**Authority:** Records observation only. FETCH network execution cannot be proven from cached refs; no Git command is run by this tool.
+
+### `refresh_integration_git` — execute_action
+
+Queue a provider refresh of one Integration's Git observation.
+
+**When:** Use when the last recorded branch/PR/check observation may be stale.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Persistent asynchronous operation handle for provider observation.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"action":"refresh_integration_git","integration_id":"INTEGRATION","data":{}}`
+
+**Related:** `get_git_state`, `get_operation`
+
+**Authority:** Requests observation only; does not merge, edit source, deploy, or release.
+
+### `refresh_repository_git` — execute_action
+
+Queue repository branch/commit discovery for an attached code repository.
+
+**When:** Use to refresh discovered commits, including commits not yet linked to work.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `product_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `repository_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Persistent asynchronous repository scan operation.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"action":"refresh_repository_git","product_id":"PRODUCT","data":{"repository_id":"REPOSITORY"}}`
+
+**Related:** `get_unlinked_git_commits`, `get_operation`
+
+**Authority:** Requests provider observation only; does not edit source or link commits to Features/Integrations.
+
+### `record_integration_revision` — execute_action
+
+Record an immutable caller-supplied source revision for an Integration and repository.
+
+**When:** Use after obtaining exact source branch and commit SHAs; include the full commit list ending at head.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `integration_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `repository_id` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `branch` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `base_commit` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `head_commit` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `commits` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+
+**Output:** Persisted IntegrationRevision with provenance fields and supplied commit sequence.
+
+**Errors:**
+
+- `NOT_FOUND`: Integration/repository missing; refresh scoped context.
+- `VALIDATION`: Messages include 'revision repository outside feature scope', 'revision repository must be declared by integration', 'valid source branch required', 'base_commit, head_commit and nonempty commits require full lowercase SHA40 or SHA64', 'invalid, mixed-format or duplicate commit', 'head_commit must occur in commits, using the base commit hash format'; correct scope and values.
+
+**Example:** `{"action":"record_integration_revision","integration_id":"INTEGRATION","data":{"repository_id":"REPOSITORY","branch":"feature/work","base_commit":"FULL_SHA","head_commit":"FULL_SHA","commits":["FULL_SHA"]}}`
+
+**Related:** `get_integration_context`, `get_git_state`, `plan_composition`
+
+**Authority:** Records caller-supplied claims; it does not verify Git/provider state, edit source, merge, build, deploy, or release.
+
+### `create_integration_branch` — execute_action
+
+Queue explicit approved creation of a managed Integration source branch from an exact commit.
+
+**When:** Use only when creating an Integration branch is intended and explicit approve is true.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution
+- `integration_id` (string, optional): Target Integration
+- `data` (object, required): Action input
+- `application_id` (string, optional): Integration-scoped component
+- `base_commit` (string, optional): Exact source SHA40/SHA64
+- `approve` (boolean, optional): Explicit approval
+
+**Output:** Persistent CREATE_BRANCH operation; worker verifies configured base and created SHA before binding ref.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'explicit approval and integration-scoped component required', 'attached source repository required', 'source ref operation already active', 'integration already bound', 'exact source commit required'; correct prerequisites.
+- `NOT_FOUND`: Verify Integration, component, repository, and connection.
+
+**Example:** `{"action":"create_integration_branch","integration_id":"INTEGRATION","data":{"application_id":"APP","base_commit":"FULL_SHA","approve":true}}`
+
+**Related:** `get_operation`, `get_integration_context`, `protect_integration_revision`
+
+**Authority:** Queues a create-only provider ref operation; does not rewrite history or guarantee administrator-enforced branch protection.
+
+### `protect_integration_revision` — execute_action
+
+Queue create-only provider pinning of an existing Integration revision under a managed ref.
+
+**When:** Use when an exact persisted revision must be pinned for later immutable composition.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution
+- `integration_id` (string, optional): Target Integration
+- `data` (object, required): Action input
+- `application_id` (string, optional): Integration-scoped component
+- `revision_id` (string, optional): Revision belonging to Integration and component repository
+- `approve` (boolean, optional): Explicit approval
+
+**Output:** Persistent PIN_REVISION operation for revision head SHA.
+
+**Errors:**
+
+- `VALIDATION`: Messages include 'explicit approval and integration-scoped component required', 'attached source repository required', 'source ref operation already active', 'revision scope mismatch'; correct prerequisites.
+- `NOT_FOUND`: Verify Integration, component, repository, revision, and connection.
+
+**Example:** `{"action":"protect_integration_revision","integration_id":"INTEGRATION","data":{"application_id":"APP","revision_id":"REVISION","approve":true}}`
+
+**Related:** `get_operation`, `record_integration_revision`, `create_integration_branch`
+
+**Authority:** Queues a create-only pinned ref; does not rewrite history or create administrator-enforced GitHub branch protection.
+
 ## work tracking
 
 ### `execute` — mcp_tool
@@ -1614,34 +2078,23 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `mcp_tool:get_attention_required`
 - `mcp_tool:get_backup_capabilities`
 - `mcp_tool:get_code_api`
-- `mcp_tool:get_context_excerpt`
 - `mcp_tool:get_environment_state`
-- `mcp_tool:get_feature_graph`
-- `mcp_tool:get_git_state`
-- `mcp_tool:get_integration_context`
 - `mcp_tool:get_intelligence_task`
-- `mcp_tool:get_local_git_state`
 - `mcp_tool:get_operation`
 - `mcp_tool:get_product_configuration`
-- `mcp_tool:get_project_context`
 - `mcp_tool:get_runtime_report`
-- `mcp_tool:get_state`
 - `mcp_tool:get_status_schema`
 - `mcp_tool:get_tool_guide`
-- `mcp_tool:get_unlinked_git_commits`
 - `mcp_tool:get_worker_history`
 - `mcp_tool:get_worker_job`
-- `mcp_tool:graph_neighbors`
 - `mcp_tool:import_workspace_configuration`
 - `mcp_tool:list_pipelines`
 - `mcp_tool:list_signatures`
 - `mcp_tool:match_local_repositories`
-- `mcp_tool:plan_local_git_sync`
 - `mcp_tool:prepare_release_candidate`
 - `mcp_tool:promote_release_candidate`
 - `mcp_tool:reconcile_composition`
 - `mcp_tool:record_conflict_resolution`
-- `mcp_tool:record_local_git_sync`
 - `mcp_tool:record_runtime_observation`
 - `mcp_tool:record_scenario_run`
 - `mcp_tool:refresh_environment_runtime`
@@ -1653,7 +2106,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `mcp_tool:resume`
 - `mcp_tool:revise_test_scenario`
 - `mcp_tool:scan_workspace`
-- `mcp_tool:search_context`
 - `mcp_tool:search_product_knowledge`
 - `mcp_tool:set_project_knowledge`
 - `mcp_tool:sign_artifact`
@@ -1680,7 +2132,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:create_external_system`
 - `execute_action:create_github_connection`
 - `execute_action:create_hotfix`
-- `execute_action:create_integration_branch`
 - `execute_action:create_repository`
 - `execute_action:create_system_relationship`
 - `execute_action:create_test_scenario`
@@ -1694,7 +2145,6 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:plan_release`
 - `execute_action:prepare_release_candidate`
 - `execute_action:promote_release_candidate`
-- `execute_action:protect_integration_revision`
 - `execute_action:queue_intelligence_task`
 - `execute_action:queue_worker_job`
 - `execute_action:queue_worker_publication`
@@ -1702,15 +2152,12 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:reconcile_worker_job`
 - `execute_action:reconcile_worker_publication`
 - `execute_action:record_conflict_resolution`
-- `execute_action:record_integration_revision`
 - `execute_action:record_package_artifact`
 - `execute_action:record_release`
 - `execute_action:record_runtime_observation`
 - `execute_action:record_scenario_run`
 - `execute_action:refresh_environment_runtime`
-- `execute_action:refresh_integration_git`
 - `execute_action:refresh_registry_inventory`
-- `execute_action:refresh_repository_git`
 - `execute_action:release_artifact_pin`
 - `execute_action:release_candidate_dev`
 - `execute_action:release_candidate_dev_after_restoration`
