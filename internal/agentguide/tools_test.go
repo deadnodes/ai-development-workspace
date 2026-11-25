@@ -9,8 +9,8 @@ func TestRegistryActionsExist(t *testing.T) {
 }
 
 func TestPendingDocumentationOnlyShrinks(t *testing.T) {
-	if got := len(PendingDocumentation()); got > 76 {
-		t.Fatalf("pendingDocumentation grew: got %d; updated bound is 76", got)
+	if got := len(PendingDocumentation()); got > 47 {
+		t.Fatalf("pendingDocumentation grew: got %d; updated bound is 47", got)
 	}
 }
 
@@ -23,6 +23,14 @@ func TestToolGuideResolvesAliases(t *testing.T) {
 		"http_route:POST /api/test-scenarios",
 		"http_route:POST /api/products/{id}/candidate-dev/confirm-restoration",
 		"http_route:GET /api/operations/{id}",
+		"mcp_tool:request_candidate_dev_restoration",
+		"http_route:POST /api/products/{id}/candidate-dev/request-restoration",
+		"http_route:POST /api/products/{id}/candidate-dev/reserve",
+		"http_route:POST /api/test-scenarios/revisions",
+		"http_route:GET /api/builds",
+		"http_route:GET /api/agent-kit",
+		"http_route:GET /api/attention",
+		"http_route:/mcp",
 	} {
 		if _, ok := ToolGuide(name).(ToolEntry); !ok {
 			t.Fatalf("ToolGuide(%q) did not resolve to an entry", name)

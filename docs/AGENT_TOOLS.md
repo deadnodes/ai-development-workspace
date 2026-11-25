@@ -540,6 +540,210 @@ Read a Feature delivery graph of repository-scoped PRs, source revisions, compos
 
 **Authority:** Read only; missing runtime is unknown and graph history does not authorize merge, deploy, or release.
 
+### `/mcp` — http_route
+
+Expose the Streamable HTTP MCP server endpoint.
+
+**When:** Use an MCP client configured for this server URL; use the MCP protocol handshake and tools/resources.
+
+**Inputs:**
+
+- `method` (HTTP, required): MCP protocol request
+- `body` (JSON, required): MCP request envelope
+
+**Output:** MCP protocol response or stream.
+
+**Errors:**
+
+- `HTTP_ERROR`: Invalid protocol request or authentication/authorization failure is returned by MCP transport; follow protocol error and server auth response.
+
+**Example:** `{"jsonrpc":"2.0","method":"initialize","id":1}`
+
+**Related:** `get_tool_guide`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/agent-kit` — http_route
+
+Return embedded workspace instructions and installable agent skills.
+
+**When:** Use to retrieve the current kit and hashes for workspace setup.
+
+**Inputs:**
+
+
+**Output:** Agent kit JSON with instructions and skills.
+
+**Errors:**
+
+- `HTTP_ERROR`: No route-specific query inputs; server errors indicate unavailable response.
+
+**Example:** `GET /api/agent-kit`
+
+**Related:** `get_agent_kit`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/attention` — http_route
+
+Return attention items for an optional Product.
+
+**When:** Use to find unresolved work needing attention; supply product_id to scope.
+
+**Inputs:**
+
+- `product_id` (string, optional): Optional Product filter
+
+**Output:** Attention query projection.
+
+**Errors:**
+
+- `HTTP_ERROR`: Application query errors are returned by standard response handling; verify Product ID.
+
+**Example:** `GET /api/attention?product_id=P`
+
+**Related:** `get_attention_required`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/build-profiles` — http_route
+
+List configured native build profiles.
+
+**When:** Use to inspect supported profiles before native component configuration.
+
+**Inputs:**
+
+
+**Output:** Build profile array.
+
+**Errors:**
+
+- `HTTP_ERROR`: 501 "build service unavailable" if capability is not registered.
+
+**Example:** `GET /api/build-profiles`
+
+**Related:** `configure_component`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/builds` — http_route
+
+List build history with optional filters and pagination.
+
+**When:** Use for bounded build diagnostics; retain the same filters when following cursors.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product filter
+- `cursor` (string, optional): Continuation cursor
+- `limit` (integer, optional): Page size
+- `application_id` (string, optional): Component filter
+- `status` (string, optional): Build status filter
+
+**Output:** Build page and next cursor.
+
+**Errors:**
+
+- `HTTP_ERROR`: 400 "invalid build query" for malformed query values; correct filter/limit.
+
+**Example:** `GET /api/builds?product_id=P&limit=20`
+
+**Related:** `get_build`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/builds/{id}` — http_route
+
+Read one build by ID with optional Product scope.
+
+**When:** Use to inspect a known build handle.
+
+**Inputs:**
+
+- `id` (string, required): Build ID path parameter
+- `product_id` (string, optional): Optional Product scope
+
+**Output:** Build record.
+
+**Errors:**
+
+- `HTTP_ERROR`: 501 "build service unavailable" or application not-found/scope error; verify service and identifiers.
+
+**Example:** `GET /api/builds/B?product_id=P`
+
+**Related:** `get_build`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/code-sdk/rcp.ts` — http_route
+
+Return the generated TypeScript client SDK source.
+
+**When:** Use to inspect typed API calls for local agent scripts.
+
+**Inputs:**
+
+
+**Output:** TypeScript source text.
+
+**Errors:**
+
+- `HTTP_ERROR`: No input; an unavailable generated asset returns an HTTP error.
+
+**Example:** `GET /api/code-sdk/rcp.ts`
+
+**Related:** `get_code_api`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/connections/{id}/repositories` — http_route
+
+Discover repositories visible to a configured provider connection.
+
+**When:** Use before importing a repository; results reflect provider visibility.
+
+**Inputs:**
+
+- `id` (string, required): Connection ID path parameter
+
+**Output:** Provider repository discovery result.
+
+**Errors:**
+
+- `HTTP_ERROR`: Provider, connection or authorization errors are returned by query response; verify connection grant and provider access.
+
+**Example:** `GET /api/connections/CONNECTION/repositories`
+
+**Related:** `discover_repositories`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
+### `GET /api/context/excerpt` — http_route
+
+Read a bounded excerpt from one curated context source.
+
+**When:** Use after search_context yields a source ID; offsets are Unicode-character positions.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `id` (string, required): Curated source ID
+- `offset` (integer, optional): Character offset, default 0
+- `max_chars` (integer, optional): Excerpt length, default 2000 and max 8000
+
+**Output:** Excerpt with continuation offset when more source text remains.
+
+**Errors:**
+
+- `HTTP_ERROR`: 400 "invalid offset" or "invalid max_chars" for non-integer query values; fix the query; missing/out-of-scope source is returned as application error.
+
+**Example:** `GET /api/context/excerpt?product_id=P&id=SOURCE&offset=0&max_chars=2000`
+
+**Related:** `get_context_excerpt`
+
+**Authority:** Read-only transport or bounded query; provides no external mutation authority.
+
 ## delivery
 
 ### `configure_component` — execute_action
@@ -2480,6 +2684,339 @@ Read persisted operation status, step evidence, child handles and attention need
 
 **Authority:** Read only; queued/pending is not completion, deployment health or authorization. Conflict resolution is external and reconciliation is separate.
 
+### `request_candidate_dev_restoration` — execute_action
+
+**Same operation:** `mcp_tool:request_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/request-restoration`
+
+Request bounded restoration of all original components held by a candidate Dev reservation.
+
+**When:** Use after candidate effects when restoration is required; inspect the complete asynchronous plan and hash before the separate confirmation and external reviewed Flux merges.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `product_id` (string, optional): Owning Product
+- `reservation_operation_id` (string, optional): Exact active reservation operation
+- `request_key` (string, optional): Unique idempotency key
+- `expected_selection` (object, optional): Current composition, operation and generation CAS token
+
+**Output:** Persistent restoration operation and plan.
+
+**Errors:**
+
+- `VALIDATION`: Validate exact reservation, owner, selection/request key or state; refresh current state and correct scope/CAS before retrying.
+
+**Example:** `{"action":"request_candidate_dev_restoration","product_id":"P","actor":"operator","data":{"reservation_operation_id":"HOLD","request_key":"restore-request-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `verify_candidate_dev_restoration`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `reserve_candidate_dev` — execute_action
+
+**Same operation:** `mcp_tool:reserve_candidate_dev`, `http_route:POST /api/products/{id}/candidate-dev/reserve`
+
+Reserve the current DEV/TEST selection for preparation of an exact native main candidate.
+
+**When:** Use before candidate preparation after reviewing the current environment selection; do not use as deployment or acceptance.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `product_id` (string, optional): Product scope
+- `candidate_operation_id` (string, optional): Exact candidate operation
+- `environment_id` (string, optional): Configured DEV/TEST environment
+- `request_key` (string, optional): Unique 16..128 character request key
+- `expected_selection` (object, optional): CAS composition/operation/generation token
+
+**Output:** Reservation operation; managed deployments are fenced while active.
+
+**Errors:**
+
+- `VALIDATION`: Validation messages include 'candidate operation required', 'environment must belong to product', 'request_key must be 16..128 characters', or stale selection; correct inputs and reread selection.
+
+**Example:** `{"action":"reserve_candidate_dev","product_id":"P","data":{"candidate_operation_id":"OP","environment_id":"DEV","request_key":"reserve-candidate-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `deploy_candidate_dev`, `capture_candidate_dev_baseline`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `revise_test_scenario` — execute_action
+
+**Same operation:** `mcp_tool:revise_test_scenario`, `http_route:POST /api/test-scenarios/revisions`
+
+Append a complete immutable revision to an existing test scenario.
+
+**When:** Use when verification behavior changes; preserve prior versions and runs.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `product_id` (string, optional): Product scope
+- `scenario_id` (string, optional): Scenario to revise
+- `title` (string, optional): Scenario title
+- `objective` (string, optional): Behavior under test
+- `mechanism` (string, optional): Execution mechanism
+- `preconditions` (array[string], optional): Required setup
+- `steps` (array[string], optional): Ordered test steps
+- `expected_outcomes` (array[string], optional): Expected results
+- `integration_ids` (array[string], optional): Applicable integrations
+- `blocking` (boolean, optional): Whether failed evidence blocks readiness
+
+**Output:** New immutable scenario version.
+
+**Errors:**
+
+- `VALIDATION`: 'scenario not found' or validation of required title/objective/mechanism/steps/expected outcomes; verify scope and submit a complete definition.
+
+**Example:** `{"action":"revise_test_scenario","product_id":"P","data":{"scenario_id":"S","title":"API regression","objective":"Preserve response contract","mechanism":"integration","steps":["Call endpoint"],"expected_outcomes":["Returns 200"]}}`
+
+**Related:** `create_test_scenario`, `record_scenario_run`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `select_composition` — execute_action
+
+Set an existing composition as an environment desired selection.
+
+**When:** Use after planning and reviewing the exact composition; this records intent and does not start execution.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `id` (string, optional): Composition ID
+
+**Output:** Updated desired composition selection.
+
+**Errors:**
+
+- `VALIDATION`: 'composition not found', 'composition does not belong to environment', or selection conflict; refresh and verify composition/environment scope.
+
+**Example:** `{"action":"select_composition","id":"COMPOSITION","data":{}}`
+
+**Related:** `plan_composition`, `reconcile_composition`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `set_external_scope` — execute_action
+
+Replace external-system or relationship links on one Feature, Integration, or Gate.
+
+**When:** Use to maintain dependency context after confirming every referenced record and target scope.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `feature_id` (string, optional): Feature target
+- `integration_id` (string, optional): Integration target
+- `gate_id` (string, optional): Gate target
+- `relationship_ids` (array[string], optional): Relationship IDs for Feature scope
+- `external_system_ids` (array[string], optional): External system IDs for Integration/Gate scope
+
+**Output:** Updated scoped external context links.
+
+**Errors:**
+
+- `VALIDATION`: Validation reports unsupported/missing target scope or referenced IDs outside scope; use IDs from the same Product and correct target.
+
+**Example:** `{"action":"set_external_scope","feature_id":"F","data":{"relationship_ids":["REL"]}}`
+
+**Related:** `create_system_relationship`, `create_gate`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `update_environment` — execute_action
+
+Update editable metadata on an existing environment.
+
+**When:** Use for labels and parameters; desired/reconciled/runtime or composition fields are not deployment evidence and are guarded.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `id` (string, required): Environment ID
+- `product_id` (string, optional): Optional Product scope
+- `name` (string, optional): Environment name
+- `cluster` (string, optional): Cluster label
+- `namespace` (string, optional): Namespace label
+- `parameters` (object, optional): String-valued environment parameters
+
+**Output:** Updated Environment record.
+
+**Errors:**
+
+- `VALIDATION`: 'environment not found', 'name required', duplicate name, or forbidden control fields; refresh scope and change only editable metadata.
+
+**Example:** `{"action":"update_environment","id":"ENV","data":{"namespace":"app-dev"}}`
+
+**Related:** `create_environment`, `get_environment_state`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `update_environment_feature` — execute_action
+
+**Same operation:** `mcp_tool:update_environment_feature`, `http_route:POST /api/features/{id}/update-environment`
+
+Patch explicit revisions for one Feature into an existing pinned DEV/TEST composition.
+
+**When:** Use for a scoped feature update while preserving other selected features; provide fresh CAS and durable idempotency key.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `feature_id` (string, optional): Feature scope
+- `environment_id` (string, optional): DEV/TEST target
+- `revision_ids` (array[string], optional): Explicit revisions to select
+- `idempotency_key` (string, optional): Durable unique request key
+- `expected_selection` (object, optional): Current desired composition/operation/generation
+
+**Output:** Queued COMPOSE operation for existing composition.
+
+**Errors:**
+
+- `VALIDATION`: Errors include unsupported scope fields, stale selection/CAS or invalid Feature revisions; reread current selection and correct the explicit revision set.
+
+**Example:** `{"action":"update_environment_feature","feature_id":"F","data":{"environment_id":"DEV","revision_ids":["R2"],"idempotency_key":"feature-patch-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `select_composition`, `reconcile_composition`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `update_external_system` — execute_action
+
+Update descriptive metadata for an instance-level external system.
+
+**When:** Use to correct ownership, contacts, interfaces, contracts or notes; does not operate the external system.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `id` (string, optional): External system ID
+- `name` (string, optional): Unique system name
+- `description` (string, optional): Description
+- `team` (string, optional): Owning team
+- `contact` (string, optional): Contact reference
+- `interfaces` (array[string], optional): Interfaces
+- `contracts` (array[string], optional): Contracts
+- `notes` (string, optional): Additional context
+
+**Output:** Updated ExternalSystem record.
+
+**Errors:**
+
+- `VALIDATION`: 'external system not found', 'external system name required', or duplicate name; verify ID and uniqueness.
+
+**Example:** `{"action":"update_external_system","id":"SYSTEM","data":{"team":"Platform"}}`
+
+**Related:** `create_external_system`, `create_system_relationship`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `verify_candidate_dev_restoration` — execute_action
+
+**Same operation:** `mcp_tool:verify_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/verify-restoration`
+
+Request fresh server-owned proof that original candidate Dev images are available and runtime has been restored.
+
+**When:** Use only after exact restoration confirmation and separately completed human-reviewed external Flux merges; then inspect proof before explicit release.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `product_id` (string, optional): Product scope
+- `restoration_operation_id` (string, optional): Exact restoration operation
+- `request_key` (string, optional): Unique request key
+- `expected_selection` (object, optional): Current selection CAS
+
+**Output:** Persistent verification operation/result.
+
+**Errors:**
+
+- `VALIDATION`: Errors include stale selection, wrong restoration owner/operation, incomplete confirmation or incomplete component scope; reconcile the same operation and satisfy all original-component checks.
+
+**Example:** `{"action":"verify_candidate_dev_restoration","product_id":"P","data":{"restoration_operation_id":"RESTORE","request_key":"verify-restore-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":3}}}`
+
+**Related:** `request_candidate_dev_restoration`, `get_operation`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `verify_candidate_dev_runtime` — execute_action
+
+**Same operation:** `mcp_tool:verify_candidate_dev_runtime`, `http_route:POST /api/products/{id}/candidate-dev/verify-runtime`
+
+Request server-owned point-in-time runtime evidence for the same owner's activated Dev candidate.
+
+**When:** Use after activation/deployment to inspect exact runtime groups and image identity; this is not functional acceptance.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `product_id` (string, optional): Product scope
+- `activation_operation_id` (string, optional): Candidate activation operation
+- `request_key` (string, optional): Unique request key
+- `expected_selection` (object, optional): Current selection CAS
+
+**Output:** Persistent runtime verification operation/result.
+
+**Errors:**
+
+- `VALIDATION`: Errors include invalid owner/activation, stale selection or incomplete runtime groups; inspect current operation and correct exact scope.
+
+**Example:** `{"action":"verify_candidate_dev_runtime","product_id":"P","data":{"activation_operation_id":"ACTIVATION","request_key":"runtime-verify-001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `deploy_candidate_dev`, `get_operation`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
+### `verify_conflict_resolution` — execute_action
+
+**Same operation:** `mcp_tool:verify_conflict_resolution`, `http_route:POST /api/products/{id}/conflicts/verify`
+
+Verify passing exact-commit evidence for each integration affected by a composition conflict.
+
+**When:** Use after an external executor records resolution and required checks; verify the exact recorded result IDs.
+
+**Inputs:**
+
+- `action` (string, required): Exact command action
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values
+- `product_id` (string, optional): Product scope
+- `conflict_id` (string, optional): Conflict ID
+- `result_ids` (array[string], optional): Check result evidence IDs
+
+**Output:** Conflict verification status and evidence.
+
+**Errors:**
+
+- `VALIDATION`: Messages include conflict missing/outside Product, result set incomplete, stale commit or failed checks; refresh conflict and record fresh passing evidence.
+
+**Example:** `{"action":"verify_conflict_resolution","product_id":"P","data":{"conflict_id":"CONFLICT","result_ids":["RESULT"]}}`
+
+**Related:** `claim_composition_conflict`, `record_conflict_resolution`, `reconcile_composition`
+
+**Authority:** Records or requests this specific Control Plane operation only; does not authorize arbitrary code edits, shell/SQL, unrelated external effects, or bypass of approval and policy.
+
 ## release
 
 ### `confirm_candidate_dev_restoration` — execute_action
@@ -2639,37 +3176,6 @@ Unlock a candidate Dev reservation after confirmed complete restoration and fres
 **Related:** `request_candidate_dev_restoration`, `verify_candidate_dev_restoration`
 
 **Authority:** Unlock only under restoration policy; no TTL unlock, PR merge, or physical garbage collection.
-
-### `request_candidate_dev_restoration` — mcp_tool
-
-**Same operation:** `execute_action:request_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/request-restoration`
-
-Request bounded restoration of every original baseline component under recovery fencing.
-
-**When:** Use when a reserved candidate environment requires restoration; inspect complete plan before separate confirmation.
-
-**Inputs:**
-
-- `actor` (string, required): Attribution
-- `product_id` (string, required): Product scope
-- `reservation_operation_id` (string, required): Reservation handle
-- `request_key` (string, required): 16..128 byte idempotency key
-- `expected_selection` (object, required): Exact selection CAS
-
-**Output:** Persistent restoration operation and bounded plan.
-
-**Errors:**
-
-- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
-- `NOT_FOUND`: Refresh scoped context and verify the ID.
-- `CONFLICT`: Re-read current state; do not replay with changed intent.
-- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
-
-**Example:** `{"name":"request_candidate_dev_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","reservation_operation_id":"RESERVATION","request_key":"restore-key-000001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
-
-**Related:** `verify_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
-
-**Authority:** Requests a plan only; does not confirm, merge Flux changes, verify runtime, or unlock.
 
 ### `plan_release` — execute_action
 
@@ -4045,40 +4551,17 @@ Scan configured local workspace and match remotes to repositories already attach
 
 The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
 
-- `mcp_tool:reserve_candidate_dev`
 - `mcp_tool:restore_backup`
 - `mcp_tool:resume`
-- `mcp_tool:revise_test_scenario`
 - `mcp_tool:scan_workspace`
 - `mcp_tool:search_product_knowledge`
 - `mcp_tool:set_project_knowledge`
 - `mcp_tool:sign_artifact`
 - `mcp_tool:sync_pull_request_review`
-- `mcp_tool:update_environment_feature`
 - `mcp_tool:upsert_product_knowledge`
-- `mcp_tool:verify_candidate_dev_restoration`
-- `mcp_tool:verify_candidate_dev_runtime`
-- `mcp_tool:verify_conflict_resolution`
 - `execute_action:cancel_intelligence_task`
 - `execute_action:cancel_native_delivery`
 - `execute_action:cancel_worker_job`
-- `execute_action:reserve_candidate_dev`
-- `execute_action:revise_test_scenario`
-- `execute_action:select_composition`
-- `execute_action:set_external_scope`
-- `execute_action:update_environment`
-- `execute_action:update_environment_feature`
-- `execute_action:update_external_system`
-- `execute_action:verify_candidate_dev_restoration`
-- `execute_action:verify_candidate_dev_runtime`
-- `execute_action:verify_conflict_resolution`
-- `http_route:/mcp`
-- `http_route:GET /api/build-profiles`
-- `http_route:GET /api/builds`
-- `http_route:GET /api/builds/{id}`
-- `http_route:GET /api/code-sdk/rcp.ts`
-- `http_route:GET /api/connections/{id}/repositories`
-- `http_route:GET /api/context/excerpt`
 - `http_route:GET /api/context/graph`
 - `http_route:GET /api/context/search`
 - `http_route:GET /api/deployments`
@@ -4106,18 +4589,12 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:POST /api/deployments`
 - `http_route:POST /api/deployments/{id}/close`
 - `http_route:POST /api/deployments/{id}/reconcile`
-- `http_route:POST /api/features/{id}/update-environment`
 - `http_route:POST /api/local-git/plan`
 - `http_route:POST /api/local-git/record`
-- `http_route:POST /api/products/{id}/candidate-dev/reserve`
-- `http_route:POST /api/products/{id}/candidate-dev/verify-restoration`
-- `http_route:POST /api/products/{id}/candidate-dev/verify-runtime`
-- `http_route:POST /api/products/{id}/conflicts/verify`
 - `http_route:POST /api/products/{id}/knowledge`
 - `http_route:POST /api/products/{id}/knowledge/nodes`
 - `http_route:POST /api/reviews/sync`
 - `http_route:POST /api/runtime-reports`
 - `http_route:POST /api/signatures`
-- `http_route:POST /api/test-scenarios/revisions`
 - `http_route:POST /api/tools/{name}`
 - `http_route:POST /api/workspaces/scan`
