@@ -9,8 +9,8 @@ func TestRegistryActionsExist(t *testing.T) {
 }
 
 func TestPendingDocumentationOnlyShrinks(t *testing.T) {
-	if got := len(PendingDocumentation()); got > 148 {
-		t.Fatalf("pendingDocumentation grew: got %d; updated bound is 148", got)
+	if got := len(PendingDocumentation()); got > 102 {
+		t.Fatalf("pendingDocumentation grew: got %d; updated bound is 102", got)
 	}
 }
 

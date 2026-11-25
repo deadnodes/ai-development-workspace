@@ -32,6 +32,36 @@ Read normalized protected artifact roots, effective retention policies, stored a
 
 **Authority:** Read only; InputHash and inventory do not authorize artifact deletion or registry mutation.
 
+### `list_signatures` — mcp_tool
+
+**Same operation:** `http_route:GET /api/signatures`
+
+List Product-scoped signing request handles and per-key signature evidence.
+
+**When:** Use to inspect signing results; filter by exact digest and paginate as needed.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `digest` (string, optional): Exact image digest filter
+- `limit` (integer, optional): 1..100; default 25
+- `cursor` (string, optional): Scope-bound cursor
+
+**Output:** Paged signature requests and evidence.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"list_signatures","arguments":{"product_id":"PRODUCT"}}`
+
+**Related:** `sign_artifact`, `get_build`
+
+**Authority:** Read only; a signature record alone does not authorize deployment or promotion.
+
 ## backup
 
 ### `create_backup` — mcp_tool
@@ -512,6 +542,235 @@ Read desired GitOps state separately from reconciled and runtime observations.
 **Related:** `get_operation`, `deploy_integration`, `assemble_environment`
 
 **Authority:** Read only; desired state is not runtime health, functional acceptance or deployment authorization.
+
+### `get_runtime_report` — mcp_tool
+
+**Same operation:** `http_route:GET /api/runtime-reports`
+
+Read pushed runtime snapshots and their freshness for a Product/environment/cluster.
+
+**When:** Use to inspect recorded cluster evidence; refresh explicitly when current inventory is needed.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product filter
+- `environment_id` (string, optional): Environment filter
+- `cluster` (string, optional): Cluster filter
+- `limit` (integer, optional): Page size; HTTP accepts 1..1000
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Paged runtime snapshot records with freshness; snapshots older than five minutes are stale.
+
+**Errors:**
+
+- `VALIDATION`: HTTP limit must be 1..1000; correct page size.
+- `INTERNAL`: runtime reports unavailable; inspect service capability.
+
+**Example:** `{"name":"get_runtime_report","arguments":{"product_id":"PRODUCT","environment_id":"ENV"}}`
+
+**Related:** `refresh_environment_runtime`, `get_environment_state`
+
+**Authority:** Read only; snapshots are evidence, not authorization or acceptance.
+
+### `list_pipelines` — mcp_tool
+
+**Same operation:** `http_route:GET /api/pipelines`
+
+Read time-ordered builds and deployments with stages and status hints.
+
+**When:** Use to review pipeline history with optional filters and cursor pagination.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `profile_id` (string, optional): Build profile filter
+- `status` (string, optional): Pipeline status filter
+- `environment_id` (string, optional): Environment filter
+- `q` (string, optional): Text filter
+- `limit` (integer, optional): 1..100
+- `cursor` (string, optional): Continuation cursor
+
+**Output:** Paged pipeline/build/deployment items.
+
+**Errors:**
+
+- `VALIDATION`: invalid pipeline query; correct filters/types.
+- `INTERNAL`: pipeline service unavailable; inspect service capability.
+
+**Example:** `{"name":"list_pipelines","arguments":{"product_id":"PRODUCT","limit":20}}`
+
+**Related:** `list_builds`, `get_build`
+
+**Authority:** Read only; pipeline status does not authorize deployment or prove runtime health.
+
+### `reconcile_composition` — mcp_tool
+
+**Same operation:** `execute_action:reconcile_composition`, `http_route:POST /api/compositions/{id}/reconcile`
+
+Queue execution of one selected immutable composition in its configured environment.
+
+**When:** Use after reviewing composition and target; poll the resulting operation and children.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `id` (string, required): Composition ID
+- `resolution_conflict_ids` (array[string], optional): Resolved conflicts applicable to this plan
+
+**Output:** Persistent composition operation with build/GitOps steps.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"reconcile_composition","arguments":{"id":"COMPOSITION"}}`
+
+**Related:** `get_operation`, `get_environment_state`
+
+**Authority:** Queues only policy-permitted delivery; does not authorize source edits, conflict resolution, or production release.
+
+### `record_conflict_resolution` — mcp_tool
+
+**Same operation:** `execute_action:record_conflict_resolution`, `http_route:POST /api/products/{id}/conflicts/resolution`
+
+Record the claim owner's externally completed conflict resolution commit and rationale.
+
+**When:** Use after resolving the exact conflict externally and while holding its claim.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `conflict_id` (string, required): Exact conflict ID
+- `commit` (string, required): Resolution commit
+- `rationale` (string, required): Resolution explanation
+
+**Output:** Append-only resolution record.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"record_conflict_resolution","arguments":{"product_id":"PRODUCT","conflict_id":"CONFLICT","commit":"SHA","rationale":"Keep both changes"}}`
+
+**Related:** `claim_composition_conflict`, `verify_conflict_resolution`
+
+**Authority:** Records an assertion only; does not resolve source, verify checks, deploy, or authorize edits.
+
+### `record_runtime_observation` — mcp_tool
+
+**Same operation:** `execute_action:record_runtime_observation`, `http_route:POST /api/operations/{id}/runtime`
+
+Record caller-supplied runtime observation against an exact child operation, environment, GitOps commit and artifact digest.
+
+**When:** Use after external runtime inspection; identify the exact evidence observed.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `operation_id` (string, required): Exact operation ID
+- `gitops_commit` (string, required): Observed GitOps commit
+- `artifact_digest` (string, required): Observed artifact digest
+- `healthy` (boolean, required): Observed health
+- `environment_id` (string, required): Environment
+- `details` (string, required): Observation details
+
+**Output:** Append-only runtime observation record.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"record_runtime_observation","arguments":{"operation_id":"OP","gitops_commit":"SHA","artifact_digest":"sha256:DIGEST","healthy":true,"environment_id":"ENV","details":"All replicas ready"}}`
+
+**Related:** `get_runtime_report`, `get_environment_state`
+
+**Authority:** Caller assertion, not server-collected telemetry, approval, or functional acceptance.
+
+### `refresh_environment_runtime` — mcp_tool
+
+**Same operation:** `execute_action:refresh_environment_runtime`
+
+Queue read-only Kubernetes/Flux and GitOps/Actions inventory for an environment.
+
+**When:** Use when a fresh runtime inventory is needed; poll the returned operation.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `environment_id` (string, required): Target Environment
+- `application_id` (string, optional): Optional application filter
+
+**Output:** Persistent refresh operation handle.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"refresh_environment_runtime","arguments":{"product_id":"PRODUCT","environment_id":"ENV"}}`
+
+**Related:** `get_runtime_report`, `get_operation`
+
+**Authority:** Read-only observation; does not change cluster resources or advance deployment readiness.
+
+## discovery
+
+### `get_status_schema` — mcp_tool
+
+Return controlled status values and allowed lifecycle transitions.
+
+**When:** Use before proposing a lifecycle transition; use execute for the actual domain command.
+
+**Inputs:**
+
+
+**Output:** Status catalog and transition table.
+
+**Errors:**
+
+- `INTERNAL`: Status catalog unavailable; inspect service.
+
+**Example:** `{"name":"get_status_schema","arguments":{}}`
+
+**Related:** `get_tool_guide`, `execute`
+
+**Authority:** Read only; clients cannot assign server-owned statuses or bypass readiness checks.
+
+### `get_tool_guide` — mcp_tool
+
+Read the generated tool index or one exact tool/action/route entry.
+
+**When:** Use with no name for the catalog, or name for a single contract.
+
+**Inputs:**
+
+- `name` (string, optional): Exact name or kind:name; aliases are accepted
+
+**Output:** Grouped compact index or one complete guide entry; entries are bounded to 32 KiB.
+
+**Errors:**
+
+- `NOT_FOUND`: Unknown guide name; use exact registry spelling.
+- `VALIDATION`: guide entry exceeds output bound; request a smaller/different entry.
+
+**Example:** `{"name":"get_tool_guide","arguments":{"name":"mcp_tool:execute"}}`
+
+**Related:** `get_status_schema`, `get_code_api`
+
+**Authority:** Documentation only; it grants no command, shell, source-edit, deployment, or release authority.
 
 ## execution
 
@@ -1776,6 +2035,165 @@ Read persisted operation status, step evidence, child handles and attention need
 
 **Authority:** Read only; queued/pending is not completion, deployment health or authorization. Conflict resolution is external and reconciliation is separate.
 
+## release
+
+### `prepare_release_candidate` — mcp_tool
+
+**Same operation:** `execute_action:prepare_release_candidate`, `http_route:POST /api/release-candidates`
+
+Prepare a release candidate from an exact Product/environment selection.
+
+**When:** Use only under the main-first release policy with exact source evidence and applicable explicit approval.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `name` (string, required): Candidate name
+- `environment_id` (string, required): Target environment
+- `components` (array, optional): Legacy CI candidate selection
+- `approve_main_update` (boolean, optional): Legacy explicit main-update approval
+- `main_sources` (array, optional): Exact already-merged main source snapshots
+- `idempotency_key` (string, optional): Durable replay key
+
+**Output:** Persistent candidate operation; poll get_operation for evidence.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"prepare_release_candidate","arguments":{"product_id":"PRODUCT","name":"release-1","environment_id":"ENV"}}`
+
+**Related:** `promote_release_candidate`, `get_operation`
+
+**Authority:** Does not grant merge, source edit, candidate approval, promotion, or deployment beyond domain policy.
+
+### `promote_release_candidate` — mcp_tool
+
+**Same operation:** `execute_action:promote_release_candidate`, `http_route:POST /api/release-candidates/{id}/promote`
+
+Request promotion of one exact release candidate and verified artifact digests.
+
+**When:** Only after reviewing candidate evidence and required scenario/finding gates; explicit approval is required.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `candidate_operation_id` (string, required): Exact candidate operation
+- `approve` (boolean, required): Explicit approval flag
+
+**Output:** Persistent promotion operation.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"promote_release_candidate","arguments":{"candidate_operation_id":"CANDIDATE","approve":true}}`
+
+**Related:** `prepare_release_candidate`, `get_operation`
+
+**Authority:** Approval flag is subject to application policy; does not authorize source editing or bypass evidence gates.
+
+### `release_candidate_dev` — mcp_tool
+
+**Same operation:** `execute_action:release_candidate_dev`, `http_route:POST /api/products/{id}/candidate-dev/release`
+
+Explicitly release an unchanged candidate Dev preparation reservation.
+
+**When:** Use only with reservation owner attribution and current expected-selection CAS before candidate effects; uncertain/restored reservations require restoration protocol.
+
+**Inputs:**
+
+- `actor` (string, required): Attribution
+- `product_id` (string, required): Product scope
+- `reservation_operation_id` (string, required): Reservation handle
+- `request_key` (string, required): 16..128 byte idempotency key
+- `expected_selection` (object, required): Exact composition/operation/generation CAS
+
+**Output:** Persistent reservation release operation/evidence.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"release_candidate_dev","arguments":{"actor":"operator","product_id":"PRODUCT","reservation_operation_id":"RESERVATION","request_key":"release-key-000001","expected_selection":{"composition_id":"C","operation_id":"O","generation":1}}}`
+
+**Related:** `reserve_candidate_dev`, `request_candidate_dev_restoration`
+
+**Authority:** Releases only eligible unchanged reservation; does not restore environment or authorize production.
+
+### `release_candidate_dev_after_restoration` — mcp_tool
+
+**Same operation:** `execute_action:release_candidate_dev_after_restoration`, `http_route:POST /api/products/{id}/candidate-dev/release-after-restoration`
+
+Unlock a candidate Dev reservation after confirmed complete restoration and fresh successful proof.
+
+**When:** Use only after reviewing exact restoration confirmation, latest verification and settled effects.
+
+**Inputs:**
+
+- `actor` (string, required): Attribution
+- `product_id` (string, required): Product scope
+- `restoration_operation_id` (string, required): Restoration operation
+- `restoration_verification_operation_id` (string, required): Latest successful verification
+- `request_key` (string, required): 16..128 byte idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent scoped unlock operation.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"release_candidate_dev_after_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","restoration_operation_id":"RESTORE","restoration_verification_operation_id":"PROOF","request_key":"unlock-key-000001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `request_candidate_dev_restoration`, `verify_candidate_dev_restoration`
+
+**Authority:** Unlock only under restoration policy; no TTL unlock, PR merge, or physical garbage collection.
+
+### `request_candidate_dev_restoration` — mcp_tool
+
+**Same operation:** `execute_action:request_candidate_dev_restoration`, `http_route:POST /api/products/{id}/candidate-dev/request-restoration`
+
+Request bounded restoration of every original baseline component under recovery fencing.
+
+**When:** Use when a reserved candidate environment requires restoration; inspect complete plan before separate confirmation.
+
+**Inputs:**
+
+- `actor` (string, required): Attribution
+- `product_id` (string, required): Product scope
+- `reservation_operation_id` (string, required): Reservation handle
+- `request_key` (string, required): 16..128 byte idempotency key
+- `expected_selection` (object, required): Exact selection CAS
+
+**Output:** Persistent restoration operation and bounded plan.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"request_candidate_dev_restoration","arguments":{"actor":"operator","product_id":"PRODUCT","reservation_operation_id":"RESERVATION","request_key":"restore-key-000001","expected_selection":{"composition_id":"C","operation_id":"O","generation":2}}}`
+
+**Related:** `verify_candidate_dev_restoration`, `release_candidate_dev_after_restoration`
+
+**Authority:** Requests a plan only; does not confirm, merge Flux changes, verify runtime, or unlock.
+
 ## verification
 
 ### `create_test_scenario` — mcp_tool
@@ -1813,6 +2231,43 @@ Create an immutable versioned behavior scenario for later execution against an e
 **Related:** `revise_test_scenario`, `record_scenario_run`, `get_operation`
 
 **Authority:** Defines verification only; does not execute tests, supply business data, or establish release readiness.
+
+### `record_scenario_run` — mcp_tool
+
+**Same operation:** `execute_action:record_scenario_run`, `http_route:POST /api/scenario-runs`
+
+Record execution evidence for one immutable scenario version against an exact composition or candidate.
+
+**When:** Use after actually running the scenario and collecting every component output.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `product_id` (string, required): Product scope
+- `scenario_version_id` (string, required): Exact scenario version
+- `composition_id` (string, optional): Composition under test
+- `candidate_operation_id` (string, optional): Candidate under test
+- `environment_id` (string, optional): Environment
+- `components` (array, required): Per-component application/operation/source/digest evidence
+- `result` (string, required): Scenario result
+- `observations` (array[string], optional): Observed outcomes
+- `artifacts` (array, optional): Evidence artifacts
+- `finding_ids` (array[string], optional): Linked findings
+
+**Output:** Append-only scenario run and linked evidence.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"record_scenario_run","arguments":{"product_id":"PRODUCT","scenario_version_id":"VERSION","components":[],"result":"passed"}}`
+
+**Related:** `create_test_scenario`, `revise_test_scenario`
+
+**Authority:** Records supplied evidence; does not execute tests or make failed evidence disappear.
 
 ## work tracking
 
@@ -2537,6 +2992,62 @@ Create a focused hotfix Integration under a Feature, optionally linked to a Find
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+## workers
+
+### `get_worker_history` — mcp_tool
+
+Read bounded native worker jobs, attempts, or job links for a Product.
+
+**When:** Use jobs first, then paginate attempts/links with the selected job_id; not for GitHub Actions logs.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `feature_id` (string, optional): Optional Feature filter
+- `job_id` (string, optional): Job filter / parent for attempts or links
+- `collection` (string, optional): jobs, attempts, or links
+- `limit` (integer, optional): 1..100; default 25
+- `cursor` (string, optional): Scope-bound continuation cursor
+
+**Output:** Bounded worker history including recorded status and links.
+
+**Errors:**
+
+- `VALIDATION`: Worker history read failed: verify exact scope, collection and cursor; bounded reader required.
+
+**Example:** `{"name":"get_worker_history","arguments":{"product_id":"PRODUCT","collection":"jobs","limit":25}}`
+
+**Related:** `get_worker_job`, `get_operation`
+
+**Authority:** Read only; recorded status and unverified snapshot provenance are not runtime or success proof.
+
+### `get_worker_job` — mcp_tool
+
+**Same operation:** `http_route:GET /api/worker-jobs/{id}`
+
+Read one bounded native worker job and its attempts.
+
+**When:** Use with the exact job ID from worker history.
+
+**Inputs:**
+
+- `job_id` (string, required): Exact worker job ID
+
+**Output:** Job details and bounded attempts.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"get_worker_job","arguments":{"job_id":"JOB"}}`
+
+**Related:** `get_worker_history`
+
+**Authority:** Read only; does not run, retry, or authorize a worker job.
+
 ## workspace
 
 ### `export_workspace_configuration` — mcp_tool
@@ -2634,30 +3145,89 @@ Discover the typed agent-side TypeScript SDK declarations, optionally filtered b
 
 **Authority:** Schema discovery only; SDK access grants no command authority.
 
+### `get_product_configuration` — mcp_tool
+
+**Same operation:** `http_route:GET /api/products/{id}/configuration`
+
+Export effective Product configuration from the authoritative store for a one-way configuration mirror.
+
+**When:** Use to inspect or mirror current setup; use create_backup for full history and import_workspace_configuration only for a new Product.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+
+**Output:** Portable configuration including secret references, never resolved secret values.
+
+**Errors:**
+
+- `VALIDATION`: Correct the action envelope or values using GET /api/schema.
+- `NOT_FOUND`: Refresh scoped context and verify the ID.
+- `CONFLICT`: Re-read current state; do not replay with changed intent.
+- `STALE_FENCE`: Resume the same executor with the current fence or follow takeover policy.
+
+**Example:** `{"name":"get_product_configuration","arguments":{"product_id":"PRODUCT"}}`
+
+**Related:** `export_workspace_configuration`, `import_workspace_configuration`, `create_backup`
+
+**Authority:** Read only; this is not a backup or import grant and does not disclose credential values.
+
+### `import_workspace_configuration` — mcp_tool
+
+**Same operation:** `http_route:POST /api/workspaces/import`
+
+Atomically import portable setup into a Product that does not already exist.
+
+**When:** Use to seed a new instance from an exported configuration after reviewing IDs and contents.
+
+**Inputs:**
+
+- `actor` (string, optional): Attribution
+- `configuration` (object, required): Portable workspace configuration
+
+**Output:** Imported Product/setup result.
+
+**Errors:**
+
+- `VALIDATION`: Invalid workspace JSON/configuration; correct the supplied portable shape.
+- `CONFLICT`: IDs conflict with existing records; import only into an empty/new Product context.
+
+**Example:** `{"name":"import_workspace_configuration","arguments":{"configuration":{"product":{"id":"PRODUCT"}}}}`
+
+**Related:** `get_product_configuration`, `export_workspace_configuration`
+
+**Authority:** Imports metadata only; does not clone repositories, enable providers, create credentials, or schedule operations.
+
+### `match_local_repositories` — mcp_tool
+
+**Same operation:** `http_route:POST /api/workspaces/match`
+
+Scan configured local workspace and match remotes to repositories already attached to a Product.
+
+**When:** Use to map existing checkouts before local Git work; do not use to import unrelated repositories.
+
+**Inputs:**
+
+- `product_id` (string, required): Product scope
+- `actor` (string, optional): Attribution
+
+**Output:** Matched checkouts, paths, branches, commits and AGENTS context.
+
+**Errors:**
+
+- `VALIDATION`: workspace unavailable or not configured; configure/recover server workspace.
+- `NOT_FOUND`: No matching attached repository; inspect Product attachments and remotes.
+
+**Example:** `{"name":"match_local_repositories","arguments":{"product_id":"PRODUCT"}}`
+
+**Related:** `scan_workspace`, `get_local_git_state`
+
+**Authority:** Read only; does not fetch, change source, or attach repositories.
+
 ## Pending documentation
 
 The registry tracks remaining interfaces explicitly; later stages must reduce this list to zero.
 
-- `mcp_tool:get_product_configuration`
-- `mcp_tool:get_runtime_report`
-- `mcp_tool:get_status_schema`
-- `mcp_tool:get_tool_guide`
-- `mcp_tool:get_worker_history`
-- `mcp_tool:get_worker_job`
-- `mcp_tool:import_workspace_configuration`
-- `mcp_tool:list_pipelines`
-- `mcp_tool:list_signatures`
-- `mcp_tool:match_local_repositories`
-- `mcp_tool:prepare_release_candidate`
-- `mcp_tool:promote_release_candidate`
-- `mcp_tool:reconcile_composition`
-- `mcp_tool:record_conflict_resolution`
-- `mcp_tool:record_runtime_observation`
-- `mcp_tool:record_scenario_run`
-- `mcp_tool:refresh_environment_runtime`
-- `mcp_tool:release_candidate_dev`
-- `mcp_tool:release_candidate_dev_after_restoration`
-- `mcp_tool:request_candidate_dev_restoration`
 - `mcp_tool:reserve_candidate_dev`
 - `mcp_tool:restore_backup`
 - `mcp_tool:resume`
@@ -2692,25 +3262,15 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `execute_action:pin_artifact`
 - `execute_action:plan_composition`
 - `execute_action:plan_release`
-- `execute_action:prepare_release_candidate`
-- `execute_action:promote_release_candidate`
 - `execute_action:queue_intelligence_task`
 - `execute_action:queue_worker_job`
 - `execute_action:queue_worker_publication`
-- `execute_action:reconcile_composition`
 - `execute_action:reconcile_worker_job`
 - `execute_action:reconcile_worker_publication`
-- `execute_action:record_conflict_resolution`
 - `execute_action:record_package_artifact`
 - `execute_action:record_release`
-- `execute_action:record_runtime_observation`
-- `execute_action:record_scenario_run`
-- `execute_action:refresh_environment_runtime`
 - `execute_action:refresh_registry_inventory`
 - `execute_action:release_artifact_pin`
-- `execute_action:release_candidate_dev`
-- `execute_action:release_candidate_dev_after_restoration`
-- `execute_action:request_candidate_dev_restoration`
 - `execute_action:reserve_candidate_dev`
 - `execute_action:revise_test_scenario`
 - `execute_action:select_composition`
@@ -2735,28 +3295,22 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:GET /api/features/{id}/graph`
 - `http_route:GET /api/integrations/{id}/context`
 - `http_route:GET /api/integrations/{id}/git`
-- `http_route:GET /api/pipelines`
-- `http_route:GET /api/products/{id}/configuration`
 - `http_route:GET /api/products/{id}/context`
 - `http_route:GET /api/products/{id}/knowledge/search`
 - `http_route:GET /api/products/{id}/local-checkouts/{checkout}/git`
 - `http_route:GET /api/products/{id}/unlinked-git-commits`
 - `http_route:GET /api/repositories/{id}/branches`
-- `http_route:GET /api/runtime-reports`
 - `http_route:GET /api/schema`
-- `http_route:GET /api/signatures`
 - `http_route:GET /api/state`
 - `http_route:GET /api/statuses`
 - `http_route:GET /api/tools`
 - `http_route:GET /api/ui-state`
 - `http_route:GET /api/worker-history`
-- `http_route:GET /api/worker-jobs/{id}`
 - `http_route:GET /healthz`
 - `http_route:POST /api/backups/restore`
 - `http_route:POST /api/builds`
 - `http_route:POST /api/builds/{id}/cancel`
 - `http_route:POST /api/builds/{id}/close`
-- `http_route:POST /api/compositions/{id}/reconcile`
 - `http_route:POST /api/connections/{id}/test`
 - `http_route:POST /api/deployments`
 - `http_route:POST /api/deployments/{id}/close`
@@ -2764,25 +3318,15 @@ The registry tracks remaining interfaces explicitly; later stages must reduce th
 - `http_route:POST /api/features/{id}/update-environment`
 - `http_route:POST /api/local-git/plan`
 - `http_route:POST /api/local-git/record`
-- `http_route:POST /api/operations/{id}/runtime`
-- `http_route:POST /api/products/{id}/candidate-dev/release`
-- `http_route:POST /api/products/{id}/candidate-dev/release-after-restoration`
-- `http_route:POST /api/products/{id}/candidate-dev/request-restoration`
 - `http_route:POST /api/products/{id}/candidate-dev/reserve`
 - `http_route:POST /api/products/{id}/candidate-dev/verify-restoration`
 - `http_route:POST /api/products/{id}/candidate-dev/verify-runtime`
-- `http_route:POST /api/products/{id}/conflicts/resolution`
 - `http_route:POST /api/products/{id}/conflicts/verify`
 - `http_route:POST /api/products/{id}/knowledge`
 - `http_route:POST /api/products/{id}/knowledge/nodes`
-- `http_route:POST /api/release-candidates`
-- `http_route:POST /api/release-candidates/{id}/promote`
 - `http_route:POST /api/reviews/sync`
 - `http_route:POST /api/runtime-reports`
-- `http_route:POST /api/scenario-runs`
 - `http_route:POST /api/signatures`
 - `http_route:POST /api/test-scenarios/revisions`
 - `http_route:POST /api/tools/{name}`
-- `http_route:POST /api/workspaces/import`
-- `http_route:POST /api/workspaces/match`
 - `http_route:POST /api/workspaces/scan`
