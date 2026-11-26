@@ -342,7 +342,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		if in == nil {
 			return nil, missing("integration", id)
 		}
-		featureContext, e := s.Resume(ctx, in.FeatureID)
+		featureContext, e := s.resumeFromState(ctx, st, in.FeatureID)
 		if e != nil {
 			return nil, e
 		}

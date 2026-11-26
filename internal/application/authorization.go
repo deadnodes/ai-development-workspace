@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -85,26 +87,100 @@ func scopedState(ctx context.Context, st domain.State) (domain.State, error) {
 	if !ok || instanceAdmin(p) {
 		return st, nil
 	}
-	rows, err := stateRows(st)
-	if err != nil {
-		return domain.State{}, err
-	}
-	for kind, group := range rows {
-		filtered := []map[string]any{}
-		for _, row := range group {
-			if allowedProduct(p, rowProduct(kind, row)) {
-				filtered = append(filtered, row)
+	return filterScopedState(st, p)
+}
+
+// filterScopedState shallow-copies each collection before filtering so its
+// returned slices never alias Store's cached state. State currently consists
+// only of collections. The former JSON decode into map[string][] rejected any
+// encoded non-null non-array field; omitted/null fields decoded as zero. Keep
+// that behavior for future fields rather than silently exposing them.
+func filterScopedState(st domain.State, p auth.Principal) (domain.State, error) {
+	out := st
+	sv := reflect.ValueOf(st)
+	ov := reflect.ValueOf(&out).Elem()
+	wildcard := slices.Contains(p.Products, "*")
+	for i := 0; i < sv.NumField(); i++ {
+		field := sv.Field(i)
+		dst := ov.Field(i)
+		if field.Kind() != reflect.Slice {
+			meta := sv.Type().Field(i)
+			jsonTag := strings.Split(meta.Tag.Get("json"), ",")
+			if jsonTag[0] == "-" || (slices.Contains(jsonTag[1:], "omitempty") && field.IsZero()) {
+				continue
+			}
+			b, err := json.Marshal(field.Interface())
+			if err != nil {
+				return domain.State{}, err
+			}
+			if string(b) != "null" {
+				return domain.State{}, fmt.Errorf("json: cannot unmarshal value into Go struct field State.%s of type []map[string]interface {}", meta.Name)
+			}
+			continue
+		}
+		// Two passes: size the result by matching rows only, so a reader of a small
+		// Product never holds an array sized for the whole instance journal.
+		isProducts := sv.Type().Field(i).Name == "Products"
+		keep := func(row reflect.Value) bool {
+			product, found := stateRowProduct(row, isProducts)
+			return found && product != "" && (wildcard || slices.Contains(p.Products, product))
+		}
+		matches := 0
+		for j := 0; j < field.Len(); j++ {
+			if keep(field.Index(j)) {
+				matches++
 			}
 		}
-		rows[kind] = filtered
+		filtered := reflect.MakeSlice(field.Type(), 0, matches)
+		for j := 0; j < field.Len() && filtered.Len() < matches; j++ {
+			if row := field.Index(j); keep(row) {
+				filtered = reflect.Append(filtered, row)
+			}
+		}
+		dst.Set(filtered)
 	}
-	b, err := json.Marshal(rows)
-	if err != nil {
-		return domain.State{}, err
+	return out, nil
+}
+
+func stateRowProduct(row reflect.Value, products bool) (string, bool) {
+	for row.Kind() == reflect.Pointer || row.Kind() == reflect.Interface {
+		if row.IsNil() {
+			return "", false
+		}
+		row = row.Elem()
 	}
-	var out domain.State
-	err = json.Unmarshal(b, &out)
-	return out, err
+	if row.Kind() != reflect.Struct {
+		return "", false
+	}
+	var find func(reflect.Value) (string, bool)
+	find = func(v reflect.Value) (string, bool) {
+		for n := 0; n < v.NumField(); n++ {
+			f := v.Field(n)
+			meta := v.Type().Field(n)
+			tag := strings.Split(meta.Tag.Get("json"), ",")[0]
+			if (products && tag == "id") || (!products && tag == "product_id") {
+				if f.Kind() == reflect.String {
+					return f.String(), true
+				}
+				return "", false
+			}
+			if meta.Anonymous {
+				for f.Kind() == reflect.Pointer {
+					if f.IsNil() {
+						break
+					}
+					f = f.Elem()
+				}
+				if f.Kind() == reflect.Struct {
+					if value, ok := find(f); ok {
+						return value, true
+					}
+				}
+			}
+		}
+		return "", false
+	}
+	return find(row)
 }
 
 // This allowlist deliberately fails closed for newly introduced commands.
