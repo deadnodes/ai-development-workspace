@@ -46,6 +46,8 @@ Windows supports local project tracking, HTTP, and stdio MCP. Native worker sand
 
 `mcp --data` starts its own local application in the client subprocess. It uses stdio, not HTTP; it needs no token, and you do not need to keep `serve` open. Never launch this mode for an untrusted user: access to the file and the ability to start the binary is full admin access. For a remote instance continue to use `mcp --url URL --profile NAME`; `--url` and `--data` cannot be combined.
 
+Use `get_tool_guide` to look up contracts and `execute` to record project work. Stdio does not run workers and rejects operations such as Git refresh, builds, and deployment before queueing them. For those operations, connect to the HTTP `/mcp` endpoint of a server with the required workers configured.
+
 ```sh
 "$bin" connect --data "$db" --workspace "$project" --harness both
 "$bin" doctor --data "$db" --workspace "$project"
@@ -56,11 +58,12 @@ Windows supports local project tracking, HTTP, and stdio MCP. Native worker sand
 & $bin doctor --data $db --workspace $project
 ```
 
-`connect` writes project-level `.codex/config.toml` and `.mcp.json` using absolute paths and separate arguments for `mcp --data PATH --workspace DIR`. Choose `--harness codex` or `--harness claude` to write only that client's config. Open or reload the project in the client and accept its normal project trust and MCP prompts. Review these files before committing: they contain machine-specific paths. `doctor` checks the file and the client configuration without launching a server or creating the database.
+`connect` writes project-level `.codex/config.toml` and `.mcp.json` using absolute paths and separate arguments for `mcp --data PATH --workspace DIR`. Choose `--harness codex` or `--harness claude` to write only that client's config. Open or reload the project in the client and accept its normal project trust and MCP prompts. Review these files before committing: they contain machine-specific paths. `doctor` verifies that the client points to the requested database and workspace without launching a server or creating the database.
 
 ## Access and backups
 
 - **Single local admin.** With SQLite and no `RC_TOKEN` or OIDC configuration, HTTP requests from loopback have full access, including to private Products. Bind locally by default (`127.0.0.1:8090`). A non-loopback bind without authentication fails before opening the database.
+- **Claiming Products after enabling OIDC.** A shared Product created by the local admin (including the default workspace Product) has no owner. An authenticated user with the required Product write permission can claim it with `set_product_visibility`, keeping it `shared` or changing it to `private`. Existing shared records with the synthetic owner `local` are also claimable. Private records are not automatically reassigned.
 - **LAN access is opt-in.** Set a strong, unique `RC_TOKEN`, set `ALLOWED_HOSTS` to the hostname or LAN IP clients use, and start with `--listen 0.0.0.0:8090` (or a specific interface). Set the token in the UI's Settings or send it as `Authorization: Bearer …` for API/MCP. Use a firewall and a TLS reverse proxy if traffic crosses a network; plain HTTP does not protect the bearer token. For multi-user identity and private-Product isolation, use [OIDC authentication](AUTHENTICATION.md), preferably with PostgreSQL.
 - **Shared file, same computer.** SQLite uses WAL, foreign keys, a 10-second busy timeout, and `synchronous=NORMAL` (transactions survive process crashes; the newest commits can be lost on sudden power failure). `serve` and several stdio clients can use the same database concurrently on a local disk. Do not use SQLite WAL over SMB/NFS, cloud-sync folders, or across hosts. To move a database to a neighboring PC, back it up first and copy the backup to that PC's local disk.
 - **Back up before moving or upgrading.** Use MCP `create_backup` for the portable logical archive; restore into an empty instance with `restore_backup`. See [Backup](BACKUP.md) for limits and what is excluded. With SQLite tooling installed, run `sqlite3 "$db" '.backup backup.sqlite'` for a consistent live file backup. To copy the main file directly, close HTTP and every MCP process using it, then copy it. Do not copy only the main file from a running installation: recent commits can still be in its `-wal` sidecar. Protect backup files as you protect the database. Old bbolt files are rejected; use a fresh SQLite path (no in-place migration).

@@ -101,6 +101,8 @@ func TestRequestProdPromotionRefusalCodesAtomicAndIdempotent(t *testing.T) {
 
 func TestProdPromotionClaimLeaseAndStaleClaim(t *testing.T) {
 	s, m, _ := promotionFixture(t)
+	now := time.Now().UTC()
+	s.promotionNow = func() time.Time { return now }
 	p, e := s.RequestProdPromotion(context.Background(), promoReq("build1"))
 	if e != nil {
 		t.Fatal(e)
@@ -114,7 +116,11 @@ func TestProdPromotionClaimLeaseAndStaleClaim(t *testing.T) {
 	if e != nil || renewed.LeaseExpiresAt == nil || !renewed.LeaseExpiresAt.After(before) {
 		t.Fatalf("heartbeat did not extend lease: %v %v", renewed.LeaseExpiresAt, e)
 	}
-	m.state.ProdPromotions[0].LeaseExpiresAt = promotionPtrTime(time.Now().Add(-time.Second))
+	next, e := s.HeartbeatProdPromotion(context.Background(), p.ID, "p", "prod", domain.HeartbeatProdPromotion{ClaimID: first.ClaimID})
+	if e != nil || next.LeaseExpiresAt == nil || !next.LeaseExpiresAt.After(*renewed.LeaseExpiresAt) {
+		t.Fatalf("same-tick heartbeat failed to advance again: %v (%v)", next.LeaseExpiresAt, e)
+	}
+	now = next.LeaseExpiresAt.Add(time.Nanosecond)
 	second, e := s.ClaimProdPromotion(context.Background(), domain.ClaimProdPromotion{ProductID: "p", EnvironmentID: "prod"})
 	if e != nil || second == nil || second.ClaimID == first.ClaimID || second.Attempts != 2 {
 		t.Fatal(second, e)

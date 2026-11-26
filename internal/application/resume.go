@@ -73,7 +73,7 @@ func (s *Service) resumeFromState(ctx context.Context, st domain.State, featureI
 			mem = append(mem, v)
 			if v.Kind == "handoff" {
 				previous, found := latestHandoffs[v.IntegrationID]
-				if !found || v.CreatedAt.After(previous.CreatedAt) || (v.CreatedAt.Equal(previous.CreatedAt) && v.ID > previous.ID) {
+				if !found || !v.CreatedAt.Before(previous.CreatedAt) {
 					latestHandoffs[v.IntegrationID] = v
 				}
 			}

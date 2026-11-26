@@ -130,12 +130,12 @@ func TestDispatchCoalescesBranchQueueWithoutBlockingSharedPool(t *testing.T) {
 	a := queue(t, s, "A")
 	m.state.Builds[0].Status = "RUNNING"
 	base := time.Now().UTC()
-	for i, id := range []string{"B", "C", "D"} {
+	for i, id := range []string{"Z", "Y", "D"} {
 		b := copyBuild(a)
 		b.ID, b.RequestKey = id, id
 		b.Status, b.FailureCode, b.SupersededBy = "QUEUED", "", ""
 		b.SourceSHA = strings.Repeat(string(rune('b'+i)), 40)
-		b.QueuedAt, b.CreatedAt, b.UpdatedAt = base.Add(time.Duration(i+1)*time.Minute), base.Add(time.Duration(i+1)*time.Minute), base.Add(time.Duration(i+1)*time.Minute)
+		b.QueuedAt, b.CreatedAt, b.UpdatedAt = base, base, base
 		m.state.Builds = append(m.state.Builds, b)
 	}
 	f.head = strings.Repeat("e", 40)
@@ -156,7 +156,7 @@ func TestDispatchCoalescesBranchQueueWithoutBlockingSharedPool(t *testing.T) {
 		}
 	}
 	for _, event := range m.state.Events {
-		if (event.EntityID == "B" || event.EntityID == "C") && event.Action == "supersede_build" && event.Data.Data["reason"] != "branch_newer_queued" {
+		if (event.EntityID == "Z" || event.EntityID == "Y") && event.Action == "supersede_build" && event.Data.Data["reason"] != "branch_newer_queued" {
 			t.Fatalf("missing reason: %+v", event.Data.Data)
 		}
 	}

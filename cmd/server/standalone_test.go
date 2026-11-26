@@ -114,6 +114,19 @@ func TestStandaloneSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions := session.InitializeResult().Instructions
+	for _, name := range []string{"get_tool_guide", "execute"} {
+		if !strings.Contains(instructions, name) || !slices.ContainsFunc(listed.Tools, func(tool *mcp.Tool) bool { return tool.Name == name }) {
+			t.Fatalf("startup instructions or stdio tools are missing %s", name)
+		}
+	}
+	if strings.Contains(instructions, "get_code_api") {
+		t.Fatal("stdio instructions advertise the HTTP-only SDK tool")
+	}
 	call := func(name string, args map[string]any, expected ...string) {
 		t.Helper()
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
@@ -140,6 +153,30 @@ func TestStandaloneSmoke(t *testing.T) {
 	call("execute", map[string]any{"action": "create_feature", "id": "fixture-feature", "product_id": "fixture-private", "data": map[string]any{"title": "Portable SQLite feature", "problem": "Context must survive restart", "goal": "Searchable local notes"}}, "fixture-feature")
 	call("get_state", map[string]any{}, "fixture-private")
 	call("search_context", map[string]any{"product_id": "fixture-private", "query": "portable"}, "fixture-feature")
+	call("execute", map[string]any{"action": "create_integration", "id": "fixture-integration", "feature_id": "fixture-feature", "data": map[string]any{"title": "Fixture integration", "objective": "Track locally"}}, "fixture-integration")
+	for _, request := range []*mcp.CallToolParams{
+		{Name: "execute", Arguments: map[string]any{"action": "refresh_integration_git", "integration_id": "fixture-integration", "data": map[string]any{}}},
+		{Name: "queue_build", Arguments: map[string]any{"product_id": "fixture-private", "profile_id": "app"}},
+		{Name: "deploy_build", Arguments: map[string]any{"product_id": "fixture-private", "environment_id": "dev", "build_id": "fixture-build"}},
+	} {
+		result, err := session.CallTool(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := json.Marshal(result.Content)
+		if err != nil || !result.IsError || !bytes.Contains(content, []byte("mcp --data does not run workers")) {
+			t.Fatalf("%s did not refuse worker-backed work: %s (%v)", request.Name, content, err)
+		}
+	}
+	store, err = persistence.OpenSQLite(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	state, err := store.Read(ctx)
+	if err != nil || len(state.Operations) != 0 || len(state.Builds) != 0 || len(state.Deployments) != 0 {
+		t.Fatalf("worker requests left durable work or the store could not be read: %v", err)
+	}
 	response, err := httpClient.Get("http://" + addr + "/api/state")
 	if err != nil {
 		t.Fatal(err)

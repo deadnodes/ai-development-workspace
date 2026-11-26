@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -54,6 +55,26 @@ func TestLocalConnectAndDoctorWithoutDatabaseOrCredentials(t *testing.T) {
 	}
 	if err := RunDoctor(ctx, []string{"--data", database + ".other", "--workspace", workspace}, &bytes.Buffer{}); err == nil {
 		t.Fatal("doctor accepted the wrong database")
+	}
+	claudePath := filepath.Join(workspace, ".mcp.json")
+	var config localMCPConfig
+	if err := json.Unmarshal(readFile(t, workspace, ".mcp.json"), &config); err != nil {
+		t.Fatal(err)
+	}
+	entry := config.Claude["release-control"]
+	for _, invalidArgs := range [][]string{append(slices.Clone(entry.Args[:4]), t.TempDir()), entry.Args[:3], append(slices.Clone(entry.Args), "--workspace", workspace)} {
+		entry.Args = invalidArgs
+		config.Claude["release-control"] = entry
+		encoded, err := json.Marshal(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(claudePath, encoded, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunDoctor(ctx, args, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--workspace") {
+			t.Fatalf("doctor did not reject invalid workspace args %q: %v", invalidArgs, err)
+		}
 	}
 	if _, err := os.Stat(database); !os.IsNotExist(err) {
 		t.Fatalf("connect or doctor touched the database: %v", err)

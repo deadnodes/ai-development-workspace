@@ -111,6 +111,9 @@ func validProdSignature(it domain.ProdPromotionItem, sig *domain.ProdSignature, 
 var promotionDigest = regexp.MustCompile(`@sha256:[a-fA-F0-9]{64}$`)
 
 func (s *Service) RequestProdPromotion(ctx context.Context, in domain.RequestProdPromotion) (domain.ProdPromotion, error) {
+	if err := s.requireWorkers("request_prod_promotion"); err != nil {
+		return domain.ProdPromotion{}, err
+	}
 	var out domain.ProdPromotion
 	if err := s.authorizeProductMutation(ctx, "write", in.ProductID); err != nil {
 		return out, err
@@ -352,7 +355,7 @@ func (s *Service) ClaimProdPromotion(ctx context.Context, in domain.ClaimProdPro
 			if err := requireProductRead(ctx, st, in.ProductID); err != nil {
 				return err
 			}
-			now := time.Now().UTC()
+			now := s.prodPromotionTime()
 			for _, p := range st.ProdPromotions {
 				if p.ProductID == in.ProductID && p.EnvironmentID == in.EnvironmentID && p.Attempts < 3 &&
 					(p.Status == "QUEUED" || p.Status == "CLAIMED" && p.LeaseExpiresAt != nil && now.After(*p.LeaseExpiresAt)) {
@@ -370,7 +373,7 @@ func (s *Service) ClaimProdPromotion(ctx context.Context, in domain.ClaimProdPro
 				if err := requireProductRead(ctx, st, in.ProductID); err != nil {
 					return err
 				}
-				now := time.Now().UTC()
+				now := s.prodPromotionTime()
 				for i := range st.ProdPromotions {
 					p := &st.ProdPromotions[i]
 					if p.ProductID != in.ProductID || p.EnvironmentID != in.EnvironmentID || p.Attempts >= 3 {
@@ -421,7 +424,8 @@ func (s *Service) RecordProdPromotionResult(ctx context.Context, promotionID, pr
 			if p.ID != promotionID {
 				continue
 			}
-			if p.ProductID != productID || p.EnvironmentID != environmentID || p.Status != "CLAIMED" || p.ClaimID != in.ClaimID || p.LeaseExpiresAt == nil || !time.Now().UTC().Before(*p.LeaseExpiresAt) {
+			now := s.prodPromotionTime()
+			if p.ProductID != productID || p.EnvironmentID != environmentID || p.Status != "CLAIMED" || p.ClaimID != in.ClaimID || p.LeaseExpiresAt == nil || !now.Before(*p.LeaseExpiresAt) {
 				return invalid("STALE_CLAIM")
 			}
 			if len(in.Items) != len(p.Items) {
@@ -455,7 +459,6 @@ func (s *Service) RecordProdPromotionResult(ctx context.Context, promotionID, pr
 				p.Items[i].ProdSignature = v.ProdSignature
 				all = all && (v.Result == "SIGNED" || v.Result == "ALREADY_SIGNED")
 			}
-			now := time.Now().UTC()
 			p.Status = "FAILED"
 			if all {
 				p.Status = "SUCCEEDED"
@@ -471,6 +474,13 @@ func (s *Service) RecordProdPromotionResult(ctx context.Context, promotionID, pr
 	return out, err
 }
 
+func (s *Service) prodPromotionTime() time.Time {
+	if s.promotionNow != nil {
+		return s.promotionNow().UTC()
+	}
+	return time.Now().UTC()
+}
+
 func (s *Service) HeartbeatProdPromotion(ctx context.Context, promotionID, productID, environmentID string, in domain.HeartbeatProdPromotion) (domain.ProdPromotion, error) {
 	var out domain.ProdPromotion
 	err := s.store.Update(ctx, func(st *domain.State) error {
@@ -482,11 +492,11 @@ func (s *Service) HeartbeatProdPromotion(ctx context.Context, promotionID, produ
 			if p.ID != promotionID {
 				continue
 			}
-			now := time.Now().UTC()
+			now := s.prodPromotionTime()
 			if p.ProductID != productID || p.EnvironmentID != environmentID || p.Status != "CLAIMED" || p.ClaimID != in.ClaimID || p.LeaseExpiresAt == nil || !now.Before(*p.LeaseExpiresAt) {
 				return invalid("STALE_CLAIM")
 			}
-			lease := now.Add(10 * time.Minute)
+			lease := extendLease(now, 10*time.Minute, p.LeaseExpiresAt)
 			p.LeaseExpiresAt = &lease
 			p.UpdatedAt = now
 			out = *p

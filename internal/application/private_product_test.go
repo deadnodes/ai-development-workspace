@@ -13,6 +13,30 @@ func userCtx(id, kind, owner, role string) context.Context {
 	return auth.WithPrincipal(context.Background(), auth.Principal{ID: id, Kind: kind, Owner: owner, Role: role, Products: []string{"*"}, Permissions: []string{"read", "write", "deploy", "admin"}})
 }
 
+func TestLocalSharedProductCanBeClaimedAfterEnablingOIDC(t *testing.T) {
+	for _, owner := range []string{"", "local"} {
+		store := &memoryStore{domain.EmptyState()}
+		local := NewStandalone(store)
+		product, err := local.InitializeWorkspaceProduct(auth.WithLocalAdmin(context.Background()), "Local project")
+		if err != nil || product.ID == "" || product.Owner != "" || product.Visibility != "shared" {
+			t.Fatalf("new local shared product has unexpected owner or visibility: %+v (%v)", product, err)
+		}
+		store.state.Products[0].Owner = owner
+		server := New(store)
+		alice := userCtx("oidc-alice", "human", "", "admin")
+		claim := domain.Command{Action: "set_product_visibility", ProductID: product.ID, Data: map[string]any{"visibility": "shared"}}
+		if _, err := server.Execute(alice, claim); err != nil || store.state.Products[0].Owner != "oidc-alice" {
+			t.Fatalf("could not claim shared product with owner %q: %v", owner, err)
+		}
+		if _, err := server.Execute(userCtx("oidc-bob", "human", "", "admin"), claim); !errors.Is(err, auth.ErrForbidden) {
+			t.Fatalf("claimed product could be taken by another user: %v", err)
+		}
+		if _, err := server.Execute(alice, domain.Command{Action: "add_product_member", ProductID: product.ID, Data: map[string]any{"user_id": "oidc-bob"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestPrivateProductStateAndCommandScope(t *testing.T) {
 	m := &memoryStore{domain.EmptyState()}
 	s := New(m)

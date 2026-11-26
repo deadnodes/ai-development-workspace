@@ -3,7 +3,6 @@ package agentconnect
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -152,9 +151,9 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 					break
 				}
 				name := filepath.Base(filepath.Dir(p))
-				sum := sha256.Sum256(b)
+				sum := sha256.Sum256([]byte(skillLF(string(b))))
 				want := sha256.Sum256(installedSkill(expected[name]))
-				if hex.EncodeToString(sum[:]) != hex.EncodeToString(want[:]) {
+				if sum != want {
 					e = fmt.Errorf("%s checksum mismatch", p)
 					break
 				}

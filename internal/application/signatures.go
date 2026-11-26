@@ -328,6 +328,9 @@ func artifactRef(reg buildconfig.Registry, ref string) (string, string, bool) {
 	return repo, parts[1], true
 }
 func (s *Service) SignArtifact(ctx context.Context, in domain.SignArtifactRequest) (domain.ArtifactSignature, error) {
+	if err := s.requireWorkers("sign_artifact"); err != nil {
+		return domain.ArtifactSignature{}, err
+	}
 	var out domain.ArtifactSignature
 	if in.ProductID == "" {
 		return out, invalid("product_id required")

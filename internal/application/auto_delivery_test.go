@@ -350,9 +350,7 @@ func TestAutoDeployRechecksNewestAfterIO(t *testing.T) {
 	source := s.deployments.source.(*deploymentFake)
 	source.ancestorHook = func() {
 		newer := m.state.Builds[0]
-		newer.ID = "newer"
-		// Same-SHA rebuild must supersede the older handle.
-		newer.QueuedAt = newer.QueuedAt.Add(time.Minute)
+		newer.ID = "ahead-in-queue"
 		m.state.Builds = append(m.state.Builds, newer)
 		source.ancestorHook = nil
 	}
@@ -361,7 +359,7 @@ func TestAutoDeployRechecksNewestAfterIO(t *testing.T) {
 		t.Fatal("stale successful build deployed after concurrent success")
 	}
 	s.autoDeployBuilds(context.Background())
-	if len(m.state.Deployments) != 2 || m.state.Deployments[1].BuildID != "newer" {
+	if len(m.state.Deployments) != 2 || m.state.Deployments[1].BuildID != "ahead-in-queue" {
 		t.Fatal("newest build not deployed on next tick")
 	}
 }

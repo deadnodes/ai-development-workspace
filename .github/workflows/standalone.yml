@@ -70,10 +70,21 @@ jobs:
           $env:RCP_SMOKE_BINARY = (Resolve-Path 'dist/release-control-windows-amd64.exe').Path
           go test -count=1 -run '^TestStandaloneSmoke$' -v ./cmd/server
 
+  docker-sqlite:
+    name: Docker SQLite startup and persistence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: docker build -t rcp-standalone-smoke .
+      - run: bash scripts/standalone-docker-smoke.sh rcp-standalone-smoke
+
   release:
     name: Publish standalone release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, windows]
+    needs: [build, windows, docker-sqlite]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

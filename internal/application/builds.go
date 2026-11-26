@@ -183,7 +183,7 @@ func (s *Service) coalesceQueuedBranches(ctx context.Context) error {
 			queued[b.ID] = b
 			k := branchBuildKey(b)
 			old, ok := newest[k]
-			if !ok || newerAutoBuild(b, old) {
+			if !ok || compareBuildAge(b, old) >= 0 {
 				newest[k] = b
 			}
 		}
@@ -222,6 +222,9 @@ func buildEvent(st *domain.State, b domain.Build, action string) {
 }
 func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (domain.Build, error) {
 	var out domain.Build
+	if err := s.requireWorkers("queue_build"); err != nil {
+		return out, err
+	}
 	if in.ProductID == "" {
 		return out, invalid("product_id required")
 	}
@@ -834,29 +837,16 @@ func (s *Service) DispatchBuildsOnce(ctx context.Context) error {
 	defer a.mu.Unlock()
 	s.pollAutoBuilds(ctx, time.Now().UTC())
 	defer s.autoDeployBuilds(ctx)
+	blockedPools := map[string]bool{}
+	// Reconcile concurrent/restored duplicate branch queues atomically before dispatch.
+	if e := s.coalesceQueuedBranches(ctx); e != nil {
+		return e
+	}
 	st, e := s.buildSnapshot(ctx)
 	if e != nil {
 		return e
 	}
 	sort.SliceStable(st.Builds, func(i, j int) bool {
-		if st.Builds[i].QueuedAt.Equal(st.Builds[j].QueuedAt) {
-			return st.Builds[i].ID < st.Builds[j].ID
-		}
-		return st.Builds[i].QueuedAt.Before(st.Builds[j].QueuedAt)
-	})
-	blockedPools := map[string]bool{}
-	// Reconcile concurrent/restored duplicate branch queues atomically before dispatch.
-	if e = s.coalesceQueuedBranches(ctx); e != nil {
-		return e
-	}
-	st, e = s.buildSnapshot(ctx)
-	if e != nil {
-		return e
-	}
-	sort.SliceStable(st.Builds, func(i, j int) bool {
-		if st.Builds[i].QueuedAt.Equal(st.Builds[j].QueuedAt) {
-			return st.Builds[i].ID < st.Builds[j].ID
-		}
 		return st.Builds[i].QueuedAt.Before(st.Builds[j].QueuedAt)
 	})
 	activeBranches := map[string]string{}

@@ -515,7 +515,7 @@ func runLocalMCP(ctx context.Context, data, workspace string, in io.Reader, out 
 		return err
 	}
 	defer store.Close()
-	service := application.New(store)
+	service := application.NewStandalone(store)
 	if workspace == "" {
 		workspace = os.Getenv("RCP_WORKSPACE_ROOT")
 	}

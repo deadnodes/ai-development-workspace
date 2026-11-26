@@ -638,7 +638,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			nowp := now
 			e.LastHeartbeat = &nowp
-			until := now.Add(time.Duration(e.LeaseTTLSeconds) * time.Second)
+			until := extendLease(now, time.Duration(e.LeaseTTLSeconds)*time.Second, e.LeaseUntil)
 			e.LeaseUntil = &until
 			receipt, _ := c.Data["progress_receipt"].(string)
 			if len(receipt) > 256 {
@@ -737,7 +737,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			executionCondition(st, e, state, required, reason, now)
 			e.ExitReason, e.WaitingRef, e.BlockerRef = reason, waitingRef, blockerRef
 			if state == "running" {
-				until := now.Add(time.Duration(e.LeaseTTLSeconds) * time.Second)
+				until := extendLease(now, time.Duration(e.LeaseTTLSeconds)*time.Second, e.LeaseUntil)
 				e.LeaseUntil = &until
 				e.LastHeartbeat = &now
 				e.LastProgress = &now

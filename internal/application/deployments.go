@@ -88,6 +88,9 @@ func deploymentEvent(st *domain.State, d domain.Deployment, action string) {
 }
 func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest) (domain.Deployment, error) {
 	var out domain.Deployment
+	if err := s.requireWorkers("deploy_build"); err != nil {
+		return out, err
+	}
 	if in.ProductID == "" || in.BuildID == "" || in.EnvironmentID != "dev" || len(in.RequestKey) > 128 {
 		return out, invalid("deploy_build requires Product, build and dev environment; production rejected")
 	}
@@ -133,9 +136,11 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			return invalid("reason requires allow_rollback")
 		}
 		var b domain.Build
-		for _, v := range st.Builds {
+		var buildPosition int
+		for index, v := range st.Builds {
 			if v.ID == in.BuildID && v.ProductID == in.ProductID {
 				b = v
+				buildPosition = index
 				break
 			}
 		}
@@ -160,8 +165,11 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 			}
 			// Revalidate the newest successful handle both before and after external
 			// ancestry I/O; a concurrently completed build takes precedence.
-			for _, newer := range st.Builds {
-				if newer.ProductID == b.ProductID && newer.ProfileID == b.ProfileID && newer.Branch == b.Branch && newer.SourceSHA == b.SourceSHA && newer.Status == "SUCCEEDED" && !newer.RestoreQuarantined && newerAutoBuild(newer, b) {
+			for index, newer := range st.Builds {
+				if newer.ProductID != b.ProductID || newer.ProfileID != b.ProfileID || newer.Branch != b.Branch || newer.SourceSHA != b.SourceSHA || newer.Status != "SUCCEEDED" || newer.RestoreQuarantined {
+					continue
+				}
+				if order := compareBuildAge(newer, b); order > 0 || order == 0 && index > buildPosition {
 					return invalid("AUTO_DEPLOY_SUPERSEDED: newer successful build exists")
 				}
 			}

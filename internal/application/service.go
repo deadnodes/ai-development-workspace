@@ -28,6 +28,7 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
+	standalone               bool
 	prodPublicKey            string
 	prodPromotionNotify      chan struct{}
 	runtimeFreshnessSnapshot map[string]time.Time
@@ -36,6 +37,7 @@ type Service struct {
 	intelligence             IntelligenceProvider
 	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
 	nativeAuthorityNow func() time.Time
+	promotionNow       func() time.Time
 	// Restoration proposal deadline decisions only; read/proof/unlock clocks stay real.
 	restorationAuthorityNow func() time.Time
 	externalWorkers         *workerconfig.Authority
@@ -95,6 +97,11 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	if workerCommand(c.Action) {
+		if err := s.requireWorkers(c.Action); err != nil {
+			return nil, err
+		}
+	}
 	c.Actor = attributedActor(ctx, c.Actor)
 	request := *s
 	if c.Action == "queue_intelligence_task" {
@@ -190,7 +197,7 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 						executionCondition(st, ex, "running", false, "", now)
 					}
 					if ex.State == "running" {
-						until := now.Add(time.Duration(ex.LeaseTTLSeconds) * time.Second)
+						until := extendLease(now, time.Duration(ex.LeaseTTLSeconds)*time.Second, ex.LeaseUntil)
 						ex.LeaseUntil = &until
 						ex.LastHeartbeat = &now
 						ex.LastProgress = &now
@@ -717,7 +724,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("owner and members are server-managed")
 		}
 		v.Owner, _ = auth.PrivateProductViewer(ctx)
-		if auth.IsLocalAdmin(ctx) {
+		if v.Visibility == "private" && auth.IsLocalAdmin(ctx) {
 			v.Owner = "local"
 		}
 		if v.Visibility == "private" && v.Owner == "" {

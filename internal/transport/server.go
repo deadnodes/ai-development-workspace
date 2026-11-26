@@ -124,7 +124,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 	registerWorkspaceRoutes(mux, service)
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
-	server := configureMCP(mux, service, options)
+	server := configureMCP(mux, service, options, agentguide.Instructions)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20})
 	registerCodeMode(mux, server, mcpHandler)
 	mux.Handle("/mcp", mcpHandler)
@@ -163,7 +163,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 }
 
 func NewLocalMCP(service Service) *mcp.Server {
-	server := configureMCP(discardRoutes{}, service, Options{})
+	server := configureMCP(discardRoutes{}, service, Options{}, agentguide.LocalInstructions)
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 			return next(auth.WithLocalAdmin(ctx), method, request)
@@ -177,8 +177,8 @@ type discardRoutes struct{}
 func (discardRoutes) Handle(string, http.Handler)                                 {}
 func (discardRoutes) HandleFunc(string, func(http.ResponseWriter, *http.Request)) {}
 
-func configureMCP(mux routeRegistrar, service Service, options Options) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
+func configureMCP(mux routeRegistrar, service Service, options Options, instructions string) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: instructions})
 	registerProdPromotions(mux, server, service)
 	registerRuntimeReports(mux, server, service, options)
 	registerStateNavigationTool(server, service)
@@ -223,7 +223,7 @@ func configureMCP(mux routeRegistrar, service Service, options Options) *mcp.Ser
 	registerFlowTools(server, service)
 	registerWorkspaceTools(server, service)
 	registerLocalGitTools(server, service)
-	registerAgentGuideTools(server)
+	registerAgentGuideTools(server, instructions)
 	return server
 }
 

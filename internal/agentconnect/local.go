@@ -146,11 +146,19 @@ func doctorLocal(data, workspace, name string, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "SQLite file will be created at first launch: %s\n", data)
 	}
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return err
+	}
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
+	workspaceInfo, err := root.Stat(".")
+	if err != nil {
+		return err
+	}
 	found := false
 	for _, file := range []string{".codex/config.toml", ".mcp.json"} {
 		plan, err := readPlan(root, file)
@@ -179,6 +187,13 @@ func doctorLocal(data, workspace, name string, out io.Writer) error {
 		found = true
 		if len(entry.Args) < 3 || !slices.Equal(entry.Args[:3], []string{"mcp", "--data", data}) || !filepath.IsAbs(entry.Command) {
 			return fmt.Errorf("%s: %s does not launch the requested local SQLite file", file, name)
+		}
+		if len(entry.Args) != 5 || entry.Args[3] != "--workspace" || !filepath.IsAbs(entry.Args[4]) {
+			return fmt.Errorf("%s: %s must pass exactly one absolute --workspace argument", file, name)
+		}
+		configuredWorkspace, err := os.Stat(entry.Args[4])
+		if err != nil || !os.SameFile(workspaceInfo, configuredWorkspace) {
+			return fmt.Errorf("%s: %s does not launch the requested --workspace directory", file, name)
 		}
 		info, err := os.Stat(entry.Command)
 		if err != nil || !executableFile(info) {
