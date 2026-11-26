@@ -67,14 +67,27 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	boot, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
+	// Each startup phase has its own budget and logs its duration: a single shared
+	// 20s budget made a slow OIDC discovery or cold state load fail the whole boot
+	// with an anonymous "context deadline exceeded".
+	phase := func(name string, budget time.Duration, fn func(context.Context) error) error {
+		started := time.Now()
+		phaseCtx, cancelPhase := context.WithTimeout(ctx, budget)
+		defer cancelPhase()
+		if e := fn(phaseCtx); e != nil {
+			slog.Error("startup phase failed", "phase", name, "duration", time.Since(started).Round(time.Millisecond), "budget", budget, "error", e)
+			return fmt.Errorf("startup %s: %w", name, e)
+		}
+		slog.Info("startup phase", "phase", name, "duration", time.Since(started).Round(time.Millisecond))
+		return nil
+	}
+	bootBudget := envDuration("RCP_BOOT_PHASE_TIMEOUT", 20*time.Second)
 	authConfig, err := auth.ConfigFromEnv()
 	if err != nil {
 		return err
 	}
-	authManager, err := auth.New(boot, authConfig)
-	if err != nil {
+	var authManager *auth.Manager
+	if err = phase("auth", bootBudget, func(c context.Context) (e error) { authManager, e = auth.New(c, authConfig); return e }); err != nil {
 		return err
 	}
 	defer authManager.Close()
@@ -83,7 +96,10 @@ func run() error {
 		Close()
 	}
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
-		store, err = persistence.Open(boot, dbURL)
+		err = phase("database", bootBudget, func(c context.Context) (e error) {
+			store, e = persistence.Open(c, dbURL)
+			return e
+		})
 	} else {
 		dataPath := os.Getenv("RCP_DATA_PATH")
 		if dataPath == "" {
@@ -93,7 +109,10 @@ func run() error {
 			}
 			dataPath = filepath.Join(directory, "release-control", "state.db")
 		}
-		store, err = persistence.OpenLocal(boot, dataPath)
+		err = phase("database", bootBudget, func(c context.Context) (e error) {
+			store, e = persistence.OpenLocal(c, dataPath)
+			return e
+		})
 		if err == nil {
 			slog.Info("using local database", "path", dataPath)
 		}
@@ -117,7 +136,9 @@ func run() error {
 			return fmt.Errorf("configure production public key: %w", e)
 		}
 	}
-	if err := service.CheckConnectionSecrets(boot); err != nil {
+	// The first state view loads every record and the audit journal; its cost grows
+	// with history, so it gets a separate, larger budget.
+	if err := phase("initial state load", envDuration("RCP_STATE_LOAD_TIMEOUT", 2*time.Minute), service.CheckConnectionSecrets); err != nil {
 		return err
 	}
 	if path := os.Getenv("RCP_BUILDS_FILE"); path != "" {
@@ -172,7 +193,7 @@ func run() error {
 		service.ConfigureWorkers(workers)
 	}
 	if os.Getenv("DATABASE_URL") == "" && workspaceRoot != "" {
-		if err := bootstrapWorkspace(boot, service, workspaceRoot); err != nil {
+		if err := phase("workspace scan", bootBudget, func(c context.Context) error { return bootstrapWorkspace(c, service, workspaceRoot) }); err != nil {
 			slog.Warn("initial workspace scan incomplete; server will remain available", "error", err)
 		}
 	}
@@ -426,4 +447,19 @@ func operationRetentionDelay(deleted int) time.Duration {
 		return time.Minute
 	}
 	return time.Hour
+}
+
+// envDuration reads a positive Go duration from name, falling back to def when
+// the variable is unset or invalid (logged).
+func envDuration(name string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		slog.Warn("invalid duration; using default", "variable", name, "default", def)
+		return def
+	}
+	return d
 }
