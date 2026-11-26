@@ -1,10 +1,15 @@
 # Private Products
 
 Products are shared by default. Set `data.visibility` to `private` when creating
-one, or use `set_product_visibility` later. A private Product and every row
-attached to it are visible to its owner and invited members. Agents inherit
+one, or use `set_product_visibility` later. Among human users, a private Product
+and its records are visible only to its owner and invited members. Agents inherit
 their owning human's access. A human with the instance admin role does not gain
-access to another user's private Product merely by being an administrator.
+access to another user's private Product through their own login without an
+invitation. Operator-configured infrastructure tokens (any `service` or
+`worker` principal) do not need membership. They can see and act on private
+Products only within their configured permissions and Product, environment,
+or other applicable scope. An operator who can mint service tokens is trusted
+infrastructure.
 New shared Products also record their authenticated creator as owner (the
 owning human for an agent). Only a genuinely ownerless Product can be claimed
 via `set_product_visibility`. A credential with a limited Product grant must
@@ -29,8 +34,7 @@ service principal also sees all Products and whole-instance backups include
 private Products. Ordinary users and agents cannot use backups to access
 private Products they cannot see.
 
-The instance admin role does not bypass Product membership for reads or
-commands. The trusted `service/bootstrap` principal is the recovery exception:
+The trusted `service/bootstrap` principal has instance-wide recovery scope:
 it can inspect every Product and perform whole-instance backup and restore.
 Shared Products remain visible under the existing Product permission rules.
 
@@ -42,9 +46,12 @@ is no longer visible or has been deleted, restart the traversal without it.
 
 The same visibility rules apply to indexed search, excerpts, graph neighbors,
 worker and runtime reports, reference checks, and Product configuration exports.
-Worker credentials authorize capabilities, not Product membership; a worker
-without a human identity cannot claim or replay work for a private Product.
-The public production-signature endpoint never exposes private Products.
+Workers can claim and report work for private Products within their configured
+Product, repository, and capability scope. Runtime reporters can submit within
+their configured Product, environment, and cluster scope, but cannot read
+reports. Production promoters remain bound to their configured Product and
+environment. The public production-signature endpoint never exposes private
+Products and responses are not cacheable.
 Whole-instance backup fails rather than returning a partial archive if the
 caller cannot see every Product; use bootstrap for instance recovery.
 For authenticated callers other than bootstrap, audit and other retained rows

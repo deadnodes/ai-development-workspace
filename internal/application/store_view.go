@@ -24,7 +24,7 @@ func (s *Service) view(ctx context.Context, fn func(*domain.State) error) error 
 }
 
 func requireProductRead(ctx context.Context, st *domain.State, product string) error {
-	if _, restricted := auth.PrivateProductViewer(ctx); !restricted {
+	if !auth.RequiresExistingProduct(ctx) {
 		return nil
 	}
 	if record := productByID(*st, product); record == nil || !productVisibleTo(ctx, record) {
@@ -34,7 +34,7 @@ func requireProductRead(ctx context.Context, st *domain.State, product string) e
 }
 
 func (s *Service) requireProductAccess(ctx context.Context, product string) error {
-	if _, restricted := auth.PrivateProductViewer(ctx); !restricted {
+	if !auth.RequiresExistingProduct(ctx) {
 		return nil
 	}
 	if reader, ok := s.store.(interface {

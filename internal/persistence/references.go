@@ -32,7 +32,7 @@ func (s *Store) ReadReferences(ctx context.Context, ids []string) (domain.State,
 		return domain.State{}, err
 	}
 	const owner = `(CASE WHEN kind='products' THEN id ELSE coalesce(product_id,'') END)`
-	_, restricted := auth.PrivateProductViewer(ctx)
+	restricted := auth.RequiresExistingProduct(ctx)
 	const allowedRecord = `(` + owner + ` = '' OR (` + owner + ` <> ALL($2::text[]) AND (NOT $3::boolean OR ` + owner + ` IN (SELECT id FROM records WHERE kind='products'))))`
 	const allowedEvent = `(CASE WHEN coalesce(product_id,'') = '' THEN NOT $3::boolean OR NOT (document->>'action' IN ('create_product','restore_backup_evidence') OR (document->>'action'='restore_backup' AND coalesce(document->'data'->'data' ?| ARRAY['interrupted_operations','quarantined_builds','quarantined_deployments','quarantined_signatures'],false))) ELSE product_id <> ALL($2::text[]) AND (NOT $3::boolean OR product_id IN (SELECT id FROM records WHERE kind='products')) END)`
 	rows, err := tx.Query(ctx, referenceClosure+`
@@ -103,7 +103,7 @@ func readLocalReferences(ctx context.Context, data []byte, ids []string, groups 
 	}); err != nil {
 		return err
 	}
-	_, restricted := auth.PrivateProductViewer(ctx)
+	restricted := auth.RequiresExistingProduct(ctx)
 	visible := map[string]bool{}
 	if restricted {
 		err := historyArray(ctx, collections["products"], func(raw []byte) error {

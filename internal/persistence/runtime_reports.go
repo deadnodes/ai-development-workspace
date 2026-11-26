@@ -21,7 +21,7 @@ func (s *LocalStore) SaveRuntimeReport(ctx context.Context, r rr.Report, now tim
 		if e := ctx.Err(); e != nil {
 			return e
 		}
-		if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+		if auth.RequiresExistingProduct(ctx) {
 			visible, err := localProductAccess(ctx, tx, r.ProductID)
 			if err != nil {
 				return err
@@ -70,7 +70,7 @@ func (s *LocalStore) ReadRuntimeReports(ctx context.Context, p, e, c string, win
 	s.lifecycle.RLock()
 	defer s.lifecycle.RUnlock()
 	err = s.db.View(func(tx *bolt.Tx) error {
-		if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+		if auth.RequiresExistingProduct(ctx) {
 			data := tx.Bucket(localBucket).Get(localStateKey)
 			hidden, err := hiddenLocalProducts(ctx, data)
 			if err != nil {
@@ -122,7 +122,7 @@ func (s *Store) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Tim
 		return rr.JournalResult{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+	if auth.RequiresExistingProduct(ctx) {
 		var revision int64
 		if err := tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR SHARE").Scan(&revision); err != nil {
 			return rr.JournalResult{}, err
@@ -219,7 +219,7 @@ func (s *Store) ReadRuntimeReports(ctx context.Context, p, e, c string, windows 
 	queryer := interface {
 		Query(context.Context, string, ...any) (pgx.Rows, error)
 	}(s.pool)
-	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+	if auth.RequiresExistingProduct(ctx) {
 		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 		if err != nil {
 			return nil, err

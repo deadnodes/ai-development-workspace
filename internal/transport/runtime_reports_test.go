@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-func TestRuntimeReporterTokenScope(t *testing.T) {
+func TestPrivateRuntimeReporterTokenScope(t *testing.T) {
 	ctx := context.Background()
 	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
@@ -27,7 +27,8 @@ func TestRuntimeReporterTokenScope(t *testing.T) {
 	}
 	defer store.Close()
 	svc := application.New(store)
-	if _, err := svc.Execute(ctx, domain.Command{Action: "create_product", ID: "p", Actor: "test", Data: map[string]any{"name": "Runtime reports"}}); err != nil {
+	owner := auth.WithPrincipal(ctx, auth.Principal{ID: "human/owner", Kind: "human", Permissions: []string{"write"}, Products: []string{"p"}})
+	if _, err := svc.Execute(owner, domain.Command{Action: "create_product", ID: "p", Data: map[string]any{"name": "Runtime reports", "visibility": "private"}}); err != nil {
 		t.Fatal(err)
 	}
 	handler := transport.New(svc, transport.Options{Token: "control", RuntimeReporterToken: "reporter", RuntimeReporterScope: "p:prod:cluster"})

@@ -74,9 +74,16 @@ async function refresh(){
  const ticket=typeof liveEpoch==='number'?liveEpoch:null;refreshInFlight++;
  try{
   const url=uiStateURL(),defaultURL='/api/ui-state?';
-  const loadState=request(url).catch(error=>{
+  const loadState=request(url).catch(async error=>{
    if(error.status!==404||url===defaultURL)throw error;
    if(ticket!==null&&ticket!==liveEpoch)return null;
+   const scope=new URLSearchParams(url.slice(defaultURL.length));
+   if(scope.has('product_id')&&scope.has('feature_id')){
+    scope.delete('product_id');
+    try{return await request(defaultURL+scope.toString());}
+    catch(retryError){if(retryError.status!==404)throw retryError;}
+    if(ticket!==null&&ticket!==liveEpoch)return null;
+   }
    productID='';persistProductRoute(false,'');
    return request(defaultURL);
   });

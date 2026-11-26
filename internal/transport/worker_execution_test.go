@@ -20,7 +20,7 @@ import (
 
 const testWorkerCredential = "fixture-worker-token-000000000000000000001"
 
-func workerTransportFixture(t *testing.T) (*application.Service, *workerconfig.Authority, *httptest.Server) {
+func workerTransportFixture(t *testing.T, productVisibility ...string) (*application.Service, *workerconfig.Authority, *httptest.Server) {
 	t.Helper()
 	ctx := context.Background()
 	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "worker.db"))
@@ -42,6 +42,12 @@ func workerTransportFixture(t *testing.T) (*application.Service, *workerconfig.A
 		t.Fatal(e)
 	}
 	s.ConfigureWorkers(a)
+	if len(productVisibility) > 0 {
+		owner := auth.WithPrincipal(ctx, auth.Principal{Kind: "human", ID: "human/owner", Products: []string{"p"}, Permissions: []string{"write"}})
+		if _, err := s.Execute(owner, domain.Command{Action: "set_product_visibility", ProductID: "p", Data: map[string]any{"visibility": productVisibility[0]}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, e = s.Execute(ctx, domain.Command{Action: "queue_worker_job", Actor: "human/operator", ProductID: "p", IntegrationID: "i", Data: map[string]any{"request_key": "transport-initial-fixture", "recipe_id": "check", "recipe_revision": "v1", "recipe_hash": r.Hash, "config_revision": "cfg1", "revision_id": "rev", "source_sha": strings.Repeat("b", 40), "parameters": map[string]any{"race": true}, "deadline": time.Now().Add(time.Minute), "max_attempts": 2}}); e != nil {
 		t.Fatal(e)
 	}
@@ -118,40 +124,39 @@ func TestWorkerChannelIsolationAndTypedClient(t *testing.T) {
 		t.Fatal("conflicting replay accepted")
 	}
 }
-func TestPrivateWorkerHTTPRejectsClaimAndReplay(t *testing.T) {
-	s, _, server := workerTransportFixture(t)
+func TestPrivateWorkerHTTPClaimsAndReportsWithinScope(t *testing.T) {
+	_, _, server := workerTransportFixture(t, "private")
 	client, err := workerclient.New(server.URL, testWorkerCredential)
 	if err != nil {
 		t.Fatal(err)
 	}
 	claim := domain.WorkerClaim{ProductID: "p", RepositoryID: "r", Capability: "source_check"}
+	for _, outOfScope := range []domain.WorkerClaim{
+		{ProductID: "other", RepositoryID: "r", Capability: "source_check"},
+		{ProductID: "p", RepositoryID: "other", Capability: "source_check"},
+		{ProductID: "p", RepositoryID: "r", Capability: "local_oci_build"},
+	} {
+		if denied, err := client.Claim(context.Background(), outOfScope); err == nil || denied != nil {
+			t.Fatalf("out-of-scope claim accepted: %v, %v", denied, err)
+		}
+	}
 	lease, err := client.Claim(context.Background(), claim)
 	if err != nil || lease == nil {
-		t.Fatalf("shared product claim: %v, %v", lease, err)
+		t.Fatalf("private product claim: %v, %v", lease, err)
 	}
 	attempt := domain.WorkerAttemptRequest{JobID: lease.Job.ID, AttemptID: lease.Attempt.ID, Fence: lease.Attempt.Fence, InputHash: lease.Job.InputHash}
 	if _, err = client.Start(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Heartbeat(context.Background(), attempt); err != nil {
 		t.Fatal(err)
 	}
 	report := domain.WorkerReport{WorkerAttemptRequest: attempt, Result: "PASSED"}
 	if _, err = client.Report(context.Background(), report); err != nil {
 		t.Fatal(err)
 	}
-	owner := auth.WithPrincipal(context.Background(), auth.Principal{Kind: "human", ID: "human/owner", Role: "admin", Permissions: []string{"admin"}, Products: []string{"*"}})
-	if _, err = s.Execute(owner, domain.Command{Action: "set_product_visibility", Actor: "human/owner", ProductID: "p", Data: map[string]any{"visibility": "private"}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, req := range []struct {
-		path string
-		body any
-	}{{workerClaimPath, claim}, {workerStartPath, attempt}, {workerHeartbeatPath, attempt}, {workerReportPath, report}} {
-		body, err := json.Marshal(req.body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if code := workerHTTP(t, server, req.path, testWorkerCredential, string(body)); code != http.StatusNotFound {
-			t.Errorf("%s: got %d, want 404", req.path, code)
-		}
+	if _, err = client.Report(context.Background(), report); err != nil {
+		t.Fatalf("private product report replay: %v", err)
 	}
 }
 func TestWorkerRoutesDisabledByDefaultAndWithoutControlProtection(t *testing.T) {

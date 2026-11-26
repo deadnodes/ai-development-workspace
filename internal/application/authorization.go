@@ -267,10 +267,11 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command, fu
 		}
 		return nil
 	}
-	projected, needed, err := authorizationProjection(st, c)
+	refs, restrictedFields, err := commandAuthorizationInputs(c)
 	if err != nil {
 		return err
 	}
+	projected, needed := projectReferences(st, refs)
 	if fullSnapshot {
 		if err := requireVisibleReferences(ctx, st, projected, needed); err != nil {
 			return err
@@ -281,6 +282,9 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command, fu
 	}
 	if instanceAdmin(p) {
 		return nil
+	}
+	if restrictedFields {
+		return auth.ErrForbidden
 	}
 	permission := "admin"
 	if slices.Contains(memberWriteActions, c.Action) {
@@ -326,62 +330,27 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command, fu
 		}
 	}
 	visited := map[string]bool{}
-	var inspect func(any) error
-	inspect = func(v any) error {
-		switch v := v.(type) {
-		case string:
-			if owner, found := owners[v]; found {
-				if !allowedProduct(p, owner) {
-					return auth.ErrForbidden
-				}
-				if production[v] {
-					return auth.ErrForbidden
-				}
-				if !visited[v] {
-					visited[v] = true
-					for _, key := range []string{"environment_id", "composition_id", "candidate_operation_id", "operation_id", "parent_id"} {
-						if target, ok := entities[v][key].(string); ok && target != "" {
-							if err := inspect(target); err != nil {
-								return err
-							}
-						}
+	var inspect func(string) error
+	inspect = func(ref string) error {
+		if owner, found := owners[ref]; found && !visited[ref] {
+			if !allowedProduct(p, owner) || production[ref] {
+				return auth.ErrForbidden
+			}
+			visited[ref] = true
+			for _, key := range []string{"environment_id", "composition_id", "candidate_operation_id", "operation_id", "parent_id"} {
+				if target, ok := entities[ref][key].(string); ok && target != "" {
+					if err := inspect(target); err != nil {
+						return err
 					}
-				}
-			}
-		case []any:
-			for _, item := range v {
-				if err := inspect(item); err != nil {
-					return err
-				}
-			}
-		case map[string]any:
-			for key, item := range v {
-				if key == "actor" {
-					continue
-				}
-				if key == "approve_main_update" && item == true {
-					return auth.ErrForbidden
-				}
-				if key == "status" && item == "released" {
-					return auth.ErrForbidden
-				}
-				if err := inspect(item); err != nil {
-					return err
 				}
 			}
 		}
 		return nil
 	}
-	b, err := json.Marshal(c)
-	if err != nil {
-		return err
-	}
-	var data any
-	if err = json.Unmarshal(b, &data); err != nil {
-		return err
-	}
-	if err = inspect(data); err != nil {
-		return err
+	for _, ref := range refs {
+		if err = inspect(ref); err != nil {
+			return err
+		}
 	}
 	if !matched {
 		return auth.ErrForbidden

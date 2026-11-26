@@ -28,4 +28,21 @@ const legacy=browser('http://localhost/#feature-b','a');assert.equal(legacy.w.lo
 const operations=browser('http://localhost/#operations','a');assert.equal(operations.w.location.search,'?product=a');
 const unknown=browser('http://localhost/?product=missing#delivery','a');assert.equal(unknown.run('productID'),'missing');
 for(const b of [one,two,legacy,operations,unknown])b.dom.window.close();
-console.log('Product URLs override browser storage; shared links, product selection, history and legacy feature links passed.');
+for(const visible of [true,false]){
+ const {w,run,dom}=browser('http://localhost/?product=stale#bookmark','a');
+ const calls=[];
+ const view={products:[{id:'b',name:'B'}],features:visible?[{id:'bookmark',product_id:'b',title:'Bookmarked feature'}]:[],projection:{product_id:'b'}};
+ w.fetch=async path=>{
+  if(path==='/api/statuses')return {ok:true,json:async()=>({})};
+  calls.push(path);
+  if(path==='/api/ui-state?'||visible&&path==='/api/ui-state?feature_id=bookmark')return {ok:true,json:async()=>view};
+  return {ok:false,status:404,json:async()=>({error:'not found'})};
+ };
+ await run('refresh()');
+ assert.deepEqual(calls,['/api/ui-state?product_id=stale&feature_id=bookmark','/api/ui-state?feature_id=bookmark',...(visible?[]:['/api/ui-state?'])]);
+ assert.equal(w.location.search,'?product=b');
+ assert.equal(w.location.hash,visible?'#bookmark':'');
+ assert.equal(w.document.querySelector('#breadcrumb').textContent,visible?'Bookmarked feature':'Overview');
+ dom.window.close();
+}
+console.log('Product routes, history and stale-hint bookmark recovery passed.');

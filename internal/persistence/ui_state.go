@@ -62,7 +62,7 @@ func (s *Store) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domai
 	out.Projection = uiProjection(q)
 	// Filtering and limits are applied in SQL before documents cross the connection.
 	rows, err := tx.Query(ctx, `WITH selected AS (
- SELECT kind,CASE WHEN kind='features' THEN jsonb_build_object('id',id,'product_id',product_id,'title',left(coalesce(document->>'title',''),512),'status',document->>'status','owner',left(coalesce(document->>'owner',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') WHEN kind='products' AND id<>$1 THEN jsonb_build_object('id',id,'name',left(coalesce(document->>'name',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') ELSE document END AS document,position,id,row_number() OVER(PARTITION BY kind ORDER BY position DESC,id) AS n FROM records
+ SELECT kind,CASE WHEN kind='features' THEN jsonb_build_object('id',id,'product_id',product_id,'title',left(coalesce(document->>'title',''),512),'status',document->>'status','owner',left(coalesce(document->>'owner',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') WHEN kind='products' AND id<>$1 THEN jsonb_build_object('id',id,'name',left(coalesce(document->>'name',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') ELSE document END AS document,position,id,row_number() OVER(PARTITION BY kind ORDER BY (kind='products' AND id=$1) DESC,position DESC,id) AS n FROM records
  WHERE (CASE WHEN kind='products' THEN id ELSE coalesce(product_id,'') END) <> ALL($6::text[]) AND ((kind IN ('products','features') AND (NOT $2::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($3::text[])))
  OR (kind<>ALL($4::text[]) AND kind NOT IN ('products','features','operations') AND (product_id=$1 OR coalesce(product_id,'')='')))
 	) SELECT kind,document,n FROM selected WHERE n<=CASE WHEN kind IN ('git_observations','runtime_snapshots') THEN 51 WHEN kind='prod_promotions' THEN 101 ELSE $5 END ORDER BY kind,position,id`, q.ProductID, q.RestrictProducts, q.AllowedProductIDs, uiOmitted, uiCollectionLimit+1, hidden)
@@ -330,6 +330,8 @@ func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest,
 			limit = 100
 		}
 		var docs []json.RawMessage
+		var selectedProduct json.RawMessage
+		selectedProductPosition := -1
 		count := 0
 		err := historyArray(ctx, raw, func(record []byte) error {
 			id, product := scopeText(record, "id"), scopeText(record, "product_id")
@@ -345,6 +347,10 @@ func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest,
 			if history && (product != q.ProductID || historyText(record, "feature_id") != q.FeatureID) ||
 				kind == "operations" && strings.HasPrefix(historyText(record, "kind"), "REFRESH") {
 				return nil
+			}
+			if kind == "products" && id == q.ProductID {
+				selectedProduct = record
+				selectedProductPosition = count
 			}
 			if kind == "features" && id != q.FeatureID || kind == "products" && id != q.ProductID {
 				var row map[string]json.RawMessage
@@ -380,6 +386,9 @@ func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest,
 			out.Projection.Truncated = append(out.Projection.Truncated, kind)
 			pivot := count % limit
 			docs = append(slices.Clone(docs[pivot:]), docs[:pivot]...)
+			if selectedProductPosition >= 0 && selectedProductPosition < count-limit {
+				docs[0] = selectedProduct
+			}
 		}
 		selected[kind] = docs
 		return err

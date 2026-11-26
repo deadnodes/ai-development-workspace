@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/imagesigning"
@@ -150,19 +151,30 @@ func TestProdPromotionClaimDoesNotWriteWhileQueueIsEmpty(t *testing.T) {
 
 func promotionPtrTime(t time.Time) *time.Time { return &t }
 
-func TestProdPromotionResultRequiresPinnedVerifiedSignature(t *testing.T) {
+func TestPrivateProdPromotionRequiresPinnedVerifiedSignature(t *testing.T) {
 	s, _, _ := promotionFixture(t)
-	p, err := s.RequestProdPromotion(context.Background(), promoReq("build1"))
+	owner := userCtx("owner", "human", "", "member")
+	if _, err := s.Execute(owner, domain.Command{Action: "set_product_visibility", ProductID: "p", Data: map[string]any{"visibility": "private"}}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.RequestProdPromotion(owner, promoReq("build1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim, err := s.ClaimProdPromotion(context.Background(), domain.ClaimProdPromotion{ProductID: "p", EnvironmentID: "prod"})
-	if err != nil || claim == nil {
+	promoter := auth.WithPrincipal(context.Background(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
+	claim, err := s.ClaimProdPromotion(promoter, domain.ClaimProdPromotion{ProductID: "p", EnvironmentID: "prod"})
+	if err != nil || claim == nil || claim.ID != p.ID {
 		t.Fatal(claim, err)
+	}
+	if _, err = s.HeartbeatProdPromotion(promoter, p.ID, "p", "dev", domain.HeartbeatProdPromotion{ClaimID: claim.ClaimID}); err == nil {
+		t.Fatal("heartbeat accepted with mismatched environment")
+	}
+	if heartbeat, err := s.HeartbeatProdPromotion(promoter, p.ID, "p", "prod", domain.HeartbeatProdPromotion{ClaimID: claim.ClaimID}); err != nil || heartbeat.Status != "CLAIMED" {
+		t.Fatal(heartbeat, err)
 	}
 	it := claim.Items[0]
 	result := domain.ProdPromotionItem{BuildID: it.BuildID, ImageID: it.ImageID, Digest: it.Digest, Result: "SIGNED", ProdSignature: &domain.ProdSignature{SignatureTag: imagesigning.Tag(it.Digest, "sig"), PayloadB64: "e30=", SignatureB64: "AA==", KeyFingerprint: "unconfigured"}}
-	if _, err = s.RecordProdPromotionResult(context.Background(), p.ID, "p", "prod", domain.ProdPromotionResult{ClaimID: claim.ClaimID, Items: []domain.ProdPromotionItem{result}}); err == nil || !strings.Contains(err.Error(), "INVALID_SIGNATURE") {
+	if _, err = s.RecordProdPromotionResult(promoter, p.ID, "p", "prod", domain.ProdPromotionResult{ClaimID: claim.ClaimID, Items: []domain.ProdPromotionItem{result}}); err == nil || !strings.Contains(err.Error(), "INVALID_SIGNATURE") {
 		t.Fatalf("accepted signature without pinned key: %v", err)
 	}
 
@@ -185,7 +197,7 @@ func TestProdPromotionResultRequiresPinnedVerifiedSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	result.ProdSignature = &domain.ProdSignature{SignatureTag: imagesigning.Tag(it.Digest, "sig"), PayloadB64: base64.StdEncoding.EncodeToString(payload), SignatureB64: base64.StdEncoding.EncodeToString(sig), KeyFingerprint: prodKey.Fingerprint()}
-	completed, err := s.RecordProdPromotionResult(context.Background(), p.ID, "p", "prod", domain.ProdPromotionResult{ClaimID: claim.ClaimID, Items: []domain.ProdPromotionItem{result}})
+	completed, err := s.RecordProdPromotionResult(promoter, p.ID, "p", "prod", domain.ProdPromotionResult{ClaimID: claim.ClaimID, Items: []domain.ProdPromotionItem{result}})
 	if err != nil || completed.Status != "SUCCEEDED" || completed.Items[0].Result != "SIGNED" {
 		t.Fatalf("valid signed result was refused: %#v %v", completed, err)
 	}

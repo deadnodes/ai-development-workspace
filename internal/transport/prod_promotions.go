@@ -46,7 +46,7 @@ func registerProdPromotions(mux routeRegistrar, server *mcp.Server, service Serv
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "public, max-age=30")
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	})

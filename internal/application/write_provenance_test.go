@@ -120,7 +120,7 @@ func TestPostgresCommandAuthorizationKeepsUnprojectedEventScope(t *testing.T) {
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{ID: "agent/member", Kind: "agent", Role: "member", Products: []string{"p"}, Permissions: []string{"read", "write"}})
 	svc := New(store)
 	for _, reference := range []string{"foreign-event", "chain"} {
-		command := domain.Command{Action: "record_progress", FeatureID: "f", Data: map[string]any{"title": reference}}
+		command := domain.Command{Action: "record_progress", ID: reference, FeatureID: "f", Data: map[string]any{"title": "Progress"}}
 		if _, err := svc.Execute(ctx, command); !errors.Is(err, auth.ErrForbidden) {
 			t.Fatalf("preflight admitted %s: %v", reference, err)
 		}
@@ -129,6 +129,9 @@ func TestPostgresCommandAuthorizationKeepsUnprojectedEventScope(t *testing.T) {
 		wrapper := commandAuthorizationStore{Store: store, command: command}
 		if err := wrapper.Update(ctx, func(st *domain.State) error { t.Fatal("unauthorized callback ran"); return nil }); !errors.Is(err, auth.ErrForbidden) {
 			t.Fatalf("transaction admitted %s: %v", reference, err)
+		}
+		if _, err := svc.Execute(ctx, domain.Command{Action: "record_progress", FeatureID: "f", Data: map[string]any{"title": reference}}); err != nil {
+			t.Fatalf("title %q was treated as a reference: %v", reference, err)
 		}
 	}
 	if _, err := svc.Execute(ctx, domain.Command{Action: "record_progress", ID: "own-event", FeatureID: "f", Data: map[string]any{"title": "duplicate"}}); !errors.Is(err, ErrValidation) {

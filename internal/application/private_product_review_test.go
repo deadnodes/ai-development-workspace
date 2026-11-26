@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -416,6 +418,119 @@ func TestPrivateUIStateStaleSelection(t *testing.T) {
 		}
 		if view, err := service.UIState(reader, "", ""); err != nil || view.Projection.ProductID != "shared" || len(view.Products) != 1 {
 			t.Fatalf("default view is not visible: %v %v", view.Projection, err)
+		}
+	})
+}
+
+func TestPrivateInfrastructureServiceProductGrants(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		service := New(store)
+		owner := userCtx("owner", "human", "", "admin")
+		privateReviewCreate(t, service, owner, "allowed", "private")
+		privateReviewCreate(t, service, owner, "outside", "private")
+		principal := auth.WithPrincipal(context.Background(), auth.Principal{ID: "service/custom", Kind: "service", Products: []string{"allowed"}, Permissions: []string{"read", "write"}})
+		if st, err := service.State(principal); err != nil || len(st.Products) != 1 || st.Products[0].ID != "allowed" {
+			t.Fatalf("service product visibility: %+v %v", st.Products, err)
+		}
+		if _, ok := store.(stateMetadataReader); ok {
+			if page, err := service.StatePage(principal, domain.StatePageRequest{}); err != nil || len(page.Items) != 1 || page.Items[0].ID != "allowed" {
+				t.Fatalf("service navigation scope: %+v %v", page.Items, err)
+			}
+		}
+		command := domain.Command{Action: "create_feature", ID: "infra-feature", ProductID: "allowed", Data: map[string]any{"title": "Infrastructure feature", "goal": "Test scoped writes"}}
+		if _, err := service.Execute(principal, command); err != nil {
+			t.Fatalf("service could not write to its allowed private Product: %v", err)
+		}
+		command.ID, command.ProductID = "outside-feature", "outside"
+		if _, err := service.Execute(principal, command); !errors.Is(err, auth.ErrForbidden) {
+			t.Fatalf("out-of-scope write: got %v, want forbidden", err)
+		}
+	})
+}
+
+func TestPrivateUIStateScopedSelectedProductOutsideNavigationWindow(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		if _, ok := store.(uiStateReader); !ok {
+			return
+		}
+		owner := userCtx("owner", "human", "", "member")
+		const productID, featureID = "selected", "selected-feature"
+		if err := store.Update(context.Background(), func(st *domain.State) error {
+			st.Products = append(st.Products, domain.Product{Meta: domain.Meta{ID: productID}, Name: "Selected", Description: "Full product record", Visibility: "private", Owner: "owner"})
+			st.Features = append(st.Features, domain.Feature{Meta: domain.Meta{ID: featureID, ProductID: productID}, Title: "Selected feature", Status: "planned"})
+			st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: "selected-repo", ProductID: productID}, Role: "APPLICATION"})
+			for index := range 1001 {
+				st.Products = append(st.Products, domain.Product{Meta: domain.Meta{ID: fmt.Sprintf("newer-%04d", index)}, Name: "Newer"})
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		service := New(store)
+		for _, scope := range [][2]string{{productID, ""}, {"", featureID}} {
+			view, err := service.UIState(owner, scope[0], scope[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if view.Projection.ProductID != productID || len(view.Products) != view.Projection.CollectionLimit || !slices.Contains(view.Projection.Truncated, "products") {
+				t.Fatalf("unbounded or wrong projection: %+v; products = %d", view.Projection, len(view.Products))
+			}
+			product := productByID(view.State, productID)
+			if product == nil || product.Description != "Full product record" || len(view.Features) != 1 || len(view.Repositories) != 1 {
+				t.Fatalf("selected product or child records omitted: product=%+v features=%+v repositories=%+v", product, view.Features, view.Repositories)
+			}
+			if _, err = service.UIState(userCtx("outsider", "human", "", "admin"), scope[0], scope[1]); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("hidden selection: got %v, want NOT_FOUND", err)
+			}
+		}
+	})
+}
+
+func TestPrivateCommandReferenceIDsIgnoreText(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		service := New(store)
+		owner := userCtx("owner", "human", "", "member")
+		privateReviewCreate(t, service, owner, "hidden", "private")
+		privateReviewCreate(t, service, owner, "shared", "shared")
+		exec(t, service, domain.Command{Action: "create_repository", ID: "hidden-repo", ProductID: "hidden", Data: map[string]any{"name": "Repository", "url": "https://github.com/test/repo"}})
+		writer := auth.WithPrincipal(context.Background(), auth.Principal{ID: "writer", Kind: "human", Products: []string{"shared"}, Permissions: []string{"write"}})
+		feature := domain.Command{Action: "create_feature", ID: "visible-feature", ProductID: "shared", Data: map[string]any{"title": "hidden", "goal": "hidden-repo", "requirements": []string{"hidden-repo"}}}
+		if _, err := service.Execute(writer, feature); err != nil {
+			t.Fatalf("text was treated as an ID: %v", err)
+		}
+		integration := domain.Command{Action: "create_integration", FeatureID: feature.ID, Data: map[string]any{"title": "Integration", "objective": "Test"}}
+		for _, ref := range []map[string]any{{"repositories": []string{"hidden-repo"}}, {"branches": []domain.Branch{{RepositoryID: "hidden-repo"}}}} {
+			for key, value := range ref {
+				integration.Data[key] = value
+				if _, err := service.Execute(writer, integration); !errors.Is(err, ErrNotFound) {
+					t.Errorf("real reference %s: got %v, want NOT_FOUND", key, err)
+				}
+				delete(integration.Data, key)
+			}
+		}
+	})
+}
+
+func TestPrivateRuntimeReporterPersistence(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		reports, ok := store.(rr.Store)
+		if !ok {
+			return
+		}
+		service := New(store)
+		owner := userCtx("owner", "human", "", "member")
+		privateReviewCreate(t, service, owner, "secret", "private")
+		reporter := auth.WithPrincipal(context.Background(), auth.Principal{ID: "service/prod-runtime-reporter", Kind: "service"})
+		report := rr.Report{ProductID: "secret", EnvironmentID: "prod", Cluster: "cluster", ReportedAt: time.Now().UTC()}
+		if _, err := service.ReportRuntime(reporter, report); err != nil {
+			t.Fatalf("report rejected: %v", err)
+		}
+		clusters, err := reports.ReadRuntimeReports(owner, report.ProductID, report.EnvironmentID, report.Cluster)
+		if err != nil || len(clusters) != 1 || clusters[0].Cluster != report.Cluster {
+			t.Fatalf("report not persisted: %v, %v", clusters, err)
+		}
+		if _, err := service.GetRuntimeReport(reporter, report.ProductID, report.EnvironmentID, report.Cluster); !errors.Is(err, auth.ErrForbidden) {
+			t.Fatalf("reporter unexpectedly authorized to read: %v", err)
 		}
 	})
 }

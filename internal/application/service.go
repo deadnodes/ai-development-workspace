@@ -694,7 +694,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		out = map[string]string{"deleted_product_id": c.ProductID}
 	case "create_product":
 		if productIDRetired(st, m.ID) {
-			if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+			if auth.RequiresExistingProduct(ctx) {
 				return nil, missing("product", m.ID)
 			}
 			return nil, invalid("product ID is no longer available")
