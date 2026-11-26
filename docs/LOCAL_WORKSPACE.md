@@ -1,10 +1,10 @@
 # Local workspace and portable project context
 
-The same Go binary serves the UI, API and MCP. With no `DATABASE_URL`, it uses an embedded database at `RCP_DATA_PATH`; the default is `os.UserConfigDir()/release-control/state.db`. For example, on macOS this is beneath the user’s Library/Application Support directory. Docker uses `/data/state.db`; keep that directory on a persistent volume. Set `DATABASE_URL` to use PostgreSQL instead. The UI and application commands are identical with either store.
+The same Go binary serves the UI, API and MCP. With no `DATABASE_URL`, it uses an embedded database at `RCP_DATA_PATH`; the default is `os.UserConfigDir()/release-control/rcp.sqlite`. For example, on macOS this is beneath the user’s Library/Application Support directory. Docker uses `/data/rcp.sqlite`; keep that directory on a persistent volume. Set `DATABASE_URL` to use PostgreSQL instead. The UI and application commands are identical with either store.
 
 ```sh
 go build -o bin/release-control ./cmd/server
-RCP_DATA_PATH="$PWD/.local/state.db" RCP_WORKSPACE_ROOT="$PWD" ./bin/release-control
+RCP_DATA_PATH="$PWD/.local/rcp.sqlite" RCP_WORKSPACE_ROOT="$PWD" ./bin/release-control
 ```
 
 Ensure `DATABASE_URL` is unset to select embedded storage. The workspace root is optional. Without it, remote repository context and project knowledge still work, while scanning explicitly reports unavailable. In Docker, mount the intended workspace and set `RCP_WORKSPACE_ROOT` to its path **inside the container**. The browser’s filesystem is not the server’s filesystem.

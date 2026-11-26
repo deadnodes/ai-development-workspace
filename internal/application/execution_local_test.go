@@ -10,9 +10,9 @@ import (
 	"releasecontrol/internal/persistence"
 )
 
-func TestCreateExecutionGroupWithLocalStore(t *testing.T) {
+func TestCreateExecutionGroupWithSQLiteStore(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,9 +159,9 @@ func findEventFrom(st domain.State, typ string) domain.ExecutionEvent {
 	return domain.ExecutionEvent{}
 }
 
-func TestExecutionLifecycleLocalStore(t *testing.T) {
+func TestExecutionLifecycleSQLiteStore(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "lifecycle.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "lifecycle.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

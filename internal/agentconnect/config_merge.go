@@ -14,6 +14,10 @@ import (
 
 func claudeEntry(o Options, endpoint string) map[string]any {
 	entry := map[string]any{"command": o.Executable}
+	if o.DataPath != "" {
+		entry["args"] = localMCPArgs(o)
+		return entry
+	}
 	args := []string{"mcp", "--url", endpoint}
 	if o.Profile != "" {
 		args = append(args, "--profile", o.Profile)

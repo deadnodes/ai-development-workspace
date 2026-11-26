@@ -16,7 +16,7 @@ import (
 func TestEmbeddedWorkspaceMCPEntryAndConfigImport(t *testing.T) {
 	ctx := context.Background()
 	file := filepath.Join(t.TempDir(), "state.db")
-	store, e := persistence.OpenLocal(ctx, file)
+	store, e := persistence.OpenSQLite(ctx, file)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -62,7 +62,7 @@ func TestEmbeddedWorkspaceMCPEntryAndConfigImport(t *testing.T) {
 	session.Close()
 	srv.Close()
 	store.Close()
-	reopened, e := persistence.OpenLocal(ctx, file)
+	reopened, e := persistence.OpenSQLite(ctx, file)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -109,7 +109,7 @@ func openWorkerTestStore(t *testing.T, kind string) (workerTestStore, func() wor
 	if kind == "local" {
 		path := filepath.Join(t.TempDir(), "worker.db")
 		open := func() workerTestStore {
-			s, e := persistence.OpenLocal(ctx, path)
+			s, e := persistence.OpenSQLite(ctx, path)
 			if e != nil {
 				t.Fatal(e)
 			}

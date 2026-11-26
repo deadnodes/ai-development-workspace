@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -100,8 +99,7 @@ func RunToken(args []string, out io.Writer) error {
 		return errors.New("saved credential unavailable")
 	}
 	if fd >= 0 {
-		_, err = syscall.Write(fd, []byte(token))
-		return err
+		return writeCredentialFD(fd, token)
 	}
 	_, err = io.WriteString(out, token)
 	return err
@@ -127,18 +125,39 @@ func (nopWriteCloser) Close() error { return nil }
 // SDK transports at both ends. Stdout is exclusively MCP protocol traffic.
 // Restarting the process reloads its persistent agent credential; it requires
 // neither a browser session nor an environment inherited by the Codex process.
-func RunMCP(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
+type LocalMCPRunner func(context.Context, string, string, io.Reader, io.Writer) error
+
+func RunMCP(ctx context.Context, args []string, in io.Reader, out io.Writer, local ...LocalMCPRunner) error {
 	flags := flag.NewFlagSet("release-control mcp", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	var raw, profile, tokenEnv string
+	flags.SetOutput(os.Stderr)
+	var raw, profile, tokenEnv, data, workspace string
+	flags.StringVar(&data, "data", "", "local SQLite file (instead of --url)")
+	flags.StringVar(&workspace, "workspace", "", "local workspace directory")
 	flags.StringVar(&raw, "url", "", "Control Plane base URL")
 	flags.StringVar(&profile, "profile", "default", "saved agent credential profile")
 	flags.StringVar(&tokenEnv, "token-env", "", "bearer token environment variable")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	supplied := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { supplied[f.Name] = true })
+	if supplied["data"] {
+		if supplied["url"] || supplied["profile"] || supplied["token-env"] {
+			return errors.New("--data cannot be combined with --url, --profile or --token-env")
+		}
+		if data == "" || len(local) != 1 {
+			return errors.New("local MCP requires a nonempty --data path and a standalone binary")
+		}
+		return local[0](ctx, data, workspace, in, out)
+	}
+	if supplied["workspace"] {
+		return errors.New("--workspace requires --data")
 	}
 	endpoint, err := secureEndpoint(raw)
 	if err != nil {

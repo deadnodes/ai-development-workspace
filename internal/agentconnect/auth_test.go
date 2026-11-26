@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ import (
 
 func TestCredentialEncryptionPersistenceAndPermissions(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	const endpoint = "https://control.example.test"
 	const token = "agent-secret-never-plaintext"
 	if err := saveCredential(endpoint, "default", token); err != nil {
@@ -40,7 +41,7 @@ func TestCredentialEncryptionPersistenceAndPermissions(t *testing.T) {
 	}
 	for _, name := range []string{name, "key"} {
 		info, err := os.Stat(filepath.Join(home, ".release-control", name))
-		if err != nil || info.Mode().Perm() != 0600 {
+		if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 			t.Fatalf("insecure mode: %v %v", info, err)
 		}
 	}
@@ -56,9 +57,12 @@ func TestCredentialEncryptionPersistenceAndPermissions(t *testing.T) {
 
 func TestCredentialSymlinkAndLoosePermissionsRejected(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(home, ".release-control")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if err := saveCredential("https://control.test", "default", "secret"); err == nil {
@@ -137,7 +141,7 @@ func TestDevicePollingCancellation(t *testing.T) {
 }
 
 func TestConnectSavedCredentialSecretFreeAndIdempotent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	server := kitServer(t, 1, "saved-agent-secret")
 	if err := saveCredential(server.URL, "default", "saved-agent-secret"); err != nil {
 		t.Fatal(err)
@@ -170,7 +174,7 @@ func TestConnectSavedCredentialSecretFreeAndIdempotent(t *testing.T) {
 }
 
 func TestMCPProxyRoundTripAndRestart(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	server := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "1"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "Echo"}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 		Text string `json:"text"`
@@ -245,7 +249,7 @@ func TestLoginDoesNotFollowRedirects(t *testing.T) {
 }
 
 func TestCredentialErrorsDoNotExposeToken(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	err := RunMCP(context.Background(), []string{"--url", "https://control.test"}, strings.NewReader(""), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "login") {
 		t.Fatalf("missing login guidance: %v", err)
@@ -253,7 +257,7 @@ func TestCredentialErrorsDoNotExposeToken(t *testing.T) {
 }
 
 func TestLoginEnrollsAndSavesWithoutPrintingCredential(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	var server *httptest.Server
 	var polled bool
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +297,10 @@ func TestLoginEnrollsAndSavesWithoutPrintingCredential(t *testing.T) {
 }
 
 func TestTokenProfileWritesOnlyToRequestedFD(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file descriptors are unavailable on Windows")
+	}
+	setTestHome(t, t.TempDir())
 	const endpoint = "https://control.example.test"
 	if err := saveCredential(endpoint, "default", "fd-secret"); err != nil {
 		t.Fatal(err)
@@ -318,4 +325,10 @@ func TestTokenProfileWritesOnlyToRequestedFD(t *testing.T) {
 	if stdout.Len() != 0 || string(got) != "fd-secret" {
 		t.Fatalf("stdout=%q fd=%q", stdout.String(), got)
 	}
+}
+
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 }

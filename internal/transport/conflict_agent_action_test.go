@@ -30,7 +30,7 @@ func TestCallerConflictActionRealHTTPAndMCP(t *testing.T) {
 			}
 			var err error
 			if kind == "local" {
-				store, err = persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "caller.db"))
+				store, err = persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "caller.db"))
 			} else {
 				store, err = persistence.Open(ctx, isolatedDatabase(t))
 			}

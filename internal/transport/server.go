@@ -30,6 +30,7 @@ type Service interface {
 }
 
 type Options struct {
+	LocalAdmin           bool
 	Auth                 *auth.Manager
 	Workers              *workerconfig.Authority
 	RuntimeReporterToken string
@@ -123,6 +124,60 @@ func newServer(service Service, options Options, register func(string)) http.Han
 	registerWorkspaceRoutes(mux, service)
 	registerLocalGitRoutes(mux, service)
 	registerAgentGuideRoutes(mux)
+	server := configureMCP(mux, service, options)
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20})
+	registerCodeMode(mux, server, mcpHandler)
+	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/", http.FileServer(http.FS(web.FS)))
+	var control http.Handler = mux
+	if options.Auth != nil {
+		control = options.Auth.Wrap(control)
+	}
+	return protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/public/prod-signatures/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if promoterTokenValid(r, options) {
+			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && (strings.HasSuffix(r.URL.Path, "/result") || strings.HasSuffix(r.URL.Path, "/heartbeat"))) {
+				ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
+				promoterMux.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})
+			return
+		}
+		if isRuntimeReporter(r, options) {
+			runtimeReportPost(service, options).ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-runtime-reporter", Kind: "service"})))
+			return
+		}
+		if workerEndpoint(r.URL.Path) {
+			workerMux.ServeHTTP(w, r)
+			return
+		}
+		if options.LocalAdmin {
+			r = r.WithContext(auth.WithLocalAdmin(r.Context()))
+		}
+		control.ServeHTTP(w, r)
+	}), options)
+}
+
+func NewLocalMCP(service Service) *mcp.Server {
+	server := configureMCP(discardRoutes{}, service, Options{})
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			return next(auth.WithLocalAdmin(ctx), method, request)
+		}
+	})
+	return server
+}
+
+type discardRoutes struct{}
+
+func (discardRoutes) Handle(string, http.Handler)                                 {}
+func (discardRoutes) HandleFunc(string, func(http.ResponseWriter, *http.Request)) {}
+
+func configureMCP(mux routeRegistrar, service Service, options Options) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "release-control", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: agentguide.Instructions})
 	registerProdPromotions(mux, server, service)
 	registerRuntimeReports(mux, server, service, options)
@@ -169,38 +224,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 	registerWorkspaceTools(server, service)
 	registerLocalGitTools(server, service)
 	registerAgentGuideTools(server)
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20})
-	registerCodeMode(mux, server, mcpHandler)
-	mux.Handle("/mcp", mcpHandler)
-	mux.Handle("/", http.FileServer(http.FS(web.FS)))
-	var control http.Handler = mux
-	if options.Auth != nil {
-		control = options.Auth.Wrap(control)
-	}
-	return protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/public/prod-signatures/") {
-			mux.ServeHTTP(w, r)
-			return
-		}
-		if promoterTokenValid(r, options) {
-			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && (strings.HasSuffix(r.URL.Path, "/result") || strings.HasSuffix(r.URL.Path, "/heartbeat"))) {
-				ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
-				promoterMux.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-			write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})
-			return
-		}
-		if isRuntimeReporter(r, options) {
-			runtimeReportPost(service, options).ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-runtime-reporter", Kind: "service"})))
-			return
-		}
-		if workerEndpoint(r.URL.Path) {
-			workerMux.ServeHTTP(w, r)
-			return
-		}
-		control.ServeHTTP(w, r)
-	}), options)
+	return server
 }
 
 func respond(w http.ResponseWriter, v any, err error) {
@@ -242,7 +266,7 @@ func protect(next http.Handler, o Options) http.Handler {
 		if h, _, e := net.SplitHostPort(host); e == nil {
 			host = h
 		}
-		allowed := host == "localhost" || host == "127.0.0.1" || host == "::1"
+		allowed := host == "localhost" || net.ParseIP(host).IsLoopback()
 		for _, h := range o.AllowedHosts {
 			if strings.EqualFold(host, h) {
 				allowed = true

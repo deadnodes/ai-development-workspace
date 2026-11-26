@@ -21,7 +21,7 @@ import (
 
 func TestPrivateRuntimeReporterTokenScope(t *testing.T) {
 	ctx := context.Background()
-	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -84,7 +84,7 @@ func TestRuntimeReporterOIDC(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

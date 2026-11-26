@@ -14,15 +14,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
+	"releasecontrol/internal/sqlitefile"
 	"releasecontrol/internal/transport"
 )
 
@@ -55,7 +54,7 @@ func TestRetentionInventoryProtectedAPIReopenBackupRestore(t *testing.T) {
 			open := func() retentionTestStore {
 				t.Helper()
 				if kind == "local" {
-					s, e := persistence.OpenLocal(ctx, path)
+					s, e := persistence.OpenSQLite(ctx, path)
 					if e != nil {
 						t.Fatal(e)
 					}
@@ -220,7 +219,7 @@ func TestRetentionInventoryProtectedAPIReopenBackupRestore(t *testing.T) {
 			}
 			var destination retentionTestStore
 			if kind == "local" {
-				destination, e = persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "restored.db"))
+				destination, e = persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "restored.db"))
 			} else {
 				destination, e = persistence.Open(ctx, isolatedDatabase(t))
 			}
@@ -322,7 +321,7 @@ func TestRetentionPinCorruptionFailsClosedOnStoredReadAndReopen(t *testing.T) {
 			var store retentionTestStore
 			var err error
 			if kind == "local" {
-				store, err = persistence.OpenLocal(ctx, path)
+				store, err = persistence.OpenSQLite(ctx, path)
 			} else {
 				store, err = persistence.Open(ctx, db)
 			}
@@ -340,32 +339,29 @@ func TestRetentionPinCorruptionFailsClosedOnStoredReadAndReopen(t *testing.T) {
 			id := state.ArtifactPins[0].ID
 			store.Close()
 			if kind == "local" {
-				raw, e := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second})
+				raw, e := sqlitefile.Open(ctx, path)
 				if e != nil {
 					t.Fatal(e)
 				}
-				e = raw.Update(func(tx *bolt.Tx) error {
-					bucket := tx.Bucket([]byte("release-control"))
-					var st domain.State
-					if err := json.Unmarshal(bucket.Get([]byte("state")), &st); err != nil {
-						return err
-					}
-					if fixture.mutation == "request_hash" {
-						st.ArtifactPins[0].RequestHash = "corrupt"
-					} else {
-						st.ArtifactPins[0].ReleasedAt = &st.ArtifactPins[0].UpdatedAt
-					}
-					b, _ := json.Marshal(st)
-					return bucket.Put([]byte("state"), b)
-				})
+				if fixture.mutation == "request_hash" {
+					_, e = raw.ExecContext(ctx, "UPDATE records SET document=json_set(document,'$.request_hash','corrupt') WHERE kind='artifact_pins' AND id=?", id)
+				} else {
+					_, e = raw.ExecContext(ctx, "UPDATE records SET document=json_set(document,'$.released_at',document->'$.updated_at') WHERE kind='artifact_pins' AND id=?", id)
+				}
 				raw.Close()
 				if e != nil {
 					t.Fatal(e)
 				}
-				reopened, e := persistence.OpenLocal(ctx, path)
-				if e == nil {
-					reopened.Close()
-					t.Fatal("local reopen accepted corrupt pin")
+				reopened, e := persistence.OpenSQLite(ctx, path)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer reopened.Close()
+				if _, e = reopened.Read(ctx); e == nil {
+					t.Fatal("SQLite accepted corrupt pin")
+				}
+				if _, e = application.New(reopened).Query(ctx, "get_artifact_retention", "p"); e == nil {
+					t.Fatal("SQLite inventory consumed corrupt pin")
 				}
 			} else {
 				conn, e := pgx.Connect(ctx, db)

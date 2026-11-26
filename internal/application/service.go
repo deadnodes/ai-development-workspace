@@ -717,6 +717,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("owner and members are server-managed")
 		}
 		v.Owner, _ = auth.PrivateProductViewer(ctx)
+		if auth.IsLocalAdmin(ctx) {
+			v.Owner = "local"
+		}
 		if v.Visibility == "private" && v.Owner == "" {
 			return nil, fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
 		}

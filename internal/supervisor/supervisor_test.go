@@ -121,7 +121,7 @@ func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 
 func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "app.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

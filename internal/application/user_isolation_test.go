@@ -14,7 +14,7 @@ import (
 
 func TestClaimExecutionIsAssignedToPrincipalOwner(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestClaimExecutionIsAssignedToPrincipalOwner(t *testing.T) {
 
 func TestAssignIntegrationAuthorizationAndAdminForce(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestAssignIntegrationAuthorizationAndAdminForce(t *testing.T) {
 
 func TestExecutionIsolationCoversLifecycleGroupsAndSupervisorEvents(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

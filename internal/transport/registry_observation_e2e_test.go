@@ -1,3 +1,5 @@
+//go:build !windows
+
 package transport_test
 
 import (
@@ -154,7 +156,7 @@ func TestRegistryObservationDistributionProtectedAPI(t *testing.T) {
 			var store retentionTestStore
 			var e error
 			if kind == "local" {
-				store, e = persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				store, e = persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 			} else {
 				store, e = persistence.Open(ctx, isolatedDatabase(t))
 			}

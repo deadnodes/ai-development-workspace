@@ -97,7 +97,7 @@ func TestWorkerHistoryStores(t *testing.T) {
 	ctx := context.Background()
 	st := historyFixture(t)
 	path := filepath.Join(t.TempDir(), "state.db")
-	local, e := OpenLocal(ctx, path)
+	local, e := OpenSQLite(ctx, path)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -106,7 +106,7 @@ func TestWorkerHistoryStores(t *testing.T) {
 	}
 	checkHistoryReader(t, local)
 	local.Close()
-	local, e = OpenLocal(ctx, path)
+	local, e = OpenSQLite(ctx, path)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -166,7 +166,7 @@ func TestWorkerHistoryStores(t *testing.T) {
 }
 func TestWorkerHistoryBrokenFrozenChain(t *testing.T) {
 	ctx := context.Background()
-	local, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	local, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -196,7 +196,7 @@ func TestWorkerHistoryBrokenFrozenChain(t *testing.T) {
 
 func TestWorkerHistoryMainCandidateAndBaseOnly(t *testing.T) {
 	ctx := context.Background()
-	local, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	local, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -348,7 +348,7 @@ func TestWorkerHistoryFrozenSourceParity(t *testing.T) {
 			st.Products[0].Description = ""
 			st.WorkerJobs[1].Inputs.Parameters = nil
 			tc.mutate(&st)
-			local, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "independent.db"))
+			local, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "independent.db"))
 			if e != nil {
 				t.Fatal(e)
 			}

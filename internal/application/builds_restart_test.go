@@ -22,13 +22,13 @@ type buildTestStore interface {
 }
 
 func TestBuildDispatcherDurableRestart(t *testing.T) {
-	for _, kind := range []string{"bbolt", "postgres"} {
+	for _, kind := range []string{"sqlite", "postgres"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			var open func() (buildTestStore, error)
-			if kind == "bbolt" {
+			if kind == "sqlite" {
 				path := filepath.Join(t.TempDir(), "build.db")
-				open = func() (buildTestStore, error) { return persistence.OpenLocal(ctx, path) }
+				open = func() (buildTestStore, error) { return persistence.OpenSQLite(ctx, path) }
 			} else {
 				dsn := os.Getenv("TEST_DATABASE_URL")
 				if dsn == "" {

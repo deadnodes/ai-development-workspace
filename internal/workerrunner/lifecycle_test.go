@@ -1,3 +1,5 @@
+//go:build !windows
+
 package workerrunner
 
 import (
@@ -72,7 +74,7 @@ func TestRealWorkerFailureCancellationExpiryKillAndRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			store, err := persistence.OpenLocal(ctx, filepath.Join(dir, "test.db"))
+			store, err := persistence.OpenSQLite(ctx, filepath.Join(dir, "test.db"))
 			if err != nil {
 				t.Fatal(err)
 			}

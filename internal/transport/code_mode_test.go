@@ -23,7 +23,7 @@ import (
 
 func codeServer(t *testing.T, token string) *httptest.Server {
 	t.Helper()
-	store, err := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestCodeModeSchemaConverter(t *testing.T) {
 
 // The recorder path also verifies dispatch where the host forbids TCP listeners.
 func TestCodeModeInProcess(t *testing.T) {
-	store, err := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func (s *codePrincipalService) ResumeSummary(ctx context.Context, _ string) (any
 	return map[string]bool{"ok": true}, nil
 }
 func TestCodeModePrincipalAndTokenInProcess(t *testing.T) {
-	store, err := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

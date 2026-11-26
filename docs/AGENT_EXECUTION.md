@@ -294,7 +294,7 @@ validation, and product configuration code. Add no worker-principal reuse.
 Tests: unit state transitions/derived action_required, independent group members,
 scope and transition validation, lost versus stalled (stalled never revokes),
 pending/resolved operation semantics, takeover old-fence rejection, competing
-transactions, restart persistence; bbolt and PostgreSQL transaction tests with
+transactions, restart persistence; SQLite and PostgreSQL transaction tests with
 `TEST_DATABASE_URL` and isolated schemas. Done: group restore returns every
 member; reconciliation detects conditions automatically; every RCP mutation
 covered by execution fence is atomic; no automatic reassignment.

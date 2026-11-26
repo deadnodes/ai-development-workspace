@@ -121,15 +121,14 @@ are stale. Missing workloads become `document.absent=true` until expiry or cap
 eviction on an accepted report for that cluster. Reappearance clears absence. Unchanged documents retain
 `changed_at` while `observed_at` advances.
 
-Snapshots live outside domain.State in PostgreSQL tables or a separate bbolt
-bucket, with no State revision/cache updates for snapshot writes. Changed image,
+Snapshots live outside domain.State in dedicated PostgreSQL and SQLite tables, with no State revision/cache updates for snapshot writes. Changed image,
 digest, readiness or absence signals produce scoped append-only journal events,
 limited to 20 workload events plus one overflow summary per accepted report.
 Each exact product/environment/cluster scope entry has a rolling budget of 500
 `runtime_report_changed` events per 24 hours, including overflow summaries.
 The server reserves this budget atomically with the snapshot, using at most 500
 server-time timestamps in `runtime_report_clusters.journal_budget` (equivalent
-private snapshot metadata in bbolt/memory), never in State. Entries expire exactly
+private snapshot metadata in memory), never in State. Entries expire exactly
 24 hours after reservation; process restarts do not reset persisted budgets.
 When the budget limits details, `runtime_report_budget_exceeded` is emitted at
 most once per rolling hour per scope, carrying `suppressed_changes` and

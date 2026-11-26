@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package artifactspool provides an operator-owned local CAS handoff. It is not
 // control-plane storage: only trusted supervisors write it, outside containers.
 package artifactspool

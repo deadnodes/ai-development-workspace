@@ -34,7 +34,11 @@ func (s *Service) executeProductMembership(ctx context.Context, c domain.Command
 		bootstrap := authenticated && principal.Kind == "service" && principal.ID == "service/bootstrap"
 		user, _ := auth.PrivateProductViewer(ctx)
 		claimingShared := c.Action == "set_product_visibility" && p.Visibility != "private" && p.Owner == "" && user != ""
-		if !bootstrap && (user == "" || (p.Owner != user && !claimingShared)) {
+		localAdmin := auth.IsLocalAdmin(ctx)
+		if localAdmin {
+			user = "local"
+		}
+		if !bootstrap && !localAdmin && (user == "" || (p.Owner != user && !claimingShared)) {
 			return auth.ErrForbidden
 		}
 		if c.Action == "set_product_visibility" {

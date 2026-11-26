@@ -1,5 +1,7 @@
 # Local Docker startup for agents
 
+For the no-Docker binary and SQLite quickstart, see [Standalone](STANDALONE.md).
+
 Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
 
 Prerequisites: running Docker engine and Docker Compose with `up --wait` support.

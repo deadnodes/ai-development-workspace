@@ -31,7 +31,7 @@
     ],
     "partitions": "STORE_WRITE_TEST_PARTITIONS.json",
     "verification_method": "All 307 top-level tests covered: 91 completed serial tests, four disjoint remaining-test partitions, and targeted reruns after fixture and identity fixes. All eight renewed-retention modes passed across the original run and race-enabled reruns.",
-    "fixture_timing": "The 25-second production deadline case passed in an isolated rerun. Three long bbolt retention setup modes use a test-only 30-second worker lease and passed with race instrumentation; the default expiry/fence fixtures retain 5 seconds."
+    "fixture_timing": "The 25-second production deadline case passed in an isolated rerun. Three long retention setup modes on the former embedded backend use a test-only 30-second worker lease and passed with race instrumentation; the default expiry/fence fixtures retain 5 seconds."
   },
   "non_application_packages": {
     "releasecontrol/cmd/publisher": "skip",

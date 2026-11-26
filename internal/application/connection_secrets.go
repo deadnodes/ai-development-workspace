@@ -82,12 +82,22 @@ func connectionSecretWarnings(st *domain.State, product string) []map[string]any
 
 // CheckConnectionSecrets runs once at startup, without reading secret contents.
 func (s *Service) CheckConnectionSecrets(ctx context.Context) error {
-	return s.view(ctx, func(st *domain.State) error {
+	warn := func(st *domain.State) error {
 		for _, item := range connectionSecretWarnings(st, "") {
 			slog.Warn("connection secret outside configured directory", "connection_id", item["connection_id"], "name", item["name"], "paths", item["paths"])
 		}
 		return nil
-	})
+	}
+	if reader, ok := s.store.(interface {
+		ReadGitHubConnections(context.Context) ([]domain.GitHubConnection, error)
+	}); ok {
+		connections, err := reader.ReadGitHubConnections(ctx)
+		if err != nil {
+			return err
+		}
+		return warn(&domain.State{GitHubConnections: connections})
+	}
+	return s.view(ctx, warn)
 }
 
 // Collapse only refresh failures with the specific confinement error and a

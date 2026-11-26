@@ -27,7 +27,7 @@ A Product defines its own topology and defaults. It can use any environment name
 
 ProviderConnections belong to the instance and describe adapter kind, endpoint, external scope/capabilities and **secret references only**. Explicit product grants and product bindings authorize use of a connection; sharing a connection does not grant visibility across products. A dedicated installation simply has one Product. The current trusted-local deployment exposes full state via `/api/state` and compact Product/Feature/Integration navigation via MCP `get_state` under one optional shared token: current logical reference isolation is **not** per-user RBAC. Authentication/authorization for a shared installation must filter reads as well as writes before claiming access isolation.
 
-MCP navigation uses a shared application projection and dedicated metadata readers, never the full State reader or gate derivation. PostgreSQL applies scope, ID keyset and count limits in SQL and bounds labels before transferring them. Local bbolt keeps its monolithic JSON format and scans O(blob) bytes while decoding only navigation metadata; bounded output does not imply constant-time reads. Pages have count and serialized-byte limits and scope-bound cursors with live keyset semantics. Full HTTP snapshots, backup/export and Feature resume retain their separate contracts and may be large. See [the navigation contract](CONTRACT.md).
+MCP navigation uses a shared application projection and dedicated metadata readers, never the full State reader or gate derivation. PostgreSQL and SQLite apply scope, ID keyset and count limits in SQL and bound labels before transferring them. Pages have count and serialized-byte limits and scope-bound cursors with live keyset semantics. Full HTTP snapshots, backup/export and Feature resume retain their separate contracts and may be large. See [the navigation contract](CONTRACT.md).
 
 ## Domain model and compatibility
 
@@ -153,7 +153,7 @@ Test environments host selected integration compositions. Production release can
 
 ## Local workspace mode
 
-The same domain/application/UI/MCP run against an embedded bbolt file by default or PostgreSQL when DATABASE_URL is configured. Both implement the same transactional Store interface; transport and business rules do not branch by backend. Local storage is single-process and bounded; the shared deployment uses PostgreSQL.
+The same domain/application/UI/MCP run against an embedded SQLite file by default or PostgreSQL when DATABASE_URL is configured. Both implement the same transactional Store interface; transport and business rules do not branch by backend. SQLite supports multiple processes on the same host via WAL. Shared server deployments use PostgreSQL.
 
 An operator-configured workspace root enables read-only Git/AGENTS discovery. The scanner never clones or executes repository commands. Local checkout observations are distinct from portable repository URLs. Curated ProductKnowledge contains nested product areas, repository scope, interface relationships and nonsecret parameters independently of Feature history. AGENTS documents remain attributed source context, never implicit execution authorization.
 

@@ -47,6 +47,7 @@ func safePath(root *os.Root, relative string) error {
 	return nil
 }
 func readPlan(root *os.Root, relative string) (filePlan, error) {
+	relative = filepath.FromSlash(relative)
 	p := filePlan{relative: relative, mode: 0600}
 	if err := safePath(root, relative); err != nil {
 		return p, err

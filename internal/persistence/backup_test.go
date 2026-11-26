@@ -13,14 +13,14 @@ import (
 )
 
 func TestRestoreBackupRejectsAuditOnlyInstance(t *testing.T) {
-	for _, backend := range []string{"postgres", "bbolt"} {
+	for _, backend := range []string{"postgres", "sqlite"} {
 		t.Run(backend, func(t *testing.T) {
 			ctx := context.Background()
 			var store application.Store
 			if backend == "postgres" {
 				store = retrievalPostgres(t)
 			} else {
-				local, err := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				local, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if err != nil {
 					t.Fatal(err)
 				}

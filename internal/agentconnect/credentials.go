@@ -52,7 +52,7 @@ func credentialRoot(create bool) (*os.Root, error) {
 	const dir = ".release-control"
 	info, err := root.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) && create {
-		err = root.Mkdir(dir, 0700)
+		err = makeCredentialDir(root, dir)
 		if err == nil {
 			info, err = root.Lstat(dir)
 		}
@@ -60,8 +60,11 @@ func credentialRoot(create bool) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("credential directory must be a private directory (0700), not a symlink")
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("credential directory must be a private directory, not a symlink")
+	}
+	if err := checkCredentialAccess(root, dir, info); err != nil {
+		return nil, err
 	}
 	return root.OpenRoot(dir)
 }
@@ -74,8 +77,11 @@ func readPrivate(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode().Perm()&0077 != 0 || !info.Mode().IsRegular() || info.Size() > 65536 {
-		return nil, errors.New("credential file must be a private regular file (0600)")
+	if !info.Mode().IsRegular() || info.Size() > 65536 {
+		return nil, errors.New("credential file must be a private regular file of at most 64 KiB")
+	}
+	if err := checkCredentialAccess(root, name, info); err != nil {
+		return nil, err
 	}
 	return root.ReadFile(name)
 }

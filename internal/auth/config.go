@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"releasecontrol/internal/sqlitefile"
 )
 
 var ErrForbidden = errors.New("forbidden")
@@ -25,6 +27,16 @@ type Principal struct {
 	Permissions []string `json:"permissions"`
 }
 type principalKey struct{}
+type localAdminKey struct{}
+
+func WithLocalAdmin(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localAdminKey{}, true)
+}
+
+func IsLocalAdmin(ctx context.Context) bool {
+	_, authenticated := FromContext(ctx)
+	return !authenticated && ctx.Value(localAdminKey{}) == true
+}
 
 func FromContext(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(Principal)
@@ -44,6 +56,10 @@ type Config struct {
 }
 
 func ConfigFromEnv() (Config, error) {
+	return ConfigFromEnvForData(os.Getenv("RCP_DATA_PATH"))
+}
+
+func ConfigFromEnvForData(domainPath string) (Config, error) {
 	c := Config{Mode: os.Getenv("RCP_AUTH_MODE"), PublicURL: os.Getenv("RCP_PUBLIC_URL"), IssuerURL: os.Getenv("RCP_OIDC_ISSUER_URL"), ClientID: os.Getenv("RCP_OIDC_CLIENT_ID"), ClientSecret: os.Getenv("RCP_OIDC_CLIENT_SECRET"), RolesClaim: os.Getenv("RCP_OIDC_ROLES_CLAIM"), AllowedRoles: csv(os.Getenv("RCP_OIDC_ALLOWED_ROLES")), AdminRoles: csv(os.Getenv("RCP_OIDC_ADMIN_ROLES")), Products: csv(os.Getenv("RCP_AUTH_PRODUCTS")), DatabaseURL: os.Getenv("DATABASE_URL"), FilePath: os.Getenv("RCP_AUTH_FILE"), BootstrapToken: os.Getenv("RCP_AUTH_BOOTSTRAP_TOKEN"), SessionTTL: 8 * time.Hour}
 	if c.Mode == "" {
 		c.Mode = "local"
@@ -72,13 +88,12 @@ func ConfigFromEnv() (Config, error) {
 		}
 	}
 	if c.Mode == "oidc" && c.DatabaseURL == "" && c.FilePath != "" {
-		domainPath := os.Getenv("RCP_DATA_PATH")
 		if domainPath == "" {
-			dir, err := os.UserConfigDir()
+			var err error
+			domainPath, err = sqlitefile.DefaultPath()
 			if err != nil {
 				return c, err
 			}
-			domainPath = filepath.Join(dir, "release-control", "state.db")
 		}
 		privateAbs, err := filepath.Abs(c.FilePath)
 		if err != nil {

@@ -45,7 +45,7 @@ response's `reconciliation_required_operation_ids`, never as cancelled. Imported
 leases are invalidated and no automatic execution is replayed.
 
 Job + attempt + operation + audit transitions use the same Store transaction on
-both bbolt and PostgreSQL. Poll/claim also performs bounded expiry recovery.
+both SQLite and PostgreSQL. Poll/claim also performs bounded expiry recovery.
 Failed transaction commits publish no attempt or acknowledgement.
 
 ## Authentication and trust

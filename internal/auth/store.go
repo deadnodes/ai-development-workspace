@@ -5,16 +5,15 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	bolt "go.etcd.io/bbolt"
+	"releasecontrol/internal/sqlitefile"
 )
 
 type loginFlow struct {
@@ -79,7 +78,7 @@ func (s *authState) prune(now time.Time) {
 }
 
 type privateStore struct {
-	db   *bolt.DB
+	db   *sql.DB
 	pool *pgxpool.Pool
 	aead cipher.AEAD
 }
@@ -108,14 +107,9 @@ func openStore(ctx context.Context, c Config) (*privateStore, error) {
 			}
 		}
 	} else {
-		if err = os.MkdirAll(filepath.Dir(c.FilePath), 0700); err == nil {
-			s.db, err = bolt.Open(c.FilePath, 0600, &bolt.Options{Timeout: time.Second})
-			if err == nil {
-				err = os.Chmod(c.FilePath, 0600)
-			}
-		}
+		s.db, err = sqlitefile.Open(ctx, c.FilePath)
 		if err == nil {
-			err = s.db.Update(func(tx *bolt.Tx) error { _, e := tx.CreateBucketIfNotExists([]byte("private_auth")); return e })
+			_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS rcp_auth_private (id integer PRIMARY KEY CHECK (id=1), payload blob NOT NULL)`)
 		}
 	}
 	if err != nil {
@@ -180,14 +174,23 @@ func (s *privateStore) update(ctx context.Context, fn func(*authState) error) er
 		return s.encode(st)
 	}
 	if s.db != nil {
-		return s.db.Update(func(tx *bolt.Tx) error {
-			bucket := tx.Bucket([]byte("private_auth"))
-			b, e := apply(bucket.Get([]byte("state")))
-			if e != nil {
-				return e
-			}
-			return bucket.Put([]byte("state"), b)
-		})
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		var payload []byte
+		if err := tx.QueryRowContext(ctx, `SELECT payload FROM rcp_auth_private WHERE id=1`).Scan(&payload); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		encoded, err := apply(payload)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO rcp_auth_private (id,payload) VALUES(1,$1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, encoded); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	tx, e := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if e != nil {

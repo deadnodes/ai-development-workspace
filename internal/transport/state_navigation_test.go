@@ -27,7 +27,7 @@ func TestBoundedStateNavigationMCP(t *testing.T) {
 			ctx := context.Background()
 			var store application.Store
 			if backend == "local" {
-				s, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				s, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if err != nil {
 					t.Fatal(err)
 				}

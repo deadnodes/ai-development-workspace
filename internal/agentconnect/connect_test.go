@@ -11,13 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"releasecontrol/internal/agentguide"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func kitServer(t *testing.T, products int, token string) *httptest.Server {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "fixture", Version: "1"}, nil)
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: "get_state"}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Limit int `json:"limit"`
@@ -121,7 +122,7 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 		}
 	}
 	info, _ := os.Stat(filepath.Join(root, "AGENTS.md"))
-	if info.Mode().Perm() != 0640 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0640 {
 		t.Fatal("existing file mode changed")
 	}
 	var mcpConfig, claudeSettings map[string]any
@@ -134,7 +135,7 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 }
 
 func TestCodexNotifyOptionMergesProjectConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	server := kitServer(t, 1, "")
 	root := t.TempDir()
 	writeFile(t, root, ".codex/config.toml", "model = \"keep\"\n")
@@ -187,6 +188,9 @@ func TestConnectRejectsSymlinkEscapes(t *testing.T) {
 				os.WriteFile(target, []byte("untouched"), 0600)
 			}
 			if err := os.Symlink(target, filepath.Join(root, relative)); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
 				t.Fatal(err)
 			}
 			if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root}); err == nil {

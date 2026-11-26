@@ -41,7 +41,7 @@ func TestFeaturePatchHTTPMCPPersistence(t *testing.T) {
 			} else {
 				path := filepath.Join(t.TempDir(), "state.db")
 				reopen = func() {
-					s, e := persistence.OpenLocal(ctx, path)
+					s, e := persistence.OpenSQLite(ctx, path)
 					if e != nil {
 						t.Fatal(e)
 					}
@@ -286,7 +286,7 @@ func TestFeaturePatchHTTPMCPPersistence(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			restored, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "restored.db"))
+			restored, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "restored.db"))
 			if e != nil {
 				t.Fatal(e)
 			}

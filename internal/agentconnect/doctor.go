@@ -28,9 +28,11 @@ type doctorCheck struct {
 
 // RunDoctor checks a connected agent workspace without changing it.
 func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
-	var raw, profile, product, workspace, tokenEnv string
+	var raw, profile, product, workspace, tokenEnv, data, name string
 	f := flag.NewFlagSet("release-control doctor", flag.ContinueOnError)
 	f.SetOutput(out)
+	f.StringVar(&data, "data", "", "local SQLite file (instead of --url)")
+	f.StringVar(&name, "name", "release-control", "local MCP server name")
 	f.StringVar(&raw, "url", "", "Control Plane base URL")
 	f.StringVar(&profile, "profile", "default", "saved credential profile")
 	f.StringVar(&product, "product-id", "", "Product ID")
@@ -44,6 +46,16 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if data != "" {
+		var conflicts bool
+		f.Visit(func(flag *flag.Flag) {
+			conflicts = conflicts || flag.Name == "url" || flag.Name == "profile" || flag.Name == "token-env" || flag.Name == "product-id"
+		})
+		if conflicts {
+			return errors.New("--data cannot be combined with remote connection options")
+		}
+		return doctorLocal(data, workspace, name, out)
 	}
 	endpoint, endpointErr := secureEndpoint(raw)
 	root, rootErr := filepath.Abs(workspace)

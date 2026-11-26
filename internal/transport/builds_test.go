@@ -46,7 +46,7 @@ func (transportRegistry) Resolve(context.Context, buildconfig.Registry, string, 
 }
 func TestBuildHTTPMCPContract(t *testing.T) {
 	ctx := context.Background()
-	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "build.db"))
+	store, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "build.db"))
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -16,6 +16,7 @@ import (
 	"releasecontrol/internal/ocipublisher"
 	"releasecontrol/internal/ociverify"
 	"releasecontrol/internal/workerconfig"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,6 +117,9 @@ type nativeFixture struct {
 }
 
 func newNativeFixture(t *testing.T, kind string) *nativeFixture {
+	if runtime.GOOS == "windows" {
+		t.Skip("native publication fixture requires POSIX file locking")
+	}
 	t.Helper()
 	ctx := context.Background()
 	_, seed, _ := externalFixture(t)
@@ -593,7 +597,7 @@ func TestNativeQuarantineRejectsProductDeletionAcrossReopenAndBackup(t *testing.
 }
 
 // Long multi-component audit fixtures can spend more than five seconds in
-// race-instrumented bbolt serialization. Expiry/fence tests keep the short lease.
+// race-instrumented embedded-store setup. Expiry/fence tests keep the short lease.
 func nativeFixtureLeaseSeconds() int {
 	if os.Getenv("RCP_TEST_LONG_NATIVE_LEASE") == "1" {
 		return 30

@@ -24,7 +24,7 @@ func oneProductPage() map[string]any {
 
 func metadataServer(t *testing.T, page any, jsonResponse bool) *httptest.Server {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	sdk := mcp.NewServer(&mcp.Implementation{Name: "discovery-test", Version: "1"}, nil)
 	mcp.AddTool(sdk, &mcp.Tool{Name: "get_state"}, func(_ context.Context, _ *mcp.CallToolRequest, in struct {
 		Limit int `json:"limit"`
@@ -177,7 +177,7 @@ func TestDiscoveryWholeBodyCapAllStatusesAndTypes(t *testing.T) {
 }
 
 func TestDiscoveryOriginRedirectAndHTTPFailuresWriteNothing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	var foreignCalls atomic.Int32
 	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		foreignCalls.Add(1)
@@ -233,7 +233,7 @@ func TestDiscoveryOriginRedirectAndHTTPFailuresWriteNothing(t *testing.T) {
 }
 
 func TestExplicitProductSkipsDiscoveryAndMatchesContext(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	for _, mismatch := range []bool{false, true} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {

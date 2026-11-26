@@ -335,11 +335,11 @@ func (w *cappedOutput) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func git(ctx context.Context, path string, args ...string) (string, error) {
-	fixed := []string{"--no-pager", "-c", "safe.directory=" + path, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-C", path}
+	fixed := []string{"--no-pager", "-c", "safe.directory=" + filepath.ToSlash(path), "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-C", path}
 	cmd := exec.CommandContext(ctx, "git", append(fixed, args...)...)
 	// Do not inherit injected GIT_DIR/GIT_CONFIG_COUNT/credential helpers or user
 	// configuration. These are plumbing reads and cannot start network operations.
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/nonexistent", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CEILING_DIRECTORIES=" + filepath.Dir(path), "LC_ALL=C"}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CEILING_DIRECTORIES=" + filepath.Dir(path), "LC_ALL=C"}
 	output := &cappedOutput{}
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard

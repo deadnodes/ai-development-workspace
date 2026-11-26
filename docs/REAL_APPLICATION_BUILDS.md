@@ -87,7 +87,7 @@ seeded attempts; there is no manual job queue or archive copy. Provider/PR
 behavior is a local fixture, not evidence of a live GitHub check bridge.
 
 The admitted changed-source image runs by digest with an ephemeral fake token,
-temporary bbolt/workspace files and no real database. Runtime checks exercise
+temporary SQLite/workspace files and no PostgreSQL dependency. Runtime checks exercise
 health, API authentication, Product creation/readback, Feature creation/update/
 readback, supported Product deletion with Feature cascade/absence, the changed embedded
 asset and real Git workspace scanning. A separate private TLS fixture exercises

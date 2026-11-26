@@ -108,7 +108,7 @@ func TestPostgresViewIncrementalJournalAndIsolation(t *testing.T) {
 
 func TestLocalViewReadParity(t *testing.T) {
 	ctx := context.Background()
-	s, err := OpenLocal(ctx, t.TempDir()+"/state.db")
+	s, err := OpenSQLite(ctx, t.TempDir()+"/state.db")
 	if err != nil {
 		t.Fatal(err)
 	}
