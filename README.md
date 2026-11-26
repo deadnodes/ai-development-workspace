@@ -1,5 +1,8 @@
 # AI Development Workspace
 
+Private Product visibility and invitations are documented in
+[docs/PRIVATE_PRODUCTS.md](docs/PRIVATE_PRODUCTS.md).
+
 Agent-side TypeScript batching: [Code mode](docs/CODE_MODE.md).
 
 ## Shared authenticated installations

@@ -208,7 +208,11 @@ func (m *Manager) Wrap(next http.Handler) http.Handler {
 			if !method(w, r, "GET") {
 				return
 			}
-			body := map[string]any{"auth_mode": "oidc", "principal": p}
+			userID := p.ID
+			if p.Kind == "agent" {
+				userID = p.Owner
+			}
+			body := map[string]any{"auth_mode": "oidc", "principal": p, "user_id": userID}
 			if raw != "" {
 				body["csrf_token"] = m.mac("csrf", raw)
 			}

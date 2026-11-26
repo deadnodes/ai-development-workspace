@@ -113,6 +113,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if c.Action == "set_product_visibility" || c.Action == "add_product_member" || c.Action == "remove_product_member" {
+		return s.executeProductMembership(ctx, c)
+	}
 	if c.Action == "assign_integration" || c.Action == "unassign_integration" {
 		return s.executeAssignment(ctx, c)
 	}
@@ -177,7 +180,7 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 			}
 		}
 		var err error
-		result, err = applyAuthorizedOrigin(st, c, s.externalWorkers, origin)
+		result, err = applyAuthorizedOrigin(ctx, st, c, s.externalWorkers, origin)
 		if err == nil && (c.Action == "record_progress" || c.Action == "transition_integration") {
 			if _, ok := c.Data["execution_fence"]; ok {
 				ex := executionFor(st, c.IntegrationID)
@@ -474,9 +477,9 @@ func validateIntegration(st *domain.State, in domain.Integration) error {
 }
 func apply(st *domain.State, c domain.Command) (any, error) { return applyAuthorized(st, c, nil) }
 func applyAuthorized(st *domain.State, c domain.Command, authority *workerconfig.Authority) (any, error) {
-	return applyAuthorizedOrigin(st, c, authority, nil)
+	return applyAuthorizedOrigin(context.Background(), st, c, authority, nil)
 }
-func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *workerconfig.Authority, origin *composeRefreshOrigin) (any, error) {
+func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Command, authority *workerconfig.Authority, origin *composeRefreshOrigin) (any, error) {
 	if strings.TrimSpace(c.Actor) == "" {
 		return nil, invalid("actor required")
 	}
@@ -697,6 +700,22 @@ func applyAuthorizedOrigin(st *domain.State, c domain.Command, authority *worker
 		v.Meta = m
 		if strings.TrimSpace(v.Name) == "" {
 			return nil, invalid("name required")
+		}
+		if v.Visibility == "" {
+			v.Visibility = "shared"
+		}
+		if v.Visibility != "shared" && v.Visibility != "private" {
+			return nil, invalid("visibility must be shared or private")
+		}
+		if v.Owner != "" || len(v.Members) != 0 {
+			return nil, invalid("owner and members are server-managed")
+		}
+		if v.Visibility == "private" {
+			user, enforced := principalUser(ctx)
+			if !enforced || user == "" {
+				return nil, fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
+			}
+			v.Owner = user
 		}
 		st.Products = append(st.Products, v)
 		out = v

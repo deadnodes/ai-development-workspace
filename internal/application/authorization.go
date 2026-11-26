@@ -46,6 +46,31 @@ func principalUser(ctx context.Context) (user string, enforced bool) {
 func allowedProduct(p auth.Principal, product string) bool {
 	return product != "" && (slices.Contains(p.Products, "*") || slices.Contains(p.Products, product))
 }
+func bootstrapPrincipal(ctx context.Context) bool {
+	p, ok := auth.FromContext(ctx)
+	return ok && p.Kind == "service" && p.ID == "service/bootstrap"
+}
+func productVisibleTo(ctx context.Context, product *domain.Product) bool {
+	if product == nil || product.Visibility != "private" || bootstrapPrincipal(ctx) {
+		return true
+	}
+	if _, ok := auth.FromContext(ctx); !ok {
+		return true
+	}
+	user, _ := principalUser(ctx)
+	if user == "" {
+		return false
+	}
+	return product.Owner == user || slices.Contains(product.Members, user)
+}
+func productByID(st domain.State, id string) *domain.Product {
+	for i := range st.Products {
+		if st.Products[i].ID == id {
+			return &st.Products[i]
+		}
+	}
+	return nil
+}
 func authorize(ctx context.Context, permission, product string) error {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -84,10 +109,10 @@ func scopedState(ctx context.Context, st domain.State) (domain.State, error) {
 		return domain.State{}, err
 	}
 	p, ok := auth.FromContext(ctx)
-	if !ok || instanceAdmin(p) {
+	if !ok {
 		return st, nil
 	}
-	return filterScopedState(st, p)
+	return filterScopedStateForContext(ctx, st, p)
 }
 
 // filterScopedState shallow-copies each collection before filtering so its
@@ -96,10 +121,19 @@ func scopedState(ctx context.Context, st domain.State) (domain.State, error) {
 // encoded non-null non-array field; omitted/null fields decoded as zero. Keep
 // that behavior for future fields rather than silently exposing them.
 func filterScopedState(st domain.State, p auth.Principal) (domain.State, error) {
+	return filterScopedStateForContext(auth.WithPrincipal(context.Background(), p), st, p)
+}
+func filterScopedStateForContext(ctx context.Context, st domain.State, p auth.Principal) (domain.State, error) {
 	out := st
 	sv := reflect.ValueOf(st)
 	ov := reflect.ValueOf(&out).Elem()
-	wildcard := slices.Contains(p.Products, "*")
+	visibleProducts := map[string]bool{}
+	for i := range st.Products {
+		pr := &st.Products[i]
+		if (allowedProduct(p, pr.ID) || instanceAdmin(p)) && productVisibleTo(ctx, pr) {
+			visibleProducts[pr.ID] = true
+		}
+	}
 	for i := 0; i < sv.NumField(); i++ {
 		field := sv.Field(i)
 		dst := ov.Field(i)
@@ -123,7 +157,13 @@ func filterScopedState(st domain.State, p auth.Principal) (domain.State, error) 
 		isProducts := sv.Type().Field(i).Name == "Products"
 		keep := func(row reflect.Value) bool {
 			product, found := stateRowProduct(row, isProducts)
-			return found && product != "" && (wildcard || slices.Contains(p.Products, product))
+			if !found {
+				return false
+			}
+			if product == "" && instanceAdmin(p) {
+				return true
+			}
+			return visibleProducts[product]
 		}
 		matches := 0
 		for j := 0; j < field.Len(); j++ {
@@ -185,6 +225,7 @@ func stateRowProduct(row reflect.Value, products bool) (string, bool) {
 
 // This allowlist deliberately fails closed for newly introduced commands.
 var memberWriteActions = []string{
+	"create_product", "set_product_visibility", "add_product_member", "remove_product_member",
 	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event", "assign_integration", "unassign_integration",
 	"queue_intelligence_task", "cancel_intelligence_task",
 	"create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution",
@@ -201,6 +242,26 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 	}
 	if p.Kind != "human" && slices.Contains([]string{"prepare_release_candidate", "promote_release_candidate", "plan_release", "record_release"}, c.Action) {
 		return auth.ErrForbidden
+	}
+	// Resolve the command's product scope before permission checks so an
+	// invisible private Product is indistinguishable from a missing one.
+	productID := c.ProductID
+	if productID == "" {
+		for i := range st.Features {
+			if st.Features[i].ID == c.FeatureID {
+				productID = st.Features[i].ProductID
+				break
+			}
+		}
+		for i := range st.Integrations {
+			if st.Integrations[i].ID == c.IntegrationID {
+				productID = st.Integrations[i].ProductID
+				break
+			}
+		}
+	}
+	if pr := productByID(st, productID); pr != nil && !productVisibleTo(ctx, pr) {
+		return missing("product", productID)
 	}
 	if instanceAdmin(p) {
 		return nil
@@ -246,7 +307,7 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 	}
 	// Resolve every persisted reference, including nested arrays/objects. Checking
 	// only Command.ProductID permits IDs in data to bypass ownership checks.
-	matched := c.ProductID != "" && allowedProduct(p, c.ProductID)
+	matched := c.Action == "create_product" || c.ProductID != "" && allowedProduct(p, c.ProductID)
 	for _, ref := range []string{c.ID, c.FeatureID, c.IntegrationID, c.GateID, c.CheckID, c.ResultID} {
 		if owner, exists := owners[ref]; exists && allowedProduct(p, owner) {
 			matched = true
@@ -258,7 +319,13 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 		switch v := v.(type) {
 		case string:
 			if owner, found := owners[v]; found {
-				if !allowedProduct(p, owner) || production[v] {
+				if !allowedProduct(p, owner) {
+					if pr := productByID(st, owner); pr != nil && !productVisibleTo(ctx, pr) {
+						return missing("product", owner)
+					}
+					return auth.ErrForbidden
+				}
+				if production[v] {
 					return auth.ErrForbidden
 				}
 				if !visited[v] {
