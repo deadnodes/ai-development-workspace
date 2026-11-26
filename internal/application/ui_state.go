@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
@@ -28,6 +29,12 @@ func (s *Service) UIState(ctx context.Context, product, feature string) (domain.
 		return domain.UIState{}, invalid("bounded UI reader unavailable")
 	}
 	out, err := reader.ReadUIState(ctx, q)
+	if errors.Is(err, domain.ErrReadScopeNotFound) {
+		if feature != "" {
+			return domain.UIState{}, missing("feature", feature)
+		}
+		return domain.UIState{}, missing("product", product)
+	}
 	if err != nil {
 		return out, err
 	}

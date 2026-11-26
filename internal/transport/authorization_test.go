@@ -51,7 +51,7 @@ func TestScopedHTTPAndMCPUseSameApplicationPolicy(t *testing.T) {
 		{"POST", "/api/workspaces/import", `{"actor":"admin","configuration":{}}`, 403},
 		{"POST", "/api/local-git/plan", `{"product_id":"private","checkout_id":"x","actor":"admin","mode":"FETCH"}`, 403},
 		{"POST", "/api/local-git/record", `{"product_id":"private","checkout_id":"x","actor":"admin","plan_id":"x"}`, 403},
-		{"POST", "/api/reviews/sync", `{"actor":"admin","integration_id":"private-i","repository_id":"private-r","pull_request":1}`, 403},
+		{"POST", "/api/reviews/sync", `{"actor":"admin","integration_id":"private-i","repository_id":"private-r","pull_request":1}`, 404},
 		{"POST", "/api/commands", `{"action":"grant_connection","product_id":"p","actor":"admin","data":{}}`, 403},
 		{"POST", "/api/products/private/knowledge/nodes", `{"actor":"admin","node":{"id":"x","kind":"contract","title":"x","content":"x"}}`, 403},
 		{"POST", "/api/products/p/knowledge/nodes", `{"actor":"admin","node":{"id":"x","kind":"contract","title":"x","content":"x"}}`, 200},

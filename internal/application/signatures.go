@@ -531,6 +531,9 @@ func (s *Service) ListSignatures(ctx context.Context, in domain.ListSignaturesRe
 		after = c.After
 	}
 	e := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		records := slices.Clone(st.ArtifactSignatures)
 		sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 		for _, v := range records {

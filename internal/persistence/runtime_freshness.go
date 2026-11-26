@@ -3,7 +3,9 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	bolt "go.etcd.io/bbolt"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"strings"
 	"time"
@@ -23,7 +25,11 @@ func (s *Store) RuntimeFreshness(ctx context.Context, ids []string) (map[string]
 	for i, key := range ids {
 		operations[i], targets[i], _ = strings.Cut(key, "\x00")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT f.operation_id, f.target, f.observation_id, f.observed_at, f.healthy FROM runtime_observation_freshness f JOIN unnest($1::text[], $2::text[]) AS wanted(operation_id, target) USING (operation_id, target)`, operations, targets)
+	user, restricted := auth.PrivateProductViewer(ctx)
+	rows, err := s.pool.Query(ctx, `SELECT f.operation_id, f.target, f.observation_id, f.observed_at, f.healthy
+		FROM runtime_observation_freshness f JOIN unnest($1::text[], $2::text[]) AS wanted(operation_id, target) USING (operation_id, target)
+		WHERE NOT $3::boolean OR EXISTS (SELECT 1 FROM records observation JOIN records product ON product.kind='products' AND product.id=observation.product_id
+		WHERE observation.kind='runtime_observations' AND observation.id=f.observation_id AND (`+fmt.Sprintf(privateProductDeniedSQL, "product.", "$4")+`) IS NOT TRUE)`, operations, targets, restricted, user)
 	if err != nil {
 		return nil, err
 	}
@@ -94,11 +100,44 @@ func (s *LocalStore) RuntimeFreshness(ctx context.Context, ids []string) (map[st
 				return err
 			}
 			if raw := b.Get([]byte(id)); raw != nil {
-				var v localRuntimeFreshness
-				if err := json.Unmarshal(raw, &v); err != nil {
+				var value localRuntimeFreshness
+				if err := json.Unmarshal(raw, &value); err != nil {
 					return err
 				}
-				out[id] = domain.RuntimeFreshness{ObservationID: v.ObservationID, ObservedAt: v.ObservedAt, Healthy: v.Healthy}
+				out[id] = domain.RuntimeFreshness{ObservationID: value.ObservationID, ObservedAt: value.ObservedAt, Healthy: value.Healthy}
+			}
+		}
+		if _, restricted := auth.PrivateProductViewer(ctx); restricted && len(out) > 0 {
+			data := tx.Bucket(localBucket).Get(localStateKey)
+			hidden, err := hiddenLocalProducts(ctx, data)
+			if err != nil {
+				return err
+			}
+			products := map[string]bool{}
+			if err := historyScan(ctx, data, "products", func(raw []byte) error {
+				id := scopeText(raw, "id")
+				products[id] = !hidden[id]
+				return nil
+			}); err != nil {
+				return err
+			}
+			visibleObservations := make(map[string]bool, len(out))
+			for _, freshness := range out {
+				visibleObservations[freshness.ObservationID] = false
+			}
+			if err := historyScan(ctx, data, "runtime_observations", func(raw []byte) error {
+				id := scopeText(raw, "id")
+				if _, wanted := visibleObservations[id]; wanted && products[scopeText(raw, "product_id")] {
+					visibleObservations[id] = true
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			for key, freshness := range out {
+				if !visibleObservations[freshness.ObservationID] {
+					delete(out, key)
+				}
 			}
 		}
 		return nil

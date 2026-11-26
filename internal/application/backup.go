@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 )
 
@@ -47,6 +48,11 @@ func (s *Service) CreateBackup(ctx context.Context, actor string) (Backup, error
 	st, err := s.store.Read(ctx)
 	if err != nil {
 		return Backup{}, err
+	}
+	for _, product := range st.Products {
+		if !productVisibleTo(ctx, &product) {
+			return Backup{}, auth.ErrForbidden
+		}
 	}
 	data, err := json.Marshal(backupEnvelope{Format: "release-control-backup", Version: 1, CreatedAt: time.Now().UTC(), RequestedBy: actor, State: st})
 	if err != nil {

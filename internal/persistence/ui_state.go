@@ -3,11 +3,14 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/domain"
 	"slices"
 	"sort"
+	"strings"
 )
 
 const uiCollectionLimit = 1000
@@ -25,34 +28,44 @@ func (s *Store) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domai
 		return out, err
 	}
 	defer tx.Rollback(ctx)
+	hidden, err := hiddenProducts(ctx, tx)
+	if err != nil {
+		return out, err
+	}
+	if q.ProductID != "" {
+		visible, err := visibleProductIn(ctx, tx, q.ProductID, hidden)
+		if err != nil {
+			return out, err
+		}
+		if !visible || q.RestrictProducts && !slices.Contains(q.AllowedProductIDs, q.ProductID) {
+			return out, domain.ErrReadScopeNotFound
+		}
+	}
 	// Resolve deep links before selecting product-owned rows. Unauthorized features cannot select a scope.
 	if q.FeatureID != "" {
 		var p string
-		err = tx.QueryRow(ctx, `SELECT product_id FROM records WHERE kind='features' AND id=$1 AND (NOT $2::boolean OR product_id=ANY($3::text[]))`, q.FeatureID, q.RestrictProducts, q.AllowedProductIDs).Scan(&p)
+		err = tx.QueryRow(ctx, `SELECT product_id FROM records WHERE kind='features' AND id=$1 AND (NOT $2::boolean OR product_id=ANY($3::text[])) AND product_id <> ALL($4::text[])`, q.FeatureID, q.RestrictProducts, q.AllowedProductIDs, hidden).Scan(&p)
 		if err == nil {
 			q.ProductID = p
 		} else if err != pgx.ErrNoRows {
 			return out, err
 		} else {
-			q.FeatureID = ""
+			return out, domain.ErrReadScopeNotFound
 		}
 	}
 	if q.ProductID == "" {
-		err = tx.QueryRow(ctx, `SELECT id FROM records WHERE kind='products' AND (NOT $1::boolean OR id=ANY($2::text[])) ORDER BY position,id LIMIT 1`, q.RestrictProducts, q.AllowedProductIDs).Scan(&q.ProductID)
+		err = tx.QueryRow(ctx, `SELECT id FROM records WHERE kind='products' AND (NOT $1::boolean OR id=ANY($2::text[])) AND id <> ALL($3::text[]) ORDER BY position,id LIMIT 1`, q.RestrictProducts, q.AllowedProductIDs, hidden).Scan(&q.ProductID)
 		if err != nil && err != pgx.ErrNoRows {
 			return out, err
 		}
-	}
-	if q.RestrictProducts && !slices.Contains(q.AllowedProductIDs, q.ProductID) {
-		return out, fmt.Errorf("UI product unavailable")
 	}
 	out.Projection = uiProjection(q)
 	// Filtering and limits are applied in SQL before documents cross the connection.
 	rows, err := tx.Query(ctx, `WITH selected AS (
  SELECT kind,CASE WHEN kind='features' THEN jsonb_build_object('id',id,'product_id',product_id,'title',left(coalesce(document->>'title',''),512),'status',document->>'status','owner',left(coalesce(document->>'owner',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') WHEN kind='products' AND id<>$1 THEN jsonb_build_object('id',id,'name',left(coalesce(document->>'name',''),512),'created_at',document->'created_at','updated_at',document->'updated_at') ELSE document END AS document,position,id,row_number() OVER(PARTITION BY kind ORDER BY position DESC,id) AS n FROM records
- WHERE ((kind IN ('products','features') AND (NOT $2::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($3::text[])))
+ WHERE (CASE WHEN kind='products' THEN id ELSE coalesce(product_id,'') END) <> ALL($6::text[]) AND ((kind IN ('products','features') AND (NOT $2::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($3::text[])))
  OR (kind<>ALL($4::text[]) AND kind NOT IN ('products','features','operations') AND (product_id=$1 OR coalesce(product_id,'')='')))
-	) SELECT kind,document,n FROM selected WHERE n<=CASE WHEN kind IN ('git_observations','runtime_snapshots') THEN 51 WHEN kind='prod_promotions' THEN 101 ELSE $5 END ORDER BY kind,position,id`, q.ProductID, q.RestrictProducts, q.AllowedProductIDs, uiOmitted, uiCollectionLimit+1)
+	) SELECT kind,document,n FROM selected WHERE n<=CASE WHEN kind IN ('git_observations','runtime_snapshots') THEN 51 WHEN kind='prod_promotions' THEN 101 ELSE $5 END ORDER BY kind,position,id`, q.ProductID, q.RestrictProducts, q.AllowedProductIDs, uiOmitted, uiCollectionLimit+1, hidden)
 	if err != nil {
 		return out, err
 	}
@@ -150,7 +163,7 @@ func (s *Store) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domai
 		ids = append(ids, v.ID)
 	}
 	// Consumers expect append order after the newest windows have been chosen.
-	rows, err = tx.Query(ctx, `SELECT document FROM records WHERE kind='operations' AND id=ANY($1::text[]) ORDER BY position,id`, ids)
+	rows, err = tx.Query(ctx, `SELECT document FROM records WHERE kind='operations' AND product_id=$2 AND id=ANY($1::text[]) ORDER BY position,id`, ids, q.ProductID)
 	if err != nil {
 		return out, err
 	}
@@ -256,57 +269,88 @@ func (s *Store) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domai
 
 // Embedded installations retain a monolithic value; filter before returning it.
 func (s *LocalStore) ReadUIState(ctx context.Context, q domain.UIStateRequest) (domain.UIState, error) {
-	st, err := s.Read(ctx)
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
 	out := domain.UIState{State: domain.EmptyState()}
+	if s.closed {
+		return out, errors.New("local database is closed")
+	}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return readLocalUIState(ctx, tx.Bucket(localBucket).Get(localStateKey), q, &out)
+	})
+	return out, err
+}
+
+func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest, out *domain.UIState) error {
+	if len(data) == 0 || len(data) > maxLocalStateBytes {
+		return errors.New("local state missing or exceeds 256 MiB limit")
+	}
+	hidden, err := hiddenLocalProducts(ctx, data)
 	if err != nil {
-		return out, err
+		return err
 	}
-	allowed := func(p string) bool { return !q.RestrictProducts || slices.Contains(q.AllowedProductIDs, p) }
-	for _, f := range st.Features {
-		if f.ID == q.FeatureID && allowed(f.ProductID) {
-			q.ProductID = f.ProductID
-		}
-	}
-	if q.ProductID == "" {
-		for _, p := range st.Products {
-			if allowed(p.ID) {
-				q.ProductID = p.ID
-				break
+	var firstProduct string
+	visible := map[string]bool{}
+	if err := historyScan(ctx, data, "products", func(raw []byte) error {
+		id := scopeText(raw, "id")
+		if id != "" && !hidden[id] && (!q.RestrictProducts || slices.Contains(q.AllowedProductIDs, id)) {
+			visible[id] = true
+			if firstProduct == "" {
+				firstProduct = id
 			}
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	groups, err := codecDocuments(st)
-	if err != nil {
-		return out, err
+	if q.ProductID != "" && !visible[q.ProductID] {
+		return domain.ErrReadScopeNotFound
+	}
+	if q.FeatureID != "" {
+		product := scopeText(historyRecord(ctx, data, "features", q.FeatureID, ""), "product_id")
+		if !visible[product] {
+			return domain.ErrReadScopeNotFound
+		}
+		q.ProductID = product
+	}
+	if q.ProductID == "" {
+		q.ProductID = firstProduct
 	}
 	out.Projection = uiProjection(q)
 	selected := map[string][]json.RawMessage{}
-	for kind, docs := range groups {
-		if slices.Contains(uiOmitted, kind) && kind != "git_observations" && kind != "runtime_snapshots" {
-			continue
+	err = objectFields(data, func(kind string, raw []byte) error {
+		history := kind == "memories" || kind == "events"
+		if history && q.FeatureID == "" || !history && slices.Contains(uiOmitted, kind) && kind != "git_observations" && kind != "runtime_snapshots" {
+			return nil
 		}
-		for _, d := range docs {
-			var m struct{ ID, ProductID, FeatureID, Kind string }
-			var row map[string]json.RawMessage
-			_ = json.Unmarshal(d, &row)
-			_ = json.Unmarshal(row["id"], &m.ID)
-			_ = json.Unmarshal(row["product_id"], &m.ProductID)
-			_ = json.Unmarshal(row["feature_id"], &m.FeatureID)
-			_ = json.Unmarshal(row["kind"], &m.Kind)
-			p := m.ProductID
+		limit := uiCollectionLimit
+		if history {
+			limit = uiHistoryLimit
+		} else if kind == "prod_promotions" {
+			limit = 100
+		}
+		var docs []json.RawMessage
+		count := 0
+		err := historyArray(ctx, raw, func(record []byte) error {
+			id, product := scopeText(record, "id"), scopeText(record, "product_id")
 			if kind == "products" {
-				p = m.ID
+				product = id
 			}
-			if !allowed(p) && p != "" {
-				continue
+			if product != "" && !visible[product] {
+				return nil
 			}
-			if kind != "products" && kind != "features" && p != "" && p != q.ProductID {
-				continue
+			if kind != "products" && kind != "features" && product != "" && product != q.ProductID {
+				return nil
 			}
-			if kind == "operations" && len(m.Kind) >= 7 && m.Kind[:7] == "REFRESH" {
-				continue
+			if history && (product != q.ProductID || historyText(record, "feature_id") != q.FeatureID) ||
+				kind == "operations" && strings.HasPrefix(historyText(record, "kind"), "REFRESH") {
+				return nil
 			}
-			if (kind == "features" && m.ID != q.FeatureID) || (kind == "products" && m.ID != q.ProductID) {
+			if kind == "features" && id != q.FeatureID || kind == "products" && id != q.ProductID {
+				var row map[string]json.RawMessage
+				if err := json.Unmarshal(record, &row); err != nil {
+					return err
+				}
 				header := map[string]json.RawMessage{}
 				for _, key := range []string{"id", "product_id", "title", "status", "owner", "created_at", "updated_at", "name"} {
 					if v, ok := row[key]; ok {
@@ -322,51 +366,33 @@ func (s *LocalStore) ReadUIState(ctx context.Context, q domain.UIStateRequest) (
 						header[key] = v
 					}
 				}
-				d, _ = json.Marshal(header)
+				record, _ = json.Marshal(header)
 			}
-			selected[kind] = append(selected[kind], d)
-		}
-		limit := uiCollectionLimit
-		if kind == "prod_promotions" {
-			limit = 100
-		}
-		if len(selected[kind]) > limit {
+			if count < limit {
+				docs = append(docs, record)
+			} else {
+				docs[count%limit] = record
+			}
+			count++
+			return nil
+		})
+		if count > limit {
 			out.Projection.Truncated = append(out.Projection.Truncated, kind)
-			selected[kind] = selected[kind][len(selected[kind])-limit:]
-		}
-	}
-	for _, kind := range []string{"memories", "events"} {
-		if q.FeatureID == "" {
-			continue
-		}
-		var docs []json.RawMessage
-		if kind == "events" {
-			for _, e := range st.Events {
-				if e.ProductID == q.ProductID && e.FeatureID == q.FeatureID {
-					b, _ := json.Marshal(e)
-					docs = append(docs, b)
-				}
-			}
-		} else {
-			for _, m := range st.Memories {
-				if m.ProductID == q.ProductID && m.FeatureID == q.FeatureID {
-					b, _ := json.Marshal(m)
-					docs = append(docs, b)
-				}
-			}
-		}
-		if len(docs) > uiHistoryLimit {
-			docs = docs[len(docs)-uiHistoryLimit:]
-			out.Projection.Truncated = append(out.Projection.Truncated, kind)
+			pivot := count % limit
+			docs = append(slices.Clone(docs[pivot:]), docs[:pivot]...)
 		}
 		selected[kind] = docs
+		return err
+	})
+	if err != nil {
+		return err
 	}
 	sort.Strings(out.Projection.Truncated)
 	if err = budgetUIGroups(selected, &out.Projection); err != nil {
-		return out, err
+		return err
 	}
 	out.State, err = decodeStoredDocuments(selected)
-	return out, err
+	return err
 }
 
 const uiMemorySQL = `jsonb_build_object('id',document->'id','product_id',document->'product_id','feature_id',document->'feature_id','integration_id',document->'integration_id','actor',document->'actor','created_at',document->'created_at','updated_at',document->'updated_at','kind',document->'kind','status',document->'status','commit',document->'commit','deployment',document->'deployment','session',document->'session','title',left(coalesce(document->>'title',''),8192),'body',left(coalesce(document->>'body',''),8192),'reason',left(coalesce(document->>'reason',''),8192),'current',left(coalesce(document->>'current',''),8192),'resolution',left(coalesce(document->>'resolution',''),8192),'completed',coalesce((SELECT jsonb_agg(left(value,512)) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(document->'completed')='array' THEN document->'completed' ELSE '[]'::jsonb END) WITH ORDINALITY AS a(value,n) WHERE n<=20),'[]'::jsonb),'remaining',coalesce((SELECT jsonb_agg(left(value,512)) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(document->'remaining')='array' THEN document->'remaining' ELSE '[]'::jsonb END) WITH ORDINALITY AS a(value,n) WHERE n<=20),'[]'::jsonb),'next',coalesce((SELECT jsonb_agg(left(value,512)) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(document->'next')='array' THEN document->'next' ELSE '[]'::jsonb END) WITH ORDINALITY AS a(value,n) WHERE n<=20),'[]'::jsonb),'warnings',coalesce((SELECT jsonb_agg(left(value,512)) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(document->'warnings')='array' THEN document->'warnings' ELSE '[]'::jsonb END) WITH ORDINALITY AS a(value,n) WHERE n<=20),'[]'::jsonb))`

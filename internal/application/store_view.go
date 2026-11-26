@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"maps"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
 	"time"
@@ -20,6 +21,16 @@ func (s *Service) view(ctx context.Context, fn func(*domain.State) error) error 
 		return err
 	}
 	return fn(&st)
+}
+
+func requireProductRead(ctx context.Context, st *domain.State, product string) error {
+	if _, restricted := auth.PrivateProductViewer(ctx); !restricted {
+		return nil
+	}
+	if record := productByID(*st, product); record == nil || !productVisibleTo(ctx, record) {
+		return missing("product", product)
+	}
+	return nil
 }
 func copyTime(t *time.Time) *time.Time {
 	if t == nil {

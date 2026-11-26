@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"sort"
 
 	"releasecontrol/internal/domain"
@@ -23,28 +24,49 @@ func productConfiguration(st domain.State, productID string) (ProductConfigurati
 	if !productExists(&st, productID) {
 		return ProductConfiguration{}, missing("product", productID)
 	}
-	raw, err := json.Marshal(st)
-	if err != nil {
-		return ProductConfiguration{}, err
+	source := reflect.ValueOf(st)
+	collections := map[string]int{}
+	for i := 0; i < source.NumField(); i++ {
+		collections[source.Type().Field(i).Tag.Get("json")] = i
 	}
-	var all map[string][]map[string]any
-	if err = json.Unmarshal(raw, &all); err != nil {
-		return ProductConfiguration{}, err
+	project := func(kind string, include func(reflect.Value) bool) ([]map[string]any, error) {
+		selected := []map[string]any{}
+		rows := source.Field(collections[kind])
+		for i := 0; i < rows.Len(); i++ {
+			row := rows.Index(i)
+			if !include(row) {
+				continue
+			}
+			raw, err := json.Marshal(row.Interface())
+			if err != nil {
+				return nil, err
+			}
+			var document map[string]any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				return nil, err
+			}
+			selected = append(selected, document)
+		}
+		return selected, nil
 	}
 	out := map[string][]map[string]any{}
 	// These are configuration records only. Never export operations, reports or audit
 	// wholesale: those can contain unrelated product and provider data.
 	for _, kind := range []string{"products", "applications", "repositories", "repository_bindings", "component_builds", "publication_targets", "environment_bindings", "environments", "connection_grants", "system_relationships"} {
-		out[kind] = []map[string]any{}
-		for _, row := range all[kind] {
-			if (kind == "products" && row["id"] == productID) || (kind != "products" && row["product_id"] == productID) {
-				if kind == "environments" {
-					delete(row, "reconciled")
-					delete(row, "runtime")
-				}
-				out[kind] = append(out[kind], row)
+		rows, err := project(kind, func(row reflect.Value) bool {
+			owner, _ := stateRowProduct(row, kind == "products")
+			return owner == productID
+		})
+		if err != nil {
+			return ProductConfiguration{}, err
+		}
+		if kind == "environments" {
+			for _, row := range rows {
+				delete(row, "reconciled")
+				delete(row, "runtime")
 			}
 		}
+		out[kind] = rows
 	}
 	// Configuration changes are append-only in storage. Mirror only effective values.
 	for kind, keys := range map[string][]string{"publication_targets": {"application_id"}, "component_builds": {"application_id"}, "environment_bindings": {"environment_id", "application_id"}, "repository_bindings": {"repository_id"}} {
@@ -83,10 +105,13 @@ func productConfiguration(st domain.State, productID string) (ProductConfigurati
 		{"compositions", refs("environments", "desired_composition_id")},
 	} {
 		out[selection.kind] = []map[string]any{}
-		for _, row := range all[selection.kind] {
-			if !selection.ids[row["id"]] {
-				continue
-			}
+		rows, err := project(selection.kind, func(row reflect.Value) bool {
+			return selection.ids[row.FieldByIndex(stateIDPaths[collections[selection.kind]]).String()]
+		})
+		if err != nil {
+			return ProductConfiguration{}, err
+		}
+		for _, row := range rows {
 			if selection.kind == "github_connections" {
 				row = map[string]any{"id": row["id"], "name": row["name"], "config": row["config"]}
 			}

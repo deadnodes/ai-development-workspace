@@ -362,6 +362,9 @@ func (s *Service) scanWorkspace(ctx context.Context, product, actor string, atta
 	if !productExists(&st, product) {
 		return nil, missing("product", product)
 	}
+	if err := requireProductRead(ctx, &st, product); err != nil {
+		return nil, err
+	}
 	result, err := workspace.Scan(ctx, s.workspaceRoot)
 	if err != nil {
 		return nil, invalid("workspace scan: %s", err)
@@ -379,6 +382,9 @@ func (s *Service) scanWorkspace(ctx context.Context, product, actor string, atta
 	err = s.store.Update(ctx, func(st *domain.State) error {
 		if !productExists(st, product) {
 			return missing("product", product)
+		}
+		if err := requireProductRead(ctx, st, product); err != nil {
+			return err
 		}
 		m := workspaceMeta(product, actor)
 		for _, r := range result.Repositories {

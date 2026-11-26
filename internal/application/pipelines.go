@@ -296,6 +296,9 @@ func (s *Service) ListPipelines(ctx context.Context, in domain.ListPipelinesRequ
 		}
 	}
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		byBuild := map[string][]domain.Deployment{}
 		for _, d := range st.Deployments {
 			if d.ProductID == in.ProductID {

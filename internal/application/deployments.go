@@ -343,6 +343,9 @@ func (s *Service) GetDeployment(ctx context.Context, in domain.DeploymentLookup)
 	}
 	var out domain.Deployment
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		for _, d := range st.Deployments {
 			if d.ProductID == in.ProductID && d.ID == in.DeploymentID {
 				out = copyDeployment(d)
@@ -377,6 +380,9 @@ func (s *Service) ListDeployments(ctx context.Context, in domain.ListDeployments
 		after = c.After
 	}
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		deployments := append([]domain.Deployment(nil), st.Deployments...)
 		sort.Slice(deployments, func(i, j int) bool { return deployments[i].ID < deployments[j].ID })
 		for _, d := range deployments {

@@ -76,11 +76,6 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, err
 		}
 	}
-	if name == "list_branches" {
-		if err := s.authorizeReferences(ctx, "read", id); err != nil {
-			return nil, err
-		}
-	}
 	st, e := s.State(ctx)
 	if e != nil {
 		return nil, e
@@ -320,15 +315,24 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return repos, nil
 
 	case "list_branches":
-		st, e = s.store.Read(ctx)
-		if e != nil {
-			return nil, e
-		}
 		b := repositoryBinding(&st, id)
 		if b == nil {
 			return nil, missing("repository binding", id)
 		}
-		c := connection(&st, b.ConnectionID)
+		var c *domain.GitHubConnection
+		if err := s.view(ctx, func(raw *domain.State) error {
+			if err := requireProductRead(ctx, raw, b.ProductID); err != nil {
+				return err
+			}
+			c = connection(raw, b.ConnectionID)
+			if c != nil {
+				copy := *c
+				c = &copy
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 		if c == nil || s.provider == nil {
 			return nil, invalid("external provider/connection unavailable")
 		}
@@ -506,6 +510,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		var secretWarnings []map[string]any
 		var secretRefreshFailures map[string]bool
 		if err := s.view(ctx, func(raw *domain.State) error {
+			if err := requireProductRead(ctx, raw, id); err != nil {
+				return err
+			}
 			secretWarnings = connectionSecretWarnings(raw, id)
 			secretRefreshFailures = connectionSecretRefreshFailures(raw, id, secretWarnings)
 			return nil

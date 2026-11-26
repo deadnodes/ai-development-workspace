@@ -21,7 +21,7 @@ type reviewInput struct {
 	PullRequest   int      `json:"pull_request"`
 }
 
-func registerReviewRoutes(mux *http.ServeMux, service Service) {
+func registerReviewRoutes(mux routeRegistrar, service Service) {
 	s, ok := service.(reviewService)
 	if !ok {
 		return

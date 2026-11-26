@@ -152,7 +152,16 @@ func (s *Service) ProjectContextSummary(ctx context.Context, product string) (an
 			break
 		}
 	}
-	out := map[string]any{"projection": "bounded_project_summary", "product": map[string]any{"id": p.ID, "name": contextExcerpt(p.Name, 256), "description": contextExcerpt(p.Description, 600)}, "knowledge": map[string]any{"overview": contextExcerpt(k.Overview, 1600), "instructions": contextExcerpt(k.Instructions, 2000), "parameters": contextParameters(k.Parameters)}, "repositories": repos, "components": apps, "environments": envs, "knowledge_nodes": nodes, "text_excerpted": true, "documents_omitted": true, "guidance": "Navigation and excerpts only (32KiB maximum); use graph/text search to locate relevant facts, source documents, and exact evidence. Full operator context remains at HTTP /api/products/{id}/context."}
+	owner, members, limited := boundedProductMembership(p.Owner, p.Members, false)
+	visibility := p.Visibility
+	if visibility == "" {
+		visibility = "shared"
+	}
+	productCard := map[string]any{"id": p.ID, "name": contextExcerpt(p.Name, 256), "description": contextExcerpt(p.Description, 600), "visibility": visibility, "owner": owner, "members": members}
+	if limited {
+		productCard["membership_truncated"] = true
+	}
+	out := map[string]any{"projection": "bounded_project_summary", "product": productCard, "knowledge": map[string]any{"overview": contextExcerpt(k.Overview, 1600), "instructions": contextExcerpt(k.Instructions, 2000), "parameters": contextParameters(k.Parameters)}, "repositories": repos, "components": apps, "environments": envs, "knowledge_nodes": nodes, "text_excerpted": true, "documents_omitted": true, "guidance": "Navigation and excerpts only (32KiB maximum); use graph/text search to locate relevant facts, source documents, and exact evidence. Full operator context remains at HTTP /api/products/{id}/context."}
 	for {
 		b, e := json.Marshal(out)
 		if e != nil {
@@ -179,6 +188,12 @@ func (s *Service) ProjectContextSummary(ctx context.Context, product string) (an
 		if len(envs) > 0 {
 			envs = envs[:len(envs)-1]
 			out["environments"] = envs
+			continue
+		}
+		if len(members) > 0 {
+			members = members[:len(members)-1]
+			productCard["members"] = members
+			productCard["membership_truncated"] = true
 			continue
 		}
 		return nil, invalid("project summary exceeds byte budget")

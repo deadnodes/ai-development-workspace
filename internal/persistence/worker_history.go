@@ -105,7 +105,15 @@ func (s *Store) ReadWorkerHistory(ctx context.Context, q domain.WorkerHistoryMet
 		return out, e
 	}
 	defer tx.Rollback(ctx)
-	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='products' AND id=$1),($2='' OR EXISTS(SELECT 1 FROM records WHERE kind='features' AND id=$2 AND product_id=$1))`, q.ProductID, q.FeatureID).Scan(&out.ProductFound, &out.FeatureFound)
+	hidden, e := hiddenProducts(ctx, tx)
+	if e != nil {
+		return out, e
+	}
+	e = tx.QueryRow(ctx, `SELECT `+visibleProductSQL, q.ProductID, hidden).Scan(&out.ProductFound)
+	if e != nil || !out.ProductFound {
+		return out, e
+	}
+	e = tx.QueryRow(ctx, `SELECT ($2='' OR EXISTS(SELECT 1 FROM records WHERE kind='features' AND id=$2 AND product_id=$1))`, q.ProductID, q.FeatureID).Scan(&out.FeatureFound)
 	if e != nil || !out.ProductFound || !out.FeatureFound {
 		return out, e
 	}
@@ -316,7 +324,14 @@ func (s *LocalStore) ReadWorkerHistory(ctx context.Context, q domain.WorkerHisto
 		if len(data) == 0 || len(data) > maxLocalStateBytes {
 			return errors.New("local state missing or oversized")
 		}
-		out.ProductFound = historyRecord(ctx, data, "products", q.ProductID, "") != nil
+		hidden, err := hiddenLocalProducts(ctx, data)
+		if err != nil {
+			return err
+		}
+		out.ProductFound = !hidden[q.ProductID] && historyRecord(ctx, data, "products", q.ProductID, "") != nil
+		if !out.ProductFound {
+			return ctx.Err()
+		}
 		out.FeatureFound = q.FeatureID == "" || historyRecord(ctx, data, "features", q.FeatureID, q.ProductID) != nil
 		out.JobFound = q.JobID == ""
 		if !out.ProductFound || !out.FeatureFound {

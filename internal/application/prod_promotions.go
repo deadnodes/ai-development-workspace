@@ -51,7 +51,8 @@ func (s *Service) PublicProdSignatures(ctx context.Context, digest string) (Publ
 	}
 	err := s.view(ctx, func(st *domain.State) error {
 		for _, p := range st.ProdPromotions {
-			if p.Status != "SUCCEEDED" {
+			product := productByID(*st, p.ProductID)
+			if p.Status != "SUCCEEDED" || product != nil && product.Visibility == "private" {
 				continue
 			}
 			for _, it := range p.Items {
@@ -302,6 +303,9 @@ func (s *Service) GetProdPromotion(ctx context.Context, productID, id string) (d
 		return out, err
 	}
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, productID); err != nil {
+			return err
+		}
 		for _, p := range st.ProdPromotions {
 			if p.ID == id && p.ProductID == productID {
 				out = p
@@ -321,6 +325,9 @@ func (s *Service) ListProdPromotions(ctx context.Context, productID string, limi
 		limit = 25
 	}
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, productID); err != nil {
+			return err
+		}
 		for i := len(st.ProdPromotions) - 1; i >= 0 && len(out) < limit; i-- {
 			if st.ProdPromotions[i].ProductID == productID {
 				out = append(out, st.ProdPromotions[i])

@@ -18,8 +18,12 @@ func (s *Store) ReadContext(ctx context.Context, product, feature string) (domai
 		return domain.State{}, err
 	}
 	defer tx.Rollback(ctx)
+	hidden, err := hiddenProducts(ctx, tx)
+	if err != nil {
+		return domain.State{}, err
+	}
 	if feature != "" {
-		err = tx.QueryRow(ctx, `SELECT product_id FROM records WHERE kind='features' AND id=$1`, feature).Scan(&product)
+		err = tx.QueryRow(ctx, `SELECT product_id FROM records WHERE kind='features' AND id=$1 AND product_id <> ALL($2::text[]) AND ($3='' OR product_id=$3)`, feature, hidden, product).Scan(&product)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.EmptyState(), nil
 		}
@@ -27,14 +31,23 @@ func (s *Store) ReadContext(ctx context.Context, product, feature string) (domai
 			return domain.State{}, err
 		}
 	}
+	visible, err := visibleProductIn(ctx, tx, product, hidden)
+	if err != nil {
+		return domain.State{}, err
+	}
+	if !visible {
+		return domain.EmptyState(), nil
+	}
 	var rows pgx.Rows
 	if feature == "" {
-		rows, err = tx.Query(ctx, `SELECT kind,document FROM records WHERE (kind='products' AND id=$1) OR (product_id=$1 AND kind IN ('repositories','applications','environments','workspace_documents','local_checkouts')) OR id=(SELECT id FROM records WHERE kind='project_knowledge' AND product_id=$1 ORDER BY position DESC,id DESC LIMIT 1) ORDER BY kind,position,id`, product)
+		rows, err = tx.Query(ctx, `SELECT kind,document FROM records WHERE (kind='products' AND id=$1) OR (product_id=$1 AND (kind IN ('repositories','applications','environments','workspace_documents','local_checkouts') OR (kind='project_knowledge' AND id=(SELECT id FROM records WHERE kind='project_knowledge' AND product_id=$1 ORDER BY position DESC,id DESC LIMIT 1)))) ORDER BY kind,position,id`, product)
 	} else {
 		// Each branch is independently bounded. Large prose and old snapshots are
 		// excluded at SQL level rather than decoded and discarded by the service.
 		rows, err = tx.Query(ctx, `SELECT kind,document FROM (
-   (SELECT kind,jsonb_build_object('id',id,'product_id',product_id,'title',left(document->>'title',256),'status',document->>'status','goal',left(document->>'goal',1200),'owner',left(document->>'owner',128)) AS document,position FROM records WHERE kind='features' AND id=$2 LIMIT 1)
+	   (SELECT kind,document,position FROM records WHERE kind='products' AND id=$1)
+	   UNION ALL
+	   (SELECT kind,jsonb_build_object('id',id,'product_id',product_id,'title',left(document->>'title',256),'status',document->>'status','goal',left(document->>'goal',1200),'owner',left(document->>'owner',128)) AS document,position FROM records WHERE kind='features' AND id=$2 AND product_id=$1 LIMIT 1)
    UNION ALL
    (SELECT kind,jsonb_build_object('id',id,'product_id',product_id,'feature_id',feature_id,'title',left(document->>'title',256),'status',document->>'status','objective',left(document->>'objective',600),'owner',left(document->>'owner',128),'position',document->'position') AS document,position FROM records WHERE kind='integrations' AND product_id=$1 AND feature_id=$2 ORDER BY position,id LIMIT 101)
    UNION ALL

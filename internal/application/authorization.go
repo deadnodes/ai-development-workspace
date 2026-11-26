@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -51,17 +52,7 @@ func bootstrapPrincipal(ctx context.Context) bool {
 	return ok && p.Kind == "service" && p.ID == "service/bootstrap"
 }
 func productVisibleTo(ctx context.Context, product *domain.Product) bool {
-	if product == nil || product.Visibility != "private" || bootstrapPrincipal(ctx) {
-		return true
-	}
-	if _, ok := auth.FromContext(ctx); !ok {
-		return true
-	}
-	user, _ := principalUser(ctx)
-	if user == "" {
-		return false
-	}
-	return product.Owner == user || slices.Contains(product.Members, user)
+	return product == nil || auth.ProductVisible(ctx, product.Visibility, product.Owner, product.Members)
 }
 func productByID(st domain.State, id string) *domain.Product {
 	for i := range st.Products {
@@ -261,7 +252,19 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 		}
 	}
 	if pr := productByID(st, productID); pr != nil && !productVisibleTo(ctx, pr) {
-		return missing("product", productID)
+		return ErrNotFound
+	}
+	if bootstrapPrincipal(ctx) && instanceAdmin(p) {
+		return nil
+	}
+	projected, needed, err := authorizationProjection(st, c)
+	if err != nil {
+		return err
+	}
+	for _, product := range st.Products {
+		if !productVisibleTo(ctx, &product) && referencesProduct(projected, product.ID, needed) {
+			return ErrNotFound
+		}
 	}
 	if instanceAdmin(p) {
 		return nil
@@ -274,10 +277,6 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 		permission = "deploy"
 	}
 	if err := authorize(ctx, permission, c.ProductID); err != nil {
-		return err
-	}
-	projected, err := authorizationProjection(st, c)
-	if err != nil {
 		return err
 	}
 	rows, err := stateRows(projected)
@@ -320,9 +319,6 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 		case string:
 			if owner, found := owners[v]; found {
 				if !allowedProduct(p, owner) {
-					if pr := productByID(st, owner); pr != nil && !productVisibleTo(ctx, pr) {
-						return missing("product", owner)
-					}
 					return auth.ErrForbidden
 				}
 				if production[v] {
@@ -380,15 +376,50 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 	return nil
 }
 
+func referencesProduct(st domain.State, product string, needed map[string]bool) bool {
+	value := reflect.ValueOf(st)
+	for i := range stateIDPaths {
+		name := value.Type().Field(i).Name
+		rows := value.Field(i)
+		for j := 0; j < rows.Len(); j++ {
+			if name == "EnvironmentBindings" && !needed[rows.Index(j).FieldByIndex(stateIDPaths[i]).String()] {
+				continue
+			}
+			if owner, ok := stateRowProduct(rows.Index(j), name == "Products"); ok && owner == product {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Service) authorizeReferences(ctx context.Context, permission string, ids ...string) error {
 	if err := authorize(ctx, permission, ""); err != nil {
 		return err
 	}
 	p, ok := auth.FromContext(ctx)
-	if !ok || instanceAdmin(p) {
+	if !ok || bootstrapPrincipal(ctx) {
 		return nil
 	}
-	st, err := s.store.Read(ctx)
+	var st domain.State
+	var err error
+	if reader, ok := s.store.(referenceReader); ok {
+		st, err = reader.ReadReferences(ctx, ids)
+	} else {
+		err = s.view(ctx, func(raw *domain.State) error {
+			var needed map[string]bool
+			st, needed = projectReferences(*raw, ids)
+			for _, product := range raw.Products {
+				if !productVisibleTo(ctx, &product) && referencesProduct(st, product.ID, needed) {
+					return ErrNotFound
+				}
+			}
+			return nil
+		})
+	}
+	if errors.Is(err, domain.ErrReadScopeNotFound) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -402,14 +433,14 @@ func (s *Service) authorizeReferences(ctx context.Context, permission string, id
 			for _, row := range group {
 				if row["id"] == id {
 					found = true
-					if !allowedProduct(p, rowProduct(kind, row)) {
+					if !instanceAdmin(p) && !allowedProduct(p, rowProduct(kind, row)) {
 						return auth.ErrForbidden
 					}
 				}
 			}
 		}
 		if !found {
-			return auth.ErrForbidden
+			return ErrNotFound
 		}
 	}
 	return nil

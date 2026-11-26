@@ -44,7 +44,32 @@ type Options struct {
 }
 
 func New(service Service, options Options) http.Handler {
-	mux := http.NewServeMux()
+	return newServer(service, options, nil)
+}
+
+type routeRegistrar interface {
+	Handle(string, http.Handler)
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
+}
+
+type observedMux struct {
+	*http.ServeMux
+	register func(string)
+}
+
+func (mux observedMux) Handle(pattern string, handler http.Handler) {
+	mux.ServeMux.Handle(pattern, handler)
+	if mux.register != nil {
+		mux.register(pattern)
+	}
+}
+
+func (mux observedMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	mux.Handle(pattern, http.HandlerFunc(handler))
+}
+
+func newServer(service Service, options Options, register func(string)) http.Handler {
+	mux := observedMux{http.NewServeMux(), register}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -83,7 +108,7 @@ func New(service Service, options Options) http.Handler {
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
-	workerMux := http.NewServeMux()
+	workerMux := observedMux{http.NewServeMux(), register}
 	registerWorkerRoutes(workerMux, service, options)
 	registerBuildRoutes(mux, service)
 	registerPipelineRoutes(mux, service)

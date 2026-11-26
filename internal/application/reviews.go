@@ -49,7 +49,16 @@ func (s *Service) SyncReview(ctx context.Context, actor, integrationID, reposito
 	}
 	in := integration(&st, integrationID)
 	binding := repositoryBinding(&st, repositoryID)
-	if in == nil || binding == nil || binding.ProductID != in.ProductID || !domain.IsSourceRole(binding.Role) {
+	if in == nil || binding == nil {
+		return nil, ErrNotFound
+	}
+	if err := requireProductRead(ctx, &st, in.ProductID); err != nil {
+		return nil, ErrNotFound
+	}
+	if err := requireProductRead(ctx, &st, binding.ProductID); err != nil {
+		return nil, ErrNotFound
+	}
+	if binding.ProductID != in.ProductID || !domain.IsSourceRole(binding.Role) {
 		return nil, invalid("integration and SOURCE repository must belong to product")
 	}
 	f := feature(&st, in.FeatureID)
@@ -97,6 +106,9 @@ func (s *Service) SyncReview(ctx context.Context, actor, integrationID, reposito
 		currentIn := integration(current, integrationID)
 		if currentIn == nil || currentIn.FeatureID != in.FeatureID {
 			return invalid("integration changed during sync")
+		}
+		if err := requireProductRead(ctx, current, currentIn.ProductID); err != nil {
+			return ErrNotFound
 		}
 		currentFeature := feature(current, currentIn.FeatureID)
 		if (len(currentIn.Repositories) > 0 && !slices.Contains(currentIn.Repositories, repositoryID)) || (len(currentFeature.Repositories) > 0 && !slices.Contains(currentFeature.Repositories, repositoryID)) {

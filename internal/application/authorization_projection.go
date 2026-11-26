@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
 
@@ -62,11 +63,16 @@ var authorizationPaths = func() [][][]int {
 	return out
 }()
 
-func authorizationProjection(st domain.State, c domain.Command) (domain.State, error) {
+func authorizationProjection(st domain.State, c domain.Command) (domain.State, map[string]bool, error) {
 	ids, err := commandReferenceIDs(c)
 	if err != nil {
-		return domain.State{}, err
+		return domain.State{}, nil, err
 	}
+	projected, needed := projectReferences(st, ids)
+	return projected, needed, nil
+}
+
+func projectReferences(st domain.State, ids []string) (domain.State, map[string]bool) {
 	needed := map[string]bool{}
 	for _, id := range ids {
 		needed[id] = true
@@ -81,16 +87,15 @@ func authorizationProjection(st domain.State, c domain.Command) (domain.State, e
 			bindings := src.Type().Field(i).Name == "EnvironmentBindings"
 			for j := 0; j < field.Len(); j++ {
 				key := [2]int{i, j}
-				if selected[key] {
-					continue
-				}
 				row := field.Index(j)
 				id := row.FieldByIndex(path).String()
 				if !bindings && !needed[id] {
 					continue
 				}
-				selected[key] = true
-				dst.Field(i).Set(reflect.Append(dst.Field(i), row))
+				if !selected[key] {
+					selected[key] = true
+					dst.Field(i).Set(reflect.Append(dst.Field(i), row))
+				}
 				// Binding rows provide production metadata, not additional graph roots.
 				if !needed[id] {
 					continue
@@ -105,15 +110,17 @@ func authorizationProjection(st domain.State, c domain.Command) (domain.State, e
 			}
 		}
 	}
-	return out, nil
+	return out, needed
+}
+
+type referenceReader interface {
+	ReadReferences(context.Context, []string) (domain.State, error)
 }
 
 func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error {
 	var st domain.State
 	var err error
-	if reader, ok := s.Store.(interface {
-		ReadReferences(context.Context, []string) (domain.State, error)
-	}); ok {
+	if reader, ok := s.Store.(referenceReader); ok {
 		var ids []string
 		ids, err = commandReferenceIDs(s.command)
 		if err == nil {
@@ -121,6 +128,9 @@ func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error
 		}
 	} else {
 		st, err = s.Store.Read(ctx)
+	}
+	if errors.Is(err, domain.ErrReadScopeNotFound) {
+		return ErrNotFound
 	}
 	if err != nil {
 		return err

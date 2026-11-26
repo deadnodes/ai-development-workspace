@@ -85,7 +85,7 @@ func decodeWorkerHistory(raw []byte) (domain.WorkerHistoryRequest, error) {
 	}
 	return out, nil
 }
-func registerWorkerHistoryRoutes(mux *http.ServeMux, service Service) {
+func registerWorkerHistoryRoutes(mux routeRegistrar, service Service) {
 	mux.HandleFunc("GET /api/worker-history", func(w http.ResponseWriter, r *http.Request) {
 		values, e := strconvQueryHistory(r)
 		if e != nil {

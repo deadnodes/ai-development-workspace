@@ -14,7 +14,7 @@ type localGitService interface {
 	RecordLocalGitSync(context.Context, application.LocalGitRequest) (any, error)
 }
 
-func registerLocalGitRoutes(mux *http.ServeMux, service Service) {
+func registerLocalGitRoutes(mux routeRegistrar, service Service) {
 	s, ok := service.(localGitService)
 	if !ok {
 		return

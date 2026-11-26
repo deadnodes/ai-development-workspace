@@ -29,3 +29,15 @@ The instance admin role does not bypass Product membership for reads or
 commands. The trusted `service/bootstrap` principal is the recovery exception:
 it can inspect every Product and perform whole-instance backup and restore.
 Shared Products remain visible under the existing Product permission rules.
+
+Navigation and project summaries show visibility, owner, and members only for
+visible Products. A hidden Product or one of its records is indistinguishable
+from a missing record on direct reads. Navigation and browser projections
+filter out hidden rows before applying limits. If a navigation cursor's anchor
+is no longer visible or has been deleted, restart the traversal without it.
+
+The same visibility rules apply to indexed search, excerpts, graph neighbors,
+worker and runtime reports, reference checks, and Product configuration exports.
+The public production-signature endpoint never exposes private Products.
+Whole-instance backup fails rather than returning a partial archive if the
+caller cannot see every Product; use bootstrap for instance recovery.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
@@ -81,6 +82,9 @@ func (s *Service) GetRuntimeReport(ctx context.Context, p, e, c string, pages ..
 		after = cur.After
 	}
 	clusters, err := store.ReadRuntimeReports(ctx, p, e, c, rr.ReadWindow{After: after, Limit: page.Limit + 1})
+	if errors.Is(err, domain.ErrReadScopeNotFound) {
+		return nil, missing("product", p)
+	}
 	if err != nil {
 		return nil, err
 	}

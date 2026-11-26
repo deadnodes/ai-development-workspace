@@ -29,7 +29,7 @@ func workerEndpoint(path string) bool {
 	return false
 }
 
-func registerWorkerRoutes(mux *http.ServeMux, service Service, o Options) {
+func registerWorkerRoutes(mux routeRegistrar, service Service, o Options) {
 	mux.HandleFunc("/api/worker/", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(workerService)
 		if !ok || o.Workers == nil || o.Token == "" {

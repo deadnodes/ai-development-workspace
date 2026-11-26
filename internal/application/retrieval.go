@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"releasecontrol/internal/domain"
 	"strings"
 	"unicode/utf8"
@@ -59,6 +60,9 @@ func (s *Service) SearchContext(ctx context.Context, q domain.ContextSearchReque
 		return out, invalid("search limit must be 1..20")
 	}
 	out, e = r.SearchContext(ctx, q)
+	if errors.Is(e, domain.ErrReadScopeNotFound) {
+		return domain.ContextSearchResult{}, missing("product", q.ProductID)
+	}
 	if e != nil {
 		return out, e
 	}

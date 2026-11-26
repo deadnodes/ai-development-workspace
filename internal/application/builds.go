@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
 	"releasecontrol/internal/delivery"
@@ -372,6 +373,9 @@ func (s *Service) GetBuild(ctx context.Context, in domain.BuildLookup) (domain.B
 	}
 	var out domain.Build
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		for _, b := range st.Builds {
 			if b.ID == in.BuildID && b.ProductID == in.ProductID {
 				out = copyBuild(b)
@@ -500,6 +504,21 @@ func (s *Service) ListBuildProfiles(ctx context.Context, productID string) ([]bu
 	if e := authorize(ctx, "read", productID); e != nil {
 		return nil, e
 	}
+	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+		if reader, ok := s.store.(interface {
+			ReadProductAccess(context.Context, string) (bool, error)
+		}); ok {
+			visible, err := reader.ReadProductAccess(ctx, productID)
+			if err != nil {
+				return nil, err
+			}
+			if !visible {
+				return nil, missing("product", productID)
+			}
+		} else if err := s.view(ctx, func(st *domain.State) error { return requireProductRead(ctx, st, productID) }); err != nil {
+			return nil, err
+		}
+	}
 	out := []buildconfig.Profile{}
 	if s.builds != nil {
 		for _, p := range s.builds.config.Profiles {
@@ -536,6 +555,9 @@ func (s *Service) ListBuilds(ctx context.Context, in domain.ListBuildsRequest) (
 		after = c.After
 	}
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		builds := slices.Clone(st.Builds)
 		sort.Slice(builds, func(i, j int) bool { return builds[i].ID < builds[j].ID })
 		for _, b := range builds {

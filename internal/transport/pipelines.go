@@ -15,7 +15,7 @@ type pipelineService interface {
 	ListPipelines(context.Context, domain.ListPipelinesRequest) (domain.PipelinePage, error)
 }
 
-func registerPipelineRoutes(mux *http.ServeMux, service Service) {
+func registerPipelineRoutes(mux routeRegistrar, service Service) {
 	mux.HandleFunc("GET /api/pipelines", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(pipelineService)
 		if !ok {

@@ -8,7 +8,7 @@ import (
 	"releasecontrol/internal/application"
 )
 
-func registerAgentGuideRoutes(mux *http.ServeMux) {
+func registerAgentGuideRoutes(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/agent-kit", func(w http.ResponseWriter, r *http.Request) { write(w, 200, agentguide.Get()) })
 }
 func registerAgentGuideTools(server *mcp.Server) {

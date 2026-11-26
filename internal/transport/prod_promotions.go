@@ -24,7 +24,7 @@ type prodPromotionService interface {
 	PublicProdSignatures(context.Context, string) (application.PublicProdSignatures, error)
 }
 
-func registerProdPromotions(mux *http.ServeMux, server *mcp.Server, service Service) {
+func registerProdPromotions(mux routeRegistrar, server *mcp.Server, service Service) {
 	mux.HandleFunc("GET /api/public/prod-signatures/{digest}", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(prodPromotionService)
 		if !ok {

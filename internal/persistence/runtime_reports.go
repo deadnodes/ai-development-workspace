@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"github.com/jackc/pgx/v5"
 	bolt "go.etcd.io/bbolt"
+	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
 	rr "releasecontrol/internal/runtimereport"
 	"strings"
 	"time"
@@ -59,6 +61,16 @@ func (s *LocalStore) ReadRuntimeReports(ctx context.Context, p, e, c string, win
 	s.lifecycle.RLock()
 	defer s.lifecycle.RUnlock()
 	err = s.db.View(func(tx *bolt.Tx) error {
+		if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+			data := tx.Bucket(localBucket).Get(localStateKey)
+			hidden, err := hiddenLocalProducts(ctx, data)
+			if err != nil {
+				return err
+			}
+			if hidden[p] || historyRecord(ctx, data, "products", p, "") == nil {
+				return domain.ErrReadScopeNotFound
+			}
+		}
 		b := tx.Bucket(runtimeReportsBucket)
 		if b == nil {
 			return nil
@@ -176,14 +188,35 @@ func (s *Store) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Tim
 	return journal, tx.Commit(ctx)
 }
 func (s *Store) ReadRuntimeReports(ctx context.Context, p, e, c string, windows ...rr.ReadWindow) ([]rr.Cluster, error) {
-	// One joined statement provides a consistent snapshot and bounds rows before transfer.
 	after := ""
 	limit := int64(9223372036854775807)
 	if len(windows) > 0 {
 		after = windows[0].After
 		limit = int64(windows[0].Limit)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT c.cluster,c.reported_at,c.workloads,r.document,r.observed_at,r.changed_at,r.absent_since
+	queryer := interface {
+		Query(context.Context, string, ...any) (pgx.Rows, error)
+	}(s.pool)
+	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		hidden, err := hiddenProducts(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		visible, err := visibleProductIn(ctx, tx, p, hidden)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return nil, domain.ErrReadScopeNotFound
+		}
+		queryer = tx
+	}
+	rows, err := queryer.Query(ctx, `SELECT c.cluster,c.reported_at,c.workloads,r.document,r.observed_at,r.changed_at,r.absent_since
  FROM runtime_report_clusters c LEFT JOIN runtime_reports r USING(product_id,environment_id,cluster)
  WHERE c.product_id=$1 AND c.environment_id=$2 AND ($3='' OR c.cluster=$3)
  AND (c.cluster || '!' || COALESCE(r.namespace || '/' || r.kind || '/' || r.name,'')) COLLATE "C" > $4

@@ -711,7 +711,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("owner and members are server-managed")
 		}
 		if v.Visibility == "private" {
-			user, enforced := principalUser(ctx)
+			user, enforced := auth.PrivateProductViewer(ctx)
 			if !enforced || user == "" {
 				return nil, fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
 			}

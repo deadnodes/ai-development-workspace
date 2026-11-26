@@ -32,7 +32,7 @@ func (s *Service) executeProductMembership(ctx context.Context, c domain.Command
 		}
 		principal, authenticated := auth.FromContext(ctx)
 		bootstrap := authenticated && principal.Kind == "service" && principal.ID == "service/bootstrap"
-		user, _ := principalUser(ctx)
+		user, _ := auth.PrivateProductViewer(ctx)
 		claimingShared := c.Action == "set_product_visibility" && p.Visibility != "private" && p.Owner == "" && user != ""
 		if !bootstrap && (user == "" || (p.Owner != user && !claimingShared)) {
 			return auth.ErrForbidden
