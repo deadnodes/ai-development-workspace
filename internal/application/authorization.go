@@ -118,14 +118,24 @@ func filterScopedState(st domain.State, p auth.Principal) (domain.State, error) 
 			}
 			continue
 		}
-		filtered := reflect.MakeSlice(field.Type(), 0, field.Len())
+		// Two passes: size the result by matching rows only, so a reader of a small
+		// Product never holds an array sized for the whole instance journal.
+		isProducts := sv.Type().Field(i).Name == "Products"
+		keep := func(row reflect.Value) bool {
+			product, found := stateRowProduct(row, isProducts)
+			return found && product != "" && (wildcard || slices.Contains(p.Products, product))
+		}
+		matches := 0
 		for j := 0; j < field.Len(); j++ {
-			row := field.Index(j)
-			product, found := stateRowProduct(row, sv.Type().Field(i).Name == "Products")
-			if !found || product == "" || (!wildcard && !slices.Contains(p.Products, product)) {
-				continue
+			if keep(field.Index(j)) {
+				matches++
 			}
-			filtered = reflect.Append(filtered, row)
+		}
+		filtered := reflect.MakeSlice(field.Type(), 0, matches)
+		for j := 0; j < field.Len() && filtered.Len() < matches; j++ {
+			if row := field.Index(j); keep(row) {
+				filtered = reflect.Append(filtered, row)
+			}
 		}
 		dst.Set(filtered)
 	}

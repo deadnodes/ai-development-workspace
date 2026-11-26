@@ -164,3 +164,27 @@ func TestIntegrationContextJSONMatchesTwoReadAssembly(t *testing.T) {
 		t.Fatalf("integration context changed\nwant %s\n got %s", wantJSON, gotJSON)
 	}
 }
+
+type countingReadStore struct {
+	*memoryStore
+	reads int
+}
+
+func (c *countingReadStore) Read(ctx context.Context) (domain.State, error) {
+	c.reads++
+	return c.memoryStore.Read(ctx)
+}
+
+// Stores without a bounded context reader must not load the full State twice
+// for one integration context request.
+func TestIntegrationContextReadsFullStateOnce(t *testing.T) {
+	s, m := fixture(t)
+	counting := &countingReadStore{memoryStore: m}
+	s.store = counting
+	if _, err := s.Query(context.Background(), "get_integration_context", "i"); err != nil {
+		t.Fatal(err)
+	}
+	if counting.reads != 1 {
+		t.Fatalf("full State reads = %d, want 1", counting.reads)
+	}
+}

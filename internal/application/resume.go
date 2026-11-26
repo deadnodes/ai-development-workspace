@@ -189,7 +189,15 @@ func (s *Service) resumeFromState(ctx context.Context, st domain.State, featureI
 		events = events[eventsTotal-20:]
 	}
 	response := map[string]any{"applications": apps, "integration_revisions": revisions, "compositions": compositions, "feature": f, "integrations": ins, "progress": map[string]int{"total": len(ins), "ready": ready, "released": released}, "memories": mem, "gates": gates, "checks": checks, "results": results, "findings": findings, "environments": envs, "repositories": repos, "other_active_work": other, "unlinked_git_commits": unlinkedGitCommits(st, f.ProductID), "next_actions": next, "events": events, "events_total": eventsTotal, "events_truncated": eventsTotal > len(events)}
-	projectContext, e := s.ProjectContext(ctx, f.ProductID)
+	// PostgreSQL has a bounded context read; other stores reuse this snapshot
+	// instead of loading the full State a second time.
+	var projectContext any
+	var e error
+	if _, bounded := s.store.(contextReader); bounded {
+		projectContext, e = s.ProjectContext(ctx, f.ProductID)
+	} else if e = authorize(ctx, "read", f.ProductID); e == nil {
+		projectContext, e = s.projectContextFromState(st, f.ProductID)
+	}
 	if e != nil {
 		return nil, e
 	}

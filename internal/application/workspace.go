@@ -265,6 +265,12 @@ func (s *Service) ProjectContext(ctx context.Context, product string) (any, erro
 	if err != nil {
 		return nil, err
 	}
+	return s.projectContextFromState(st, product)
+}
+
+// projectContextFromState assembles the Product context from an already loaded,
+// already scoped State (used when no bounded context reader exists).
+func (s *Service) projectContextFromState(st domain.State, product string) (any, error) {
 	if !productExists(&st, product) {
 		return nil, missing("product", product)
 	}
