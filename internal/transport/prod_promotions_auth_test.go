@@ -75,6 +75,9 @@ func TestProdPromoterJWTRestrictionAndPublicRead(t *testing.T) {
 	if got := call(http.MethodPost, "/api/prod-promotions/claim", valid, []byte(`{"wait":0}`)); got != http.StatusNoContent {
 		t.Fatalf("claim status %d", got)
 	}
+	if got := call(http.MethodPost, "/api/prod-promotions/missing/heartbeat", valid, []byte(`{"claim_id":"claim"}`)); got != http.StatusNotFound {
+		t.Fatalf("heartbeat must be allowed through promoter restriction, got %d", got)
+	}
 	if got := call(http.MethodGet, "/api/state", valid, nil); got != http.StatusForbidden {
 		t.Fatalf("promoter state status %d", got)
 	}

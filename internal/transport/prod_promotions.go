@@ -20,6 +20,7 @@ type prodPromotionService interface {
 	ListProdPromotions(context.Context, string, int) ([]domain.ProdPromotion, error)
 	ClaimProdPromotion(context.Context, domain.ClaimProdPromotion) (*domain.ProdPromotion, error)
 	RecordProdPromotionResult(context.Context, string, string, string, domain.ProdPromotionResult) (domain.ProdPromotion, error)
+	HeartbeatProdPromotion(context.Context, string, string, string, domain.HeartbeatProdPromotion) (domain.ProdPromotion, error)
 	PublicProdSignatures(context.Context, string) (application.PublicProdSignatures, error)
 }
 
@@ -178,6 +179,17 @@ func prodPromoterRoutes(service Service, options Options) http.Handler {
 			return
 		}
 		v, e := s.RecordProdPromotionResult(r.Context(), r.PathValue("id"), product, environment, in)
+		respond(w, v, e)
+	})
+	mux.HandleFunc("POST /api/prod-promotions/{id}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		var in domain.HeartbeatProdPromotion
+		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		d.DisallowUnknownFields()
+		if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || in.ClaimID == "" {
+			write(w, 400, map[string]string{"error": "invalid heartbeat"})
+			return
+		}
+		v, e := s.HeartbeatProdPromotion(r.Context(), r.PathValue("id"), product, environment, in)
 		respond(w, v, e)
 	})
 	return mux

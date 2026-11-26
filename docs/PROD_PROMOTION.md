@@ -10,7 +10,7 @@ RCP only queues successful, current, main-tagged builds with automatic CI proven
 required CI contexts and no failing recorded security evidence. One invalid build rejects the
 entire request. `request_key` replays the same record for identical inputs. The promoter claims
 with a ten-minute lease (up to three attempts), independently checks registry and provenance
-evidence, then returns per-image outcomes. RCP accepts successful outcomes only when the attached
+evidence, then returns per-image outcomes. The promoter renews the claim lease every two minutes during processing. RCP accepts successful outcomes only when the attached
 cosign simple-signing payload matches the digest and verifies with its pinned prod public key.
 
 The authenticated RCP API is:
@@ -21,6 +21,7 @@ The authenticated RCP API is:
   `GET /api/prod-promotions/{id}?product_id=…` — read records.
 - `POST /api/prod-promotions/claim` — promoter long poll; JSON `{ "wait": 50 }`, bounded at 55.
 - `POST /api/prod-promotions/{id}/result` — promoter reports the claim ID and item outcomes.
+- `POST /api/prod-promotions/{id}/heartbeat` — promoter renews the active claim lease by ten minutes.
 - `GET /api/public/prod-signatures/sha256:<64 lowercase hex>` — public signature evidence for CI;
   returns only verified signatures attached to succeeded promotions.
 
@@ -112,7 +113,12 @@ registry rewrite and own-image-prefix settings, and adds:
 
 `flux_artifact`, `paths` and `backfill_file` are not required in promote mode. Accepted production
 refs must be under `registry.deadnodes.internal/deadnodes/` and configured own prefixes. Zot warming
-is retried for at most five minutes. Dev signature, builder ID, `main-` provenance, successful
+is retried for up to `warm_timeout_seconds` (default 900; max 900), with a per-request
+`registry.request_timeout_seconds` (default 300; max 900). Warming also fetches dev `.sig` and
+`.att` referrer manifests and HEADs their blobs. Infrastructure reasons are `WARM_TIMEOUT`,
+`WARM_TAG_MISMATCH`, `REGISTRY_UNAVAILABLE`, `DEV_EVIDENCE_UNAVAILABLE`, `VAULT_SIGN_FAILED`,
+`SIGNATURE_PUBLISH_FAILED`, and `SIGNATURE_READBACK_FAILED`; deterministic REJECTED reasons are
+unchanged. Dev signature, builder ID, `main-` provenance, successful
 required contexts, build ID, source SHA and image revision are independently rechecked. The signer
 records only a SHA-256 of the approval text in its prod approval predicate. A failed image is
 reported independently; any non-success item leaves the promotion FAILED and requires a new request.

@@ -157,7 +157,7 @@ func New(service Service, options Options) http.Handler {
 			return
 		}
 		if promoterTokenValid(r, options) {
-			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && strings.HasSuffix(r.URL.Path, "/result")) {
+			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && (strings.HasSuffix(r.URL.Path, "/result") || strings.HasSuffix(r.URL.Path, "/heartbeat"))) {
 				ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
 				prodPromoterRoutes(service, options).ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -227,7 +227,7 @@ func protect(next http.Handler, o Options) http.Handler {
 			return
 		}
 		if promoterTokenValid(r, o) {
-			if r.Method != http.MethodPost || !(r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && strings.HasSuffix(r.URL.Path, "/result")) {
+			if r.Method != http.MethodPost || !(r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && (strings.HasSuffix(r.URL.Path, "/result") || strings.HasSuffix(r.URL.Path, "/heartbeat"))) {
 				write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})
 				return
 			}

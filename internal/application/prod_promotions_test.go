@@ -108,6 +108,11 @@ func TestProdPromotionClaimLeaseAndStaleClaim(t *testing.T) {
 	if e != nil || first == nil || first.Status != "CLAIMED" || first.Attempts != 1 {
 		t.Fatal(first, e)
 	}
+	before := *m.state.ProdPromotions[0].LeaseExpiresAt
+	renewed, e := s.HeartbeatProdPromotion(context.Background(), p.ID, "p", "prod", domain.HeartbeatProdPromotion{ClaimID: first.ClaimID})
+	if e != nil || renewed.LeaseExpiresAt == nil || !renewed.LeaseExpiresAt.After(before) {
+		t.Fatalf("heartbeat did not extend lease: %v %v", renewed.LeaseExpiresAt, e)
+	}
 	m.state.ProdPromotions[0].LeaseExpiresAt = promotionPtrTime(time.Now().Add(-time.Second))
 	second, e := s.ClaimProdPromotion(context.Background(), domain.ClaimProdPromotion{ProductID: "p", EnvironmentID: "prod"})
 	if e != nil || second == nil || second.ClaimID == first.ClaimID || second.Attempts != 2 {
@@ -116,6 +121,10 @@ func TestProdPromotionClaimLeaseAndStaleClaim(t *testing.T) {
 	_, e = s.RecordProdPromotionResult(context.Background(), p.ID, "p", "prod", domain.ProdPromotionResult{ClaimID: first.ClaimID})
 	if !errors.Is(e, ErrValidation) {
 		t.Fatalf("stale claim accepted: %v", e)
+	}
+	_, e = s.HeartbeatProdPromotion(context.Background(), p.ID, "p", "prod", domain.HeartbeatProdPromotion{ClaimID: first.ClaimID})
+	if !errors.Is(e, ErrValidation) {
+		t.Fatalf("stale heartbeat accepted: %v", e)
 	}
 }
 

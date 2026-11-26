@@ -79,6 +79,30 @@ func (c *Client) Warm(ctx context.Context, reg buildconfig.Registry, repo, crede
 	return warm(digest, 0)
 }
 
+// WarmReferrerTags fetches .sig/.att manifests and HEADs their blobs for on-demand registries.
+func (c *Client) WarmReferrerTags(ctx context.Context, reg buildconfig.Registry, repo, credential, digest string) error {
+	r, err := c.registry(reg, repo, credential)
+	if err != nil {
+		return err
+	}
+	for _, suffix := range []string{"sig", "att"} {
+		m, err := r.manifest(ctx, Tag(digest, suffix))
+		if err == ErrMissing {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, blob := range m.Layers {
+			_, h, code, err := r.request(ctx, "HEAD", r.base()+"/blobs/"+blob.Digest, "", nil)
+			if err != nil || code != 200 || h.Get("Docker-Content-Digest") != "" && h.Get("Docker-Content-Digest") != blob.Digest {
+				return ErrUnavailable
+			}
+		}
+	}
+	return nil
+}
+
 type SignatureBundle struct {
 	Payload   []byte
 	Signature []byte
