@@ -23,17 +23,23 @@ import (
 var ErrKeyMismatch = errors.New("SIGNING_KEY_MISMATCH")
 var ErrUnavailable = errors.New("signing provider unavailable")
 var ErrMissing = errors.New("signing artifact missing")
+var ErrVaultSign = errors.New("vault signing failed")
+var ErrRegistryPublish = errors.New("registry signature publish failed")
 
 type lease struct {
 	token   string
 	expires time.Time
 }
 type Client struct {
-	http   *http.Client
-	mu     sync.Mutex
-	tokens map[string]lease
-	writes sync.Mutex
+	http            *http.Client
+	registryTimeout time.Duration
+	mu              sync.Mutex
+	tokens          map[string]lease
+	writes          sync.Mutex
 }
+
+// SetRegistryRequestTimeout overrides the timeout for registry HTTP requests only.
+func (c *Client) SetRegistryRequestTimeout(timeout time.Duration) { c.registryTimeout = timeout }
 
 func New() *Client { return NewWithClient(http.DefaultClient) }
 func NewWithClient(h *http.Client) *Client {

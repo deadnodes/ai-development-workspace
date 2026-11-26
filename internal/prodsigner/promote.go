@@ -56,6 +56,7 @@ type promoterClient struct {
 }
 
 var errTokenUnavailable = errors.New("projected RCP token unavailable")
+var promotionSleep = sleepContext
 
 type promotionFailure struct {
 	event  string
@@ -88,6 +89,9 @@ func (f *promotionFailure) summary(w io.Writer) {
 }
 
 func writeJSONLine(w io.Writer, v any) {
+	if w == nil {
+		return
+	}
 	b, _ := json.Marshal(v)
 	_, _ = fmt.Fprintln(w, string(b))
 }
@@ -176,6 +180,10 @@ func (p *promoterClient) result(ctx context.Context, id string, claim string, it
 	_, status, e := p.request(ctx, http.MethodPost, "/api/prod-promotions/"+url.PathEscape(id)+"/result", json.RawMessage(b))
 	return status, e
 }
+func (p *promoterClient) heartbeat(ctx context.Context, id, claim string) (int, error) {
+	_, status, e := p.request(ctx, http.MethodPost, "/api/prod-promotions/"+url.PathEscape(id)+"/heartbeat", map[string]string{"claim_id": claim})
+	return status, e
+}
 
 func Promote(ctx context.Context, c Config, client *imagesigning.Client, log io.Writer) error {
 	return promoteWithHTTPClient(ctx, c, client, log, http.DefaultClient)
@@ -187,6 +195,15 @@ func promoteWithHTTPClient(ctx context.Context, c Config, client *imagesigning.C
 	promoter := newPromoterClient(c)
 	promoter.http = rcpHTTP
 	reg := buildconfig.Registry{Origin: c.Registry.Origin, InsecureHTTP: c.Registry.InsecureHTTP}
+	requestTimeout := c.Registry.RequestTimeoutSeconds
+	if requestTimeout == 0 {
+		requestTimeout = 300
+	}
+	warmTimeout := c.WarmTimeoutSeconds
+	if warmTimeout == 0 {
+		warmTimeout = 900
+	}
+	client.SetRegistryRequestTimeout(time.Duration(requestTimeout) * time.Second)
 	credential := filepath.Base(c.Registry.CredentialsFile)
 	backoff := 5 * time.Second
 	var claimFailure, resultFailure promotionFailure
@@ -218,10 +235,34 @@ func promoteWithHTTPClient(ctx context.Context, c Config, client *imagesigning.C
 		if promotion == nil {
 			continue
 		}
+		hbCtx, stopHeartbeat := context.WithCancel(ctx)
+		hbDone := make(chan struct{})
+		go func() {
+			defer close(hbDone)
+			ticker := time.NewTicker(2 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-hbCtx.Done():
+					return
+				case <-ticker.C:
+					_, err := promoter.heartbeat(hbCtx, promotion.ID, promotion.ClaimID)
+					if err != nil {
+						writeJSONLine(log, map[string]any{"event": "heartbeat_failed", "promotion_id": promotion.ID, "error": failureClass(err, 0)})
+					}
+				}
+			}
+		}()
 		results := make([]PromotionItem, len(promotion.Items))
 		for i, item := range promotion.Items {
-			results[i] = processPromotionItem(ctx, c, client, reg, credential, *promotion, item)
+			started := time.Now()
+			results[i] = processPromotionItemWithWarmTimeout(ctx, c, client, reg, credential, *promotion, item, time.Duration(warmTimeout)*time.Second)
+			if results[i].Result == "ERROR" || results[i].Result == "REJECTED" {
+				writeJSONLine(log, map[string]any{"event": "item_failed", "reason": results[i].Reason, "elapsed_seconds": int(time.Since(started).Seconds())})
+			}
 		}
+		stopHeartbeat()
+		<-hbDone
 		line, _ := json.Marshal(map[string]any{"promotion_id": promotion.ID, "product_id": promotion.ProductID, "items": summarize(results)})
 		if log != nil {
 			fmt.Fprintln(log, string(line))
@@ -261,8 +302,11 @@ func summarize(items []PromotionItem) []map[string]string {
 	return o
 }
 func processPromotionItem(ctx context.Context, c Config, client *imagesigning.Client, reg buildconfig.Registry, credential string, p Promotion, item PromotionItem) PromotionItem {
+	return processPromotionItemWithWarmTimeout(ctx, c, client, reg, credential, p, item, 15*time.Minute)
+}
+func processPromotionItemWithWarmTimeout(ctx context.Context, c Config, client *imagesigning.Client, reg buildconfig.Registry, credential string, p Promotion, item PromotionItem, warmTimeout time.Duration) PromotionItem {
 	reject := func(code string) PromotionItem { item.Result = "REJECTED"; item.Reason = code; return item }
-	infra := func() PromotionItem { item.Result = "ERROR"; item.Reason = "INFRASTRUCTURE_ERROR"; return item }
+	infra := func(reason string) PromotionItem { item.Result = "ERROR"; item.Reason = reason; return item }
 	if !imagesigning.DigestPattern.MatchString(item.Digest) || !strings.HasPrefix(item.ProdImageRef, "registry.deadnodes.internal/deadnodes/") || !matchesPrefix(item.ProdImageRef, c.OwnImagePrefixes) {
 		return reject("INVALID_IMAGE")
 	}
@@ -295,27 +339,36 @@ func processPromotionItem(ctx context.Context, c Config, client *imagesigning.Cl
 	if strings.Contains(repo, "..") {
 		return reject("INVALID_IMAGE")
 	}
+	sourceRepo := rewriteRepository(c, item.Repository)
 	// On-demand zot pulls are bounded to five minutes and every attempt checks the immutable digest.
-	warmCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	warmCtx, cancel := context.WithTimeout(ctx, warmTimeout)
 	defer cancel()
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(warmTimeout)
 	var warmErr error
+	backoff := 5 * time.Second
 	for {
 		warmErr = client.Warm(warmCtx, reg, repo, credential, item.Digest, item.Tag)
+		if warmErr == nil {
+			warmErr = client.WarmReferrerTags(warmCtx, reg, sourceRepo, credential, item.Digest)
+		}
 		if warmErr == nil {
 			break
 		}
 		if !time.Now().Before(deadline) {
-			return infra()
+			if strings.Contains(warmErr.Error(), "tag digest mismatch") {
+				return infra("WARM_TAG_MISMATCH")
+			}
+			return infra("WARM_TIMEOUT")
 		}
-		if !sleepContext(warmCtx, 5*time.Second) {
-			return infra()
+		if !promotionSleep(warmCtx, backoff) {
+			return infra("WARM_TIMEOUT")
 		}
+		backoff = min(backoff*2, 60*time.Second)
 	}
 	// Idempotent retry: reuse an existing signature only after verifying its payload/key/tag.
 	bundles, e := client.SignatureBundles(ctx, reg, c.SignaturesRepository, credential, item.Digest, c.ProdKey.PublicKeyPEM)
 	if e != nil {
-		return infra()
+		return infra("REGISTRY_UNAVAILABLE")
 	}
 	for _, b := range bundles {
 		if signaturePayloadMatches(b.Payload, item) {
@@ -324,10 +377,9 @@ func processPromotionItem(ctx context.Context, c Config, client *imagesigning.Cl
 			return item
 		}
 	}
-	sourceRepo := rewriteRepository(c, item.Repository)
 	buildID, sha, reason, e := VerifyDevEvidence(ctx, c, client, sourceRepo, item.Repository, item.Digest, item.BuildID, item.SourceSHA)
 	if e != nil {
-		return infra()
+		return infra("DEV_EVIDENCE_UNAVAILABLE")
 	}
 	if reason != "" {
 		return reject(reason)
@@ -340,11 +392,14 @@ func processPromotionItem(ctx context.Context, c Config, client *imagesigning.Cl
 	}
 	_, e = client.PublishIdentity(ctx, reg, c.SignaturesRepository, credential, c.ProdKey, item.Digest, buildID, sha, identity, imagesigning.Predicate{Type: ApprovalType, Body: predicate})
 	if e != nil {
-		return infra()
+		if errors.Is(e, imagesigning.ErrVaultSign) {
+			return infra("VAULT_SIGN_FAILED")
+		}
+		return infra("SIGNATURE_PUBLISH_FAILED")
 	}
 	bundles, e = client.SignatureBundles(ctx, reg, c.SignaturesRepository, credential, item.Digest, c.ProdKey.PublicKeyPEM)
 	if e != nil {
-		return infra()
+		return infra("SIGNATURE_READBACK_FAILED")
 	}
 	for _, b := range bundles {
 		if signaturePayloadMatches(b.Payload, item) {
@@ -353,7 +408,7 @@ func processPromotionItem(ctx context.Context, c Config, client *imagesigning.Cl
 			return item
 		}
 	}
-	return infra()
+	return infra("SIGNATURE_READBACK_FAILED")
 }
 func signaturePayloadMatches(payload []byte, item PromotionItem) bool {
 	var v struct {

@@ -4327,6 +4327,31 @@ Long-poll for the oldest eligible promotion in the configured promoter scope and
 
 **Authority:** Promoter-only service route; claims one eligible request in the configured Product/environment scope and does not authorize deployment.
 
+### `POST /api/prod-promotions/{id}/heartbeat` — http_route
+
+Extend the active promotion claim lease while signing is in progress.
+
+**When:** Call every two minutes from the configured prod promoter using the exact current claim_id.
+
+**Inputs:**
+
+- `id` (string, required): Promotion ID path parameter
+- `claim_id` (string, required): Current claim lease identity
+
+**Output:** Claimed promotion with lease extended by ten minutes.
+
+**Errors:**
+
+- `HTTP_ERROR`: HTTP 400 for malformed heartbeat JSON.
+- `VALIDATION`: STALE_CLAIM for an expired or replaced claim.
+- `FORBIDDEN`: Only the configured prod-promoter ServiceAccount JWT may call this route.
+
+**Example:** `POST /api/prod-promotions/PROMOTION/heartbeat {"claim_id":"CLAIM"}`
+
+**Related:** `POST /api/prod-promotions/claim`, `POST /api/prod-promotions/{id}/result`
+
+**Authority:** Promoter-only lease maintenance; does not change promotion items or authorize deployment.
+
 ### `POST /api/prod-promotions/{id}/result` — http_route
 
 Record per-image prod-promoter results for the current claim.

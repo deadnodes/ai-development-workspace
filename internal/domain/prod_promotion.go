@@ -50,3 +50,6 @@ type ProdPromotionResult struct {
 	ClaimID string              `json:"claim_id"`
 	Items   []ProdPromotionItem `json:"items"`
 }
+type HeartbeatProdPromotion struct {
+	ClaimID string `json:"claim_id"`
+}

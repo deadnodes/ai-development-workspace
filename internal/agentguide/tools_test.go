@@ -29,6 +29,7 @@ func TestToolGuideResolvesAliases(t *testing.T) {
 		"http_route:POST /api/test-scenarios/revisions",
 		"http_route:POST /api/release-candidates",
 		"http_route:POST /api/release-candidates/{id}/promote",
+		"http_route:POST /api/prod-promotions/{id}/heartbeat",
 		"http_route:POST /api/reviews/sync",
 		"http_route:POST /api/runtime-reports",
 		"http_route:POST /api/scenario-runs",

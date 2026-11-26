@@ -59,25 +59,43 @@ type observeRegistryRT struct {
 	blobHeads        int
 	sigManifestReads int
 	failReadback     bool
+	failWarmOnce     bool
 }
 
 func (o *observeRegistryRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	o.mu.Lock()
 	if strings.Contains(r.URL.Path, "/manifests/main-") && r.Method == http.MethodGet {
 		o.tagGet = true
+		if o.failWarmOnce {
+			o.failWarmOnce = false
+			o.mu.Unlock()
+			return jsonResponse(503, map[string]string{"error": "sync pending"}), nil
+		}
 	}
 	if strings.Contains(r.URL.Path, "/blobs/") && r.Method == http.MethodHead {
 		o.blobHeads++
 	}
 	if strings.Contains(r.URL.Path, "/v2/prod-signatures/manifests/") && r.Method == http.MethodGet {
 		o.sigManifestReads++
-		if o.failReadback && o.sigManifestReads >= 2 {
+		if o.failReadback && o.sigManifestReads >= 4 {
 			o.mu.Unlock()
 			return jsonResponse(503, map[string]string{"error": "readback failed"}), nil
 		}
 	}
 	o.mu.Unlock()
 	return o.base.RoundTrip(r)
+}
+
+func TestWarmRetriesUntilOnDemandTagAppears(t *testing.T) {
+	c, _, client, p, item, obs := promoteFixture(t)
+	obs.failWarmOnce = true
+	oldSleep := promotionSleep
+	promotionSleep = func(context.Context, time.Duration) bool { return true }
+	defer func() { promotionSleep = oldSleep }()
+	got := processPromotionItem(context.Background(), c, client, buildconfig.Registry{Origin: c.Registry.Origin, InsecureHTTP: true}, "registry.json", p, item)
+	if got.Result != "SIGNED" || obs.failWarmOnce {
+		t.Fatalf("warm did not retry to success: %#v", got)
+	}
 }
 
 func promoteFixture(t *testing.T) (Config, *signingtest.Fixture, *imagesigning.Client, Promotion, PromotionItem, *observeRegistryRT) {
@@ -244,7 +262,7 @@ func TestPromotionItemAlreadySignedAndRejectEvidence(t *testing.T) {
 		c, _, client, p, item, obs := promoteFixture(t)
 		obs.failReadback = true
 		got := processPromotionItem(context.Background(), c, client, buildconfig.Registry{Origin: c.Registry.Origin, InsecureHTTP: true}, "registry.json", p, item)
-		if got.Result != "ERROR" || got.Reason != "INFRASTRUCTURE_ERROR" {
+		if got.Result != "ERROR" || got.Reason != "SIGNATURE_PUBLISH_FAILED" {
 			t.Fatal(got)
 		}
 	})

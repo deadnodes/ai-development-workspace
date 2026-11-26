@@ -28,11 +28,13 @@ type Config struct {
 	Paths            []string `json:"paths"`
 	OwnImagePrefixes []string `json:"own_image_prefixes"`
 	Registry         struct {
-		Origin          string            `json:"origin"`
-		InsecureHTTP    bool              `json:"insecure_http"`
-		CredentialsFile string            `json:"credentials_file"`
-		Rewrite         map[string]string `json:"rewrite"`
+		Origin                string            `json:"origin"`
+		InsecureHTTP          bool              `json:"insecure_http"`
+		CredentialsFile       string            `json:"credentials_file"`
+		Rewrite               map[string]string `json:"rewrite"`
+		RequestTimeoutSeconds int               `json:"request_timeout_seconds,omitempty"`
 	} `json:"registry"`
+	WarmTimeoutSeconds   int                    `json:"warm_timeout_seconds,omitempty"`
 	SignaturesRepository string                 `json:"signatures_repository"`
 	DevPublicKeyPEM      string                 `json:"dev_public_key_pem"`
 	ProdKey              buildconfig.SigningKey `json:"prod_key"`
@@ -77,6 +79,9 @@ func (c Config) ValidateMode(mode string) error {
 	if mode == "promote" {
 		u, e := url.Parse(c.RCP.URL)
 		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !filepath.IsAbs(c.RCP.TokenFile) || c.RCP.ProductID == "" || c.RCP.EnvironmentID == "" {
+			return bad
+		}
+		if c.Registry.RequestTimeoutSeconds < 0 || c.Registry.RequestTimeoutSeconds > 900 || c.WarmTimeoutSeconds < 0 || c.WarmTimeoutSeconds > 900 {
 			return bad
 		}
 	}

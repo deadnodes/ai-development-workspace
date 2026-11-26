@@ -8,12 +8,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"releasecontrol/internal/buildconfig"
 	s "releasecontrol/internal/imagesigning"
 	"releasecontrol/internal/imagesigning/signingtest"
 	"strings"
 	"testing"
+	"time"
 )
+
+type timeoutProbe struct {
+	base      http.RoundTripper
+	remaining time.Duration
+}
+
+func (p *timeoutProbe) RoundTrip(r *http.Request) (*http.Response, error) {
+	if d, ok := r.Context().Deadline(); ok {
+		p.remaining = time.Until(d)
+	}
+	return p.base.RoundTrip(r)
+}
+
+func TestRegistryRequestTimeoutCanExceedThirtySecondsWithoutWaiting(t *testing.T) {
+	f := signingtest.New(t)
+	digest := f.Image("slow")
+	f.Manifests["main-slow"] = f.Manifests[digest]
+	probe := &timeoutProbe{base: f.Client().Transport}
+	c := s.NewWithClient(&http.Client{Transport: probe})
+	c.SetRegistryRequestTimeout(31 * time.Second)
+	if err := c.Warm(context.Background(), f.RegistryConfig(), "o/r", "registry.json", digest, "main-slow"); err != nil {
+		t.Fatal(err)
+	}
+	if probe.remaining <= 30*time.Second {
+		t.Fatalf("registry deadline = %s, want >30s", probe.remaining)
+	}
+}
 
 func TestGoldenPayloadAndPAE(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)

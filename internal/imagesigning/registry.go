@@ -189,6 +189,11 @@ func (c *Client) registry(r buildconfig.Registry, repo, ref string) (registry, e
 	return registry{c, r, repo, ref}, nil
 }
 func (r registry) request(ctx context.Context, method, target, media string, body []byte) ([]byte, http.Header, int, error) {
+	if r.client.registryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.client.registryTimeout)
+		defer cancel()
+	}
 	origin := strings.TrimRight(r.config.Origin, "/")
 	u, e := url.Parse(target)
 	if e != nil {
@@ -230,7 +235,13 @@ func (r registry) request(ctx context.Context, method, target, media string, bod
 		} else if username != "" {
 			req.SetBasicAuth(username, password)
 		}
-		return r.client.http.Do(req)
+		h := r.client.http
+		if r.client.registryTimeout > 0 {
+			copy := *h
+			copy.Timeout = r.client.registryTimeout
+			h = &copy
+		}
+		return h.Do(req)
 	}
 	res, e := perform("")
 	if e != nil {
@@ -485,15 +496,21 @@ func (c *Client) PublishIdentity(ctx context.Context, reg buildconfig.Registry, 
 	payload := Payload(identity, digest, buildID, sha, k.ID)
 	sig, version, e := c.Sign(ctx, k, payload)
 	if e != nil {
-		return 0, e
+		if errors.Is(e, ErrKeyMismatch) {
+			return 0, e
+		}
+		return 0, fmt.Errorf("%w: %v", ErrVaultSign, e)
 	}
 	if e = r.append(ctx, Tag(digest, "sig"), payload, SignatureType, map[string]string{SignatureAnnotation: base64.StdEncoding.EncodeToString(sig)}, k); e != nil {
-		return version, e
+		return version, fmt.Errorf("%w: %v", ErrRegistryPublish, e)
 	}
 	statement := Statement(identity, digest, p)
 	sig, v, e := c.Sign(ctx, k, PAE(PayloadType, statement))
 	if e != nil {
-		return version, e
+		if errors.Is(e, ErrKeyMismatch) {
+			return version, e
+		}
+		return version, fmt.Errorf("%w: %v", ErrVaultSign, e)
 	}
 	if v != version {
 		return version, ErrKeyMismatch
@@ -518,6 +535,9 @@ func (c *Client) PublishIdentity(ctx context.Context, reg buildconfig.Registry, 
 	}
 	b, _ := json.Marshal(Envelope{PayloadType, base64.StdEncoding.EncodeToString(statement), []EnvelopeSignature{{"", base64.StdEncoding.EncodeToString(sig)}}})
 	e = r.append(ctx, Tag(digest, "att"), b, EnvelopeType, map[string]string{SignatureAnnotation: "", "predicateType": p.Type}, k)
+	if e != nil {
+		e = fmt.Errorf("%w: %v", ErrRegistryPublish, e)
+	}
 	return version, e
 }
 func verifyEnvelope(env Envelope, k buildconfig.SigningKey) bool {

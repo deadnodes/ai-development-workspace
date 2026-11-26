@@ -451,3 +451,26 @@ func (s *Service) RecordProdPromotionResult(ctx context.Context, promotionID, pr
 	})
 	return out, err
 }
+
+func (s *Service) HeartbeatProdPromotion(ctx context.Context, promotionID, productID, environmentID string, in domain.HeartbeatProdPromotion) (domain.ProdPromotion, error) {
+	var out domain.ProdPromotion
+	err := s.store.Update(ctx, func(st *domain.State) error {
+		for i := range st.ProdPromotions {
+			p := &st.ProdPromotions[i]
+			if p.ID != promotionID {
+				continue
+			}
+			now := time.Now().UTC()
+			if p.ProductID != productID || p.EnvironmentID != environmentID || p.Status != "CLAIMED" || p.ClaimID != in.ClaimID || p.LeaseExpiresAt == nil || !now.Before(*p.LeaseExpiresAt) {
+				return invalid("STALE_CLAIM")
+			}
+			lease := now.Add(10 * time.Minute)
+			p.LeaseExpiresAt = &lease
+			p.UpdatedAt = now
+			out = *p
+			return nil
+		}
+		return fmt.Errorf("%w: prod promotion", ErrNotFound)
+	})
+	return out, err
+}
