@@ -154,9 +154,14 @@ func (s *Service) publicationEligibleWithParent(st *domain.State, j *domain.Work
 	}
 	return nil
 }
-func (s *Service) publicationReportEligible(st *domain.State, p workerconfig.Principal, in domain.WorkerReport) (*domain.WorkerJob, *domain.WorkerAttempt, error) {
+func (s *Service) publicationReportEligible(ctx context.Context, st *domain.State, p workerconfig.Principal, in domain.WorkerReport) (*domain.WorkerJob, *domain.WorkerAttempt, error) {
 	now := time.Now().UTC()
 	j := workerJob(st, in.JobID)
+	if j != nil {
+		if err := requireProductRead(ctx, st, j.ProductID); err != nil {
+			return nil, nil, err
+		}
+	}
 	a := workerAttempt(st, in.AttemptID)
 	if j == nil || a == nil || a.JobID != j.ID || a.Fence != in.Fence || j.Fence != in.Fence || j.InputHash != in.InputHash || a.InputHash != in.InputHash || a.Principal != p.ID() || !s.externalWorkers.Current(p, now) || !p.Allows(j.ProductID, j.Inputs.RepositoryID, j.Capability, now) {
 		return nil, nil, invalid("publication worker ownership or current authority denied")
@@ -187,7 +192,7 @@ func (s *Service) reportPublication(ctx context.Context, p workerconfig.Principa
 	if err != nil {
 		return out, err
 	}
-	j, a, err := s.publicationReportEligible(&st, p, in)
+	j, a, err := s.publicationReportEligible(ctx, &st, p, in)
 	if err != nil {
 		return out, err
 	}
@@ -215,7 +220,7 @@ func (s *Service) reportPublication(ctx context.Context, p workerconfig.Principa
 		}
 	}
 	err = s.store.Update(ctx, func(st *domain.State) error {
-		j, a, e := s.publicationReportEligible(st, p, in)
+		j, a, e := s.publicationReportEligible(ctx, st, p, in)
 		if e != nil {
 			return e
 		}

@@ -21,6 +21,15 @@ func (s *LocalStore) SaveRuntimeReport(ctx context.Context, r rr.Report, now tim
 		if e := ctx.Err(); e != nil {
 			return e
 		}
+		if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+			visible, err := localProductAccess(ctx, tx, r.ProductID)
+			if err != nil {
+				return err
+			}
+			if !visible {
+				return domain.ErrReadScopeNotFound
+			}
+		}
 		b, e := tx.CreateBucketIfNotExists(runtimeReportsBucket)
 		if e != nil {
 			return e
@@ -113,6 +122,19 @@ func (s *Store) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Tim
 		return rr.JournalResult{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+		var revision int64
+		if err := tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR SHARE").Scan(&revision); err != nil {
+			return rr.JournalResult{}, err
+		}
+		visible, err := readProductAccess(ctx, tx, r.ProductID)
+		if err != nil {
+			return rr.JournalResult{}, err
+		}
+		if !visible {
+			return rr.JournalResult{}, domain.ErrReadScopeNotFound
+		}
+	}
 	// Serialize the absent-set reconciliation and rate limit even for a new cluster.
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, strings.ReplaceAll(rr.Scope(r.ProductID, r.EnvironmentID, ""), "\x00", "/")); err != nil {
 		return rr.JournalResult{}, err

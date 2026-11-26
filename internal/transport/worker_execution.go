@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"releasecontrol/internal/domain"
-	"releasecontrol/internal/workerconfig"
 	"strings"
 	"time"
+
+	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workerconfig"
 )
 
 type workerService interface {
@@ -23,14 +25,21 @@ type workerService interface {
 // still authenticates its configured worker credential and capability scope.
 func workerEndpoint(path string) bool {
 	switch path {
-	case "/api/worker/claim", "/api/worker/start", "/api/worker/heartbeat", "/api/worker/report":
+	case workerClaimPath, workerStartPath, workerHeartbeatPath, workerReportPath:
 		return true
 	}
 	return false
 }
 
+const (
+	workerClaimPath     = "/api/worker/claim"
+	workerStartPath     = "/api/worker/start"
+	workerHeartbeatPath = "/api/worker/heartbeat"
+	workerReportPath    = "/api/worker/report"
+)
+
 func registerWorkerRoutes(mux routeRegistrar, service Service, o Options) {
-	mux.HandleFunc("/api/worker/", func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(workerService)
 		if !ok || o.Workers == nil || o.Token == "" {
 			write(w, 503, map[string]string{"error": "external workers disabled"})
@@ -49,7 +58,8 @@ func registerWorkerRoutes(mux routeRegistrar, service Service, o Options) {
 			write(w, 415, map[string]string{"error": "application/json required"})
 			return
 		}
-		if r.URL.Path == "/api/worker/report" {
+		ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: p.ID(), Kind: "worker"})
+		if r.URL.Path == workerReportPath {
 			raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, domain.RegistryReportMaxBytes))
 			if e != nil {
 				write(w, 400, map[string]string{"error": "invalid worker report bounds"})
@@ -66,7 +76,7 @@ func registerWorkerRoutes(mux routeRegistrar, service Service, o Options) {
 				write(w, 400, map[string]string{"error": "worker report exceeds capability bound"})
 				return
 			}
-			v, e := s.ReportWorker(r.Context(), p, in)
+			v, e := s.ReportWorker(ctx, p, in)
 			respond(w, v, e)
 			return
 		}
@@ -81,28 +91,32 @@ func registerWorkerRoutes(mux routeRegistrar, service Service, o Options) {
 			return true
 		}
 		switch r.URL.Path {
-		case "/api/worker/claim":
+		case workerClaimPath:
 			var in domain.WorkerClaim
 			if !decode(&in) {
 				return
 			}
-			v, e := s.ClaimWorker(r.Context(), p, in)
+			v, e := s.ClaimWorker(ctx, p, in)
 			respond(w, v, e)
-		case "/api/worker/start", "/api/worker/heartbeat":
+		case workerStartPath, workerHeartbeatPath:
 			var in domain.WorkerAttemptRequest
 			if !decode(&in) {
 				return
 			}
 			var v domain.WorkerLease
 			var e error
-			if r.URL.Path == "/api/worker/start" {
-				v, e = s.StartWorker(r.Context(), p, in)
+			if r.URL.Path == workerStartPath {
+				v, e = s.StartWorker(ctx, p, in)
 			} else {
-				v, e = s.HeartbeatWorker(r.Context(), p, in)
+				v, e = s.HeartbeatWorker(ctx, p, in)
 			}
 			respond(w, v, e)
 		default:
 			write(w, 404, map[string]string{"error": "worker route not found"})
 		}
-	})
+	}
+	for _, path := range []string{workerClaimPath, workerStartPath, workerHeartbeatPath, workerReportPath} {
+		mux.HandleFunc(http.MethodPost+" "+path, handler)
+	}
+	mux.HandleFunc("/api/worker/", handler)
 }

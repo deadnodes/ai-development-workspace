@@ -22,7 +22,7 @@ func (s commandAuthorizationStore) Read(ctx context.Context) (domain.State, erro
 	if err != nil {
 		return domain.State{}, err
 	}
-	if err = authorizeCommand(ctx, st, s.command); err != nil {
+	if err = authorizeCommand(ctx, st, s.command, true); err != nil {
 		return domain.State{}, err
 	}
 	return st, nil
@@ -104,7 +104,7 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	}
 	err := update(ctx, func(st *domain.State) error {
 		if _, authenticated := auth.FromContext(ctx); authenticated {
-			if err := authorizeCommand(ctx, *st, s.command); err != nil {
+			if err := authorizeCommand(ctx, *st, s.command, true); err != nil {
 				return err
 			}
 		}

@@ -14,6 +14,9 @@ import (
 )
 
 func (s *Service) ReportRuntime(ctx context.Context, r rr.Report) (any, error) {
+	if err := s.requireProductAccess(ctx, r.ProductID); err != nil {
+		return nil, err
+	}
 	if p, ok := auth.FromContext(ctx); ok && p.ID != "service/prod-runtime-reporter" {
 		if err := authorize(ctx, "write", r.ProductID); err != nil {
 			return nil, err
@@ -27,6 +30,9 @@ func (s *Service) ReportRuntime(ctx context.Context, r rr.Report) (any, error) {
 		return nil, invalid("runtime report storage unavailable")
 	}
 	changes, err := store.SaveRuntimeReport(ctx, r, time.Now().UTC())
+	if errors.Is(err, domain.ErrReadScopeNotFound) {
+		return nil, missing("product", r.ProductID)
+	}
 	if err != nil {
 		return nil, err
 	}

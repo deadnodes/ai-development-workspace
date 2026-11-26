@@ -120,7 +120,8 @@ type referenceReader interface {
 func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error {
 	var st domain.State
 	var err error
-	if reader, ok := s.Store.(referenceReader); ok {
+	reader, projected := s.Store.(referenceReader)
+	if projected {
 		var ids []string
 		ids, err = commandReferenceIDs(s.command)
 		if err == nil {
@@ -135,5 +136,5 @@ func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error
 	if err != nil {
 		return err
 	}
-	return authorizeCommand(ctx, st, s.command)
+	return authorizeCommand(ctx, st, s.command, !projected)
 }

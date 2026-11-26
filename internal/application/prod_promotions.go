@@ -112,7 +112,7 @@ var promotionDigest = regexp.MustCompile(`@sha256:[a-fA-F0-9]{64}$`)
 
 func (s *Service) RequestProdPromotion(ctx context.Context, in domain.RequestProdPromotion) (domain.ProdPromotion, error) {
 	var out domain.ProdPromotion
-	if err := authorize(ctx, "write", in.ProductID); err != nil {
+	if err := s.authorizeProductMutation(ctx, "write", in.ProductID); err != nil {
 		return out, err
 	}
 	if len(in.BuildIDs) < 1 || len(in.BuildIDs) > 20 || len(strings.TrimSpace(in.OwnerApproval)) == 0 || utf8.RuneCountInString(in.OwnerApproval) > 2000 || len(in.RequestKey) < 16 || len(in.RequestKey) > 128 {
@@ -142,6 +142,9 @@ func (s *Service) RequestProdPromotion(ctx context.Context, in domain.RequestPro
 	}
 	created := false
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		for _, p := range st.ProdPromotions {
 			if p.ProductID == in.ProductID && p.RequestKey == in.RequestKey {
 				if p.OwnerApproval != in.OwnerApproval || !sameStrings(buildIDs(p.Items), in.BuildIDs) {
@@ -346,6 +349,9 @@ func (s *Service) ClaimProdPromotion(ctx context.Context, in domain.ClaimProdPro
 		var out *domain.ProdPromotion
 		candidate := false
 		err := s.view(ctx, func(st *domain.State) error {
+			if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+				return err
+			}
 			now := time.Now().UTC()
 			for _, p := range st.ProdPromotions {
 				if p.ProductID == in.ProductID && p.EnvironmentID == in.EnvironmentID && p.Attempts < 3 &&
@@ -361,6 +367,9 @@ func (s *Service) ClaimProdPromotion(ctx context.Context, in domain.ClaimProdPro
 		}
 		if candidate {
 			err = s.store.Update(ctx, func(st *domain.State) error {
+				if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+					return err
+				}
 				now := time.Now().UTC()
 				for i := range st.ProdPromotions {
 					p := &st.ProdPromotions[i]
@@ -404,6 +413,9 @@ func (s *Service) ClaimProdPromotion(ctx context.Context, in domain.ClaimProdPro
 func (s *Service) RecordProdPromotionResult(ctx context.Context, promotionID, productID, environmentID string, in domain.ProdPromotionResult) (domain.ProdPromotion, error) {
 	var out domain.ProdPromotion
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, productID); err != nil {
+			return err
+		}
 		for i := range st.ProdPromotions {
 			p := &st.ProdPromotions[i]
 			if p.ID != promotionID {
@@ -462,6 +474,9 @@ func (s *Service) RecordProdPromotionResult(ctx context.Context, promotionID, pr
 func (s *Service) HeartbeatProdPromotion(ctx context.Context, promotionID, productID, environmentID string, in domain.HeartbeatProdPromotion) (domain.ProdPromotion, error) {
 	var out domain.ProdPromotion
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, productID); err != nil {
+			return err
+		}
 		for i := range st.ProdPromotions {
 			p := &st.ProdPromotions[i]
 			if p.ID != promotionID {

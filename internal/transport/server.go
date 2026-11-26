@@ -110,6 +110,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 	})
 	workerMux := observedMux{http.NewServeMux(), register}
 	registerWorkerRoutes(workerMux, service, options)
+	promoterMux := prodPromoterRoutes(service, options, register)
 	registerBuildRoutes(mux, service)
 	registerPipelineRoutes(mux, service)
 	registerSignatureRoutes(mux, service)
@@ -184,7 +185,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 		if promoterTokenValid(r, options) {
 			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && (strings.HasSuffix(r.URL.Path, "/result") || strings.HasSuffix(r.URL.Path, "/heartbeat"))) {
 				ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
-				prodPromoterRoutes(service, options).ServeHTTP(w, r.WithContext(ctx))
+				promoterMux.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})

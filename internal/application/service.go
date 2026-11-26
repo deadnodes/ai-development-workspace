@@ -693,6 +693,12 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		m.ID = c.ProductID
 		out = map[string]string{"deleted_product_id": c.ProductID}
 	case "create_product":
+		if productIDRetired(st, m.ID) {
+			if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+				return nil, missing("product", m.ID)
+			}
+			return nil, invalid("product ID is no longer available")
+		}
 		v := domain.Product{}
 		if e := decode(c.Data, &v); e != nil {
 			return nil, e
@@ -710,13 +716,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if v.Owner != "" || len(v.Members) != 0 {
 			return nil, invalid("owner and members are server-managed")
 		}
-		if v.Visibility == "private" {
-			user, enforced := auth.PrivateProductViewer(ctx)
-			if !enforced || user == "" {
-				return nil, fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
-			}
-			v.Owner = user
+		v.Owner, _ = auth.PrivateProductViewer(ctx)
+		if v.Visibility == "private" && v.Owner == "" {
+			return nil, fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
 		}
+		m.ProductID = v.ID
 		st.Products = append(st.Products, v)
 		out = v
 	case "create_feature", "update_feature":
@@ -1254,6 +1258,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 	if c.Action == "release_artifact_pin" {
 		eventAt = m.UpdatedAt
 	}
+	c.ProductID = m.ProductID
 	st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: eventAt, EntityID: m.ID, ProductID: m.ProductID, FeatureID: m.FeatureID, Data: c})
 	derive(st)
 	return out, nil

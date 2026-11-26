@@ -100,7 +100,7 @@ func scopedState(ctx context.Context, st domain.State) (domain.State, error) {
 		return domain.State{}, err
 	}
 	p, ok := auth.FromContext(ctx)
-	if !ok {
+	if !ok || bootstrapPrincipal(ctx) && instanceAdmin(p) {
 		return st, nil
 	}
 	return filterScopedStateForContext(ctx, st, p)
@@ -146,13 +146,14 @@ func filterScopedStateForContext(ctx context.Context, st domain.State, p auth.Pr
 		// Two passes: size the result by matching rows only, so a reader of a small
 		// Product never holds an array sized for the whole instance journal.
 		isProducts := sv.Type().Field(i).Name == "Products"
+		isEvents := sv.Type().Field(i).Name == "Events"
 		keep := func(row reflect.Value) bool {
 			product, found := stateRowProduct(row, isProducts)
 			if !found {
 				return false
 			}
 			if product == "" && instanceAdmin(p) {
-				return true
+				return !isEvents || !row.Interface().(domain.Event).HasUnscopedProductEvidence()
 			}
 			return visibleProducts[product]
 		}
@@ -226,13 +227,10 @@ var memberWriteActions = []string{
 }
 var memberDeployActions = []string{"deploy_integration", "deploy_existing_artifact", "assemble_environment", "reconcile_composition"}
 
-func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) error {
+func authorizeCommand(ctx context.Context, st domain.State, c domain.Command, fullSnapshot bool) error {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
 		return nil
-	}
-	if p.Kind != "human" && slices.Contains([]string{"prepare_release_candidate", "promote_release_candidate", "plan_release", "record_release"}, c.Action) {
-		return auth.ErrForbidden
 	}
 	// Resolve the command's product scope before permission checks so an
 	// invisible private Product is indistinguishable from a missing one.
@@ -254,17 +252,32 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 	if pr := productByID(st, productID); pr != nil && !productVisibleTo(ctx, pr) {
 		return ErrNotFound
 	}
+	if c.Action == "create_product" {
+		if pr := productByID(st, c.ID); pr != nil && !productVisibleTo(ctx, pr) {
+			return ErrNotFound
+		}
+		if !slices.Contains(p.Products, "*") && !allowedProduct(p, c.ID) {
+			return auth.ErrForbidden
+		}
+	}
+	operatorOnly := slices.Contains([]string{"prepare_release_candidate", "promote_release_candidate", "plan_release", "record_release"}, c.Action)
 	if bootstrapPrincipal(ctx) && instanceAdmin(p) {
+		if operatorOnly {
+			return auth.ErrForbidden
+		}
 		return nil
 	}
 	projected, needed, err := authorizationProjection(st, c)
 	if err != nil {
 		return err
 	}
-	for _, product := range st.Products {
-		if !productVisibleTo(ctx, &product) && referencesProduct(projected, product.ID, needed) {
-			return ErrNotFound
+	if fullSnapshot {
+		if err := requireVisibleReferences(ctx, st, projected, needed); err != nil {
+			return err
 		}
+	}
+	if p.Kind != "human" && operatorOnly {
+		return auth.ErrForbidden
 	}
 	if instanceAdmin(p) {
 		return nil
@@ -376,30 +389,10 @@ func authorizeCommand(ctx context.Context, st domain.State, c domain.Command) er
 	return nil
 }
 
-func referencesProduct(st domain.State, product string, needed map[string]bool) bool {
-	value := reflect.ValueOf(st)
-	for i := range stateIDPaths {
-		name := value.Type().Field(i).Name
-		rows := value.Field(i)
-		for j := 0; j < rows.Len(); j++ {
-			if name == "EnvironmentBindings" && !needed[rows.Index(j).FieldByIndex(stateIDPaths[i]).String()] {
-				continue
-			}
-			if owner, ok := stateRowProduct(rows.Index(j), name == "Products"); ok && owner == product {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (s *Service) authorizeReferences(ctx context.Context, permission string, ids ...string) error {
-	if err := authorize(ctx, permission, ""); err != nil {
-		return err
-	}
 	p, ok := auth.FromContext(ctx)
 	if !ok || bootstrapPrincipal(ctx) {
-		return nil
+		return authorize(ctx, permission, "")
 	}
 	var st domain.State
 	var err error
@@ -409,18 +402,16 @@ func (s *Service) authorizeReferences(ctx context.Context, permission string, id
 		err = s.view(ctx, func(raw *domain.State) error {
 			var needed map[string]bool
 			st, needed = projectReferences(*raw, ids)
-			for _, product := range raw.Products {
-				if !productVisibleTo(ctx, &product) && referencesProduct(st, product.ID, needed) {
-					return ErrNotFound
-				}
-			}
-			return nil
+			return requireVisibleReferences(ctx, *raw, st, needed)
 		})
 	}
 	if errors.Is(err, domain.ErrReadScopeNotFound) {
 		return ErrNotFound
 	}
 	if err != nil {
+		return err
+	}
+	if err := authorize(ctx, permission, ""); err != nil {
 		return err
 	}
 	rows, err := stateRows(st)
@@ -441,6 +432,29 @@ func (s *Service) authorizeReferences(ctx context.Context, permission string, id
 		}
 		if !found {
 			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+func requireVisibleReferences(ctx context.Context, raw, projected domain.State, needed map[string]bool) error {
+	value := reflect.ValueOf(projected)
+	for index, path := range stateIDPaths {
+		rows := value.Field(index)
+		name := value.Type().Field(index).Name
+		for rowIndex := 0; rowIndex < rows.Len(); rowIndex++ {
+			row := rows.Index(rowIndex)
+			if !needed[row.FieldByIndex(path).String()] {
+				continue
+			}
+			if name == "Events" && row.Interface().(domain.Event).HasUnscopedProductEvidence() {
+				return ErrNotFound
+			}
+			if product, _ := stateRowProduct(row, name == "Products"); product != "" {
+				if err := requireProductRead(ctx, &raw, product); err != nil {
+					return ErrNotFound
+				}
+			}
 		}
 	}
 	return nil

@@ -279,6 +279,9 @@ func recoverWorker(st *domain.State, j *domain.WorkerJob, now time.Time) {
 	}
 }
 func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in domain.WorkerClaim) (*domain.WorkerLease, error) {
+	if err := s.requireProductAccess(ctx, in.ProductID); err != nil {
+		return nil, err
+	}
 	if s.externalWorkers == nil {
 		return nil, invalid("external workers disabled")
 	}
@@ -309,6 +312,9 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 	}
 	var out *domain.WorkerLease
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		now = time.Now().UTC()
 		if !s.externalWorkers.Current(p, now) || !p.Allows(in.ProductID, in.RepositoryID, in.Capability, now) {
 			return invalid("worker scope expired")
@@ -363,14 +369,19 @@ func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in 
 }
 func (s *Service) mutateWorker(ctx context.Context, p workerconfig.Principal, in domain.WorkerAttemptRequest, action string, report *domain.WorkerReport) (domain.WorkerLease, error) {
 	var out domain.WorkerLease
-	if s.externalWorkers == nil {
-		return out, invalid("external workers disabled")
-	}
 	var rejected error
 	err := s.store.Update(ctx, func(st *domain.State) error {
 		now := time.Now().UTC()
 		j := workerJob(st, in.JobID)
 		a := workerAttempt(st, in.AttemptID)
+		if j != nil {
+			if err := requireProductRead(ctx, st, j.ProductID); err != nil {
+				return err
+			}
+		}
+		if s.externalWorkers == nil {
+			return invalid("external workers disabled")
+		}
 		if j == nil || a == nil || a.JobID != j.ID || a.Fence != in.Fence || j.Fence != in.Fence || a.InputHash != in.InputHash || j.InputHash != in.InputHash || a.Principal != p.ID() || !s.externalWorkers.Current(p, now) || !p.Allows(j.ProductID, j.Inputs.RepositoryID, j.Capability, now) {
 			return invalid("worker ownership or scope denied")
 		}

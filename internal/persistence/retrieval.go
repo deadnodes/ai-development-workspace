@@ -41,11 +41,7 @@ func (s *Store) SearchContext(ctx context.Context, q domain.ContextSearchRequest
 		return out, err
 	}
 	defer tx.Rollback(ctx)
-	hidden, err := hiddenProducts(ctx, tx)
-	if err != nil {
-		return out, err
-	}
-	visible, err := visibleProductIn(ctx, tx, q.ProductID, hidden)
+	visible, err := readProductAccess(ctx, tx, q.ProductID)
 	if err != nil {
 		return out, err
 	}
@@ -89,11 +85,14 @@ func (s *Store) ContextExcerpt(ctx context.Context, q domain.ContextExcerptReque
 		return out, err
 	}
 	defer tx.Rollback(ctx)
-	hidden, err := hiddenProducts(ctx, tx)
+	visible, err := readProductAccess(ctx, tx, q.ProductID)
 	if err != nil {
 		return out, err
 	}
-	err = tx.QueryRow(ctx, `SELECT `+retrievalColumns+`,substring(body from $3+1 for $4) FROM retrieval_documents WHERE product_id=$1 AND id=$2 AND product_id <> ALL($5::text[])`, q.ProductID, q.ID, q.Offset, q.MaxChars, hidden).Scan(&out.ID, &out.Kind, &out.ProductID, &out.FeatureID, &out.Title, &out.Status, &out.TextChars, &out.Truncated, &out.Text)
+	if !visible {
+		return out, nil
+	}
+	err = tx.QueryRow(ctx, `SELECT `+retrievalColumns+`,substring(body from $3+1 for $4) FROM retrieval_documents WHERE product_id=$1 AND id=$2`, q.ProductID, q.ID, q.Offset, q.MaxChars).Scan(&out.ID, &out.Kind, &out.ProductID, &out.FeatureID, &out.Title, &out.Status, &out.TextChars, &out.Truncated, &out.Text)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ContextExcerpt{}, nil
 	}
@@ -124,11 +123,14 @@ func (s *Store) GraphNeighbors(ctx context.Context, q domain.GraphNeighborsReque
 		return out, err
 	}
 	defer tx.Rollback(ctx)
-	hidden, err := hiddenProducts(ctx, tx)
+	visible, err := readProductAccess(ctx, tx, q.ProductID)
 	if err != nil {
 		return out, err
 	}
-	out.Seed, err = scanRetrievalCard(tx.QueryRow(ctx, `SELECT `+retrievalColumns+` FROM retrieval_documents WHERE product_id=$1 AND id=$2 AND product_id <> ALL($3::text[])`, q.ProductID, q.ID, hidden))
+	if !visible {
+		return domain.GraphNeighborsResult{}, nil
+	}
+	out.Seed, err = scanRetrievalCard(tx.QueryRow(ctx, `SELECT `+retrievalColumns+` FROM retrieval_documents WHERE product_id=$1 AND id=$2`, q.ProductID, q.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.GraphNeighborsResult{}, nil
 	}

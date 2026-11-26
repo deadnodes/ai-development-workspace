@@ -129,8 +129,8 @@ func registerProdPromotions(mux routeRegistrar, server *mcp.Server, service Serv
 	})
 }
 
-func prodPromoterRoutes(service Service, options Options) http.Handler {
-	mux := http.NewServeMux()
+func prodPromoterRoutes(service Service, options Options, register func(string)) http.Handler {
+	mux := observedMux{http.NewServeMux(), register}
 	s, ok := service.(prodPromotionService)
 	if !ok {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { write(w, 503, nil) })

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/workerclient"
@@ -81,7 +82,10 @@ func TestWorkerChannelIsolationAndTypedClient(t *testing.T) {
 			t.Fatalf("unknown fields accepted: %d", code)
 		}
 	}
-	for _, body := range []string{`{"product_id":"other","repository_id":"r","capability":"source_check"}`, `{"product_id":"p","repository_id":"other","capability":"source_check"}`, `{"product_id":"p","repository_id":"r","capability":"deploy"}`} {
+	if code := workerHTTP(t, server, workerClaimPath, testWorkerCredential, `{"product_id":"other","repository_id":"r","capability":"source_check"}`); code != http.StatusNotFound {
+		t.Fatalf("missing product: %d", code)
+	}
+	for _, body := range []string{`{"product_id":"p","repository_id":"other","capability":"source_check"}`, `{"product_id":"p","repository_id":"r","capability":"deploy"}`} {
 		if code := workerHTTP(t, server, "/api/worker/claim", testWorkerCredential, body); code != 422 {
 			t.Fatalf("scope escape: %d", code)
 		}
@@ -112,6 +116,42 @@ func TestWorkerChannelIsolationAndTypedClient(t *testing.T) {
 	report.Result = "CHECK_FAILED"
 	if _, e = client.Report(context.Background(), report); e == nil {
 		t.Fatal("conflicting replay accepted")
+	}
+}
+func TestPrivateWorkerHTTPRejectsClaimAndReplay(t *testing.T) {
+	s, _, server := workerTransportFixture(t)
+	client, err := workerclient.New(server.URL, testWorkerCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := domain.WorkerClaim{ProductID: "p", RepositoryID: "r", Capability: "source_check"}
+	lease, err := client.Claim(context.Background(), claim)
+	if err != nil || lease == nil {
+		t.Fatalf("shared product claim: %v, %v", lease, err)
+	}
+	attempt := domain.WorkerAttemptRequest{JobID: lease.Job.ID, AttemptID: lease.Attempt.ID, Fence: lease.Attempt.Fence, InputHash: lease.Job.InputHash}
+	if _, err = client.Start(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	report := domain.WorkerReport{WorkerAttemptRequest: attempt, Result: "PASSED"}
+	if _, err = client.Report(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	owner := auth.WithPrincipal(context.Background(), auth.Principal{Kind: "human", ID: "human/owner", Role: "admin", Permissions: []string{"admin"}, Products: []string{"*"}})
+	if _, err = s.Execute(owner, domain.Command{Action: "set_product_visibility", Actor: "human/owner", ProductID: "p", Data: map[string]any{"visibility": "private"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []struct {
+		path string
+		body any
+	}{{workerClaimPath, claim}, {workerStartPath, attempt}, {workerHeartbeatPath, attempt}, {workerReportPath, report}} {
+		body, err := json.Marshal(req.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code := workerHTTP(t, server, req.path, testWorkerCredential, string(body)); code != http.StatusNotFound {
+			t.Errorf("%s: got %d, want 404", req.path, code)
+		}
 	}
 }
 func TestWorkerRoutesDisabledByDefaultAndWithoutControlProtection(t *testing.T) {

@@ -32,6 +32,39 @@ func requireProductRead(ctx context.Context, st *domain.State, product string) e
 	}
 	return nil
 }
+
+func (s *Service) requireProductAccess(ctx context.Context, product string) error {
+	if _, restricted := auth.PrivateProductViewer(ctx); !restricted {
+		return nil
+	}
+	if reader, ok := s.store.(interface {
+		ReadProductAccess(context.Context, string) (bool, error)
+	}); ok {
+		visible, err := reader.ReadProductAccess(ctx, product)
+		if err != nil {
+			return err
+		}
+		if !visible {
+			return missing("product", product)
+		}
+		return nil
+	}
+	return s.view(ctx, func(st *domain.State) error { return requireProductRead(ctx, st, product) })
+}
+
+func (s *Service) authorizeProductMutation(ctx context.Context, permission, product string) error {
+	if err := s.requireProductAccess(ctx, product); err != nil {
+		return err
+	}
+	return authorize(ctx, permission, product)
+}
+
+func authorizeScopedMutation(ctx context.Context, st *domain.State, permission, product string) error {
+	if err := requireProductRead(ctx, st, product); err != nil {
+		return err
+	}
+	return authorize(ctx, permission, product)
+}
 func copyTime(t *time.Time) *time.Time {
 	if t == nil {
 		return nil

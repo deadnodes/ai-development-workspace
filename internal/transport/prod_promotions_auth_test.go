@@ -58,6 +58,9 @@ func TestProdPromoterJWTRestrictionAndPublicRead(t *testing.T) {
 	}
 	defer store.Close()
 	svc := application.New(store)
+	if _, err := svc.Execute(context.Background(), domain.Command{Action: "create_product", ID: "p", Actor: "test", Data: map[string]any{"name": "Shared"}}); err != nil {
+		t.Fatal(err)
+	}
 	h := transport.New(svc, transport.Options{Token: "control", ProdPromoterKeys: keys, ProdPromoterIssuer: "https://prod.issuer", ProdPromoterAudience: "rcp-prod-promoter", ProdPromoterSubject: "system:serviceaccount:supply-chain:cosign-prod-signer", ProdPromoterScope: "p:prod"})
 	call := func(method, path, token string, body []byte) int {
 		r := httptest.NewRequest(method, "http://localhost"+path, bytes.NewReader(body))
@@ -116,7 +119,11 @@ func TestProdPromoterClaimOutlivesHTTPWriteTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	handler := transport.New(application.New(store), transport.Options{Token: "control", ProdPromoterKeys: keys, ProdPromoterIssuer: "https://prod.issuer", ProdPromoterAudience: "rcp-prod-promoter", ProdPromoterSubject: "system:serviceaccount:supply-chain:cosign-prod-signer", ProdPromoterScope: "p:prod"})
+	svc := application.New(store)
+	if _, err := svc.Execute(context.Background(), domain.Command{Action: "create_product", ID: "p", Actor: "test", Data: map[string]any{"name": "Shared"}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := transport.New(svc, transport.Options{Token: "control", ProdPromoterKeys: keys, ProdPromoterIssuer: "https://prod.issuer", ProdPromoterAudience: "rcp-prod-promoter", ProdPromoterSubject: "system:serviceaccount:supply-chain:cosign-prod-signer", ProdPromoterScope: "p:prod"})
 	server := httptest.NewUnstartedServer(handler)
 	server.Config.WriteTimeout = 100 * time.Millisecond
 	server.Start()

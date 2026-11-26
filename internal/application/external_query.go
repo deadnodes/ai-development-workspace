@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
 	"sort"
@@ -71,6 +72,9 @@ func remainingExecutionSteps(current, desired string) []string {
 }
 
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
+	if name == "list_branches" {
+		return s.listBranches(ctx, id)
+	}
 	if name == "test_connection" || name == "discover_repositories" {
 		if err := authorize(ctx, "admin", ""); err != nil {
 			return nil, err
@@ -314,33 +318,6 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		}
 		return repos, nil
 
-	case "list_branches":
-		b := repositoryBinding(&st, id)
-		if b == nil {
-			return nil, missing("repository binding", id)
-		}
-		var c *domain.GitHubConnection
-		if err := s.view(ctx, func(raw *domain.State) error {
-			if err := requireProductRead(ctx, raw, b.ProductID); err != nil {
-				return err
-			}
-			c = connection(raw, b.ConnectionID)
-			if c != nil {
-				copy := *c
-				c = &copy
-			}
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-		if c == nil || s.provider == nil {
-			return nil, invalid("external provider/connection unavailable")
-		}
-		branches, err := s.provider.Branches(ctx, c.Config, repositoryLocator(&st, *b))
-		if err != nil {
-			return nil, invalid("branch discovery: %s", err)
-		}
-		return branches, nil
 	case "get_integration_context":
 		in := integration(&st, id)
 		if in == nil {
@@ -612,6 +589,37 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return items, nil
 	}
 	return nil, invalid("unknown query")
+}
+
+func (s *Service) listBranches(ctx context.Context, repositoryID string) (any, error) {
+	if err := authorize(ctx, "read", ""); err != nil {
+		return nil, err
+	}
+	var selected domain.GitHubConnection
+	var locator string
+	if err := s.view(ctx, func(st *domain.State) error {
+		principal, restricted := auth.FromContext(ctx)
+		for index := len(st.RepositoryBindings) - 1; index >= 0; index-- {
+			binding := st.RepositoryBindings[index]
+			if binding.RepositoryID != repositoryID || requireProductRead(ctx, st, binding.ProductID) != nil || restricted && !allowedProduct(principal, binding.ProductID) {
+				continue
+			}
+			conn := connection(st, binding.ConnectionID)
+			if conn == nil || s.provider == nil {
+				return invalid("external provider/connection unavailable")
+			}
+			selected, locator = *conn, repositoryLocator(st, binding)
+			return nil
+		}
+		return missing("repository binding", repositoryID)
+	}); err != nil {
+		return nil, err
+	}
+	branches, err := s.provider.Branches(ctx, selected.Config, locator)
+	if err != nil {
+		return nil, invalid("branch discovery: %s", err)
+	}
+	return branches, nil
 }
 
 func parseExecutionEventCursor(cursor string) (time.Time, string, bool) {

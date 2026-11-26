@@ -36,12 +36,18 @@ func visibleProductIn(ctx context.Context, tx pgx.Tx, id string, hidden []string
 	return visible, err
 }
 
-func (s *Store) ReadProductAccess(ctx context.Context, id string) (bool, error) {
+func readProductAccess(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, id string) (bool, error) {
 	user, restricted := auth.PrivateProductViewer(ctx)
 	var visible bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='products' AND id=$1
+	err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='products' AND id=$1
 		AND (NOT $2::boolean OR (`+fmt.Sprintf(privateProductDeniedSQL, "", "$3")+`) IS NOT TRUE))`, id, restricted, user).Scan(&visible)
 	return visible, err
+}
+
+func (s *Store) ReadProductAccess(ctx context.Context, id string) (bool, error) {
+	return readProductAccess(ctx, s.pool, id)
 }
 
 func (s *LocalStore) ReadProductAccess(ctx context.Context, id string) (bool, error) {
@@ -52,18 +58,25 @@ func (s *LocalStore) ReadProductAccess(ctx context.Context, id string) (bool, er
 	}
 	var visible bool
 	err := s.db.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(localBucket).Get(localStateKey)
-		return historyScan(ctx, data, "products", func(raw []byte) error {
-			if scopeText(raw, "id") != id {
-				return nil
-			}
-			var product domain.Product
-			if err := json.Unmarshal(raw, &product); err != nil {
-				return err
-			}
-			visible = productVisible(ctx, product)
+		var err error
+		visible, err = localProductAccess(ctx, tx, id)
+		return err
+	})
+	return visible, err
+}
+
+func localProductAccess(ctx context.Context, tx *bolt.Tx, id string) (bool, error) {
+	var visible bool
+	err := historyScan(ctx, tx.Bucket(localBucket).Get(localStateKey), "products", func(raw []byte) error {
+		if scopeText(raw, "id") != id {
 			return nil
-		})
+		}
+		var product domain.Product
+		if err := json.Unmarshal(raw, &product); err != nil {
+			return err
+		}
+		visible = productVisible(ctx, product)
+		return nil
 	})
 	return visible, err
 }

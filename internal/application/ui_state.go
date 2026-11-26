@@ -13,7 +13,7 @@ type uiStateReader interface {
 }
 
 func (s *Service) UIState(ctx context.Context, product, feature string) (domain.UIState, error) {
-	if err := authorize(ctx, "read", product); err != nil {
+	if err := authorize(ctx, "read", ""); err != nil {
 		return domain.UIState{}, err
 	}
 	if (product != "" && !stateID(product)) || (feature != "" && !stateID(feature)) {

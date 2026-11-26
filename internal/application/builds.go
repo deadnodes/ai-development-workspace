@@ -14,7 +14,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"releasecontrol/internal/auth"
 	"releasecontrol/internal/buildconfig"
 	"releasecontrol/internal/buildregistry"
 	"releasecontrol/internal/delivery"
@@ -226,7 +225,7 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 	if in.ProductID == "" {
 		return out, invalid("product_id required")
 	}
-	if e := authorize(ctx, "write", in.ProductID); e != nil {
+	if e := s.authorizeProductMutation(ctx, "write", in.ProductID); e != nil {
 		return out, e
 	}
 	a := s.builds
@@ -259,6 +258,9 @@ func (s *Service) QueueBuild(ctx context.Context, in domain.QueueBuildRequest) (
 	// Receipts bind normalized selectors; a branch's resolved SHA is historical
 	// evidence, not a selector to resolve again on replay.
 	replay := func(st *domain.State) (bool, error) {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return true, err
+		}
 		for _, receipt := range st.BuildReceipts {
 			if in.RequestKey != "" && receipt.ProductID == in.ProductID && receipt.RequestKey == in.RequestKey {
 				if receipt.Workflow != p.Workflow || receipt.ProfileID != p.ID || receipt.Branch != in.Branch || in.SHA != "" && receipt.SourceSHA != in.SHA {
@@ -392,10 +394,10 @@ func (s *Service) CancelBuild(ctx context.Context, in domain.BuildLookup) (domai
 	if in.ProductID == "" || in.BuildID == "" {
 		return out, invalid("product_id and build_id required")
 	}
-	if e := authorize(ctx, "write", in.ProductID); e != nil {
-		return out, e
-	}
 	e := s.store.Update(ctx, func(st *domain.State) error {
+		if err := authorizeScopedMutation(ctx, st, "write", in.ProductID); err != nil {
+			return err
+		}
 		for i := range st.Builds {
 			b := &st.Builds[i]
 			if b.ID != in.BuildID || b.ProductID != in.ProductID {
@@ -428,11 +430,11 @@ func buildCanClose(b domain.Build) bool {
 // CloseBuild abandons an active handle without changing any provider evidence.
 func (s *Service) CloseBuild(ctx context.Context, in domain.CloseBuildRequest) (domain.Build, error) {
 	var out domain.Build
-	if e := authorize(ctx, "admin", ""); e != nil {
-		return out, e
-	}
 	if in.ProductID == "" || in.BuildID == "" {
 		return out, invalid("product_id and build_id required")
+	}
+	if e := s.authorizeProductMutation(ctx, "admin", in.ProductID); e != nil {
+		return out, e
 	}
 	in.Reason = strings.TrimSpace(in.Reason)
 	if n := utf8.RuneCountInString(in.Reason); n < 8 || n > 500 {
@@ -446,6 +448,9 @@ func (s *Service) CloseBuild(ctx context.Context, in domain.CloseBuildRequest) (
 		return out, err
 	}
 	err = s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		for i, b := range st.Builds {
 			if b.ID != in.BuildID || b.ProductID != in.ProductID {
 				continue
@@ -504,20 +509,8 @@ func (s *Service) ListBuildProfiles(ctx context.Context, productID string) ([]bu
 	if e := authorize(ctx, "read", productID); e != nil {
 		return nil, e
 	}
-	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
-		if reader, ok := s.store.(interface {
-			ReadProductAccess(context.Context, string) (bool, error)
-		}); ok {
-			visible, err := reader.ReadProductAccess(ctx, productID)
-			if err != nil {
-				return nil, err
-			}
-			if !visible {
-				return nil, missing("product", productID)
-			}
-		} else if err := s.view(ctx, func(st *domain.State) error { return requireProductRead(ctx, st, productID) }); err != nil {
-			return nil, err
-		}
+	if err := s.requireProductAccess(ctx, productID); err != nil {
+		return nil, err
 	}
 	out := []buildconfig.Profile{}
 	if s.builds != nil {

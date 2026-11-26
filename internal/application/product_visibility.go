@@ -42,7 +42,7 @@ func (s *Service) executeProductMembership(ctx context.Context, c domain.Command
 			if !ok || (visibility != "private" && visibility != "shared") {
 				return invalid("visibility must be shared or private")
 			}
-			if visibility == "private" && p.Owner == "" {
+			if p.Owner == "" && (user != "" || visibility == "private") {
 				if user == "" && !bootstrap {
 					return fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
 				}
@@ -76,3 +76,12 @@ func (s *Service) executeProductMembership(ctx context.Context, c domain.Command
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }
+
+func productIDRetired(st *domain.State, productID string) bool {
+	for _, event := range st.Events {
+		if event.Action == "delete_product" && event.ProductID == productID {
+			return true
+		}
+	}
+	return false
+}

@@ -54,6 +54,7 @@ func TestAuthorizationProjectionAndAttribution(t *testing.T) {
 }
 func TestAuthorizationFailsClosedForPrivilegesAndReferences(t *testing.T) {
 	s, m := fixture(t)
+	exec(t, s, domain.Command{Action: "create_product", ID: "secret", Data: map[string]any{"name": "Other product"}})
 	m.state.Repositories = append(m.state.Repositories, domain.Repository{Meta: domain.Meta{ID: "other-repo", ProductID: "secret"}})
 	m.state.Environments = append(m.state.Environments, domain.Environment{Meta: domain.Meta{ID: "prod", ProductID: "p"}})
 	m.state.EnvironmentBindings = append(m.state.EnvironmentBindings, domain.EnvironmentBinding{Meta: domain.Meta{ID: "prod-binding", ProductID: "p"}, EnvironmentID: "prod", Purpose: "PROD"})

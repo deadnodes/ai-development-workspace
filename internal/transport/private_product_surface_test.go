@@ -63,21 +63,57 @@ var nonProductMCPReads = map[string]string{
 	"get_agent_skill": "fixed skill text", "get_backup_capabilities": "static archive protocol",
 }
 
-// These tools submit mutations or enqueue operations, rather than exposing a
-// read endpoint. Approval, replay, and hidden references use command policy.
 const privateMCPCommands = `
-execute restore_backup import_workspace_configuration scan_workspace match_local_repositories
-set_project_knowledge upsert_product_knowledge plan_local_git_sync record_local_git_sync
+execute
 refresh_environment_runtime deploy_integration deploy_existing_artifact create_integration_branch protect_integration_revision
 claim_execution heartbeat_execution report_execution release_execution takeover_execution set_desired_state
 create_execution_group add_execution_group_member remove_execution_group_member set_execution_group_harness
 set_product_stalled_timeout report_turn_end claim_execution_event_delivery ack_execution_event resolve_execution_event
-queue_build cancel_build close_build deploy_build close_deployment reconcile_deployment sign_artifact request_prod_promotion
 request_candidate_dev_restoration confirm_candidate_dev_restoration verify_candidate_dev_restoration release_candidate_dev_after_restoration
 capture_candidate_dev_baseline verify_candidate_dev_runtime deploy_candidate_dev reserve_candidate_dev release_candidate_dev
 update_environment_feature assemble_environment claim_composition_conflict record_conflict_resolution verify_conflict_resolution
 reconcile_composition prepare_release_candidate promote_release_candidate create_hotfix record_runtime_observation
 create_test_scenario revise_test_scenario record_scenario_run`
+
+var privateMCPDirectMutations = map[string]string{
+	"queue_build": "QueueBuild", "cancel_build": "CancelBuild", "close_build": "CloseBuild",
+	"deploy_build": "DeployBuild", "close_deployment": "CloseDeployment", "reconcile_deployment": "ReconcileDeployment",
+	"sign_artifact": "SignArtifact", "request_prod_promotion": "RequestProdPromotion",
+	"scan_workspace": "ScanWorkspace", "match_local_repositories": "MatchWorkspace",
+	"set_project_knowledge": "SetProjectKnowledge", "upsert_product_knowledge": "UpsertKnowledgeNode",
+	"plan_local_git_sync": "PlanLocalGitSync", "record_local_git_sync": "RecordLocalGitSync", "sync_pull_request_review": "SyncReview",
+	"import_workspace_configuration": "TestPrivateProductOwnershipGrantsAndImport", "restore_backup": "TestPrivateRestoreEvidence",
+}
+
+var privateHTTPDirectMutations = map[string]string{
+	"POST /api/builds": "QueueBuild", "POST /api/builds/{id}/cancel": "CancelBuild", "POST /api/builds/{id}/close": "CloseBuild",
+	"POST /api/deployments": "DeployBuild", "POST /api/deployments/{id}/close": "CloseDeployment", "POST /api/deployments/{id}/reconcile": "ReconcileDeployment",
+	"POST /api/signatures": "SignArtifact", "POST /api/prod-promotions": "RequestProdPromotion",
+	"POST /api/prod-promotions/claim": "ClaimProdPromotion", "POST /api/prod-promotions/{id}/result": "RecordProdPromotionResult", "POST /api/prod-promotions/{id}/heartbeat": "HeartbeatProdPromotion",
+	"POST /api/workspaces/scan": "ScanWorkspace", "POST /api/workspaces/match": "MatchWorkspace",
+	"POST /api/products/{id}/knowledge": "SetProjectKnowledge", "POST /api/products/{id}/knowledge/nodes": "UpsertKnowledgeNode",
+	"POST /api/local-git/plan": "PlanLocalGitSync", "POST /api/local-git/record": "RecordLocalGitSync", "POST /api/reviews/sync": "SyncReview",
+	"POST /api/runtime-reports": "ReportRuntime", "POST /api/workspaces/import": "TestPrivateProductOwnershipGrantsAndImport",
+	"POST /api/backups/restore": "TestPrivateRestoreEvidence",
+	"POST /api/worker/claim":    "ClaimWorker", "POST /api/worker/start": "StartWorker", "POST /api/worker/heartbeat": "HeartbeatWorker", "POST /api/worker/report": "ReportWorker",
+}
+
+const privateHTTPCommandPaths = `
+/api/commands /api/compositions/{id}/reconcile /api/features/{id}/hotfix /api/features/{id}/update-environment
+/api/integrations/{id}/deploy /api/operations/{id}/runtime /api/products/{id}/assemble-environment
+/api/products/{id}/candidate-dev/capture-baseline /api/products/{id}/candidate-dev/confirm-restoration /api/products/{id}/candidate-dev/deploy
+/api/products/{id}/candidate-dev/release /api/products/{id}/candidate-dev/release-after-restoration /api/products/{id}/candidate-dev/request-restoration
+/api/products/{id}/candidate-dev/reserve /api/products/{id}/candidate-dev/verify-restoration /api/products/{id}/candidate-dev/verify-runtime
+/api/products/{id}/conflicts/claim /api/products/{id}/conflicts/resolution /api/products/{id}/conflicts/verify
+/api/release-candidates /api/release-candidates/{id}/promote /api/scenario-runs /api/test-scenarios /api/test-scenarios/revisions`
+
+var nonProductHTTPMutations = map[string]string{
+	"POST /api/backups/export":        "read-only, covered by CreateBackup",
+	"POST /api/connections/{id}/test": "instance-owned provider connection, no Product data",
+	"POST /api/tools/{name}":          "dispatch to the inventoried tool catalog",
+	"/mcp":                            "dispatch to the inventoried MCP tools",
+	"/api/worker/":                    "fallback for separately registered POST routes; no other mutations",
+}
 
 func privateMatrixEntries(t *testing.T) map[string]bool {
 	t.Helper()
@@ -133,6 +169,7 @@ func TestPrivateProductReadSurface(t *testing.T) {
 	}
 	t.Cleanup(store.Close)
 	routes := map[string]bool{}
+	mutations := map[string]bool{}
 	server := httptest.NewServer(newServer(application.New(store), Options{}, func(pattern string) {
 		method, path, hasMethod := strings.Cut(pattern, " ")
 		if !hasMethod {
@@ -140,6 +177,9 @@ func TestPrivateProductReadSurface(t *testing.T) {
 		}
 		if strings.HasPrefix(path, "/api/") && (!hasMethod || method == "GET") {
 			routes[pattern] = true
+		}
+		if hasMethod && method != "GET" || path == "/mcp" || path == "/api/worker/" {
+			mutations[pattern] = true
 		}
 	}))
 	defer server.Close()
@@ -164,8 +204,17 @@ func TestPrivateProductReadSurface(t *testing.T) {
 		params.Cursor = result.NextCursor
 	}
 	nonReaderMCP := maps.Clone(nonProductMCPReads)
+	mcpWrites := maps.Clone(privateMCPDirectMutations)
 	for _, name := range strings.Fields(privateMCPCommands) {
-		nonReaderMCP[name] = "mutation or operation submission, not a Product read endpoint"
+		if mcpWrites[name] != "" {
+			t.Errorf("duplicate mutation classification: %s", name)
+		}
+		mcpWrites[name] = "Execute"
+	}
+	for name := range mcpWrites {
+		if privateMCPReads[name] == "" {
+			nonReaderMCP[name] = "membership-checked mutation"
+		}
 	}
 	entries := privateMatrixEntries(t)
 	for _, surface := range []struct {
@@ -193,4 +242,72 @@ func TestPrivateProductReadSurface(t *testing.T) {
 			}
 		}
 	}
+	httpWrites := maps.Clone(privateHTTPDirectMutations)
+	for _, path := range strings.Fields(privateHTTPCommandPaths) {
+		pattern := "POST " + path
+		if httpWrites[pattern] != "" {
+			t.Errorf("duplicate mutation classification: %s", pattern)
+		}
+		httpWrites[pattern] = "Execute"
+	}
+	for route := range mutations {
+		if (httpWrites[route] == "") == (nonProductHTTPMutations[route] == "") {
+			t.Errorf("%s requires exactly one mutation classification", route)
+		}
+	}
+	for route := range nonProductHTTPMutations {
+		if !mutations[route] {
+			t.Errorf("classified non-Product route no longer registered: %s", route)
+		}
+	}
+	mutationEntries := privateMutationMatrixEntries(t)
+	for _, surface := range []struct {
+		actual  map[string]bool
+		covered map[string]string
+	}{{tools, mcpWrites}, {mutations, httpWrites}} {
+		for name, entry := range surface.covered {
+			if !surface.actual[name] || !mutationEntries[entry] {
+				t.Errorf("%s is not registered or has no mutation regression %s", name, entry)
+			}
+		}
+	}
+}
+
+func privateMutationMatrixEntries(t *testing.T) map[string]bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "../application/private_product_review_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]bool{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || !strings.HasPrefix(fn.Name.Name, "TestPrivate") {
+			continue
+		}
+		entries[fn.Name.Name] = true
+		if fn.Name.Name != "TestPrivateDirectMutationSurface" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			assignment, ok := node.(*ast.AssignStmt)
+			if !ok || len(assignment.Lhs) != 1 {
+				return true
+			}
+			name, ok := assignment.Lhs[0].(*ast.Ident)
+			if !ok || name.Name != "calls" {
+				return true
+			}
+			for _, entry := range assignment.Rhs[0].(*ast.CompositeLit).Elts {
+				value := entry.(*ast.KeyValueExpr).Key.(*ast.BasicLit).Value
+				name, err := strconv.Unquote(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entries[name] = true
+			}
+			return false
+		})
+	}
+	return entries
 }

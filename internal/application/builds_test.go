@@ -843,13 +843,13 @@ func TestRestoreBuildQuarantine(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			audit := state.Events[len(state.Events)-1].Data.Data["quarantined_builds"]
+			audit := state.Events[len(state.Events)-2].Data.Data["record"]
 			raw, err := json.Marshal(audit)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var originals []domain.Build
-			if err = json.Unmarshal(raw, &originals); err != nil || len(originals) != 1 || originals[0].Status != before.Status || originals[0].RestoreQuarantined {
+			var original domain.Build
+			if err = json.Unmarshal(raw, &original); err != nil || original.Status != before.Status || original.RestoreQuarantined {
 				t.Fatalf("original build audit lost: %s", raw)
 			}
 			ids := result.(map[string]any)["quarantined_build_ids"].([]string)
