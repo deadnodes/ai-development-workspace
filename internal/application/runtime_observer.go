@@ -40,7 +40,7 @@ func (s *Service) ObserveRuntimeOnce(ctx context.Context, observers []delivery.R
 		previous := make(map[string]*domain.RuntimeObservation)
 		for i := range st.RuntimeObservations {
 			r := &st.RuntimeObservations[i]
-			if old := previous[domain.RuntimeObservationKey(r.OperationID, r.Target)]; old == nil || r.CreatedAt.After(old.CreatedAt) || r.CreatedAt.Equal(old.CreatedAt) && r.ID > old.ID {
+			if old := previous[domain.RuntimeObservationKey(r.OperationID, r.Target)]; old == nil || !r.CreatedAt.Before(old.CreatedAt) { // equal time: the later appended row wins
 				previous[domain.RuntimeObservationKey(r.OperationID, r.Target)] = r
 			}
 		}

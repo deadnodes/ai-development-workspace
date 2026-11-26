@@ -724,7 +724,7 @@ func notesBaselines(st *domain.State, product, environment string, in intelligen
 			latest[op.ApplicationID] = map[string]domain.RuntimeObservation{}
 		}
 		old, ok := latest[op.ApplicationID][o.Target]
-		if !ok || o.CreatedAt.After(old.CreatedAt) || o.CreatedAt.Equal(old.CreatedAt) && o.ID > old.ID {
+		if !ok || !o.CreatedAt.Before(old.CreatedAt) { // equal time: the later appended row wins
 			latest[op.ApplicationID][o.Target] = o
 		}
 	}

@@ -31,7 +31,7 @@ func BindRuntimeFreshness(rows []RuntimeObservation, freshness map[string]Runtim
 	latest := map[string]RuntimeObservation{}
 	for _, r := range rows {
 		old, ok := latest[RuntimeObservationKey(r.OperationID, r.Target)]
-		if !ok || r.CreatedAt.After(old.CreatedAt) || r.CreatedAt.Equal(old.CreatedAt) && r.ID > old.ID {
+		if !ok || !r.CreatedAt.Before(old.CreatedAt) { // equal time: the later appended row wins
 			latest[RuntimeObservationKey(r.OperationID, r.Target)] = r
 		}
 	}
