@@ -62,6 +62,21 @@ func workerIdentity(t *testing.T, s *Service) workerconfig.Principal {
 	}
 	return p
 }
+
+func TestClaimWorkerHidesProductsOutsideWorkerGrant(t *testing.T) {
+	store := &memoryStore{state: domain.EmptyState()}
+	store.state.Products = []domain.Product{{Meta: domain.Meta{ID: "private"}, Name: "Private"}}
+	service := New(store)
+	service.externalWorkers = workerAuthority(t)
+	principal := workerIdentity(t, service) // grants only product p
+	for _, product := range []string{"private", "missing"} {
+		_, err := service.ClaimWorker(context.Background(), principal, domain.WorkerClaim{ProductID: product, RepositoryID: "r", Capability: "source_check"})
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("product %q: got %v, want NOT_FOUND", product, err)
+		}
+	}
+}
+
 func claimWorker(t *testing.T, s *Service) *domain.WorkerLease {
 	t.Helper()
 	v, e := s.ClaimWorker(context.Background(), workerIdentity(t, s), domain.WorkerClaim{ProductID: "p", RepositoryID: "r", Capability: "source_check"})

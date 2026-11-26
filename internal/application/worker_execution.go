@@ -279,13 +279,16 @@ func recoverWorker(st *domain.State, j *domain.WorkerJob, now time.Time) {
 	}
 }
 func (s *Service) ClaimWorker(ctx context.Context, p workerconfig.Principal, in domain.WorkerClaim) (*domain.WorkerLease, error) {
+	now := time.Now().UTC()
+	if s.externalWorkers != nil && (!s.externalWorkers.Current(p, now) || !p.Allows(in.ProductID, in.RepositoryID, in.Capability, now)) {
+		return nil, ErrNotFound
+	}
 	if err := s.requireProductAccess(ctx, in.ProductID); err != nil {
 		return nil, err
 	}
 	if s.externalWorkers == nil {
 		return nil, invalid("external workers disabled")
 	}
-	now := time.Now().UTC()
 	if (in.RecipeID == "") != (in.RecipeHash == "") {
 		return nil, invalid("exact recipe claim filter required")
 	}

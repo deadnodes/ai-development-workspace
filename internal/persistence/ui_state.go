@@ -332,6 +332,8 @@ func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest,
 		var docs []json.RawMessage
 		var selectedProduct json.RawMessage
 		selectedProductPosition := -1
+		var selectedFeature json.RawMessage
+		selectedFeaturePosition := -1
 		count := 0
 		err := historyArray(ctx, raw, func(record []byte) error {
 			id, product := scopeText(record, "id"), scopeText(record, "product_id")
@@ -351,6 +353,10 @@ func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest,
 			if kind == "products" && id == q.ProductID {
 				selectedProduct = record
 				selectedProductPosition = count
+			}
+			if kind == "features" && id == q.FeatureID {
+				selectedFeature = record
+				selectedFeaturePosition = count
 			}
 			if kind == "features" && id != q.FeatureID || kind == "products" && id != q.ProductID {
 				var row map[string]json.RawMessage
@@ -388,6 +394,9 @@ func readLocalUIState(ctx context.Context, data []byte, q domain.UIStateRequest,
 			docs = append(slices.Clone(docs[pivot:]), docs[:pivot]...)
 			if selectedProductPosition >= 0 && selectedProductPosition < count-limit {
 				docs[0] = selectedProduct
+			}
+			if selectedFeaturePosition >= 0 && selectedFeaturePosition < count-limit {
+				docs[0] = selectedFeature
 			}
 		}
 		selected[kind] = docs

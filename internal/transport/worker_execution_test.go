@@ -92,7 +92,7 @@ func TestWorkerChannelIsolationAndTypedClient(t *testing.T) {
 		t.Fatalf("missing product: %d", code)
 	}
 	for _, body := range []string{`{"product_id":"p","repository_id":"other","capability":"source_check"}`, `{"product_id":"p","repository_id":"r","capability":"deploy"}`} {
-		if code := workerHTTP(t, server, "/api/worker/claim", testWorkerCredential, body); code != 422 {
+		if code := workerHTTP(t, server, "/api/worker/claim", testWorkerCredential, body); code != http.StatusNotFound {
 			t.Fatalf("scope escape: %d", code)
 		}
 	}

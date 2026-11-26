@@ -35,7 +35,7 @@ func commandAuthorizationInputs(c domain.Command) ([]string, bool, error) {
 		switch v := v.(type) {
 		case string:
 			if v != "" && (key == "id" || strings.HasSuffix(key, "_id") || strings.HasSuffix(key, "_ids") ||
-				key == "depends_on" || key == "dependencies" || key == "repositories" || key == "waiting_ref" || key == "blocker_ref") {
+				key == "depends_on" || key == "dependencies" || key == "repositories" || key == "waiting_ref" || key == "blocker_ref" || key == "deployment") {
 				ids[v] = true
 			}
 		case []any:
