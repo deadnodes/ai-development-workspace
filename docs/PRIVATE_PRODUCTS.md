@@ -24,3 +24,8 @@ Trusted local processes without a principal see all Products. The bootstrap
 service principal also sees all Products and whole-instance backups include
 private Products. Ordinary users and agents cannot use backups to access
 private Products they cannot see.
+
+The instance admin role does not bypass Product membership for reads or
+commands. The trusted `service/bootstrap` principal is the recovery exception:
+it can inspect every Product and perform whole-instance backup and restore.
+Shared Products remain visible under the existing Product permission rules.
