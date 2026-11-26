@@ -64,6 +64,15 @@ func TestAgentGuideEntriesHaveCompleteBriefs(t *testing.T) {
 func TestAgentGuideExecuteExamplesMatchCommandSchema(t *testing.T) {
 	entries := agentguide.Registry()
 	root := CommandSchema()
+	rootRaw, _ := json.Marshal(root)
+	var rootSchema jsonschema.Schema
+	if err := json.Unmarshal(rootRaw, &rootSchema); err != nil {
+		t.Fatal(err)
+	}
+	fullSchema, err := rootSchema.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	variants := root["oneOf"].([]any)
 	branches := map[string]map[string]any{}
 	for _, raw := range variants {
@@ -102,6 +111,10 @@ func TestAgentGuideExecuteExamplesMatchCommandSchema(t *testing.T) {
 		}
 		if err = resolved.Validate(example); err != nil {
 			t.Errorf("%s example does not validate: %v", e.Name, err)
+		}
+		// MCP validates against the whole schema, including the root data allow-list.
+		if err = fullSchema.Validate(example); err != nil {
+			t.Errorf("%s example does not validate against the full command schema: %v", e.Name, err)
 		}
 		// Every documented top-level command field must be present in this action branch.
 		props := schemaBranch["properties"].(map[string]any)
