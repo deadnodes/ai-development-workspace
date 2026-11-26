@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"maps"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
 	"time"
@@ -20,6 +21,49 @@ func (s *Service) view(ctx context.Context, fn func(*domain.State) error) error 
 		return err
 	}
 	return fn(&st)
+}
+
+func requireProductRead(ctx context.Context, st *domain.State, product string) error {
+	if !auth.RequiresExistingProduct(ctx) {
+		return nil
+	}
+	if record := productByID(*st, product); record == nil || !productVisibleTo(ctx, record) {
+		return missing("product", product)
+	}
+	return nil
+}
+
+func (s *Service) requireProductAccess(ctx context.Context, product string) error {
+	if !auth.RequiresExistingProduct(ctx) {
+		return nil
+	}
+	if reader, ok := s.store.(interface {
+		ReadProductAccess(context.Context, string) (bool, error)
+	}); ok {
+		visible, err := reader.ReadProductAccess(ctx, product)
+		if err != nil {
+			return err
+		}
+		if !visible {
+			return missing("product", product)
+		}
+		return nil
+	}
+	return s.view(ctx, func(st *domain.State) error { return requireProductRead(ctx, st, product) })
+}
+
+func (s *Service) authorizeProductMutation(ctx context.Context, permission, product string) error {
+	if err := s.requireProductAccess(ctx, product); err != nil {
+		return err
+	}
+	return authorize(ctx, permission, product)
+}
+
+func authorizeScopedMutation(ctx context.Context, st *domain.State, permission, product string) error {
+	if err := requireProductRead(ctx, st, product); err != nil {
+		return err
+	}
+	return authorize(ctx, permission, product)
 }
 func copyTime(t *time.Time) *time.Time {
 	if t == nil {

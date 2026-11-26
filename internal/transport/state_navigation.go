@@ -31,7 +31,7 @@ func registerStateNavigationTool(server *mcp.Server, service Service) {
 		}
 		out, e := reader.StatePage(ctx, in)
 		if e != nil {
-			if errors.Is(e, application.ErrValidation) {
+			if errors.Is(e, application.ErrValidation) || errors.Is(e, application.ErrNotFound) {
 				return fail(e.Error())
 			}
 			return fail("get_state metadata read failed; ask the owning operator to inspect the store")

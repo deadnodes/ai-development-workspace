@@ -332,7 +332,7 @@ func (s *Service) SignArtifact(ctx context.Context, in domain.SignArtifactReques
 	if in.ProductID == "" {
 		return out, invalid("product_id required")
 	}
-	if e := authorize(ctx, "write", in.ProductID); e != nil {
+	if e := s.authorizeProductMutation(ctx, "write", in.ProductID); e != nil {
 		return out, e
 	}
 	a := s.builds
@@ -372,6 +372,9 @@ func (s *Service) SignArtifact(ctx context.Context, in domain.SignArtifactReques
 		}
 	}
 	replay := func(st *domain.State) (bool, error) {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return true, err
+		}
 		for _, v := range st.ArtifactSignatures {
 			if v.ProductID == in.ProductID && v.Request.RequestKey == in.RequestKey {
 				if !reflect.DeepEqual(v.Request, in) {
@@ -531,6 +534,9 @@ func (s *Service) ListSignatures(ctx context.Context, in domain.ListSignaturesRe
 		after = c.After
 	}
 	e := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		records := slices.Clone(st.ArtifactSignatures)
 		sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 		for _, v := range records {

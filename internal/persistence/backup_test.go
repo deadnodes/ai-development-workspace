@@ -28,7 +28,7 @@ func TestRestoreBackupRejectsAuditOnlyInstance(t *testing.T) {
 				store = local
 			}
 			svc := application.New(store)
-			// Capture a valid nonempty backup before deleting the last product.
+			// Capture a valid backup, then isolate a journal with no indexed provenance.
 			if _, err := svc.Execute(ctx, domain.Command{Action: "create_product", ID: "p", Actor: "agent", Data: map[string]any{"name": "Product"}}); err != nil {
 				t.Fatal(err)
 			}
@@ -36,7 +36,10 @@ func TestRestoreBackupRejectsAuditOnlyInstance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = svc.Execute(ctx, domain.Command{Action: "delete_product", ProductID: "p", Actor: "agent", Data: map[string]any{"name": "Product"}}); err != nil {
+			if err = store.Update(ctx, func(st *domain.State) error {
+				st.Products = nil
+				return nil
+			}); err != nil {
 				t.Fatal(err)
 			}
 			before, err := store.Read(ctx)

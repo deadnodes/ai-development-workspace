@@ -44,7 +44,32 @@ type Options struct {
 }
 
 func New(service Service, options Options) http.Handler {
-	mux := http.NewServeMux()
+	return newServer(service, options, nil)
+}
+
+type routeRegistrar interface {
+	Handle(string, http.Handler)
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
+}
+
+type observedMux struct {
+	*http.ServeMux
+	register func(string)
+}
+
+func (mux observedMux) Handle(pattern string, handler http.Handler) {
+	mux.ServeMux.Handle(pattern, handler)
+	if mux.register != nil {
+		mux.register(pattern)
+	}
+}
+
+func (mux observedMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	mux.Handle(pattern, http.HandlerFunc(handler))
+}
+
+func newServer(service Service, options Options, register func(string)) http.Handler {
+	mux := observedMux{http.NewServeMux(), register}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -83,8 +108,9 @@ func New(service Service, options Options) http.Handler {
 		v, e := service.Execute(r.Context(), c)
 		respond(w, v, e)
 	})
-	workerMux := http.NewServeMux()
+	workerMux := observedMux{http.NewServeMux(), register}
 	registerWorkerRoutes(workerMux, service, options)
+	promoterMux := prodPromoterRoutes(service, options, register)
 	registerBuildRoutes(mux, service)
 	registerPipelineRoutes(mux, service)
 	registerSignatureRoutes(mux, service)
@@ -159,7 +185,7 @@ func New(service Service, options Options) http.Handler {
 		if promoterTokenValid(r, options) {
 			if r.Method == http.MethodPost && (r.URL.Path == "/api/prod-promotions/claim" || strings.HasPrefix(r.URL.Path, "/api/prod-promotions/") && (strings.HasSuffix(r.URL.Path, "/result") || strings.HasSuffix(r.URL.Path, "/heartbeat"))) {
 				ctx := auth.WithPrincipal(r.Context(), auth.Principal{ID: "service/prod-promoter", Kind: "service"})
-				prodPromoterRoutes(service, options).ServeHTTP(w, r.WithContext(ctx))
+				promoterMux.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			write(w, 403, map[string]string{"error": "promoter credential restricted to promotion claim and result"})

@@ -20,11 +20,11 @@ func deploymentSafeToClose(d domain.Deployment) bool {
 // CloseDeployment records operator abandonment where no GitOps writes remain in flight.
 func (s *Service) CloseDeployment(ctx context.Context, in domain.CloseDeploymentRequest) (domain.Deployment, error) {
 	var out domain.Deployment
-	if err := authorize(ctx, "admin", ""); err != nil {
-		return out, err
-	}
 	if in.ProductID == "" || in.DeploymentID == "" {
 		return out, invalid("product_id and deployment_id required")
+	}
+	if err := s.authorizeProductMutation(ctx, "admin", in.ProductID); err != nil {
+		return out, err
 	}
 	in.Reason = strings.TrimSpace(in.Reason)
 	if n := utf8.RuneCountInString(in.Reason); n < 8 || n > 500 {
@@ -34,6 +34,9 @@ func (s *Service) CloseDeployment(ctx context.Context, in domain.CloseDeployment
 		return out, invalid("invalid request_key")
 	}
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		// The audit event is the durable request-key receipt, including after restart.
 		if in.RequestKey != "" {
 			for _, event := range st.Events {
@@ -89,12 +92,12 @@ func (s *Service) CloseDeployment(ctx context.Context, in domain.CloseDeployment
 // dispatcher's mutex so provider observations cannot race a merge attempt.
 func (s *Service) ReconcileDeployment(ctx context.Context, in domain.ReconcileDeploymentRequest) (domain.ReconcileDeploymentResult, error) {
 	var out domain.ReconcileDeploymentResult
-	if err := authorize(ctx, "admin", ""); err != nil {
-		return out, err
-	}
 	in.Reason = strings.TrimSpace(in.Reason)
 	if in.ProductID == "" || in.DeploymentID == "" || utf8.RuneCountInString(in.Reason) < 8 || utf8.RuneCountInString(in.Reason) > 500 || len(in.RequestKey) > 128 {
 		return out, invalid("invalid reconcile_deployment request")
+	}
+	if err := s.authorizeProductMutation(ctx, "admin", in.ProductID); err != nil {
+		return out, err
 	}
 	a := s.deployments
 	if a == nil {
@@ -119,6 +122,9 @@ func (s *Service) ReconcileDeployment(ctx context.Context, in domain.ReconcileDe
 	if in.RequestKey != "" {
 		var receipts []domain.Event
 		if err := s.view(ctx, func(state *domain.State) error {
+			if err := requireProductRead(ctx, state, in.ProductID); err != nil {
+				return err
+			}
 			for _, event := range state.Events {
 				if event.Action == "reconcile_deployment" && event.ProductID == in.ProductID && event.Data.Data["request_key"] == in.RequestKey {
 					receipts = append(receipts, event)
@@ -158,6 +164,9 @@ func (s *Service) ReconcileDeployment(ctx context.Context, in domain.ReconcileDe
 		return out, err
 	}
 	err = s.store.Update(ctx, func(state *domain.State) error {
+		if err := requireProductRead(ctx, state, in.ProductID); err != nil {
+			return err
+		}
 		deploymentEvent(state, d, "reconcile_deployment")
 		data := state.Events[len(state.Events)-1].Data.Data
 		data["reason"] = in.Reason

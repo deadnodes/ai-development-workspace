@@ -87,7 +87,7 @@ func workspaceJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	}
 	return true
 }
-func registerWorkspaceRoutes(mux *http.ServeMux, service Service) {
+func registerWorkspaceRoutes(mux routeRegistrar, service Service) {
 	s, ok := service.(workspaceService)
 	if !ok {
 		return

@@ -75,8 +75,14 @@ func (s *Service) WorkerHistory(ctx context.Context, in domain.WorkerHistoryRequ
 	if e != nil {
 		return out, e
 	}
-	if !meta.ProductFound || in.FeatureID != "" && !meta.FeatureFound || in.JobID != "" && !meta.JobFound {
-		return out, invalid("worker history scope not found")
+	if !meta.ProductFound {
+		return out, missing("product", in.ProductID)
+	}
+	if in.FeatureID != "" && !meta.FeatureFound {
+		return out, missing("feature", in.FeatureID)
+	}
+	if in.JobID != "" && !meta.JobFound {
+		return out, missing("worker job", in.JobID)
 	}
 	out = domain.WorkerHistoryPage{Projection: "native_worker_history", ProductID: in.ProductID, FeatureID: in.FeatureID, JobID: in.JobID, Collection: in.Collection, Items: []domain.WorkerHistoryItem{}, Consistency: "live_id_keyset: not a snapshot; concurrent inserts before the cursor require a fresh traversal", Guidance: "Recorded states and provenance are historical metadata, not verified success or runtime readiness. Native worker history only; Actions history is separate. Follow attempts and links collections for complete per-job records."}
 	if len(meta.Items) > q.Limit {

@@ -99,6 +99,8 @@ func TestSourceRetentionRestoreUsesCausalLineage(t *testing.T) {
 			flowTickUntil(t, donor, m, parent, retentionSourceReady)
 			operation := operationByID(&m.state, parent)
 			compositionByID(&m.state, "baseline").AutoRefresh = true
+			store, _ := openWorkerTestStore(t, kind)
+			defer store.Close()
 			ahead := time.Now().UTC().Add(750 * time.Millisecond)
 			operation.CreatedAt = ahead
 			operation.UpdatedAt = ahead
@@ -118,8 +120,6 @@ func TestSourceRetentionRestoreUsesCausalLineage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			store, _ := openWorkerTestStore(t, kind)
-			defer store.Close()
 			s := NewWithProvider(store, p)
 			if _, err = s.RestoreBackup(ctx, "tester", backup.ArchiveBase64, backup.SHA256); err != nil {
 				t.Fatal(err)

@@ -24,7 +24,7 @@ type prodPromotionService interface {
 	PublicProdSignatures(context.Context, string) (application.PublicProdSignatures, error)
 }
 
-func registerProdPromotions(mux *http.ServeMux, server *mcp.Server, service Service) {
+func registerProdPromotions(mux routeRegistrar, server *mcp.Server, service Service) {
 	mux.HandleFunc("GET /api/public/prod-signatures/{digest}", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(prodPromotionService)
 		if !ok {
@@ -46,7 +46,7 @@ func registerProdPromotions(mux *http.ServeMux, server *mcp.Server, service Serv
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "public, max-age=30")
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	})
@@ -129,8 +129,8 @@ func registerProdPromotions(mux *http.ServeMux, server *mcp.Server, service Serv
 	})
 }
 
-func prodPromoterRoutes(service Service, options Options) http.Handler {
-	mux := http.NewServeMux()
+func prodPromoterRoutes(service Service, options Options, register func(string)) http.Handler {
+	mux := observedMux{http.NewServeMux(), register}
 	s, ok := service.(prodPromotionService)
 	if !ok {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { write(w, 503, nil) })

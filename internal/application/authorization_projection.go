@@ -3,48 +3,60 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
+	"strings"
 
 	"releasecontrol/internal/domain"
 )
 
 func commandReferenceIDs(c domain.Command) ([]string, error) {
+	ids, _, err := commandAuthorizationInputs(c)
+	return ids, err
+}
+
+func commandAuthorizationInputs(c domain.Command) ([]string, bool, error) {
 	raw, err := json.Marshal(c)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var value any
 	if err = json.Unmarshal(raw, &value); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ids := map[string]bool{}
-	var visit func(any)
-	visit = func(v any) {
+	operatorOnly := false
+	var visit func(string, any)
+	visit = func(key string, v any) {
+		if key == "approve_main_update" && v == true || key == "status" && v == "released" {
+			operatorOnly = true
+		}
 		switch v := v.(type) {
 		case string:
-			if v != "" {
+			if v != "" && (key == "id" || strings.HasSuffix(key, "_id") || strings.HasSuffix(key, "_ids") ||
+				key == "depends_on" || key == "dependencies" || key == "repositories" || key == "waiting_ref" || key == "blocker_ref" || key == "deployment") {
 				ids[v] = true
 			}
 		case []any:
 			for _, item := range v {
-				visit(item)
+				visit(key, item)
 			}
 		case map[string]any:
 			for key, item := range v {
 				if key != "actor" {
-					visit(item)
+					visit(key, item)
 				}
 			}
 		}
 	}
-	visit(value)
+	visit("", value)
 	out := make([]string, 0, len(ids))
 	for id := range ids {
 		out = append(out, id)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out, operatorOnly, nil
 }
 
 // The authorization policy follows only these persisted edges. Preserve the
@@ -62,11 +74,7 @@ var authorizationPaths = func() [][][]int {
 	return out
 }()
 
-func authorizationProjection(st domain.State, c domain.Command) (domain.State, error) {
-	ids, err := commandReferenceIDs(c)
-	if err != nil {
-		return domain.State{}, err
-	}
+func projectReferences(st domain.State, ids []string) (domain.State, map[string]bool) {
 	needed := map[string]bool{}
 	for _, id := range ids {
 		needed[id] = true
@@ -81,16 +89,15 @@ func authorizationProjection(st domain.State, c domain.Command) (domain.State, e
 			bindings := src.Type().Field(i).Name == "EnvironmentBindings"
 			for j := 0; j < field.Len(); j++ {
 				key := [2]int{i, j}
-				if selected[key] {
-					continue
-				}
 				row := field.Index(j)
 				id := row.FieldByIndex(path).String()
 				if !bindings && !needed[id] {
 					continue
 				}
-				selected[key] = true
-				dst.Field(i).Set(reflect.Append(dst.Field(i), row))
+				if !selected[key] {
+					selected[key] = true
+					dst.Field(i).Set(reflect.Append(dst.Field(i), row))
+				}
 				// Binding rows provide production metadata, not additional graph roots.
 				if !needed[id] {
 					continue
@@ -105,15 +112,18 @@ func authorizationProjection(st domain.State, c domain.Command) (domain.State, e
 			}
 		}
 	}
-	return out, nil
+	return out, needed
+}
+
+type referenceReader interface {
+	ReadReferences(context.Context, []string) (domain.State, error)
 }
 
 func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error {
 	var st domain.State
 	var err error
-	if reader, ok := s.Store.(interface {
-		ReadReferences(context.Context, []string) (domain.State, error)
-	}); ok {
+	reader, projected := s.Store.(referenceReader)
+	if projected {
 		var ids []string
 		ids, err = commandReferenceIDs(s.command)
 		if err == nil {
@@ -122,8 +132,11 @@ func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error
 	} else {
 		st, err = s.Store.Read(ctx)
 	}
+	if errors.Is(err, domain.ErrReadScopeNotFound) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return err
 	}
-	return authorizeCommand(ctx, st, s.command)
+	return authorizeCommand(ctx, st, s.command, !projected)
 }

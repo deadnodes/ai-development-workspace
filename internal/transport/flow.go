@@ -87,7 +87,7 @@ func flowCommand(spec flowAction, input map[string]any) domain.Command {
 	}
 	return c
 }
-func registerFlowRoutes(mux *http.ServeMux, service Service) {
+func registerFlowRoutes(mux routeRegistrar, service Service) {
 	for _, spec := range flowActions {
 		mux.HandleFunc(spec.pattern, func(w http.ResponseWriter, r *http.Request) {
 			if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {

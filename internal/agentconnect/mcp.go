@@ -2,8 +2,10 @@ package agentconnect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +16,64 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// RunWhoami prints the authenticated identity exposed by GET /auth/me.
+func RunWhoami(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("release-control whoami", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var raw, profile, tokenEnv string
+	flags.StringVar(&raw, "url", "", "Control Plane base URL")
+	flags.StringVar(&profile, "profile", "default", "saved agent credential profile")
+	flags.StringVar(&tokenEnv, "token-env", "", "bearer token environment variable")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	endpoint, err := secureEndpoint(raw)
+	if err != nil {
+		return err
+	}
+	token, err := ResolveCredential(endpoint, profile, tokenEnv)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/auth/me", nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("whoami request failed: %s", resp.Status)
+	}
+	var body map[string]any
+	if err = json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return err
+	}
+	if _, ok := body["user_id"]; !ok {
+		if p, ok := body["principal"].(map[string]any); ok {
+			user := p["id"]
+			if p["kind"] == "agent" {
+				user = p["owner"]
+			}
+			body["user_id"] = user
+		}
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(body)
+}
 
 // RunToken is intended for local hooks that need authenticated HTTP access.
 // It emits only the credential bytes on stdout and never includes them in errors.

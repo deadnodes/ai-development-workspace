@@ -76,6 +76,7 @@ func TestCommandAuthorizationRechecksAtomicOwnership(t *testing.T) {
 			store, _ := openWorkerTestStore(t, kind)
 			s := New(store)
 			workerSeed(t, s)
+			exec(t, s, domain.Command{Action: "create_product", ID: "foreign", Data: map[string]any{"name": "Foreign product"}})
 			before, err := store.Read(context.Background())
 			if err != nil {
 				t.Fatal(err)

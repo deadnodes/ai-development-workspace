@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 )
 
@@ -47,6 +49,18 @@ func (s *Service) CreateBackup(ctx context.Context, actor string) (Backup, error
 	st, err := s.store.Read(ctx)
 	if err != nil {
 		return Backup{}, err
+	}
+	for _, product := range st.Products {
+		if !productVisibleTo(ctx, &product) {
+			return Backup{}, auth.ErrForbidden
+		}
+	}
+	if _, restricted := auth.PrivateProductViewer(ctx); restricted {
+		principal, _ := auth.FromContext(ctx)
+		st, err = filterScopedStateForContext(ctx, st, principal)
+		if err != nil {
+			return Backup{}, err
+		}
 	}
 	data, err := json.Marshal(backupEnvelope{Format: "release-control-backup", Version: 1, CreatedAt: time.Now().UTC(), RequestedBy: actor, State: st})
 	if err != nil {
@@ -142,7 +156,28 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 				restored.NativeQuarantines = append(restored.NativeQuarantines, domain.NativeQuarantine{Meta: domain.Meta{ID: id(), ProductID: p.ID, Actor: actor, CreatedAt: now, UpdatedAt: now}, RestoreID: restoreID})
 			}
 		}
-		originalOperations := []domain.ExternalOperation{}
+		evidenceCounts := map[string]int{}
+		evidence := func(collection string, meta domain.Meta, record any) error {
+			if meta.ProductID == "" {
+				return invalid("restore evidence for %s requires a product scope", collection)
+			}
+			evidenceCounts[collection]++
+			restored.Events = append(restored.Events, domain.Event{ID: id(), Action: "restore_backup_evidence", Actor: actor, At: now, EntityID: meta.ID, ProductID: meta.ProductID, FeatureID: meta.FeatureID, Data: domain.Command{Action: "restore_backup_evidence", Actor: actor, ProductID: meta.ProductID, FeatureID: meta.FeatureID, Data: map[string]any{"restore_event_id": restoreID, "collection": collection, "record": record}}})
+			return nil
+		}
+		restored.Operations = slices.Clone(restored.Operations)
+		originalOperations := make(map[string]int, len(restored.Operations))
+		for index, operation := range envelope.State.Operations {
+			originalOperations[operation.ID] = index
+		}
+		recordedOperations := map[string]bool{}
+		operationEvidence := func(operation domain.ExternalOperation) error {
+			if recordedOperations[operation.ID] {
+				return nil
+			}
+			recordedOperations[operation.ID] = true
+			return evidence("interrupted_operations", operation.Meta, envelope.State.Operations[originalOperations[operation.ID]])
+		}
 		for i := range restored.Operations {
 			if domain.IsRestorationOperation(restored.Operations[i]) || restored.Operations[i].DevActivationGroupID != "" || restored.Operations[i].DevActivationBatch != nil || restored.Operations[i].DevActivationIntentHash != "" || restored.Operations[i].DevActivationPRHash != "" || restored.Operations[i].DevActivationResultHash != "" || restored.Operations[i].DevActivation != nil || restored.Operations[i].DevRuntime != nil || restored.Operations[i].DevBaseline != nil {
 				restored.Operations[i].ReservationQuarantined = true
@@ -189,7 +224,9 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 				continue
 			}
 			if op.Status == "PENDING" || op.Status == "RUNNING" {
-				originalOperations = append(originalOperations, *op)
+				if err := operationEvidence(*op); err != nil {
+					return err
+				}
 				cancelled = append(cancelled, op.ID)
 				op.Status = "CANCELLED"
 				op.FinishedAt = &now
@@ -206,7 +243,9 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 			j := &restored.WorkerJobs[i]
 			if !workerTerminal(j.Status) {
 				if op := operationByID(&restored, j.OperationID); op != nil {
-					originalOperations = append(originalOperations, *op)
+					if err := operationEvidence(*op); err != nil {
+						return err
+					}
 					reconciliationRequired = append(reconciliationRequired, op.ID)
 				}
 				j.Status = "RECONCILIATION_REQUIRED"
@@ -222,36 +261,41 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 				}
 			}
 		}
-		originalDeployments := []domain.Deployment{}
 		for i := range restored.Deployments {
 			d := &restored.Deployments[i]
 			if !deploymentTerminal(*d) {
-				originalDeployments = append(originalDeployments, *d)
+				if err := evidence("quarantined_deployments", d.Meta, *d); err != nil {
+					return err
+				}
 				d.Status = "RECONCILIATION_REQUIRED"
 				d.UncertainAction = "restored"
 				d.FailureCode = "DEPLOYMENT_RESTORED"
 				d.UpdatedAt = now
 			}
 		}
-		originalSignatures := []domain.ArtifactSignature{}
 		for i := range restored.ArtifactSignatures {
 			v := &restored.ArtifactSignatures[i]
 			if v.Status == "PENDING" {
-				originalSignatures = append(originalSignatures, *v)
+				if err := evidence("quarantined_signatures", v.Meta, *v); err != nil {
+					return err
+				}
 				v.Status = "FAILED"
 				v.UpdatedAt = now
 			}
 		}
-		originalBuilds := []domain.Build{}
 		for i := range restored.Builds {
 			b := &restored.Builds[i]
+			quarantine := b.Status == "QUEUED" || buildActive(*b) || b.RestoreQuarantined
+			if b.SigningStatus == "PENDING" || quarantine {
+				if err := evidence("quarantined_builds", b.Meta, *b); err != nil {
+					return err
+				}
+			}
 			if b.SigningStatus == "PENDING" {
-				originalBuilds = append(originalBuilds, *b)
 				b.SigningStatus = "FAILED"
 				b.UpdatedAt = now
 			}
-			if b.Status == "QUEUED" || buildActive(*b) || b.RestoreQuarantined {
-				originalBuilds = append(originalBuilds, *b)
+			if quarantine {
 				quarantinedBuilds = append(quarantinedBuilds, b.ID)
 				b.RestoreQuarantined = true
 				b.Status = "RECONCILIATION_REQUIRED"
@@ -262,7 +306,7 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 		}
 		// Preserve pre-restore operation state as audit evidence; destination workers
 		// must not race the source instance or repeat CI/GitOps mutations.
-		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "interrupted_operations": originalOperations, "quarantined_builds": originalBuilds, "quarantined_deployments": originalDeployments, "quarantined_signatures": originalSignatures}}})
+		restored.Events = append(restored.Events, domain.Event{ID: restoreID, Action: "restore_backup", Actor: actor, At: now, EntityID: restoreID, Data: domain.Command{Action: "restore_backup", Actor: actor, Data: map[string]any{"sha256": expected, "source_created_at": envelope.CreatedAt, "evidence_counts": evidenceCounts}}})
 		*current = restored
 		return nil
 	})

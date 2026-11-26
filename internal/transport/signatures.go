@@ -16,7 +16,7 @@ type signatureService interface {
 	ListSignatures(context.Context, domain.ListSignaturesRequest) (domain.SignaturePage, error)
 }
 
-func registerSignatureRoutes(mux *http.ServeMux, service Service) {
+func registerSignatureRoutes(mux routeRegistrar, service Service) {
 	mux.HandleFunc("POST /api/signatures", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(signatureService)
 		if !ok {

@@ -57,7 +57,7 @@ func runtimeReportPost(service Service, options Options) http.HandlerFunc {
 		respond(w, v, err)
 	}
 }
-func registerRuntimeReports(mux *http.ServeMux, server *mcp.Server, service Service, options Options) {
+func registerRuntimeReports(mux routeRegistrar, server *mcp.Server, service Service, options Options) {
 	mux.HandleFunc("POST /api/runtime-reports", runtimeReportPost(service, options))
 	mux.HandleFunc("GET /api/runtime-reports", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := service.(runtimeReportService)

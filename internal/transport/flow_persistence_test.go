@@ -106,13 +106,15 @@ func TestPostgresFlowHistoryRestartAndBackupMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after.Events) != len(before.Events)+1 || len(after.OperationSteps) != len(before.OperationSteps)+2 {
+	if len(after.Events) != len(before.Events)+3 || len(after.OperationSteps) != len(before.OperationSteps)+2 {
 		t.Fatal("migration cancellation audit missing")
 	}
-	rawInterrupted, _ := json.Marshal(after.Events[len(after.Events)-1].Data.Data["interrupted_operations"])
-	var interrupted []domain.ExternalOperation
-	if err = json.Unmarshal(rawInterrupted, &interrupted); err != nil || len(interrupted) != 2 || !reflect.DeepEqual(interrupted[0], before.Operations[2]) || !reflect.DeepEqual(interrupted[1], before.Operations[3]) {
-		t.Fatal("pre-restore parent and child history was not retained")
+	for index, event := range after.Events[len(before.Events) : len(after.Events)-1] {
+		var interrupted domain.ExternalOperation
+		raw, _ := json.Marshal(event.Data.Data["record"])
+		if err = json.Unmarshal(raw, &interrupted); err != nil || !reflect.DeepEqual(interrupted, before.Operations[index+2]) || event.ProductID != interrupted.ProductID {
+			t.Fatal("pre-restore parent and child history was not retained")
+		}
 	}
 	for i := range after.Operations {
 		original := before.Operations[i]

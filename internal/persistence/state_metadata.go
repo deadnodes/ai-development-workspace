@@ -16,11 +16,17 @@ import (
 
 // SQL bounds text before it crosses the connection; only metadata columns are
 // read. Neither the events table nor the full record document is transferred.
-const stateCardColumns = `left(id,129), left(coalesce(product_id,''),129), left(coalesce(feature_id,''),129), CASE WHEN kind='products' THEN left(coalesce(document->>'name',''),257) ELSE '' END, CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'title',''),257) ELSE '' END, (CASE WHEN kind='products' THEN octet_length(coalesce(document->>'name',''))>256 ELSE octet_length(coalesce(document->>'title',''))>256 END), CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'status',''),65) ELSE '' END, CASE WHEN kind='integrations' THEN left(coalesce(document->>'assignee',''),129) ELSE '' END`
+const stateCardColumns = `left(id,129), left(coalesce(product_id,''),129), left(coalesce(feature_id,''),129), CASE WHEN kind='products' THEN left(coalesce(document->>'name',''),257) ELSE '' END, CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'title',''),257) ELSE '' END, (CASE WHEN kind='products' THEN octet_length(coalesce(document->>'name',''))>256 ELSE octet_length(coalesce(document->>'title',''))>256 END), CASE WHEN kind IN ('features','integrations') THEN left(coalesce(document->>'status',''),65) ELSE '' END, CASE WHEN kind='integrations' THEN left(coalesce(document->>'assignee',''),129) ELSE '' END,
+CASE WHEN kind='products' THEN coalesce(nullif(document->>'visibility',''),'shared') ELSE '' END,
+CASE WHEN kind='products' THEN left(coalesce(document->>'owner',''),129) ELSE '' END,
+CASE WHEN kind='products' THEN ARRAY(SELECT left(member,129) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(document->'members')='array' THEN document->'members' ELSE '[]'::jsonb END) WITH ORDINALITY AS m(member,ordinal) ORDER BY ordinal LIMIT 129) ELSE ARRAY[]::text[] END`
 
 func scanStateCard(row interface{ Scan(...any) error }) (domain.StateCard, error) {
 	var c domain.StateCard
-	e := row.Scan(&c.ID, &c.ProductID, &c.FeatureID, &c.Name, &c.Title, &c.Truncated, &c.RecordedStatus, &c.Assignee)
+	e := row.Scan(&c.ID, &c.ProductID, &c.FeatureID, &c.Name, &c.Title, &c.Truncated, &c.RecordedStatus, &c.Assignee, &c.Visibility, &c.Owner, &c.Members)
+	if len(c.Members) == 0 {
+		c.Members = nil
+	}
 	return c, e
 }
 func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataRequest) (domain.StateMetadata, error) {
@@ -33,8 +39,12 @@ func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataReq
 		return out, e
 	}
 	defer tx.Rollback(ctx)
+	hidden, e := hiddenProducts(ctx, tx)
+	if e != nil {
+		return out, e
+	}
 	get := func(kind, id string) (*domain.StateCard, error) {
-		c, e := scanStateCard(tx.QueryRow(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind=$1 AND id=$2 AND (NOT $3::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($4::text[]))`, kind, id, q.RestrictProducts, q.AllowedProductIDs))
+		c, e := scanStateCard(tx.QueryRow(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind=$1 AND id=$2 AND (NOT $3::boolean OR (CASE WHEN kind='products' THEN id ELSE product_id END)=ANY($4::text[])) AND (CASE WHEN kind='products' THEN id ELSE product_id END) <> ALL($5::text[])`, kind, id, q.RestrictProducts, q.AllowedProductIDs, hidden))
 		if errors.Is(e, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -64,10 +74,19 @@ func (s *Store) ReadStateMetadata(ctx context.Context, q domain.StateMetadataReq
 	if q.Collection != "products" && out.Product == nil {
 		return out, nil
 	}
+	if q.AfterID != "" {
+		anchor, err := get(q.Collection, q.AfterID)
+		if err != nil {
+			return out, err
+		}
+		if anchor == nil || q.Collection != "products" && (anchor.ProductID != out.Product.ID || q.Collection == "integrations" && anchor.FeatureID != q.FeatureID) {
+			return out, domain.ErrReadScopeNotFound
+		}
+	}
 	var rows pgx.Rows
 	switch q.Collection {
 	case "products":
-		rows, e = tx.Query(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind='products' AND id COLLATE "C">$1 COLLATE "C" AND (NOT $3::boolean OR id=ANY($4::text[])) ORDER BY id COLLATE "C" LIMIT $2`, q.AfterID, q.Limit, q.RestrictProducts, q.AllowedProductIDs)
+		rows, e = tx.Query(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind='products' AND id COLLATE "C">$1 COLLATE "C" AND (NOT $3::boolean OR id=ANY($4::text[])) AND id <> ALL($5::text[]) ORDER BY id COLLATE "C" LIMIT $2`, q.AfterID, q.Limit, q.RestrictProducts, q.AllowedProductIDs, hidden)
 	case "features":
 		rows, e = tx.Query(ctx, `SELECT `+stateCardColumns+` FROM records WHERE kind='features' AND product_id=$1 AND id COLLATE "C">$2 COLLATE "C" ORDER BY id COLLATE "C" LIMIT $3`, q.ProductID, q.AfterID, q.Limit)
 	case "integrations":
@@ -120,10 +139,14 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 		if len(data) == 0 || len(data) > maxLocalStateBytes {
 			return errors.New("local state missing or exceeds 256 MiB limit")
 		}
+		hidden, err := hiddenLocalProducts(ctx, data)
+		if err != nil {
+			return err
+		}
 		// Parents are resolved before collection filtering, in their own narrow scan.
 		if q.FeatureID != "" {
 			if e := walkStateCollection(ctx, data, "features", func(c domain.StateCard) {
-				if c.ID == q.FeatureID && metadataAllowsProduct(q, c.ProductID) {
+				if c.ID == q.FeatureID && metadataAllowsProduct(q, c.ProductID) && !hidden[c.ProductID] {
 					v := c
 					out.Feature = &v
 				}
@@ -143,7 +166,7 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 		}
 		if productID != "" {
 			if e := walkStateCollection(ctx, data, "products", func(c domain.StateCard) {
-				if c.ID == productID && metadataAllowsProduct(q, c.ID) {
+				if c.ID == productID && metadataAllowsProduct(q, c.ID) && !hidden[c.ID] {
 					v := c
 					out.Product = &v
 				}
@@ -154,21 +177,25 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 				return nil
 			}
 		}
-		return walkStateCollection(ctx, data, q.Collection, func(c domain.StateCard) {
+		anchorFound := q.AfterID == ""
+		err = walkStateCollection(ctx, data, q.Collection, func(c domain.StateCard) {
 			owner := c.ProductID
 			if q.Collection == "products" {
 				owner = c.ID
 			}
-			if !metadataAllowsProduct(q, owner) {
-				return
-			}
-			if c.ID <= q.AfterID {
+			if !metadataAllowsProduct(q, owner) || hidden[owner] {
 				return
 			}
 			if q.Collection == "features" && c.ProductID != q.ProductID {
 				return
 			}
 			if q.Collection == "integrations" && (c.FeatureID != q.FeatureID || c.ProductID != productID) {
+				return
+			}
+			if c.ID == q.AfterID {
+				anchorFound = true
+			}
+			if c.ID <= q.AfterID {
 				return
 			}
 			i := sort.Search(len(out.Items), func(i int) bool { return out.Items[i].ID >= c.ID })
@@ -182,6 +209,10 @@ func (s *LocalStore) ReadStateMetadata(ctx context.Context, q domain.StateMetada
 				out.Items = out.Items[:q.Limit]
 			}
 		})
+		if err == nil && !anchorFound {
+			return domain.ErrReadScopeNotFound
+		}
+		return err
 	})
 	return out, e
 }
@@ -349,6 +380,9 @@ func walkStateCollection(ctx context.Context, data []byte, kind string, visit fu
 				return e
 			}
 			var c domain.StateCard
+			if kind == "products" {
+				c.Visibility = "shared"
+			}
 			e = objectFields(raw[i:end], func(k string, v []byte) error {
 				var target *string
 				switch k {
@@ -378,6 +412,26 @@ func walkStateCollection(ctx context.Context, data []byte, kind string, visit fu
 						return nil
 					}
 					target = &c.Assignee
+				case "visibility", "owner", "members":
+					if kind != "products" {
+						return nil
+					}
+					if k == "members" {
+						return historyArray(ctx, v, func(rawMember []byte) error {
+							if len(c.Members) < 129 {
+								member, _, err := metadataString(rawMember)
+								if err != nil {
+									return err
+								}
+								c.Members = append(c.Members, member)
+							}
+							return nil
+						})
+					}
+					target = &c.Owner
+					if k == "visibility" {
+						target = &c.Visibility
+					}
 				default:
 					return nil
 				}
@@ -385,7 +439,9 @@ func walkStateCollection(ctx context.Context, data []byte, kind string, visit fu
 				if e != nil {
 					return fmt.Errorf("invalid navigation metadata")
 				}
-				*target = s
+				if k != "visibility" || s != "" {
+					*target = s
+				}
 				if (k == "name" || k == "title") && cut {
 					c.Truncated = true
 				}

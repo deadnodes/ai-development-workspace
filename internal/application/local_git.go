@@ -73,7 +73,7 @@ func (s *Service) LocalGitState(ctx context.Context, product, checkout string) (
 	return v, nil
 }
 func (s *Service) PlanLocalGitSync(ctx context.Context, in LocalGitRequest) (LocalGitPlan, error) {
-	if err := authorize(ctx, "write", in.ProductID); err != nil {
+	if err := s.authorizeProductMutation(ctx, "write", in.ProductID); err != nil {
 		return LocalGitPlan{}, err
 	}
 	in.Actor = attributedActor(ctx, in.Actor)
@@ -97,6 +97,9 @@ func (s *Service) PlanLocalGitSync(ctx context.Context, in LocalGitRequest) (Loc
 		plan.Preconditions = append(plan.Preconditions, "Require the same branch, clean working tree and exact recorded upstream SHA; fetch first if remote freshness is needed. Do not run build/test hooks.")
 	}
 	err = s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		if !productExists(st, in.ProductID) {
 			return missing("product", in.ProductID)
 		}
@@ -108,7 +111,7 @@ func (s *Service) PlanLocalGitSync(ctx context.Context, in LocalGitRequest) (Loc
 	return plan, err
 }
 func (s *Service) RecordLocalGitSync(ctx context.Context, in LocalGitRequest) (any, error) {
-	if err := authorize(ctx, "write", in.ProductID); err != nil {
+	if err := s.authorizeProductMutation(ctx, "write", in.ProductID); err != nil {
 		return nil, err
 	}
 	in.Actor = attributedActor(ctx, in.Actor)
@@ -142,6 +145,9 @@ func (s *Service) RecordLocalGitSync(ctx context.Context, in LocalGitRequest) (a
 	}
 	result := map[string]any{"plan_id": plan.ID, "status": "OBSERVED", "mode": plan.Mode, "state": observed, "note": "Local Git state re-read. FETCH network execution is agent-owned and cannot be proven from cached refs alone."}
 	err = s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		if !productExists(st, in.ProductID) {
 			return missing("product", in.ProductID)
 		}

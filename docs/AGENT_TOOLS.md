@@ -5370,6 +5370,79 @@ Append a structured checkpoint for the next agent or session.
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+### `set_product_visibility` — execute_action
+
+Set a Product to shared or private; only its owner or bootstrap service may change visibility.
+
+**When:** Use to restrict an existing Product or share it again.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product to update
+- `visibility` (string, optional): shared or private
+
+**Output:** Updated Product visibility and owner metadata.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is missing or not visible to this caller.
+- `FORBIDDEN`: Only the owner or bootstrap service may change visibility.
+
+**Example:** `{"action":"set_product_visibility","product_id":"PRODUCT","data":{"visibility":"private"}}`
+
+**Related:** `create_product`, `add_product_member`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
+### `add_product_member` — execute_action
+
+Invite a human user to a private Product by user ID.
+
+**When:** Ask the person to run release-control whoami and provide user_id.
+
+**Inputs:**
+
+- `product_id` (string, optional): Private Product
+- `user_id` (string, optional): Human principal ID
+
+**Output:** Updated Product membership.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is missing or not visible.
+- `FORBIDDEN`: Only the owner or bootstrap service may manage members.
+
+**Example:** `{"action":"add_product_member","product_id":"PRODUCT","data":{"user_id":"human/123"}}`
+
+**Related:** `remove_product_member`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
+### `remove_product_member` — execute_action
+
+Remove a human user from a private Product.
+
+**When:** Use when access should end; the owner cannot be removed.
+
+**Inputs:**
+
+- `product_id` (string, optional): Private Product
+- `user_id` (string, optional): Human principal ID
+
+**Output:** Updated Product membership.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is missing or not visible.
+- `FORBIDDEN`: Only the owner or bootstrap service may manage members.
+- `VALIDATION`: The Product owner cannot be removed.
+
+**Example:** `{"action":"remove_product_member","product_id":"PRODUCT","data":{"user_id":"human/123"}}`
+
+**Related:** `add_product_member`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
 ### `create_product` — execute_action
 
 Create a Product root for project context and tracked work.
@@ -5383,14 +5456,16 @@ Create a Product root for project context and tracked work.
 - `data` (object, required): Action-specific values; see GET /api/schema
 - `name` (string, required): Action-specific value; exact constraints are enforced by GET /api/schema
 - `description` (string, optional): Action-specific value; exact constraints are enforced by GET /api/schema
+- `visibility` (string, optional): shared (default) or private
 
 **Output:** Created Product ID.
 
 **Errors:**
 
 - `VALIDATION`: `name required`; provide a nonblank Product name and retry.
+- `FORBIDDEN`: PRIVATE_PRODUCT_REQUIRES_USER: private Products require an identified human user or owned agent.
 
-**Example:** `{"action":"create_product","actor":"agent/setup","data":{"name":"Payments","description":"Payments service"}}`
+**Example:** `{"action":"create_product","actor":"agent/setup","data":{"name":"Payments","description":"Payments service","visibility":"private"}}`
 
 **Related:** `get_state`, `create_feature`
 

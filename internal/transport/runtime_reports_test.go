@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	rr "releasecontrol/internal/runtimereport"
 	"releasecontrol/internal/transport"
@@ -18,7 +19,7 @@ import (
 	"time"
 )
 
-func TestRuntimeReporterTokenScope(t *testing.T) {
+func TestPrivateRuntimeReporterTokenScope(t *testing.T) {
 	ctx := context.Background()
 	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
@@ -26,6 +27,10 @@ func TestRuntimeReporterTokenScope(t *testing.T) {
 	}
 	defer store.Close()
 	svc := application.New(store)
+	owner := auth.WithPrincipal(ctx, auth.Principal{ID: "human/owner", Kind: "human", Permissions: []string{"write"}, Products: []string{"p"}})
+	if _, err := svc.Execute(owner, domain.Command{Action: "create_product", ID: "p", Data: map[string]any{"name": "Runtime reports", "visibility": "private"}}); err != nil {
+		t.Fatal(err)
+	}
 	handler := transport.New(svc, transport.Options{Token: "control", RuntimeReporterToken: "reporter", RuntimeReporterScope: "p:prod:cluster"})
 	at := time.Now().UTC()
 	report := rr.Report{ProductID: "p", EnvironmentID: "prod", Cluster: "cluster", ReportedAt: at, Workloads: []rr.Workload{{Namespace: "app", Kind: "Deployment", Name: "api", Containers: []rr.Container{{Name: "api", Image: "v1"}}}}}
@@ -47,7 +52,7 @@ func TestRuntimeReporterTokenScope(t *testing.T) {
 		}
 	}
 	state, e := store.Read(ctx)
-	if e != nil || len(state.Events) != 1 || state.Events[0].Actor != "service/prod-runtime-reporter" {
+	if e != nil || len(state.Events) != 2 || state.Events[1].Actor != "service/prod-runtime-reporter" {
 		t.Fatal(state.Events, e)
 	}
 	// Exercise the real MCP handler without opening a socket.
@@ -84,7 +89,11 @@ func TestRuntimeReporterOIDC(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	handler := transport.New(application.New(store), transport.Options{Auth: manager, RuntimeReporterToken: "reporter", RuntimeReporterScope: "p:prod:c"})
+	svc := application.New(store)
+	if _, err := svc.Execute(ctx, domain.Command{Action: "create_product", ID: "p", Actor: "test", Data: map[string]any{"name": "Runtime reports"}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := transport.New(svc, transport.Options{Auth: manager, RuntimeReporterToken: "reporter", RuntimeReporterScope: "p:prod:c"})
 	report := rr.Report{ProductID: "p", EnvironmentID: "prod", Cluster: "c", ReportedAt: time.Now()}
 	body, _ := json.Marshal(report)
 	for _, tc := range []struct {

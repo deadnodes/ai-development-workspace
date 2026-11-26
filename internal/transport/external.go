@@ -13,7 +13,7 @@ import (
 )
 
 // All semantic reads and mutations share the application layer with execute.
-func registerQueryRoutes(mux *http.ServeMux, service Service) {
+func registerQueryRoutes(mux routeRegistrar, service Service) {
 	for pattern, name := range map[string]string{
 		"GET /api/execution-groups/{id}":              "get_execution_group",
 		"GET /api/products/{id}/executions":           "list_executions",

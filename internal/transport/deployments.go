@@ -20,7 +20,7 @@ type deploymentService interface {
 	ListDeployments(context.Context, domain.ListDeploymentsRequest) (domain.DeploymentPage, error)
 }
 
-func registerDeploymentRoutes(mux *http.ServeMux, service Service) {
+func registerDeploymentRoutes(mux routeRegistrar, service Service) {
 	decode := func(w http.ResponseWriter, r *http.Request, v any) bool {
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			write(w, 415, map[string]string{"error": "application/json required"})

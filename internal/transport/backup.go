@@ -15,7 +15,7 @@ type backupService interface {
 	RestoreBackup(context.Context, string, string, string) (any, error)
 }
 
-func registerBackupRoutes(mux *http.ServeMux, service Service) {
+func registerBackupRoutes(mux routeRegistrar, service Service) {
 	backup, ok := service.(backupService)
 	if !ok {
 		return

@@ -26,7 +26,7 @@ func retrievalInteger(r *http.Request, key string) (int, error) {
 	}
 	return v, nil
 }
-func registerRetrieval(mux *http.ServeMux, server *mcp.Server, service Service) {
+func registerRetrieval(mux routeRegistrar, server *mcp.Server, service Service) {
 	reader, ok := service.(contextRetrievalService)
 	if !ok {
 		return

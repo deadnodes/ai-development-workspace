@@ -52,6 +52,8 @@ func run() error {
 			return agentconnect.RunToken(os.Args[2:], os.Stdout)
 		case "doctor":
 			return agentconnect.RunDoctor(context.Background(), os.Args[2:], os.Stdout)
+		case "whoami":
+			return agentconnect.RunWhoami(os.Args[2:], os.Stdout)
 		}
 	}
 	if len(os.Args) > 1 && os.Args[1] == "connect" {

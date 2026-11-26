@@ -98,7 +98,7 @@ func codeTools(ctx context.Context, handler http.Handler) ([]codeTool, error) {
 	return tools, nil
 }
 
-func registerCodeMode(mux *http.ServeMux, server *mcp.Server, handler http.Handler) {
+func registerCodeMode(mux routeRegistrar, server *mcp.Server, handler http.Handler) {
 	mcp.AddTool(server, &mcp.Tool{Name: "get_code_api", Description: "Discover the typed agent-side TypeScript SDK and optionally filter tool declarations."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Query string `json:"query,omitempty"`
 	}) (*mcp.CallToolResult, any, error) {

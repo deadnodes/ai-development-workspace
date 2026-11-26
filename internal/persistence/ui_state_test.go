@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"net/url"
 	"os"
+	"path/filepath"
 	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
@@ -61,6 +62,39 @@ func TestUIBudgetIncludesAppendedHistory(t *testing.T) {
 	if len(groups["events"]) != 0 || len(groups["products"]) != 1 || !slices.Contains(p.Truncated, "events") {
 		t.Fatal("appended audit escaped budget or mutable record removed")
 	}
+}
+
+func TestLocalUIStatePinsSelectedFeatureOutsideNavigationWindow(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenLocal(ctx, filepath.Join(t.TempDir(), "ui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Update(ctx, func(st *domain.State) error {
+		st.Products = append(st.Products, domain.Product{Meta: domain.Meta{ID: "p"}, Name: "Product"})
+		st.Features = append(st.Features, domain.Feature{Meta: domain.Meta{ID: "older", ProductID: "p"}, Title: "Selected old feature", Goal: "Keep me", Status: "active"})
+		for i := 0; i < uiCollectionLimit+1; i++ {
+			id := fmt.Sprintf("newer-%04d", i)
+			st.Features = append(st.Features, domain.Feature{Meta: domain.Meta{ID: id, ProductID: "p"}, Title: id, Status: "active"})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := store.ReadUIState(ctx, domain.UIStateRequest{FeatureID: "older"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, feature := range out.Features {
+		if feature.ID == "older" {
+			if feature.Goal != "Keep me" {
+				t.Fatal("selected feature was reduced to a navigation header")
+			}
+			return
+		}
+	}
+	t.Fatal("selected older feature missing from bounded navigation projection")
 }
 
 func TestPostgresUIHeadersAndOperationAppendOrder(t *testing.T) {

@@ -2,10 +2,24 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"releasecontrol/internal/domain"
 )
+
+func TestPrivateLocalReferenceClosureScansDocumentOnce(t *testing.T) {
+	data := []byte(`{"operations":[{"id":"root","product_id":"p","parent_id":"parent"},{"id":"parent","product_id":"p","environment_id":"env"}],"environments":[{"id":"env","product_id":"p"}],"products":[{"id":"p"}]}`)
+	groups := map[string][]json.RawMessage{}
+	var scans int
+	err := readLocalReferences(context.Background(), data, []string{"root"}, groups, func(doc []byte, visit func(string, []byte) error) error {
+		scans++
+		return objectFields(doc, visit)
+	})
+	if err != nil || scans != 1 || len(groups["operations"]) != 2 || len(groups["environments"]) != 1 || len(groups["products"]) != 0 {
+		t.Fatalf("scans=%d groups=%v err=%v", scans, groups, err)
+	}
+}
 
 func TestPostgresReferenceClosureCyclesAndJournalIdentities(t *testing.T) {
 	s := retrievalPostgres(t)

@@ -36,7 +36,19 @@ func (s *Store) SearchContext(ctx context.Context, q domain.ContextSearchRequest
 	if !validSearchRequest(q) {
 		return out, errors.New("invalid bounded search request")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+retrievalColumns+`,substring(body from greatest(1,strpos(lower(body),lower($3))-96) for 384),
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	visible, err := readProductAccess(ctx, tx, q.ProductID)
+	if err != nil {
+		return out, err
+	}
+	if !visible {
+		return out, domain.ErrReadScopeNotFound
+	}
+	rows, err := tx.Query(ctx, `SELECT `+retrievalColumns+`,substring(body from greatest(1,strpos(lower(body),lower($3))-96) for 384),
  ts_rank_cd(search_vector,plainto_tsquery('simple',$3))::float8 + CASE WHEN strpos(lower(title),lower($3))>0 THEN 2 ELSE 0 END
  FROM retrieval_documents WHERE product_id=$1 AND ($2='' OR feature_id=$2 OR id=$2)
  AND (search_vector @@ plainto_tsquery('simple',$3) OR strpos(lower(body),lower($3))>0)
@@ -68,7 +80,19 @@ func (s *Store) ContextExcerpt(ctx context.Context, q domain.ContextExcerptReque
 	if !validExcerptRequest(q) {
 		return out, errors.New("invalid bounded excerpt request")
 	}
-	err := s.pool.QueryRow(ctx, `SELECT `+retrievalColumns+`,substring(body from $3+1 for $4) FROM retrieval_documents WHERE product_id=$1 AND id=$2`, q.ProductID, q.ID, q.Offset, q.MaxChars).Scan(&out.ID, &out.Kind, &out.ProductID, &out.FeatureID, &out.Title, &out.Status, &out.TextChars, &out.Truncated, &out.Text)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+	visible, err := readProductAccess(ctx, tx, q.ProductID)
+	if err != nil {
+		return out, err
+	}
+	if !visible {
+		return out, nil
+	}
+	err = tx.QueryRow(ctx, `SELECT `+retrievalColumns+`,substring(body from $3+1 for $4) FROM retrieval_documents WHERE product_id=$1 AND id=$2`, q.ProductID, q.ID, q.Offset, q.MaxChars).Scan(&out.ID, &out.Kind, &out.ProductID, &out.FeatureID, &out.Title, &out.Status, &out.TextChars, &out.Truncated, &out.Text)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ContextExcerpt{}, nil
 	}
@@ -99,6 +123,13 @@ func (s *Store) GraphNeighbors(ctx context.Context, q domain.GraphNeighborsReque
 		return out, err
 	}
 	defer tx.Rollback(ctx)
+	visible, err := readProductAccess(ctx, tx, q.ProductID)
+	if err != nil {
+		return out, err
+	}
+	if !visible {
+		return domain.GraphNeighborsResult{}, nil
+	}
 	out.Seed, err = scanRetrievalCard(tx.QueryRow(ctx, `SELECT `+retrievalColumns+` FROM retrieval_documents WHERE product_id=$1 AND id=$2`, q.ProductID, q.ID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.GraphNeighborsResult{}, nil
@@ -264,6 +295,9 @@ func (s *LocalStore) SearchContext(ctx context.Context, q domain.ContextSearchRe
 	if e != nil {
 		return out, e
 	}
+	if !visibleStateProduct(ctx, st, q.ProductID) {
+		return out, domain.ErrReadScopeNotFound
+	}
 	docs, e := localRetrievalDocuments(st)
 	if e != nil {
 		return out, e
@@ -323,6 +357,9 @@ func (s *LocalStore) ContextExcerpt(ctx context.Context, q domain.ContextExcerpt
 	if e != nil {
 		return out, e
 	}
+	if !visibleStateProduct(ctx, st, q.ProductID) {
+		return out, nil
+	}
 	docs, e := localRetrievalDocuments(st)
 	if e != nil {
 		return out, e
@@ -344,6 +381,9 @@ func (s *LocalStore) GraphNeighbors(ctx context.Context, q domain.GraphNeighbors
 	st, e := s.Read(ctx)
 	if e != nil {
 		return out, e
+	}
+	if !visibleStateProduct(ctx, st, q.ProductID) {
+		return domain.GraphNeighborsResult{}, nil
 	}
 	docs, e := localRetrievalDocuments(st)
 	if e != nil {

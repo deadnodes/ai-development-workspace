@@ -91,7 +91,7 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 	if in.ProductID == "" || in.BuildID == "" || in.EnvironmentID != "dev" || len(in.RequestKey) > 128 {
 		return out, invalid("deploy_build requires Product, build and dev environment; production rejected")
 	}
-	if e := authorize(ctx, "write", in.ProductID); e != nil {
+	if e := s.authorizeProductMutation(ctx, "write", in.ProductID); e != nil {
 		return out, e
 	}
 	if s.builds == nil || s.deployments == nil {
@@ -107,6 +107,9 @@ func (s *Service) DeployBuild(ctx context.Context, in domain.DeployBuildRequest)
 	candidates := map[string]string{}
 	superseded := map[string]string{}
 	evaluate := func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		for _, r := range st.DeploymentReceipts {
 			if in.RequestKey != "" && r.ProductID == in.ProductID && r.RequestKey == in.RequestKey {
 				if r.BuildID != in.BuildID || r.EnvironmentID != in.EnvironmentID {
@@ -343,6 +346,9 @@ func (s *Service) GetDeployment(ctx context.Context, in domain.DeploymentLookup)
 	}
 	var out domain.Deployment
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		for _, d := range st.Deployments {
 			if d.ProductID == in.ProductID && d.ID == in.DeploymentID {
 				out = copyDeployment(d)
@@ -377,6 +383,9 @@ func (s *Service) ListDeployments(ctx context.Context, in domain.ListDeployments
 		after = c.After
 	}
 	err := s.view(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, in.ProductID); err != nil {
+			return err
+		}
 		deployments := append([]domain.Deployment(nil), st.Deployments...)
 		sort.Slice(deployments, func(i, j int) bool { return deployments[i].ID < deployments[j].ID })
 		for _, d := range deployments {
@@ -396,6 +405,9 @@ func (s *Service) ListDeployments(ctx context.Context, in domain.ListDeployments
 }
 func (s *Service) advanceDeployment(ctx context.Context, old domain.Deployment, next *domain.Deployment, claim bool) error {
 	return s.store.Update(ctx, func(st *domain.State) error {
+		if err := requireProductRead(ctx, st, old.ProductID); err != nil {
+			return err
+		}
 		for i, current := range st.Deployments {
 			if current.ID != old.ID {
 				continue

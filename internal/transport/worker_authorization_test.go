@@ -57,8 +57,11 @@ func TestOIDCAndWorkerCredentialsRemainIsolated(t *testing.T) {
 	if response.StatusCode != 200 {
 		t.Fatal("verified control credential rejected", response.StatusCode)
 	}
-	for _, body := range []string{`{"product_id":"foreign","repository_id":"r","capability":"source_check"}`, `{"product_id":"p","repository_id":"foreign","capability":"source_check"}`, `{"product_id":"p","repository_id":"r","capability":"deploy"}`} {
-		if code := workerHTTP(t, server, "/api/worker/claim", testWorkerCredential, body); code != 422 {
+	if code := workerHTTP(t, server, workerClaimPath, testWorkerCredential, `{"product_id":"foreign","repository_id":"r","capability":"source_check"}`); code != http.StatusNotFound {
+		t.Fatal("missing product", code)
+	}
+	for _, body := range []string{`{"product_id":"p","repository_id":"foreign","capability":"source_check"}`, `{"product_id":"p","repository_id":"r","capability":"deploy"}`} {
+		if code := workerHTTP(t, server, "/api/worker/claim", testWorkerCredential, body); code != http.StatusNotFound {
 			t.Fatal("worker scope bypass", code)
 		}
 	}

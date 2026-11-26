@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
@@ -82,14 +83,17 @@ func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (do
 		return out, invalid("get_state requires a bounded metadata reader; update the store implementation")
 	}
 	meta, e := reader.ReadStateMetadata(ctx, q)
+	if errors.Is(e, domain.ErrReadScopeNotFound) {
+		return out, missing("navigation cursor anchor", q.AfterID)
+	}
 	if e != nil {
 		return out, e
 	}
 	if in.ProductID != "" && (meta.Product == nil || meta.Product.ID != in.ProductID) {
-		return out, invalid("get_state product not found")
+		return out, missing("product", in.ProductID)
 	}
 	if in.FeatureID != "" && (meta.Feature == nil || meta.Feature.ID != in.FeatureID || meta.Product == nil || meta.Feature.ProductID != meta.Product.ID || (in.ProductID != "" && meta.Feature.ProductID != in.ProductID)) {
-		return out, invalid("get_state feature not found in requested product")
+		return out, missing("feature", in.FeatureID)
 	}
 	out = domain.StatePage{Projection: "compact_navigation", Scope: domain.StateScope{Collection: q.Collection, Product: meta.Product, Feature: meta.Feature}, Items: []domain.StateCard{}, Consistency: "live_id_keyset: not a snapshot; concurrent inserts before the cursor require a fresh traversal", Guidance: "Navigation only; recorded_status is not gate/runtime/release acceptance. Context, requirements, histories, results, logs, operations, connections and credentials are omitted. Use get_project_context, get_integration_context or scoped query tools for details; resume includes history and is not a compact export. Use the operator backup/export mechanism for a full backup."}
 	validate := func(c *domain.StateCard) error {
@@ -108,6 +112,7 @@ func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (do
 		}
 		c.Name, c.Truncated = truncateStateLabel(c.Name, c.Truncated)
 		c.Title, c.Truncated = truncateStateLabel(c.Title, c.Truncated)
+		c.Owner, c.Members, c.Truncated = boundedProductMembership(c.Owner, c.Members, c.Truncated)
 		return nil
 	}
 	if out.Scope.Product != nil {
@@ -161,6 +166,25 @@ func (s *Service) StatePage(ctx context.Context, in domain.StatePageRequest) (do
 		out.Pagination.NextCursor = encodeStateCursor(q, out.Items[len(out.Items)-1].ID)
 	}
 	return out, nil
+}
+
+func boundedProductMembership(owner string, members []string, truncated bool) (string, []string, bool) {
+	if owner != "" && !stateID(owner) {
+		owner = ""
+		truncated = true
+	}
+	if len(members) > 128 {
+		members = members[:128]
+		truncated = true
+	}
+	filtered := slices.DeleteFunc(slices.Clone(members), func(member string) bool {
+		if !stateID(member) {
+			truncated = true
+			return true
+		}
+		return false
+	})
+	return owner, filtered, truncated
 }
 func truncateStateLabel(s string, truncated bool) (string, bool) {
 	if !utf8.ValidString(s) {

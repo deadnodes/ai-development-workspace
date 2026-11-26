@@ -21,7 +21,7 @@ type buildService interface {
 	ListBuildProfiles(context.Context, string) ([]buildconfig.Profile, error)
 }
 
-func registerBuildRoutes(mux *http.ServeMux, service Service) {
+func registerBuildRoutes(mux routeRegistrar, service Service) {
 	decode := func(w http.ResponseWriter, r *http.Request, v any) bool {
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			write(w, 415, map[string]string{"error": "application/json required"})

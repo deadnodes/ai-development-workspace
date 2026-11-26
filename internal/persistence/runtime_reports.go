@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"github.com/jackc/pgx/v5"
 	bolt "go.etcd.io/bbolt"
+	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
 	rr "releasecontrol/internal/runtimereport"
 	"strings"
 	"time"
@@ -18,6 +20,15 @@ func (s *LocalStore) SaveRuntimeReport(ctx context.Context, r rr.Report, now tim
 	err = s.db.Update(func(tx *bolt.Tx) error {
 		if e := ctx.Err(); e != nil {
 			return e
+		}
+		if auth.RequiresExistingProduct(ctx) {
+			visible, err := localProductAccess(ctx, tx, r.ProductID)
+			if err != nil {
+				return err
+			}
+			if !visible {
+				return domain.ErrReadScopeNotFound
+			}
 		}
 		b, e := tx.CreateBucketIfNotExists(runtimeReportsBucket)
 		if e != nil {
@@ -59,6 +70,16 @@ func (s *LocalStore) ReadRuntimeReports(ctx context.Context, p, e, c string, win
 	s.lifecycle.RLock()
 	defer s.lifecycle.RUnlock()
 	err = s.db.View(func(tx *bolt.Tx) error {
+		if auth.RequiresExistingProduct(ctx) {
+			data := tx.Bucket(localBucket).Get(localStateKey)
+			hidden, err := hiddenLocalProducts(ctx, data)
+			if err != nil {
+				return err
+			}
+			if hidden[p] || historyRecord(ctx, data, "products", p, "") == nil {
+				return domain.ErrReadScopeNotFound
+			}
+		}
 		b := tx.Bucket(runtimeReportsBucket)
 		if b == nil {
 			return nil
@@ -101,6 +122,19 @@ func (s *Store) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Tim
 		return rr.JournalResult{}, err
 	}
 	defer tx.Rollback(ctx)
+	if auth.RequiresExistingProduct(ctx) {
+		var revision int64
+		if err := tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR SHARE").Scan(&revision); err != nil {
+			return rr.JournalResult{}, err
+		}
+		visible, err := readProductAccess(ctx, tx, r.ProductID)
+		if err != nil {
+			return rr.JournalResult{}, err
+		}
+		if !visible {
+			return rr.JournalResult{}, domain.ErrReadScopeNotFound
+		}
+	}
 	// Serialize the absent-set reconciliation and rate limit even for a new cluster.
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, strings.ReplaceAll(rr.Scope(r.ProductID, r.EnvironmentID, ""), "\x00", "/")); err != nil {
 		return rr.JournalResult{}, err
@@ -176,14 +210,35 @@ func (s *Store) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Tim
 	return journal, tx.Commit(ctx)
 }
 func (s *Store) ReadRuntimeReports(ctx context.Context, p, e, c string, windows ...rr.ReadWindow) ([]rr.Cluster, error) {
-	// One joined statement provides a consistent snapshot and bounds rows before transfer.
 	after := ""
 	limit := int64(9223372036854775807)
 	if len(windows) > 0 {
 		after = windows[0].After
 		limit = int64(windows[0].Limit)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT c.cluster,c.reported_at,c.workloads,r.document,r.observed_at,r.changed_at,r.absent_since
+	queryer := interface {
+		Query(context.Context, string, ...any) (pgx.Rows, error)
+	}(s.pool)
+	if auth.RequiresExistingProduct(ctx) {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		hidden, err := hiddenProducts(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		visible, err := visibleProductIn(ctx, tx, p, hidden)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return nil, domain.ErrReadScopeNotFound
+		}
+		queryer = tx
+	}
+	rows, err := queryer.Query(ctx, `SELECT c.cluster,c.reported_at,c.workloads,r.document,r.observed_at,r.changed_at,r.absent_since
  FROM runtime_report_clusters c LEFT JOIN runtime_reports r USING(product_id,environment_id,cluster)
  WHERE c.product_id=$1 AND c.environment_id=$2 AND ($3='' OR c.cluster=$3)
  AND (c.cluster || '!' || COALESCE(r.namespace || '/' || r.kind || '/' || r.name,'')) COLLATE "C" > $4

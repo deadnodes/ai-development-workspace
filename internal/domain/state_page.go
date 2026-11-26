@@ -8,14 +8,17 @@ type StatePageRequest struct {
 	Cursor    string `json:"cursor,omitempty"`
 }
 type StateCard struct {
-	ID             string `json:"id"`
-	ProductID      string `json:"product_id,omitempty"`
-	FeatureID      string `json:"feature_id,omitempty"`
-	Name           string `json:"name,omitempty"`
-	Title          string `json:"title,omitempty"`
-	Truncated      bool   `json:"truncated"`
-	RecordedStatus string `json:"recorded_status,omitempty"`
-	Assignee       string `json:"assignee,omitempty"`
+	ID             string   `json:"id"`
+	ProductID      string   `json:"product_id,omitempty"`
+	FeatureID      string   `json:"feature_id,omitempty"`
+	Name           string   `json:"name,omitempty"`
+	Title          string   `json:"title,omitempty"`
+	Truncated      bool     `json:"truncated"`
+	RecordedStatus string   `json:"recorded_status,omitempty"`
+	Assignee       string   `json:"assignee,omitempty"`
+	Visibility     string   `json:"visibility,omitempty"`
+	Owner          string   `json:"owner,omitempty"`
+	Members        []string `json:"members,omitempty"`
 }
 type StateScope struct {
 	Collection string     `json:"collection"`

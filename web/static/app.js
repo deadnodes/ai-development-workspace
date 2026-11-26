@@ -59,7 +59,7 @@ async function request(path, body, options={}) {
   const response = await fetch(path,{credentials:'same-origin',method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',...(authCSRF?{'X-CSRF-Token':authCSRF}:{})}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{}),...options});
   if(response.status===401&&authMode==='oidc'){requireSignIn();throw new Error('Sign in to continue.');}
   const data = await response.json();
-  if(!response.ok) throw new Error(data.error?.message || data.error || data.message || `Request failed (${response.status})`);
+  if(!response.ok) throw Object.assign(new Error(data.error?.message || data.error || data.message || `Request failed (${response.status})`),{status:response.status});
   return data;
  } finally { finish(); }
 }
@@ -73,7 +73,21 @@ async function refresh(){
  if(typeof invalidateLive==='function')invalidateLive();
  const ticket=typeof liveEpoch==='number'?liveEpoch:null;refreshInFlight++;
  try{
-  const [next,metadata]=await Promise.all([request(uiStateURL()),request('/api/statuses')]);
+  const url=uiStateURL(),defaultURL='/api/ui-state?';
+  const loadState=request(url).catch(async error=>{
+   if(error.status!==404||url===defaultURL)throw error;
+   if(ticket!==null&&ticket!==liveEpoch)return null;
+   const scope=new URLSearchParams(url.slice(defaultURL.length));
+   if(scope.has('product_id')&&scope.has('feature_id')){
+    scope.delete('product_id');
+    try{return await request(defaultURL+scope.toString());}
+    catch(retryError){if(retryError.status!==404)throw retryError;}
+    if(ticket!==null&&ticket!==liveEpoch)return null;
+   }
+   productID='';persistProductRoute(false,'');
+   return request(defaultURL);
+  });
+  const [next,metadata]=await Promise.all([loadState,request('/api/statuses')]);
   if(ticket!==null&&ticket!==liveEpoch)return;
   state=next;statusMetadata=metadata;if(next.projection?.product_id)productID=next.projection.product_id;
   if(!list(state.products).some(p=>p.id===productID))productID=state.products?.[0]?.id||'';

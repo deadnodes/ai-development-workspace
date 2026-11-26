@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workspace"
 )
@@ -101,14 +102,14 @@ func validateKnowledge(st *domain.State, product string, k domain.ProjectKnowled
 	return nil
 }
 func (s *Service) SetProjectKnowledge(ctx context.Context, product, actor string, k domain.ProjectKnowledge) (any, error) {
-	if err := authorize(ctx, "write", product); err != nil {
-		return nil, err
-	}
 	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" {
 		return nil, invalid("actor required")
 	}
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := authorizeScopedMutation(ctx, st, "write", product); err != nil {
+			return err
+		}
 		if !productExists(st, product) {
 			return missing("product", product)
 		}
@@ -158,15 +159,15 @@ func normalizeKnowledgeNode(product, actor string, node domain.KnowledgeNode) do
 }
 
 func (s *Service) UpsertKnowledgeNode(ctx context.Context, product, actor string, node domain.KnowledgeNode) (any, error) {
-	if err := authorize(ctx, "write", product); err != nil {
-		return nil, err
-	}
 	actor = attributedActor(ctx, actor)
 	if strings.TrimSpace(actor) == "" {
 		return nil, invalid("actor required")
 	}
 	var result domain.KnowledgeNode
 	err := s.store.Update(ctx, func(st *domain.State) error {
+		if err := authorizeScopedMutation(ctx, st, "write", product); err != nil {
+			return err
+		}
 		if !productExists(st, product) {
 			return missing("product", product)
 		}
@@ -345,7 +346,7 @@ func (s *Service) MatchWorkspace(ctx context.Context, product, actor string) (an
 	return s.scanWorkspace(ctx, product, actor, true)
 }
 func (s *Service) scanWorkspace(ctx context.Context, product, actor string, attachedOnly bool) (any, error) {
-	if err := authorize(ctx, "admin", ""); err != nil {
+	if err := s.authorizeProductMutation(ctx, "admin", product); err != nil {
 		return nil, err
 	}
 	actor = attributedActor(ctx, actor)
@@ -361,6 +362,9 @@ func (s *Service) scanWorkspace(ctx context.Context, product, actor string, atta
 	}
 	if !productExists(&st, product) {
 		return nil, missing("product", product)
+	}
+	if err := requireProductRead(ctx, &st, product); err != nil {
+		return nil, err
 	}
 	result, err := workspace.Scan(ctx, s.workspaceRoot)
 	if err != nil {
@@ -379,6 +383,9 @@ func (s *Service) scanWorkspace(ctx context.Context, product, actor string, atta
 	err = s.store.Update(ctx, func(st *domain.State) error {
 		if !productExists(st, product) {
 			return missing("product", product)
+		}
+		if err := requireProductRead(ctx, st, product); err != nil {
+			return err
 		}
 		m := workspaceMeta(product, actor)
 		for _, r := range result.Repositories {
@@ -536,9 +543,28 @@ func (s *Service) ImportWorkspace(ctx context.Context, actor string, in Workspac
 	if actor == "" || in.Format != "release-control-workspace" || in.Product.ID == "" || in.Product.Name == "" {
 		return nil, invalid("actor, workspace format and product required")
 	}
+	in.Product.Owner, _ = auth.PrivateProductViewer(ctx)
+	in.Product.Members = nil
+	switch in.Product.Visibility {
+	case "":
+		in.Product.Visibility = "shared"
+	case "shared":
+	case "private":
+		if in.Product.Owner == "" {
+			return nil, invalid("private workspace import requires a user identity")
+		}
+	default:
+		return nil, invalid("visibility must be shared or private")
+	}
 	err := s.store.Update(ctx, func(st *domain.State) error {
 		if productExists(st, in.Product.ID) {
+			if err := requireProductRead(ctx, st, in.Product.ID); err != nil {
+				return err
+			}
 			return invalid("product already exists; import into a new workspace")
+		}
+		if productIDRetired(st, in.Product.ID) {
+			return invalid("product ID is no longer available")
 		}
 		product := in.Product.ID
 		m := workspaceMeta(product, actor)

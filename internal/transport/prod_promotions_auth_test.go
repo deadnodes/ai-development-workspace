@@ -58,6 +58,9 @@ func TestProdPromoterJWTRestrictionAndPublicRead(t *testing.T) {
 	}
 	defer store.Close()
 	svc := application.New(store)
+	if _, err := svc.Execute(context.Background(), domain.Command{Action: "create_product", ID: "p", Actor: "test", Data: map[string]any{"name": "Shared"}}); err != nil {
+		t.Fatal(err)
+	}
 	h := transport.New(svc, transport.Options{Token: "control", ProdPromoterKeys: keys, ProdPromoterIssuer: "https://prod.issuer", ProdPromoterAudience: "rcp-prod-promoter", ProdPromoterSubject: "system:serviceaccount:supply-chain:cosign-prod-signer", ProdPromoterScope: "p:prod"})
 	call := func(method, path, token string, body []byte) int {
 		r := httptest.NewRequest(method, "http://localhost"+path, bytes.NewReader(body))
@@ -116,7 +119,11 @@ func TestProdPromoterClaimOutlivesHTTPWriteTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	handler := transport.New(application.New(store), transport.Options{Token: "control", ProdPromoterKeys: keys, ProdPromoterIssuer: "https://prod.issuer", ProdPromoterAudience: "rcp-prod-promoter", ProdPromoterSubject: "system:serviceaccount:supply-chain:cosign-prod-signer", ProdPromoterScope: "p:prod"})
+	svc := application.New(store)
+	if _, err := svc.Execute(context.Background(), domain.Command{Action: "create_product", ID: "p", Actor: "test", Data: map[string]any{"name": "Shared"}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := transport.New(svc, transport.Options{Token: "control", ProdPromoterKeys: keys, ProdPromoterIssuer: "https://prod.issuer", ProdPromoterAudience: "rcp-prod-promoter", ProdPromoterSubject: "system:serviceaccount:supply-chain:cosign-prod-signer", ProdPromoterScope: "p:prod"})
 	server := httptest.NewUnstartedServer(handler)
 	server.Config.WriteTimeout = 100 * time.Millisecond
 	server.Start()
@@ -174,6 +181,9 @@ func TestPublicProdSignatureEndpointReturnsOnlyVerifiedData(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("public signature Cache-Control = %q, want no-store", got)
 	}
 	if strings.Contains(rec.Body.String(), "owner_approval") || !strings.Contains(rec.Body.String(), "signature_b64") || !strings.Contains(rec.Body.String(), "promotion-1") {
 		t.Fatal(rec.Body.String())
