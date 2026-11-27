@@ -158,6 +158,13 @@ func walkCodeIndexPaths(ctx context.Context, checkout string, budget int) ([]str
 	for len(pending) != 0 {
 		dir := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
+		if dir != "." {
+			if _, err := root.Lstat(filepath.Join(dir, ".git")); err == nil {
+				return nil, false, fmt.Errorf("selected directory contains a nested Git checkout; use --workspace to index each matching checkout")
+			} else if !os.IsNotExist(err) {
+				return nil, false, err
+			}
+		}
 		file, err := root.Open(dir)
 		if err != nil {
 			return nil, false, err

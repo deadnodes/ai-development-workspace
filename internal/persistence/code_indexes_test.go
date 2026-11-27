@@ -192,6 +192,10 @@ func TestCodeIndexStores(t *testing.T) {
 			if cards, err := findCodeWithinBudget(ctx, store, query, 1); err != nil || len(cards) != 0 {
 				t.Fatalf("no-match query exactly at its candidate budget: %+v, %v", cards, err)
 			}
+			query.Query = "ead"
+			if cards, err := findCodeWithinBudget(ctx, store, query, 1); err != nil || len(cards) != 1 || cards[0].Symbol != "/ready" {
+				t.Fatalf("substring fallback: %+v, %v", cards, err)
+			}
 			status, err := service.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: "p"})
 			if err != nil || len(status.Items) != 1 || status.Items[0].Commit != doc.Commit {
 				t.Fatalf("status: %+v %v", status, err)
@@ -203,6 +207,75 @@ func TestCodeIndexStores(t *testing.T) {
 			outline, err := service.GetCodeFileOutline(ctx, domain.CodeOutlineRequest{ProductID: "p", RepositoryID: "r", Path: "handler.go"})
 			if err != nil || !strings.Contains(fmt.Sprint(outline), "/ready") {
 				t.Fatalf("outline: %+v %v", outline, err)
+			}
+		})
+	}
+}
+
+func TestLargeProductCodeSearchPreservesIndexedAndAuthoredResults(t *testing.T) {
+	for _, backend := range []string{"memory", "sqlite", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := context.Background()
+			var store application.Store
+			if backend == "postgres" {
+				store = retrievalPostgres(t)
+			} else {
+				local, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "index.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(local.Close)
+				store = local
+				if backend == "memory" {
+					store = memoryCodeIndexBackend{local}
+				}
+			}
+			if err := store.Update(ctx, func(st *domain.State) error {
+				*st = retrievalFixture()
+				st.Features[0].Title = "NeedleFallback"
+				for index := 1; index <= 4; index++ {
+					repo := fmt.Sprintf("repo-%d", index)
+					st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: repo, ProductID: "p"}, Name: repo, Role: "APPLICATION", URL: "https://example.invalid/" + repo})
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			service := application.New(store)
+			files := make([]domain.CodeFile, 9000)
+			for index := range files {
+				files[index] = domain.CodeFile{Path: fmt.Sprintf("file-%04d.go", index), Language: "Go"}
+			}
+			for index := 1; index <= 4; index++ {
+				repo := fmt.Sprintf("repo-%d", index)
+				if index == 4 {
+					files[0].Size, files[0].Lines = 10, 1
+					files[0].Symbols = []domain.CodeSymbol{{Name: "ResolveCredential", Kind: "function", Line: 1}}
+				}
+				doc := domain.CodeIndex{RepositoryID: repo, Branch: "main", Commit: strings.Repeat("a", 40), IndexedAt: time.Now(), Version: domain.CodeIndexVersion, Files: files}
+				if _, err := service.UpsertCodeIndex(ctx, domain.CodeIndexWrite{ProductID: "p", RepositoryID: repo, Document: doc}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			found, err := service.SearchCode(ctx, domain.CodeSearchRequest{ProductID: "p", Query: "ResolveCredential", Limit: 1})
+			if err != nil || len(found.Items) != 1 || found.Items[0].RepositoryID != "repo-4" || found.Items[0].Symbol != "ResolveCredential" || found.Truncated {
+				t.Fatalf("indexed search over scan budget: %+v, %v", found, err)
+			}
+			if backend == "memory" {
+				if _, err := service.SearchCode(ctx, domain.CodeSearchRequest{ProductID: "p", Query: "NeedleFallback"}); !errors.Is(err, application.ErrValidation) || !strings.Contains(err.Error(), "scan limit exceeded") {
+					t.Fatalf("memory fallback did not enforce the scan budget: %v", err)
+				}
+				return
+			}
+			query := domain.ContextSearchRequest{ProductID: "p", Query: "NeedleFallback"}
+			authored, err := service.SearchContext(ctx, query)
+			if err != nil || len(authored.Items) == 0 {
+				t.Fatalf("authored search: %+v, %v", authored, err)
+			}
+			query.IncludeCode = true
+			mixed, err := service.SearchContext(ctx, query)
+			if err != nil || !reflect.DeepEqual(mixed.Items, authored.Items) || mixed.CodeWarning == "" || len(mixed.CodeItems) != 0 {
+				t.Fatalf("fallback erased authored results: %+v, %v", mixed, err)
 			}
 		})
 	}

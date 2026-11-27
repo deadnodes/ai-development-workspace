@@ -96,7 +96,7 @@ func TestCodeIndexFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.Branch != "main" || len(doc.Commit) != 40 || len(doc.Files) != 6 || doc.Files[0].Path != ".gitignore" || doc.Files[4].Path != "keep.py" || doc.Files[5].Path != "yarn.lock" || doc.Files[5].Lines != 0 {
+	if doc.Branch != "main" || len(doc.Commit) != 40 || len(doc.Files) != 7 || doc.Files[0].Path != ".gitignore" || doc.Files[4].Path != "keep.py" || doc.Files[5].Path != "secret.py" || doc.Files[6].Path != "yarn.lock" || doc.Files[6].Lines != 0 {
 		t.Fatalf("unexpected filtered index: %+v", doc)
 	}
 	wire, _ := json.Marshal(doc)
@@ -107,11 +107,33 @@ func TestCodeIndexFilters(t *testing.T) {
 
 func TestCodeIndexRedactsWholeCredentialLines(t *testing.T) {
 	root := t.TempDir()
-	indexFixtureFile(t, root, "README.md", "Keep before\r\nTOKEN=hidden-fixture # shell comment\r\n\"password\": \"hidden!\",\r\n[download](https://example.invalid/repo?%61ccess_token=hidden&next=1)\r\nUse https://hidden-user@example.invalid/repo\r\nKeep after\r\n")
+	token := "rcpa_" + strings.Repeat("ab_-", 10) + "xyz"
+	indexFixtureFile(t, root, "README.md", "Keep before\r\n"+token+"\r\nTOKEN=hidden-fixture # shell comment\r\n\"password\": \"hidden!\",\r\n[download](https://example.invalid/repo?%61ccess_token=hidden&next=1)\r\nUse https://hidden-user@example.invalid/repo\r\nKeep after\r\n")
 	indexFixtureFile(t, root, "package.json", `{"dependencies":{"private":"https://example.invalid/repo?access_token=hidden&next=1"}}`)
+	indexFixtureFile(t, root, "internal/agentconnect/credentials.go", `package agentconnect
+// ResolveCredential loads the configured token.
+func ResolveCredential() string {
+  token := os.Getenv("RCP_TOKEN")
+  if token == "" { return "" }
+  return token
+}
+// token := "`+token+`"
+func Handle() {
+  mux.HandleFunc("GET /ready?access_token=hidden", handler)
+}
+`)
+	indexFixtureFile(t, root, "pyproject.toml", "[project.scripts]\nserve = \""+token+"\"\n")
+	indexFixtureFile(t, root, "Dockerfile", "ENTRYPOINT [\""+token+"\"]\n")
 	doc, err := Build(context.Background(), "fixture", root, time.Now(), Options{})
-	if err != nil || len(doc.Files) != 1 || doc.Files[0].Doc != "Keep before\n[...]\n[...]\n[...]\n[...]\nKeep after\n" {
+	if err != nil || len(doc.Files) != 5 {
 		t.Fatalf("filtered index: %+v, %v", doc.Files, err)
+	}
+	docker, readme, source, manifest, scripts := doc.Files[0], doc.Files[1], doc.Files[2], doc.Files[3], doc.Files[4]
+	if readme.Doc != "Keep before\n[...]\n[...]\n[...]\n[...]\n[...]\nKeep after\n" || len(manifest.Dependencies) != 1 || manifest.Dependencies[0].Version != "[...]" || len(scripts.Entrypoints) != 1 || scripts.Entrypoints[0].Name != "[...]" || len(docker.Entrypoints) != 1 || docker.Entrypoints[0].Name != "[...]" {
+		t.Fatalf("incorrect redaction: %+v", doc.Files)
+	}
+	if source.Path != "internal/agentconnect/credentials.go" || len(source.Symbols) != 2 || source.Symbols[0].Name != "ResolveCredential" || source.Symbols[0].Doc != "ResolveCredential loads the configured token." || source.Symbols[1].Name != "Handle" || source.Symbols[1].Doc != "[...]" || len(source.Routes) != 1 || source.Routes[0].Path != "[...]" {
+		t.Fatalf("credential handling source was not indexed safely: %+v", source)
 	}
 }
 

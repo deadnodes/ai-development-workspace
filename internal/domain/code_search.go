@@ -26,7 +26,7 @@ func (doc CodeIndex) SearchEntries(yield func(CodeSearchEntry) bool) {
 	for _, file := range doc.Files {
 		appendEntry := func(kind, symbol, title, text, snippet string, line int) bool {
 			card := CodeCard{RepositoryID: doc.RepositoryID, Branch: doc.Branch, Commit: doc.Commit, Path: file.Path, Kind: kind, Symbol: symbol, Line: line}
-			return yield(CodeSearchEntry{card, strings.ToLower(title), strings.ToLower(text), snippet})
+			return yield(CodeSearchEntry{card, strings.ToLower(title), strings.ToLower(CodeRedactSecrets(text)), CodeRedactSecrets(snippet)})
 		}
 		if !appendEntry("file", "", file.Path, file.Path, file.Language, 0) {
 			return
@@ -73,7 +73,7 @@ func (entry CodeSearchEntry) Score(query string) int {
 }
 
 func CodeSnippet(snippet, query string) string {
-	snippet = strings.TrimSpace(snippet)
+	snippet = strings.TrimSpace(CodeRedactSecrets(snippet))
 	if len(snippet) <= 480 {
 		return snippet
 	}
@@ -89,7 +89,7 @@ func CodeSnippet(snippet, query string) string {
 			seen += utf8.RuneLen(unicode.ToLower(value))
 		}
 	}
-	return CodePrefix(snippet[start:], 480)
+	return CodeRedactSecrets(CodePrefix(snippet[start:], 480))
 }
 
 func CompareCodeCards(left, right CodeCard) int {

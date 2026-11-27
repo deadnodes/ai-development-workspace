@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"releasecontrol/internal/domain"
@@ -18,6 +19,8 @@ type codeMemoryRecord struct {
 	status   domain.CodeIndexStatus
 	actor    string
 	history  []domain.CodeIndexStatus
+	entries  []domain.CodeSearchEntry
+	postings map[string][]int
 }
 
 type memoryCodeIndexes struct {
@@ -57,7 +60,18 @@ func (m *memoryCodeIndexes) PutCodeIndex(ctx context.Context, in domain.CodeInde
 		}
 		status.Truncated = slices.Clone(status.Truncated)
 		history := append([]domain.CodeIndexStatus{status}, prior.history...)
-		m.records[key] = codeMemoryRecord{data, status, in.Actor, history[:min(domain.CodeHistorySize, len(history))]}
+		record := codeMemoryRecord{document: data, status: status, actor: in.Actor, history: history[:min(domain.CodeHistorySize, len(history))], postings: map[string][]int{}}
+		for entry := range in.Document.SearchEntries {
+			ordinal := len(record.entries)
+			record.entries = append(record.entries, entry)
+			for word := range strings.FieldsSeq(domain.CodeSearchPhrase(entry.Body)) {
+				posting := record.postings[word]
+				if len(posting) == 0 || posting[len(posting)-1] != ordinal {
+					record.postings[word] = append(posting, ordinal)
+				}
+			}
+		}
+		m.records[key] = record
 		count := 0
 		var oldest codeMemoryKey
 		for candidate, record := range m.records {
@@ -170,27 +184,8 @@ func (m *memoryCodeIndexes) FindCode(ctx context.Context, in domain.CodeSearchRe
 				latest[key.repository] = record
 			}
 		}
-		visited := 0
-		for _, record := range latest {
-			var doc domain.CodeIndex
-			if err := json.Unmarshal(record.document, &doc); err != nil {
-				return err
-			}
-			doc.SearchEntries(func(entry domain.CodeSearchEntry) bool {
-				if ctx.Err() != nil {
-					return false
-				}
-				if in.Kind != "" && entry.Card.Kind != in.Kind {
-					return true
-				}
-				visited++
-				if visited > domain.CodeSearchScanBudget {
-					return false
-				}
-				score := entry.Score(in.Query)
-				if score == 0 {
-					return true
-				}
+		add := func(entry domain.CodeSearchEntry) {
+			if score := entry.Score(in.Query); score != 0 {
 				position := sort.Search(len(best), func(index int) bool {
 					return cmp.Or(cmp.Compare(best[index].score, score), domain.CompareCodeCards(entry.Card, best[index].card)) < 0
 				})
@@ -199,13 +194,39 @@ func (m *memoryCodeIndexes) FindCode(ctx context.Context, in domain.CodeSearchRe
 					best = slices.Insert(best, position, scored{entry.Card, score})
 					best = best[:min(in.Limit+1, len(best))]
 				}
-				return true
-			})
-			if visited > domain.CodeSearchScanBudget {
-				return domain.ErrCodeSearchBudget
 			}
-			if err := ctx.Err(); err != nil {
-				return err
+		}
+		if phrase := domain.CodeSearchPhrase(in.Query); phrase != "" {
+			word, _, _ := strings.Cut(phrase, " ")
+			for _, record := range latest {
+				for _, ordinal := range record.postings[word] {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					entry := record.entries[ordinal]
+					if (in.Kind == "" || entry.Card.Kind == in.Kind) && strings.Contains(" "+domain.CodeSearchPhrase(entry.Body)+" ", " "+phrase+" ") {
+						add(entry)
+					}
+				}
+			}
+			if len(best) != 0 {
+				return nil
+			}
+		}
+		visited := 0
+		for _, record := range latest {
+			for _, entry := range record.entries {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if in.Kind != "" && entry.Card.Kind != in.Kind {
+					continue
+				}
+				visited++
+				if visited > domain.CodeSearchScanBudget {
+					return domain.ErrCodeSearchBudget
+				}
+				add(entry)
 			}
 		}
 		return nil

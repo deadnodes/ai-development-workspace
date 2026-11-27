@@ -53,34 +53,40 @@ func collect(file *domain.CodeFile, body []byte) {
 }
 
 func summary(text string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	line, _, _ := strings.Cut(strings.TrimSpace(domain.CodeRedactSecrets(text)), "\n")
 	return domain.CodePrefix(line, 512)
 }
 
 func safeText(text string, limit int) bool {
-	return len(text) <= limit && !strings.ContainsRune(text, 0) && !domain.CodeHasSecret(text)
+	return len(text) <= limit && !strings.ContainsRune(text, 0)
 }
 
 func addSymbol(file *domain.CodeFile, name, kind, receiver, text string, line int) {
+	name, receiver, text = domain.CodeRedactSecrets(name), domain.CodeRedactSecrets(receiver), domain.CodeRedactSecrets(text)
 	if strings.TrimSpace(name) != "" && safeText(name, 512) && safeText(receiver, 512) && safeText(text, 512) && len(file.Symbols) <= domain.CodeMaxSymbols {
 		file.Symbols = append(file.Symbols, domain.CodeSymbol{Name: name, Kind: kind, Receiver: receiver, Doc: text, Line: line})
 	}
 }
 
 func addRoute(file *domain.CodeFile, route, method string, line int) {
-	if strings.HasPrefix(route, "/") && safeText(route, 1024) && strings.TrimSpace(method) != "" && safeText(method, 24) {
+	if !strings.HasPrefix(route, "/") {
+		return
+	}
+	route, method = domain.CodeRedactSecrets(route), domain.CodeRedactSecrets(method)
+	if safeText(route, 1024) && strings.TrimSpace(method) != "" && safeText(method, 24) {
 		file.Routes = append(file.Routes, domain.CodeRoute{Path: route, Method: method, Line: line})
 	}
 }
 
 func addDep(file *domain.CodeFile, kind, name, version string) {
+	name, version = domain.CodeRedactSecrets(name), domain.CodeRedactSecrets(version)
 	if strings.TrimSpace(name) != "" && safeText(name, 512) && safeText(version, 512) {
 		file.Dependencies = append(file.Dependencies, domain.CodeDependency{Name: name, Version: version, Kind: kind})
 	}
 }
 
 func addEntry(file *domain.CodeFile, kind, entry string) {
-	entry = strings.TrimSpace(entry)
+	entry = strings.TrimSpace(domain.CodeRedactSecrets(entry))
 	if entry != "" && safeText(entry, 512) {
 		file.Entrypoints = append(file.Entrypoints, domain.CodeEntry{Name: entry, Kind: kind})
 	}

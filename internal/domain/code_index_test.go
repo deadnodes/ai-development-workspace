@@ -36,13 +36,15 @@ func TestCodeIndexValidation(t *testing.T) {
 
 func TestCodeIndexRejectsCredentialShapedUploadFields(t *testing.T) {
 	for _, text := range []string{
-		"export TOKEN=short # comment", `"password": "fixture!",`, "`api_key` = ''", "'access_key_id' = hi;",
-		`\"private_key\":\"data!\"`, "auth: yes", "bearer = no", "credential: x", "passwd='a b'", "“token” = fixture",
+		"export TOKEN=short # comment", `"password": "fixture!",`, "`api_key` = 'value'", "'access_key_id' = hi;",
+		`\"private_key\":\"data!\"`, "auth: yes", "auth: FIXTURE", "bearer = no", "credential: x", "passwd='a b'", "“token” = fixture",
 		"https://name:pass'word@example.invalid/repo", "https://example.invalid/repo?access_token=x&next=1",
-		"https://example.invalid/repo?x=1&%73ignature=x", "https://example.invalid/?X-Amz-Credential=x",
+		"https://example.invalid/repo?x=1&%73ignature=x", "https://example.invalid/?X-Amz-Credential=x", "url=https://example.invalid/?%73ig=x",
 		"ghp_" + strings.Repeat("a", 36), "gho_" + strings.Repeat("a", 36), "github_pat_" + strings.Repeat("a", 36),
 		"glpat-" + strings.Repeat("a", 20), "xoxb-" + strings.Repeat("a", 20), "sk-" + strings.Repeat("a", 25),
 		"AKIA" + strings.Repeat("1", 16), "eyJhbGciOiJub25lIn0.e30.abcdefghij",
+		"rcpa_" + strings.Repeat("x-_A", 10) + "zzz", `token := "fixture"`, `password := 1234`, `__Host-rcp_session=opaque`,
+		"/download?%74oken=fixture", `{"token":"fixture","note":"keep"}`, "-----BEGIN PRIVATE KEY-----\nYWJjZA==\n-----END PRIVATE KEY-----",
 	} {
 		doc := CodeIndex{RepositoryID: "repo", Branch: "@{unversioned}", Version: CodeIndexVersion, IndexedAt: time.Now(), Files: []CodeFile{{Path: "README.md", Language: "Markdown", Size: len(text), Lines: 1, Doc: text}}}
 		if err := doc.Validate("repo"); err == nil || strings.Contains(err.Error(), text) {
@@ -55,5 +57,20 @@ func TestCodeIndexRejectsCredentialShapedUploadFields(t *testing.T) {
 	}
 	if CodeHasSecret("Use https://example.invalid/repo?view=all&mode=brief for details.") {
 		t.Fatal("ordinary URL was rejected")
+	}
+}
+
+func TestCodeSecretsPreserveRuntimeCodeAndEmptyValues(t *testing.T) {
+	text := strings.Join([]string{
+		`token := os.Getenv("RCP_TOKEN")`, `token = os.Getenv("RCP_TOKEN")`, `token: os.Getenv("RCP_TOKEN")`,
+		`if token == "fixture" {}`, `if token != "fixture" {}`, `token === "fixture"`,
+		`var token string`, `token: string`, `token: *Token`, `token: Token;`, `token:`, `token = ""`, `api_key = ''`,
+		`token = $TOKEN`, `token = "${TOKEN}"`, `token = "" || os.Getenv("RCP_TOKEN")`,
+		`authorization = "Bearer " + os.Getenv("RCP_TOKEN")`,
+		`https://example.invalid/repo?access_token=&next=1`, `/download?access_token=`, `url=https://example.invalid/?sig=%24%7BSIGNATURE%7D`,
+		`rcpa_`, `rcpa_` + strings.Repeat("a", 42), `rcpa_` + strings.Repeat("a", 44),
+	}, "\n")
+	if got := CodeRedactSecrets(text); got != text || CodeHasSecret(text) {
+		t.Fatalf("text without credentials was changed:\n%s", got)
 	}
 }

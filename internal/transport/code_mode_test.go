@@ -103,7 +103,9 @@ func TestCodeIndexAcrossToolAndHTTP(t *testing.T) {
 	if status, raw := codeRequest(t, server, "POST", "/api/tools/upsert_code_index", string(wire), "secret"); status != 200 || !bytes.Contains(raw, []byte(`"changed":false`)) {
 		t.Fatalf("tool replay: %d %s", status, raw)
 	}
+	agentTokenFixture := "rcpa_" + strings.Repeat("OpaqueFixture987", 2) + strings.Repeat("x", 11)
 	for _, file := range []domain.CodeFile{
+		{Path: "README.md", Language: "Markdown", Doc: "Runbook\n" + agentTokenFixture},
 		{Path: "README.md", Language: "Markdown", Doc: "Use `API_TOKEN=OpaqueFixture987` or omit it."},
 		{Path: "README.md", Language: "Markdown", Doc: "API_TOKEN=OpaqueFixture987\r\nMore text\r\n"},
 		{Path: "README.md", Language: "Markdown", Doc: "export TOKEN=OpaqueFixture987 # local"},

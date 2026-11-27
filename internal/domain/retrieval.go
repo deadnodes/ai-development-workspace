@@ -27,6 +27,7 @@ type ContextSearchResult struct {
 	Guidance      string        `json:"guidance"`
 	CodeItems     []CodeCard    `json:"code_items,omitempty"`
 	CodeTruncated bool          `json:"code_truncated,omitempty"`
+	CodeWarning   string        `json:"code_warning,omitempty"`
 }
 type ContextExcerptRequest struct {
 	ProductID string `json:"product_id"`

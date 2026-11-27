@@ -94,36 +94,20 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, opti
 			if len(content) > domain.CodeFileBytes || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 || generated.Match(content[:min(len(content), 4096)]) || strings.ContainsFunc(string(content), binaryControl) || minified(file.Language, content) {
 				continue
 			}
-			isDoc := domain.CodeDocPath(name)
-			sensitive := domain.CodeHasSecret(string(content))
-			if sensitive && (!isDoc || domain.CodeHasPrivateKey(string(content))) {
-				continue
-			}
 			file.Size = len(content)
 			file.Lines = bytes.Count(content, []byte{'\n'})
 			if len(content) > 0 && content[len(content)-1] != '\n' {
 				file.Lines++
 			}
-			if isDoc {
-				if sensitive {
-					lines := bytes.Split(content, []byte{'\n'})
-					for index, line := range lines {
-						if domain.CodeHasSecret(string(line)) {
-							lines[index] = []byte("[...]")
-						}
-					}
-					content = bytes.Join(lines, []byte{'\n'})
-				}
-				if len(content) > domain.CodeDocBytes {
+			if domain.CodeDocPath(name) {
+				text := domain.CodeRedactSecrets(string(content))
+				if len(text) > domain.CodeDocBytes {
 					flags["doc_bytes"] = true
 				}
-				if min(len(content), domain.CodeDocBytes) > domain.CodeDocsBytes-totalDocs {
+				if min(len(text), domain.CodeDocBytes) > domain.CodeDocsBytes-totalDocs {
 					flags["docs_bytes"] = true
 				}
-				file.Doc = domain.CodePrefix(string(content), min(domain.CodeDocBytes, domain.CodeDocsBytes-totalDocs))
-				if domain.CodeHasSecret(file.Doc) {
-					continue
-				}
+				file.Doc = domain.CodeRedactSecrets(domain.CodePrefix(text, min(domain.CodeDocBytes, domain.CodeDocsBytes-totalDocs)))
 			}
 			collect(&file, content)
 		}

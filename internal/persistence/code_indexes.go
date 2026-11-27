@@ -302,42 +302,57 @@ func findCodeWithinBudget(ctx context.Context, store codeTransactions, query dom
 		pos := tx.sql(`strpos`, `instr`)
 		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
 		literal := `(` + pos + `(c.text_body,$4)>0 OR ` + pos + `(c.title,$4)>0)`
-		phrase := `($6<>'' AND ` + pos + `(c.words,' ' || $6 || ' ')>0)`
-		rows, err := tx.Query(ctx, `WITH latest AS (
-		 SELECT ci.repository_id,ci.branch,ci.commit_sha, row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.indexed_at DESC,ci.branch`+collation+`) AS rank
+		latest := `WITH latest AS (
+		 SELECT ci.repository_id,ci.branch,ci.commit_sha, row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.indexed_at DESC,ci.branch` + collation + `) AS rank
 		 FROM code_indexes ci JOIN records r ON r.id=ci.repository_id AND r.product_id=ci.product_id AND r.kind='repositories'
 		 WHERE ci.product_id=$1 AND ($2='' OR ci.repository_id=$2)
-		), candidates AS MATERIALIZED (
+		)`
+		join := ` FROM latest l JOIN code_index_cards c ON c.product_id=$1 AND c.repository_id=l.repository_id AND c.branch=l.branch
+		 WHERE l.rank=1 AND ($3='' OR c.kind=$3)`
+		score := `CASE WHEN c.title=$4 THEN 3 WHEN ` + pos + `(c.title,$4)>0 THEN 2 ELSE 1 END`
+		order := ` DESC,c.repository_id` + collation + `,c.path` + collation + `,c.kind` + collation + `,c.line,c.symbol` + collation + `,c.ordinal LIMIT $5`
+		read := func(rows stateRows) error {
+			defer rows.Close()
+			for rows.Next() {
+				var card domain.CodeCard
+				var exceeded bool
+				if err := rows.Scan(&exceeded, &card.RepositoryID, &card.Branch, &card.Commit, &card.Path, &card.Kind, &card.Symbol, &card.Line, &card.Snippet); err != nil {
+					return err
+				}
+				if exceeded {
+					return domain.ErrCodeSearchBudget
+				}
+				items = append(items, card)
+			}
+			return rows.Err()
+		}
+		args := []any{query.ProductID, query.RepositoryID, query.Kind, query.Query, query.Limit + 1}
+		if phrase := domain.CodeSearchPhrase(query.Query); phrase != "" {
+			match := tx.sql(`c.search_vector @@ phraseto_tsquery('simple',$6)`, `c.rowid IN (SELECT rowid FROM code_index_search WHERE code_index_search MATCH ('"' || $6 || '"'))`)
+			rows, err := tx.Query(ctx, latest+` SELECT FALSE,c.repository_id,c.branch,l.commit_sha,c.path,c.kind,c.symbol,c.line,c.snippet`+join+` AND `+match+` ORDER BY `+score+order, append(args, phrase)...)
+			if err != nil {
+				return err
+			}
+			if err := read(rows); err != nil || len(items) != 0 {
+				return err
+			}
+		}
+		rows, err := tx.Query(ctx, latest+`, candidates AS MATERIALIZED (
 		 SELECT c.repository_id,c.branch,l.commit_sha,c.ordinal
-		 FROM latest l JOIN code_index_cards c ON c.product_id=$1 AND c.repository_id=l.repository_id AND c.branch=l.branch
-		 WHERE l.rank=1 AND ($3='' OR c.kind=$3) LIMIT ($7 + 1)
-		), budget AS (SELECT count(*)>$7 AS exceeded FROM candidates), matches AS (
-		 SELECT c.repository_id,c.branch,k.commit_sha,c.path,c.kind,c.symbol,c.line,c.snippet,c.ordinal,
-		 CASE WHEN c.title=$4 THEN 3 WHEN `+pos+`(c.title,$4)>0 THEN 2 ELSE 1 END AS score
+		 `+join+` LIMIT ($6 + 1)
+		), budget AS (SELECT count(*)>$6 AS exceeded FROM candidates), matches AS (
+		 SELECT c.repository_id,c.branch,k.commit_sha,c.path,c.kind,c.symbol,c.line,c.snippet,c.ordinal,`+score+` AS score
 		 FROM candidates k JOIN code_index_cards c ON c.product_id=$1 AND c.repository_id=k.repository_id AND c.branch=k.branch AND c.ordinal=k.ordinal
-		 WHERE NOT (SELECT exceeded FROM budget) AND (`+literal+` OR `+phrase+`)
-		 ORDER BY score DESC,c.repository_id`+collation+`,c.path`+collation+`,c.kind`+collation+`,c.line,c.symbol`+collation+`,c.ordinal LIMIT $5
+		 WHERE NOT (SELECT exceeded FROM budget) AND `+literal+` ORDER BY score`+order+`
 		), results AS (
 		 SELECT FALSE AS exceeded,repository_id,branch,commit_sha,path,kind,symbol,line,snippet,score,ordinal FROM matches
 		 UNION ALL SELECT exceeded, '', '', '', '', '', '', 0, '', 0, 0 FROM budget WHERE exceeded
 		) SELECT exceeded,repository_id,branch,commit_sha,path,kind,symbol,line,snippet FROM results
-		 ORDER BY score DESC,repository_id`+collation+`,path`+collation+`,kind`+collation+`,line,symbol`+collation+`,ordinal`, query.ProductID, query.RepositoryID, query.Kind, query.Query, query.Limit+1, domain.CodeSearchPhrase(query.Query), budget)
+		 ORDER BY score DESC,repository_id`+collation+`,path`+collation+`,kind`+collation+`,line,symbol`+collation+`,ordinal`, append(args, budget)...)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var card domain.CodeCard
-			var exceeded bool
-			if err = rows.Scan(&exceeded, &card.RepositoryID, &card.Branch, &card.Commit, &card.Path, &card.Kind, &card.Symbol, &card.Line, &card.Snippet); err != nil {
-				return err
-			}
-			if exceeded {
-				return domain.ErrCodeSearchBudget
-			}
-			items = append(items, card)
-		}
-		return rows.Err()
+		return read(rows)
 	})
 	for index := range items {
 		items[index].Snippet = domain.CodeSnippet(items[index].Snippet, query.Query)

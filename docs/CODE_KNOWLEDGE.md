@@ -59,17 +59,19 @@ release-control.exe index --url https://rcp.example.com --profile example `
 - Text from `README*`, `AGENTS.md`, `CLAUDE.md`, and Markdown under `docs/`.
   RCP does not store general source bodies, binaries, Git internals, recognized
   generated/minified files, or lockfile contents. Lockfile paths and sizes are
-  kept. Sensitive filenames, private-key documents, and source files matching
-  common credential patterns are dropped. Other matching document lines become
-  `[...]`, and the server rejects uploads with matching fields. Re-index
-  previously uploaded snapshots to apply the newer filters. This is a heuristic, not a
+  kept. Credential files are excluded by path patterns; source files aren't
+  excluded for handling or containing credentials. Lines with literal credentials
+  in extracted text become `[...]`, and the server rejects uploads containing
+  those values. Re-index previously uploaded snapshots to apply the newer
+  filters. This is a heuristic, not a
   substitute for removing secrets before indexing.
 - Git supplies tracked regular paths by default, excluding Git symlinks even
   when checkout settings materialize them as text files. `--include-untracked` adds untracked
   paths while respecting Git ignores, including the configured global exclude
   file. Use the checkout root for tracked-only indexing. Selecting a subdirectory
   requires `--include-untracked` and uses the unversioned directory's fixed
-  ignore list instead of Git ignores. A Git
+  ignore list instead of Git ignores. An unversioned directory containing a
+  nested checkout is rejected; use `--workspace` for per-checkout matching. A Git
   checkout requires Git to enumerate its files. Extractors read working-tree
   files, so the reported commit is the checkout's HEAD, not proof that the indexed
   text matches that commit. Text and its byte count use LF line endings, and
@@ -98,6 +100,7 @@ RCP, not the last successful cron run.
    The map is capped at 64 KiB. Unless a branch is explicitly selected for the
    map, these reads use the most recently accepted branch per repository.
    `search_context` with `include_code: true` adds up to five code cards.
+   If code search fails, authored results are still returned with `code_warning`.
 3. Use `search_product_knowledge` for curated architecture. After a clean
    checkout is indexed, update the relevant areas, relationships and nodes
    using `set_project_knowledge` or `upsert_product_knowledge`, citing paths and
@@ -108,6 +111,7 @@ HTTP equivalents are `POST /api/code/index` and `GET /api/code/{map,search,outli
 Workspace discovery uses `GET /api/code/repositories?product_id=…`; pass each
 returned `next_cursor` as `cursor` to continue listing attachment IDs and
 credential-free `identity` values (canonical host and path, not clone URLs).
-Code searches have a two-second deadline and reject searches over 32,768
-candidate cards; narrow by repository or card kind instead of relying on `limit`.
+Code searches have a two-second deadline. Indexed phrase matches are tried first.
+If none match, the substring fallback scans at most 32,768 candidate cards;
+narrow by repository or card kind if the fallback exceeds that budget.
 See [Agent Tools](AGENT_TOOLS.md) for typed examples and request fields.

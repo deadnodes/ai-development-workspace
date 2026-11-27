@@ -44,6 +44,33 @@ func TestCodeIndexRejectsGitSubdirectoryWithoutOptIn(t *testing.T) {
 	}
 }
 
+func TestCodeIndexRejectsWorkspaceParentContainingGitCheckout(t *testing.T) {
+	for _, marker := range []string{"directory", "worktree file"} {
+		t.Run(marker, func(t *testing.T) {
+			root := scanRoot(t)
+			repo := filepath.Join(root, "projects", "private")
+			if err := os.MkdirAll(repo, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if marker == "directory" {
+				if err := os.Mkdir(filepath.Join(repo, ".git"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				put(t, filepath.Join(repo, ".git"), "gitdir: /elsewhere\n")
+			}
+			put(t, filepath.Join(repo, ".gitignore"), "README.local.md\n")
+			put(t, filepath.Join(repo, "README.local.md"), "private fixture\n")
+			put(t, filepath.Join(root, "README.md"), "public fixture\n")
+			for _, includeUntracked := range []bool{false, true} {
+				if _, _, paths, _, err := CodeIndexPaths(context.Background(), root, includeUntracked); err == nil || !strings.Contains(err.Error(), "--workspace") || len(paths) != 0 {
+					t.Fatalf("expected workspace guidance without paths: %v, %v", paths, err)
+				}
+			}
+		})
+	}
+}
+
 func TestCodeIndexPathsIgnoreGitSymlinkMode(t *testing.T) {
 	root := initRepo(t, scanRoot(t), "project")
 	put(t, filepath.Join(root, "actual.md"), "real text")
