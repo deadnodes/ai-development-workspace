@@ -186,3 +186,22 @@ func TestBindRuntimeFreshnessEqualTimestampsPreferLaterRow(t *testing.T) {
 		t.Fatalf("freshness bound to %v, want the later row 0000", got)
 	}
 }
+
+// Pruning must keep the last appended observation as the latest root when
+// timestamps tie, whatever the random IDs.
+func TestPruneKeepsLaterAppendedObservationOnEqualTimestamps(t *testing.T) {
+	at := time.Now().UTC().Add(-48 * time.Hour)
+	st := EmptyState()
+	st.RuntimeObservations = []RuntimeObservation{
+		{Meta: Meta{ID: "aaaa", ProductID: "p", CreatedAt: at}, OperationID: "op", EnvironmentID: "env", Target: "ns/d/c", ArtifactDigest: "d", Healthy: true},
+		{Meta: Meta{ID: "ffff", ProductID: "p", CreatedAt: at}, OperationID: "op", EnvironmentID: "env", Target: "ns/d/c", ArtifactDigest: "d", Healthy: true},
+		{Meta: Meta{ID: "0000", ProductID: "p", CreatedAt: at}, OperationID: "op", EnvironmentID: "env", Target: "ns/d/c", ArtifactDigest: "d", Healthy: false},
+	}
+	pruned := PrunableRuntimeObservations(&st, time.Now().UTC(), 10)
+	if pruned["0000"] {
+		t.Fatalf("pruned the latest (last appended, unhealthy) observation: %v", pruned)
+	}
+	if pruned["aaaa"] || !pruned["ffff"] {
+		t.Fatalf("want only the middle row pruned (earliest digest root aaaa kept): %v", pruned)
+	}
+}

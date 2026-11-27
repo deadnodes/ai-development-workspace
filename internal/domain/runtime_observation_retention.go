@@ -61,16 +61,16 @@ func runtimeObservationRoots(st *State) runtimeObservationIndex {
 	for _, o := range st.Operations {
 		ops[o.ID] = o
 	}
-	newer := func(a, b RuntimeObservation) bool {
-		return a.CreatedAt.After(b.CreatedAt) || a.CreatedAt.Equal(b.CreatedAt) && a.ID > b.ID
-	}
+	// Rows are in insertion order: on equal timestamps the later row is the
+	// latest and the earlier row stays the earliest.
+	newer := func(a, b RuntimeObservation) bool { return a.CreatedAt.After(b.CreatedAt) }
 	for _, r := range st.RuntimeObservations {
 		rows[r.ID] = r
 		op := ops[r.OperationID]
 		keys := []string{"operation\x00" + RuntimeObservationKey(r.OperationID, r.Target), "target\x00" + r.ProductID + "\x00" + r.EnvironmentID + "\x00" + op.ApplicationID}
 		for _, key := range keys {
 			old, ok := latest[key]
-			if !ok || newer(r, old) {
+			if !ok || !old.CreatedAt.After(r.CreatedAt) {
 				latest[key] = r
 			}
 		}
