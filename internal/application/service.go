@@ -299,15 +299,16 @@ func refs(st *domain.State, ids []string, f string) error {
 	}
 	return nil
 }
+
+// latest is the last recorded result of a check. Results are stored in
+// append order, which stays correct when the clock is coarse or moves back.
 func latest(st *domain.State, c string) *domain.CheckResult {
-	var r *domain.CheckResult
-	for i := range st.Results {
-		v := &st.Results[i]
-		if v.CheckID == c && (r == nil || !v.CreatedAt.Before(r.CreatedAt)) {
-			r = v
+	for i := len(st.Results) - 1; i >= 0; i-- {
+		if st.Results[i].CheckID == c {
+			return &st.Results[i]
 		}
 	}
-	return r
+	return nil
 }
 func gateResult(st *domain.State, g domain.Gate) string {
 	if !externalGateEvidenceCurrent(st, g) {
@@ -1011,6 +1012,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		ch := check(st, c.CheckID)
 		if ch == nil {
 			return nil, missing("check", c.CheckID)
+		}
+		if _, set := c.Data["external_scope_id"]; set {
+			return nil, invalid("external_scope_id is set by the server")
 		}
 		v := domain.CheckResult{}
 		if e := decode(c.Data, &v); e != nil {
