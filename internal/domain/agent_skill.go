@@ -11,6 +11,7 @@ import (
 const (
 	MaxAgentSkillBodyBytes  = 64 << 10
 	MaxAgentSkillFilesBytes = 256 << 10
+	MaxAgentSkillFiles      = 64
 )
 
 var agentSkillName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -46,9 +47,12 @@ func (input AgentSkillInput) Validate() error {
 	if strings.TrimSpace(input.Body) == "" || !utf8.ValidString(input.Body) || strings.ContainsRune(input.Body, 0) {
 		return fmt.Errorf("skill body must be nonempty UTF-8 text")
 	}
+	if len(input.Files) > MaxAgentSkillFiles {
+		return fmt.Errorf("skill files exceed %d entries", MaxAgentSkillFiles)
+	}
 	total := 0
 	for name, text := range input.Files {
-		total += len(text)
+		total += len(name) + len(text)
 		if total > MaxAgentSkillFilesBytes {
 			return fmt.Errorf("skill files exceed 256 KiB total")
 		}

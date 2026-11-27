@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,153 @@ func idleEvents(events []domain.ExecutionEvent, groupID string, openOnly bool) m
 
 func idleTestPolicy(idle, wait, owner, stale int) map[string]any {
 	return map[string]any{"idle_after_seconds": idle, "wait_timeout_seconds": wait, "owner_blocked_interval_seconds": owner, "member_stale_after_seconds": stale}
+}
+
+func TestAcceptedProgressKeepsWaitingAndUnclaimedMembersFresh(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		work := ownerWorkReviewOnStore(t, store)
+		group := thirdReviewGroup(work)
+		work.run(work.owner, "create_integration", "p", "f", "", "unclaimed", map[string]any{"title": "Unclaimed", "objective": "Ship"})
+		work.run(work.agent, "add_execution_group_member", "p", "", "", "", map[string]any{"group_id": group.ID, "integration_id": "unclaimed"})
+		execution := work.run(work.agent, "claim_execution", "p", "", "i", "", work.claimData("executor")).(domain.IntegrationExecution)
+		if err := store.Update(context.Background(), func(state *domain.State) error {
+			state.Builds = append(state.Builds, domain.Build{Meta: domain.Meta{ID: "ci", ProductID: "p"}, Status: "RUNNING"})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		work.run(work.agent, "report_execution", "p", "", "i", "", map[string]any{"fence": execution.Fence, "state": "waiting_external", "waiting_ref": "ci"})
+		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", idleTestPolicy(0, 60, 0, 60))
+		old := time.Now().UTC().Add(-2 * time.Minute)
+		if err := store.Update(context.Background(), func(state *domain.State) error {
+			group := &state.ExecutionGroups[0]
+			group.CreatedAt = old
+			for index := range group.Revisions {
+				group.Revisions[index].CreatedAt = old
+			}
+			waiting := executionFor(state, "i")
+			waiting.LastHeartbeat, waiting.LastProgress = &old, &old
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		evaluate := func() groupIdleEvaluation {
+			state := thirdReviewState(t, store)
+			result, _ := evaluateGroupIdle(&state, state.ExecutionGroups[0], time.Now().UTC())
+			return result
+		}
+		if len(evaluate().staleMembers) != 2 {
+			t.Fatal("expected both members to be stale before progress")
+		}
+		waitingProgress := work.run(work.agent, "record_progress", "p", "f", "i", "", map[string]any{"title": "CI advanced", "execution_fence": execution.Fence}).(domain.Memory)
+		result := evaluate()
+		wait := result.Checks[domain.EventGroupWaitTimeout]
+		if !result.GroupActivityAt.Equal(waitingProgress.UpdatedAt) || wait.NextDueAt == nil || !wait.NextDueAt.Equal(waitingProgress.UpdatedAt.Add(time.Minute)) || len(result.staleMembers) != 1 || result.staleMembers[0].IntegrationID != "unclaimed" {
+			t.Fatalf("waiting progress did not refresh both clocks: %+v", result)
+		}
+		unclaimedProgress := work.run(work.owner, "record_progress", "p", "f", "unclaimed", "", map[string]any{"title": "Unclaimed progress"}).(domain.Memory)
+		state := thirdReviewState(t, store)
+		result = evaluate()
+		if executionFor(&state, "unclaimed") != nil || !result.GroupActivityAt.Equal(unclaimedProgress.UpdatedAt) || len(result.staleMembers) != 0 {
+			t.Fatalf("unclaimed progress did not refresh both clocks: %+v", result)
+		}
+	})
+}
+
+func TestExecutionDeliveryFeedByteBudget(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	now := time.Now().UTC()
+	largeReason := strings.Repeat("&", domain.MaxExecutionEventPageBytes)
+	events := []domain.ExecutionEvent{
+		{ID: "large", ProductID: "p", IntegrationID: "i", CreatedAt: now, Reason: largeReason, Type: "execution_continuation_required"},
+		{ID: "first", ProductID: "p", IntegrationID: "i", CreatedAt: now.Add(time.Second), Reason: strings.Repeat("&", 90000)},
+		{ID: "later", ProductID: "p", IntegrationID: "i", CreatedAt: now.Add(2 * time.Second), Reason: strings.Repeat("&", 90000)},
+	}
+	work.store.state.ExecutionEvents = events
+	cursor := ""
+	for _, want := range [][]string{{"large", "first"}, {"later"}} {
+		query, _ := json.Marshal(map[string]any{"product_id": "p", "cursor": cursor, "due_only": true})
+		page := work.query(work.agent, "list_execution_events", string(query))
+		raw, err := json.Marshal(page)
+		if err != nil || len(raw)+1 > domain.MaxExecutionEventPageBytes {
+			t.Fatalf("delivery page exceeds limit: %d bytes (%v)", len(raw), err)
+		}
+		var ids []string
+		for _, event := range page["items"].([]domain.ExecutionEvent) {
+			if event.ID == "large" && (event.Reason != "" || event.Type != "execution_continuation_required") {
+				t.Fatal("oversized event did not retain its delivery metadata")
+			}
+			ids = append(ids, event.ID)
+		}
+		if fmt.Sprint(ids) != fmt.Sprint(want) {
+			t.Fatalf("delivery page = %v; want %v", ids, want)
+		}
+		cursor = page["next_cursor"].(string)
+	}
+	if cursor != "" || work.store.state.ExecutionEvents[0].Reason != largeReason {
+		t.Fatal("delivery paging modified history or did not finish")
+	}
+}
+
+func TestStalledWakeAcknowledgesActiveSkip(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	group := thirdReviewGroup(work)
+	work.run(work.agent, "claim_execution", "p", "", "i", "", work.claimData("executor"))
+	state := &work.store.state
+	executionCondition(state, executionFor(state, "i"), "stalled", true, "no progress", time.Now().UTC())
+	var stalled domain.ExecutionEvent
+	for _, event := range state.ExecutionEvents {
+		if event.Type == "execution_stalled" && event.WakeTarget.GroupID == group.ID {
+			stalled = event
+		}
+	}
+	data := reviewDelivery(stalled.ID)
+	data["delivery_id"] = work.run(work.agent, "claim_execution_event_delivery", "p", "", "", "", data)
+	data["outcome"] = "skipped_active"
+	ack := work.run(work.agent, "ack_execution_event", "p", "", "", "", data).(domain.ExecutionEvent)
+	if ack.EscalationRequired || groupIdleEffectiveAttempts(ack) != 0 || !ack.Delivery.NextAttemptAt.After(time.Now().UTC()) {
+		t.Fatalf("active pane skip spent a retry or escalated: %+v", ack)
+	}
+}
+
+func TestIdleEventMemberPreviewAndFullGroup(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		work := ownerWorkReviewOnStore(t, store)
+		group := thirdReviewGroup(work)
+		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", idleTestPolicy(0, 0, 0, 60))
+		for index := range 11 {
+			member := fmt.Sprintf("member-%02d", index)
+			work.run(work.owner, "create_integration", "p", "f", "", member, map[string]any{"title": member, "objective": "Ship"})
+			work.run(work.agent, "add_execution_group_member", "p", "", "", "", map[string]any{"group_id": group.ID, "integration_id": member})
+		}
+		now := time.Now().UTC().Add(2 * time.Minute)
+		if err := store.Update(context.Background(), func(state *domain.State) error {
+			reconcileGroupIdle(state, now)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		state := thirdReviewState(t, store)
+		event := idleEvents(state.ExecutionEvents, group.ID, true)[domain.EventGroupMemberStale]
+		if event.GroupIdle == nil || event.GroupIdle.MemberTotal != 12 || len(event.GroupIdle.Members) != 10 {
+			t.Fatalf("wrong member preview: %+v", event.GroupIdle)
+		}
+		if members := work.query(work.agent, "get_execution_group", group.ID)["members"].([]map[string]any); len(members) != 12 {
+			t.Fatalf("full group details truncated: %d", len(members))
+		}
+		if err := store.Update(context.Background(), func(state *domain.State) error {
+			integration(state, "member-10").LastRecordedProgress = &now
+			reconcileGroupIdle(state, now.Add(2*time.Minute))
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		state = thirdReviewState(t, store)
+		next := idleEvents(state.ExecutionEvents, group.ID, true)[domain.EventGroupMemberStale]
+		if next.ID == event.ID || next.GroupIdle == nil || next.GroupIdle.MemberTotal != 12 {
+			t.Fatalf("progress outside preview did not retire the stale episode: %+v", next)
+		}
+	})
 }
 
 func TestMemberStalenessStoreMatrix(t *testing.T) {

@@ -73,6 +73,8 @@ type Integration struct {
 	Remaining          []string      `json:"remaining"`
 	WorkingAreas       []string      `json:"working_areas"`
 	Position           int           `json:"position"`
+
+	LastRecordedProgress *time.Time `json:"last_recorded_progress,omitempty"`
 }
 
 type ExecutionHarness struct {
@@ -132,6 +134,7 @@ type ExecutionEvent struct {
 	WakeTarget          ExecutionWakeTarget        `json:"wake_target"`
 	OrchestratorSkill   string                     `json:"orchestrator_skill,omitempty"`
 	GroupIdle           *ExecutionGroupIdlePayload `json:"group_idle,omitempty"`
+	GroupIdleEpisode    string                     `json:"group_idle_episode,omitempty"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	Delivery            ExecutionEventDelivery     `json:"delivery"`
 	Resolution          ExecutionEventResolution   `json:"resolution"`
@@ -168,7 +171,6 @@ type IntegrationExecution struct {
 	LeaseUntil            *time.Time              `json:"lease_until,omitempty"`
 	LastHeartbeat         *time.Time              `json:"last_heartbeat,omitempty"`
 	LastProgress          *time.Time              `json:"last_progress,omitempty"`
-	LastRecordedProgress  *time.Time              `json:"last_recorded_progress,omitempty"`
 	ClaimedAt             *time.Time              `json:"claimed_at,omitempty"`
 	ExitReason            string                  `json:"exit_reason,omitempty"`
 	WaitingRef            string                  `json:"waiting_ref,omitempty"`

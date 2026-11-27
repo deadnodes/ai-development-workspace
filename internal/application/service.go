@@ -73,11 +73,15 @@ func NewWithProvider(store Store, provider delivery.Provider) *Service {
 	s.provider = provider
 	return s
 }
-func (s *Service) State(ctx context.Context) (domain.State, error) {
+func (s *Service) readDerivedState(ctx context.Context) (domain.State, error) {
 	st, err := s.store.Read(ctx)
 	if err == nil {
 		derive(&st)
 	}
+	return st, err
+}
+func (s *Service) State(ctx context.Context) (domain.State, error) {
+	st, err := s.readDerivedState(ctx)
 	if err != nil {
 		return st, err
 	}
@@ -1049,11 +1053,10 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				in.Remaining = v.Remaining
 			}
 			in.UpdatedAt = m.UpdatedAt
+			in.LastRecordedProgress = &m.UpdatedAt
 			if ex := executionFor(st, c.IntegrationID); ex != nil {
-				now := m.UpdatedAt
-				ex.LastRecordedProgress = &now
 				if ex.State == "running" && c.Data["execution_unfenced"] != true {
-					ex.LastProgress = &now
+					ex.LastProgress = &m.UpdatedAt
 				}
 			}
 		}

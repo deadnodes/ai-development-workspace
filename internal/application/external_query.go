@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"releasecontrol/internal/auth"
-	"releasecontrol/internal/domain"
-	"releasecontrol/internal/workspace"
 	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workspace"
 )
 
 func executionNextAction(in *domain.Integration, ex *domain.IntegrationExecution, events []domain.ExecutionEvent, group *domain.ExecutionGroup) map[string]string {
@@ -74,6 +75,81 @@ func remainingExecutionSteps(current, desired string) []string {
 	return append([]string(nil), order[i+1:j+1]...)
 }
 
+func executionEventPage(items []domain.ExecutionEvent, limit int, dueOnly bool) (any, error) {
+	count := min(len(items), limit)
+	next := ""
+	if dueOnly {
+		remaining := domain.MaxExecutionEventPageBytes - len(`{"items":[],"next_cursor":}`) - 1
+		for index := range count {
+			event := items[index]
+			raw, err := json.Marshal(event)
+			if err != nil {
+				return nil, err
+			}
+			cursor, _ := json.Marshal(executionEventCursor(event))
+			if index == 0 && len(raw)+len(cursor)+1 > remaining {
+				event = compactExecutionDelivery(event)
+				raw, err = json.Marshal(event)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if len(raw)+len(cursor)+1 > remaining {
+				if index == 0 {
+					next = executionEventCursor(event)
+				}
+				count = index
+				break
+			}
+			items[index] = event
+			remaining -= len(raw) + 1
+		}
+	}
+	if count > 0 && count < len(items) {
+		next = executionEventCursor(items[count-1])
+	}
+	return map[string]any{"items": items[:count], "next_cursor": next}, nil
+}
+
+func compactExecutionDelivery(event domain.ExecutionEvent) domain.ExecutionEvent {
+	bounded := func(value string) string {
+		if len(value) > 256 {
+			return ""
+		}
+		return value
+	}
+	wake := event.WakeTarget
+	wake.Kind, wake.SessionRef, wake.TmuxTarget, wake.GroupID = bounded(wake.Kind), bounded(wake.SessionRef), bounded(wake.TmuxTarget), bounded(wake.GroupID)
+	wake.Source = bounded(wake.Source)
+	compact := domain.ExecutionEvent{
+		ID: event.ID, CreatedAt: event.CreatedAt, Type: bounded(event.Type), Cause: domain.ExecutionEventCause(bounded(string(event.Cause))),
+		ProductID: bounded(event.ProductID), IntegrationID: bounded(event.IntegrationID),
+		WakeTarget: wake, OrchestratorSkill: bounded(event.OrchestratorSkill),
+		Delivery: domain.ExecutionEventDelivery{NextAttemptAt: event.Delivery.NextAttemptAt},
+	}
+	if len(event.QuestionIDs) != 0 {
+		if questionID := bounded(event.QuestionIDs[0]); questionID != "" {
+			compact.QuestionIDs = []string{questionID}
+		}
+	}
+	if event.GroupIdle != nil {
+		payload := *event.GroupIdle
+		payload.GroupID = bounded(payload.GroupID)
+		payload.Members = slices.Clone(payload.Members[:min(len(payload.Members), domain.MaxExecutionIdlePreview)])
+		for index := range payload.Members {
+			member := &payload.Members[index]
+			member.IntegrationID, member.FeatureID = bounded(member.IntegrationID), ""
+			member.State, member.DesiredState, member.NextAction = bounded(member.State), bounded(member.DesiredState), bounded(member.NextAction)
+		}
+		compact.GroupIdle = &payload
+	}
+	return compact
+}
+
+func executionEventCursor(event domain.ExecutionEvent) string {
+	return fmt.Sprintf("%s|%s", event.CreatedAt.UTC().Format(time.RFC3339Nano), event.ID)
+}
+
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 	switch name {
 	case "list_questions", "get_question", "get_dependency_graph", "next_work", "status_overview":
@@ -87,7 +163,11 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, err
 		}
 	}
-	st, e := s.State(ctx)
+	authoritative, e := s.readDerivedState(ctx)
+	if e != nil {
+		return nil, e
+	}
+	st, e := scopedState(ctx, authoritative)
 	if e != nil {
 		return nil, e
 	}
@@ -199,6 +279,15 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		items := []domain.ExecutionEvent{}
 		product := productByID(st, productID)
 		now := time.Now().UTC()
+		var cursorTime time.Time
+		var cursorID string
+		if options.Cursor != "" {
+			var ok bool
+			cursorTime, cursorID, ok = parseExecutionEventCursor(options.Cursor)
+			if !ok {
+				return nil, invalid("invalid cursor")
+			}
+		}
 		for _, ev := range st.ExecutionEvents {
 			if ev.ProductID != productID {
 				continue
@@ -209,19 +298,14 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
 				continue
 			}
-			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || !groupWakeCurrent(&st, ev) || (domain.IsGroupIdleEvent(ev.Type) && !groupIdleEventCurrent(&st, ev, now))) {
+			if options.Cursor != "" && (ev.CreatedAt.Before(cursorTime) || ev.CreatedAt.Equal(cursorTime) && ev.ID <= cursorID) {
 				continue
 			}
-			if options.Cursor != "" {
-				cursorTime, cursorID, ok := parseExecutionEventCursor(options.Cursor)
-				if !ok {
-					return nil, invalid("invalid cursor")
-				}
-				if ev.CreatedAt.Before(cursorTime) || ev.CreatedAt.Equal(cursorTime) && ev.ID <= cursorID {
-					continue
-				}
+			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || !groupWakeCurrent(&authoritative, ev) || (domain.IsGroupIdleEvent(ev.Type) && !groupIdleEventCurrent(&authoritative, ev, now))) {
+				continue
 			}
 			ev.OrchestratorSkill = ""
+			ev.GroupIdleEpisode = ""
 			if product != nil && product.AgentRoles != nil {
 				ev.OrchestratorSkill = product.AgentRoles.OrchestratorSkill
 			}
@@ -233,14 +317,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			}
 			return items[i].CreatedAt.Before(items[j].CreatedAt)
 		})
-		hasMore := len(items) > options.Limit
-		next := ""
-		if hasMore {
-			items = items[:options.Limit]
-			last := items[len(items)-1]
-			next = fmt.Sprintf("%s|%s", last.CreatedAt.UTC().Format(time.RFC3339Nano), last.ID)
-		}
-		return map[string]any{"items": items, "next_cursor": next}, nil
+		return executionEventPage(items, options.Limit, options.DueOnly)
 	case "list_executions":
 		if !productExists(&st, id) {
 			return nil, missing("product", id)

@@ -149,7 +149,8 @@ external execution or a main-first/human-only Flux policy cutover.
 
 `upsert_agent_skill` and `delete_agent_skill` require the Product owner or an
 instance admin with visibility. Names use `^[a-z0-9][a-z0-9-]{1,62}$`; Markdown
-is capped at 64 KiB and files at 256 KiB total. Only the Product owner can set
+is capped at 64 KiB. Supporting files are capped at 64 entries and 256 KiB total,
+including the UTF-8 bytes of each relative path. Only the Product owner can set
 `orchestrator_skill` and `worker_skill` with `set_product_agent_roles`; both
 names must resolve. Change a role before deleting its assigned skill. Nothing
 is seeded. See [AGENT_CONNECT.md](AGENT_CONNECT.md) for publishing and loading.

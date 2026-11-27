@@ -82,12 +82,16 @@ and reroutes them to the current eligible target.
 ssh -t <host> tmux attach -t orch-backend
 ```
 
+The supervisor resolves the registered target to a local tmux session and pane
+ID before delivery. Captures, paste, and Enter all use that pane ID even if the
+active pane changes. Rate limits use the tmux session ID, not the target alias.
 The supervisor waits for stable pane contents and checks the last 15 lines for
 the interactive busy marker before sending a literal message and Enter. It
 waits `submit_delay` (default `800ms`) after literal input and before sending
 Enter. A delivery is accepted only after observing the case insensitive
-`esc to interrupt` marker within `verify_for`. For legacy wakes, if the marker does not appear
-within three seconds, it sends Enter once more and continues verification. If
+`esc to interrupt` marker within `verify_for`. For ordinary continuation wakes,
+if the marker does not appear within three seconds, it sends Enter once more and
+continues verification. If
 the last eight pane lines already contain `[RCP supervisor]`, it sends Enter
 without typing another copy, to submit a previous pending wake. Otherwise it
 records `wake not observed`. A busy pane is acknowledged `failed` with detail
@@ -95,25 +99,28 @@ records `wake not observed`. A busy pane is acknowledged `failed` with detail
 
 ### Idle and stuck orchestrator wakes
 
-The five `group_*` idle events are separate from turn-end continuation. Before
+The five `group_*` idle events and legacy `execution_stalled` use the same
+active-pane guard, separate from explicit turn-end continuation. When stall
+and member staleness overlap, the supervisor uses one guarded wake. Before
 typing, the supervisor checks the last 15 lines of two pane captures for the
 case-insensitive busy marker and configured `active_markers`. Changing output,
 active background tasks, and panes displaying a marker are left alone. The
 supervisor ACKs `skipped_active`; RCP records the skip without escalation and
 retries after the product's `idle_after` (10 minutes if that check is disabled),
 provided the condition still holds. Heartbeats defer group inactivity checks,
-but not per-member staleness. `group_member_stale` detects unfinished members
+but not per-member staleness. Accepted progress refreshes both checks even
+for waiting or unclaimed members. `group_member_stale` detects unfinished members
 with no `record_progress` for 15 minutes by default; the Product policy can
 override that interval or set `member_stale_after_seconds` to zero to disable it.
 
-Idle, wait-timeout, actionable-member and stale-member wakes share a per-session limit of
+Idle, wait-timeout, actionable-member, stalled and stale-member wakes share a per-session limit of
 one attempt per 15 minutes (`idle_rate_limit`). Owner reminders use their own
 per-session limit of one per four hours (`owner_blocked_rate_limit`). Both
 timestamps survive a supervisor restart in `state_file`; an active skip does
 not use the local rate limit. Locally rate-limited events are left unclaimed.
 
 These wakes require a registered tmux pane with bracketed paste enabled; there
-is no headless fallback. The fixed prompt is at most 20 lines and includes only
+is no headless fallback. The fixed prompt is at most 12 lines and includes only
 validated IDs, states, progress ages and next-action codes, never titles or
 agent text. It tells the orchestrator to reload the group; an owner reminder
 explicitly tells it not to resume work. The supervisor does not retry Enter for

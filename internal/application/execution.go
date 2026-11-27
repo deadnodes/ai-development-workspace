@@ -563,7 +563,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					delay = cap
 				}
 				ev.Delivery.NextAttemptAt = now.Add(time.Duration(delay) * time.Second)
-				if (!idleEvent && attempts >= escalate) || (idleEvent && attempts-1 >= escalate) {
+				guarded := domain.IsGuardedExecutionWake(ev.Type)
+				if (!guarded && attempts >= escalate) || (guarded && attempts-1 >= escalate) {
 					ev.EscalationRequired = true
 				}
 				ev.Delivery.AcknowledgedAt = nil
@@ -598,8 +599,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
-				idleEvent := domain.IsGroupIdleEvent(ev.Type)
-				if ev.Delivery.Attempts == 0 || x.DeliveryID == "" || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported" && !(idleEvent && x.Outcome == "skipped_active")) || ev.Delivery.AcknowledgedAt != nil {
+				guarded := domain.IsGuardedExecutionWake(ev.Type)
+				if ev.Delivery.Attempts == 0 || x.DeliveryID == "" || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported" && !(guarded && x.Outcome == "skipped_active")) || ev.Delivery.AcknowledgedAt != nil {
 					return invalid("INVALID_STATE")
 				}
 				wasEscalated := ev.EscalationRequired
@@ -607,7 +608,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				ev.Delivery.AcknowledgedAt = &t
 				ev.Delivery.AcknowledgedBy = x.SupervisorID
 				ev.Acknowledgements = append(ev.Acknowledgements, domain.ExecutionEventAck{DeliveryID: x.DeliveryID, SupervisorID: x.SupervisorID, Outcome: x.Outcome, Detail: x.Detail, At: now})
-				if idleEvent {
+				if guarded {
 					policy := idlePolicy(st, ev.ProductID)
 					switch x.Outcome {
 					case "skipped_active":
@@ -654,7 +655,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				appendExecutionEventAudit(st, *ev, "execution_event_acknowledged", x.SupervisorID, now, map[string]any{"delivery_id": x.DeliveryID, "outcome": x.Outcome, "detail": x.Detail})
 				if !wasEscalated && ev.EscalationRequired {
 					reason := "unsupported delivery"
-					if idleEvent && x.Outcome == "failed" {
+					if guarded && x.Outcome == "failed" {
 						reason = "idle wake delivery attempts exhausted"
 					}
 					appendExecutionEventAudit(st, *ev, "execution_event_escalated", x.SupervisorID, now, map[string]any{"reason": reason})

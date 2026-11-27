@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -19,9 +21,9 @@ func groupIdleOwnerVisible(ctx context.Context, owner string) bool {
 
 func groupIdleEffectiveAttempts(event domain.ExecutionEvent) int {
 	attempts := event.Delivery.Attempts
-	if domain.IsGroupIdleEvent(event.Type) {
+	if domain.IsGuardedExecutionWake(event.Type) {
 		for _, ack := range event.Acknowledgements {
-			if ack.Outcome == "skipped_active" || ack.Outcome == "delivered" {
+			if ack.Outcome == "skipped_active" || ack.Outcome == "delivered" && domain.IsGroupIdleEvent(event.Type) {
 				attempts--
 			}
 		}
@@ -122,17 +124,21 @@ func evaluateGroupIdle(st *domain.State, group domain.ExecutionGroup, now time.T
 		}
 		execution := executionFor(st, integrationID)
 		desired, state := "ready", "unassigned"
-		var lastProgress, lastHeartbeat *time.Time
+		lastProgress := child.LastRecordedProgress
+		var lastHeartbeat *time.Time
 		if execution != nil && execution.ProductID == group.ProductID {
 			state = execution.State
 			if execution.DesiredState != "" {
 				desired = execution.DesiredState
 			}
-			lastProgress, lastHeartbeat = execution.LastProgress, execution.LastHeartbeat
-			activity = laterActivity(laterActivity(activity, lastProgress), lastHeartbeat)
+			lastHeartbeat = execution.LastHeartbeat
+			if execution.LastProgress != nil && (lastProgress == nil || execution.LastProgress.After(*lastProgress)) {
+				lastProgress = execution.LastProgress
+			}
 		} else {
 			execution = nil
 		}
+		activity = laterActivity(laterActivity(activity, lastProgress), lastHeartbeat)
 		if statusReachedIntegration(child.Status, desired) || child.Status == "released" || child.Status == "cancelled" || child.Status == "superseded" || state == "completed" || state == "paused" || state == "cancelled" {
 			continue
 		}
@@ -143,10 +149,7 @@ func evaluateGroupIdle(st *domain.State, group domain.ExecutionGroup, now time.T
 		}
 		result.Pending++
 		if result.Policy.MemberStaleAfterSeconds > 0 {
-			clock := memberJoinedAt(group, integrationID)
-			if execution != nil {
-				clock = laterActivity(clock, execution.LastRecordedProgress)
-			}
+			clock := laterActivity(memberJoinedAt(group, integrationID), child.LastRecordedProgress)
 			due := clock.Add(time.Duration(result.Policy.MemberStaleAfterSeconds) * time.Second)
 			staleCheck.Armed = true
 			if staleCheck.NextDueAt == nil || due.Before(*staleCheck.NextDueAt) {
@@ -199,12 +202,26 @@ func memberJoinedAt(group domain.ExecutionGroup, integrationID string) time.Time
 
 func groupIdleSameEpisode(event domain.ExecutionEvent, group domain.ExecutionGroup, evaluation groupIdleEvaluation, members []domain.ExecutionGroupIdleMember) bool {
 	stale := event.Type == domain.EventGroupMemberStale
-	if stale {
+	return evaluation.Checks[event.Type].Armed && event.GroupIdle != nil && (stale || event.GroupIdle.GroupActivityAt.Equal(evaluation.GroupActivityAt)) && groupWakeTarget(group) == event.WakeTarget && group.Owner == event.Owner && event.GroupIdleEpisode == groupIdleEpisode(event.Type, evaluation, members)
+}
+
+func groupIdleEpisode(eventType string, evaluation groupIdleEvaluation, members []domain.ExecutionGroupIdleMember) string {
+	if eventType == domain.EventGroupMemberStale {
 		members = evaluation.staleMembers
 	}
-	return evaluation.Checks[event.Type].Armed && event.GroupIdle != nil && (stale || event.GroupIdle.GroupActivityAt.Equal(evaluation.GroupActivityAt)) && groupWakeTarget(group) == event.WakeTarget && group.Owner == event.Owner && slices.EqualFunc(event.GroupIdle.Members, members, func(before, after domain.ExecutionGroupIdleMember) bool {
-		return before.IntegrationID == after.IntegrationID && before.FeatureID == after.FeatureID && (!stale || before.ProgressClockAt != nil && before.ProgressClockAt.Equal(*after.ProgressClockAt))
-	})
+	digest := sha256.New()
+	encoder := json.NewEncoder(digest)
+	for _, member := range members {
+		_ = encoder.Encode([3]string{member.IntegrationID, member.FeatureID, memberClockKey(member.ProgressClockAt)})
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil))
+}
+
+func memberClockKey(clock *time.Time) string {
+	if clock == nil {
+		return ""
+	}
+	return clock.UTC().Format(time.RFC3339Nano)
 }
 
 func groupIdleEventCurrent(st *domain.State, event domain.ExecutionEvent, now time.Time) bool {
@@ -318,7 +335,8 @@ func reconcileGroupIdle(st *domain.State, now time.Time) bool {
 			if eventType == domain.EventGroupMemberStale {
 				payloadMembers = evaluation.staleMembers
 			}
-			event := domain.ExecutionEvent{ID: id(), ProductID: group.ProductID, Owner: group.Owner, GroupIDs: []string{group.ID}, Type: eventType, ConditionGeneration: generation, DedupeKey: fmt.Sprintf("%s|%s|%d", group.ID, eventType, generation), WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}, GroupIdle: &domain.ExecutionGroupIdlePayload{GroupID: group.ID, GroupActivityAt: evaluation.GroupActivityAt, Members: payloadMembers}}
+			preview := slices.Clone(payloadMembers[:min(len(payloadMembers), domain.MaxExecutionIdlePreview)])
+			event := domain.ExecutionEvent{ID: id(), ProductID: group.ProductID, Owner: group.Owner, GroupIDs: []string{group.ID}, Type: eventType, ConditionGeneration: generation, DedupeKey: fmt.Sprintf("%s|%s|%d", group.ID, eventType, generation), WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}, GroupIdle: &domain.ExecutionGroupIdlePayload{GroupID: group.ID, GroupActivityAt: evaluation.GroupActivityAt, Members: preview, MemberTotal: len(payloadMembers)}, GroupIdleEpisode: groupIdleEpisode(eventType, evaluation, members)}
 			st.ExecutionEvents = append(st.ExecutionEvents, event)
 			appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": eventType, "generation": generation})
 			changed = true

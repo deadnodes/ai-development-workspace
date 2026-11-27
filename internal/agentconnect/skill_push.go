@@ -166,6 +166,13 @@ func readSkillDirectory(dir string) (domain.AgentSkillInput, error) {
 		if err != nil || entry.IsDir() || path == "SKILL.md" {
 			return err
 		}
+		if len(skill.Files) >= domain.MaxAgentSkillFiles {
+			return fmt.Errorf("skill files exceed %d entries", domain.MaxAgentSkillFiles)
+		}
+		remaining -= len(path)
+		if remaining < 0 {
+			return errors.New("skill files exceed 256 KiB total")
+		}
 		text, err := read(path, remaining)
 		if err != nil {
 			return err

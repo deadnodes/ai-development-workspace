@@ -9,6 +9,8 @@ const (
 	EventGroupMemberStale      = "group_member_stale"
 	EventGroupOwnerBlocked     = "group_owner_blocked"
 	MaxExecutionIdleSeconds    = 7 * 24 * 60 * 60
+	MaxExecutionIdlePreview    = 10
+	MaxExecutionEventPageBytes = 1 << 20
 )
 
 func IsGroupIdleEvent(eventType string) bool {
@@ -17,6 +19,10 @@ func IsGroupIdleEvent(eventType string) bool {
 		return true
 	}
 	return false
+}
+
+func IsGuardedExecutionWake(eventType string) bool {
+	return eventType == "execution_stalled" || IsGroupIdleEvent(eventType)
 }
 
 type ExecutionIdlePolicy struct {
@@ -30,6 +36,7 @@ type ExecutionGroupIdlePayload struct {
 	GroupID         string                     `json:"group_id"`
 	GroupActivityAt time.Time                  `json:"group_activity_at"`
 	Members         []ExecutionGroupIdleMember `json:"members"`
+	MemberTotal     int                        `json:"member_total"`
 }
 
 type ExecutionGroupIdleMember struct {

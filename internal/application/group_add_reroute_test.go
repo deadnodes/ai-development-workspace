@@ -2,10 +2,43 @@ package application
 
 import (
 	"context"
+	"slices"
 	"testing"
+	"time"
 
 	"releasecontrol/internal/domain"
 )
+
+func TestRegisteredFallbackInDueFeed(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		work := ownerWorkReviewOnStore(t, store)
+		work.register(work.owner, "alice-orchestrator")
+		work.run(work.agent, "claim_execution", "p", "", "i", "", work.claimData("executor"))
+		question := work.run(work.agent, "ask_question", "p", "f", "i", "", reviewQuestion(true)).(domain.Memory)
+		work.run(work.owner, "answer_questions", "p", "", "", "", reviewAnswer(question.ID, ""))
+		fallback := reviewPendingWake(t, thirdReviewState(t, store), domain.ExecutionCauseBlockerResolved)
+		if fallback.WakeTarget.Source != "user_orchestrator" || fallback.WakeTarget.TmuxTarget != "alice-orchestrator" {
+			t.Fatalf("not a registered fallback: %+v", fallback.WakeTarget)
+		}
+		listed := func(ctx context.Context) bool {
+			items := work.query(ctx, "list_execution_events", `{"product_id":"p","due_only":true}`)["items"].([]domain.ExecutionEvent)
+			return slices.ContainsFunc(items, func(event domain.ExecutionEvent) bool { return event.ID == fallback.ID })
+		}
+		if !listed(work.agent) || listed(work.bobAgent) {
+			t.Fatal("due feed did not preserve fallback routing and caller visibility")
+		}
+		if err := store.Update(context.Background(), func(state *domain.State) error {
+			now := time.Now().UTC()
+			state.UserOrchestrators[0].UnregisteredAt = &now
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if listed(work.agent) {
+			t.Fatal("due feed returned an event for a removed registration")
+		}
+	})
+}
 
 // An event raised while the integration was outside any group must be rebound
 // to the group's orchestrator once the integration is added to the group

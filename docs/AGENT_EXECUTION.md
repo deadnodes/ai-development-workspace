@@ -188,7 +188,13 @@ evidence. ACK means “supervisor received this event”; it does not resolve th
 cause. Resolve/close must not erase or mutate event history.
 
 Supervisor polls `list_execution_events {cursor, limit, unresolved_only,
-due_only}` and receives stable cursor pagination. Unresolved conditions are
+due_only}` and receives stable cursor pagination. Due pages fit within 1 MiB
+and can contain fewer events than the requested limit. A single oversized
+event uses a compact delivery view; the historical event remains unchanged.
+The supervisor delivers each page before requesting the next and retries an
+oversized response at a smaller page size. Group idle events expose a preview
+of at most 10 members and `member_total`; use `get_execution_group` for full
+member details. Unresolved conditions are
 eligible for delivery at `next_attempt_at` even when a prior attempt was never
 acknowledged; each retry replaces the delivery id and rejects a late ACK from
 the older attempt. Acknowledged unresolved events become due at the persisted

@@ -3,6 +3,7 @@ package agentconnect
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,6 +15,41 @@ import (
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/transport"
 )
+
+func TestReadSkillDirectoryBudgetsPathsAndEmptyFiles(t *testing.T) {
+	newSkill := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		writeFile(t, root, "SKILL.md", "---\nname: team-worker\ndescription: Worker instructions\n---\nInstructions.\n")
+		return root
+	}
+	t.Run("entry count", func(t *testing.T) {
+		root := newSkill(t)
+		for index := range domain.MaxAgentSkillFiles {
+			writeFile(t, root, fmt.Sprintf("empty-%02d", index), "")
+		}
+		if skill, err := readSkillDirectory(root); err != nil || len(skill.Files) != domain.MaxAgentSkillFiles {
+			t.Fatalf("max entries rejected: %v", err)
+		}
+		writeFile(t, root, "extra", "")
+		if _, err := readSkillDirectory(root); err == nil || !strings.Contains(err.Error(), "64 entries") {
+			t.Fatalf("extra empty file not rejected: %v", err)
+		}
+	})
+	t.Run("path bytes", func(t *testing.T) {
+		root := newSkill(t)
+		name := "notes.txt"
+		body := strings.Repeat("a", domain.MaxAgentSkillFilesBytes-len(name))
+		writeFile(t, root, name, body)
+		if _, err := readSkillDirectory(root); err != nil {
+			t.Fatalf("exact byte budget rejected: %v", err)
+		}
+		writeFile(t, root, name, body+"a")
+		if _, err := readSkillDirectory(root); err == nil || !strings.Contains(err.Error(), "256 KiB") {
+			t.Fatalf("path bytes not charged: %v", err)
+		}
+	})
+}
 
 func TestSkillPushDryRunAndUpload(t *testing.T) {
 	ctx := context.Background()

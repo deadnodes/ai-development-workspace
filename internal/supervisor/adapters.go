@@ -6,11 +6,32 @@ import (
 	"crypto/rand"
 	"errors"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
 
 type ExecAdapter struct{ Config Config }
+
+var (
+	tmuxPaneID    = regexp.MustCompile(`^%[0-9]+$`)
+	tmuxSessionID = regexp.MustCompile(`^\$[0-9]+$`)
+)
+
+func (a ExecAdapter) bind(ctx context.Context, target string) tmuxBinding {
+	if !ValidTmuxTarget(target) {
+		return tmuxBinding{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.Config.WakeFor)
+	defer cancel()
+	name, _, _ := strings.Cut(target, ":")
+	output, err := a.output(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "display", "-p", "-t", target, "#{pane_id} #{session_id} #{session_name}")
+	fields := strings.Fields(string(output))
+	if err != nil || len(fields) != 3 || !tmuxPaneID.MatchString(fields[0]) || !tmuxSessionID.MatchString(fields[1]) || fields[2] != name {
+		return tmuxBinding{}
+	}
+	return tmuxBinding{pane: fields[0], session: fields[1]}
+}
 
 func (a ExecAdapter) Wake(ctx context.Context, req WakeRequest) WakeResult {
 	wakeCtx, cancelWake := context.WithTimeout(ctx, a.Config.WakeFor)
@@ -18,10 +39,11 @@ func (a ExecAdapter) Wake(ctx context.Context, req WakeRequest) WakeResult {
 	if req.TmuxTarget != "" && !ValidTmuxTarget(req.TmuxTarget) {
 		return WakeResult{Outcome: Unsupported, Detail: "invalid tmux target"}
 	}
-	if req.TmuxTarget != "" {
-		if ok, _ := a.tmuxHas(wakeCtx, req.TmuxTarget); ok {
-			return a.wakeTmux(wakeCtx, req)
-		}
+	if !req.bound {
+		req.tmux = a.bind(wakeCtx, req.TmuxTarget)
+	}
+	if req.tmux.pane != "" {
+		return a.wakeTmux(wakeCtx, req, req.tmux.pane)
 	}
 	if req.IdleCheck {
 		return WakeResult{Outcome: Unsupported, Detail: "idle check requires an available tmux pane"}
@@ -60,11 +82,8 @@ func (a ExecAdapter) Wake(ctx context.Context, req WakeRequest) WakeResult {
 	return WakeResult{Outcome: Delivered, Detail: "headless wake accepted"}
 }
 
-func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
-	if !ValidTmuxTarget(req.TmuxTarget) {
-		return WakeResult{Outcome: Unsupported, Detail: "invalid tmux target"}
-	}
-	before, err := a.capture(ctx, req.TmuxTarget)
+func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest, paneID string) WakeResult {
+	before, err := a.capture(ctx, paneID)
 	if err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux pane unavailable"}
 	}
@@ -77,7 +96,7 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	if err = waitDuration(ctx, a.Config.IdleFor); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "idle check interrupted"}
 	}
-	after, err := a.capture(ctx, req.TmuxTarget)
+	after, err := a.capture(ctx, paneID)
 	if err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux pane unavailable"}
 	}
@@ -88,16 +107,16 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 		return WakeResult{Outcome: Failed, Detail: "busy"}
 	}
 	if req.IdleCheck {
-		pasteMode, modeErr := a.output(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "display-message", "-p", "-t", req.TmuxTarget, "#{bracket_paste_flag}")
+		pasteMode, modeErr := a.output(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "display-message", "-p", "-t", paneID, "#{bracket_paste_flag}")
 		if modeErr != nil || strings.TrimSpace(string(pasteMode)) != "1" {
 			return WakeResult{Outcome: Unsupported, Detail: "idle wake requires bracketed paste mode"}
 		}
 		buffer := "rcp-idle-" + rand.Text()
-		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "set-buffer", "-b", buffer, req.Message, ";", "paste-buffer", "-dpr", "-b", buffer, "-t", req.TmuxTarget); err != nil {
+		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "set-buffer", "-b", buffer, req.Message, ";", "paste-buffer", "-dpr", "-b", buffer, "-t", paneID); err != nil {
 			return WakeResult{Outcome: Failed, Detail: "tmux paste failed"}
 		}
 	} else if !containsLastLines(after, "[RCP supervisor]", 8) {
-		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "-l", req.Message); err != nil {
+		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", paneID, "-l", req.Message); err != nil {
 			return WakeResult{Outcome: Failed, Detail: "tmux send failed"}
 		}
 		if err = waitDuration(ctx, a.Config.SubmitFor); err != nil {
@@ -107,7 +126,7 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	if req.IdleCheck && waitDuration(ctx, a.Config.SubmitFor) != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux submit interrupted"}
 	}
-	if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
+	if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", paneID, "Enter"); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux enter failed"}
 	}
 	verifyFor := a.Config.VerifyFor
@@ -119,12 +138,12 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	retryAt := time.Now().Add(3 * time.Second)
 	retried := false
 	for {
-		pane, e := a.capture(verifyCtx, req.TmuxTarget)
+		pane, e := a.capture(verifyCtx, paneID)
 		if e == nil && paneBusy(pane) {
 			return WakeResult{Outcome: Delivered, Detail: "tmux wake observed"}
 		}
 		if !req.IdleCheck && !retried && !time.Now().Before(retryAt) {
-			if err = a.run(verifyCtx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
+			if err = a.run(verifyCtx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", paneID, "Enter"); err != nil {
 				return WakeResult{Outcome: Failed, Detail: "tmux retry enter failed"}
 			}
 			retried = true
@@ -159,13 +178,6 @@ func containsLastLines(p []byte, message string, count int) bool {
 	return false
 }
 
-func (a ExecAdapter) tmuxHas(ctx context.Context, target string) (bool, error) {
-	if !ValidTmuxTarget(target) {
-		return false, nil
-	}
-	err := exec.CommandContext(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "has-session", "-t", target).Run()
-	return err == nil, err
-}
 func (a ExecAdapter) capture(ctx context.Context, target string) ([]byte, error) {
 	return a.output(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "capture-pane", "-p", "-t", target)
 }
