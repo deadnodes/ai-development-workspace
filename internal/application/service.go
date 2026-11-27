@@ -214,7 +214,7 @@ func meta(c domain.Command) domain.Meta {
 	if i == "" {
 		i = id()
 	}
-	n := time.Now().UTC()
+	n := monotonicNow()
 	return domain.Meta{ID: i, ProductID: c.ProductID, FeatureID: c.FeatureID, Actor: c.Actor, CreatedAt: n, UpdatedAt: n}
 }
 func feature(st *domain.State, id string) *domain.Feature {
