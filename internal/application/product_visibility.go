@@ -80,7 +80,7 @@ func (s *Service) executeProductMembership(ctx context.Context, c domain.Command
 	return out, err
 }
 
-func nowUTC() time.Time { return monotonicNow() }
+func nowUTC() time.Time { return time.Now().UTC() }
 
 func productIDRetired(st *domain.State, productID string) bool {
 	for _, event := range st.Events {
