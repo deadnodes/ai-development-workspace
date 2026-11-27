@@ -25,3 +25,18 @@ func TestDecisionAnswerRelayedByOwnersOtherAgent(t *testing.T) {
 		t.Fatalf("relayed approval did not promote the idea: %+v", f)
 	}
 }
+
+func TestDependencyApprovalRelayedByOwnersOtherAgent(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	work.idea("idea")
+	chat := userCtx("agent/alice-chat", "agent", "alice", "member")
+	edge := work.run(work.agent, "propose_dependency", "p", "", "", "", map[string]any{"from_feature_id": "idea", "to_feature_id": "f", "type": "requires", "rationale": "After f"}).(domain.FeatureDependency)
+	question := work.run(work.agent, "request_dependency_decision", "p", "", "", "", map[string]any{"dependency_id": edge.ID, "decision": "accept"}).(domain.Memory)
+	work.run(chat, "answer_questions", "p", "", "", "", reviewAnswer(question.ID, "approve"))
+	work.run(work.agent, "decide_dependency", "p", "", "", "", map[string]any{"dependency_id": edge.ID, "decision": "accept", "approval_question_id": question.ID})
+	for _, d := range work.store.state.FeatureDependencies {
+		if d.ID == edge.ID && d.Status != "accepted" {
+			t.Fatalf("relayed approval did not allow acceptance: %+v", d)
+		}
+	}
+}

@@ -1,9 +1,9 @@
 // Live E2E for stages 3-5 (owner questions, ideas, dependency graph, next_work) against dev RCP.
-// Usage: node scripts/e2e/owner-work.mjs <creds.json(0600)>
+// Usage: node scripts/e2e/owner-work.mjs <creds.json(0600)>   (or REUSE_PROFILES=1 with approved profiles)
 // Human A (full_member_a) owns a shared product; A has two agents: an
 // orchestrator and a chat agent that relays A's answers. Human B (full_member_b)
 // has one agent. All agents act through `release-control mcp` (stdio).
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 const require = createRequire(process.env.PW_DIR || "/opt/homebrew/lib/node_modules/");
@@ -11,11 +11,15 @@ const { chromium } = require("playwright");
 
 const URL = process.env.RCP_URL || "https://rcp-dev.tail9c31db.ts.net";
 const BIN = process.env.RC_BIN;
-const creds = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const creds = process.argv[2] ? JSON.parse(readFileSync(process.argv[2], "utf8")) : {};
 const results = [];
 const check = (name, ok, detail = "") => { results.push({ name, ok, detail }); console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " — " + detail : ""}`); };
 
 async function login(profile, who) {
+  // REUSE_PROFILES=1 reuses release-control profiles already approved by a previous run.
+  if (process.env.REUSE_PROFILES === "1") {
+    try { execFileSync(BIN, ["whoami", "--url", URL, "--profile", profile], { stdio: "ignore" }); return; } catch {}
+  }
   const proc = spawn(BIN, ["login", "--url", URL, "--profile", profile, "--name", profile], { stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   const verification = await new Promise((resolve, reject) => {
@@ -76,7 +80,6 @@ class Agent {
   close() { this.p.stdin.end(); this.p.kill(); }
 }
 
-import { execFileSync } from "node:child_process";
 const idOf = (r) => r.data?.id || (r.text.match(/"id"\s*:\s*"([^"]+)"/) || [])[1];
 const short = (r) => r.text.slice(0, 200);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -142,14 +145,24 @@ try {
   check("owner's chat agent relays approval", !r.error, short(r));
   r = await a.call("resume", { feature_id: IDEA });
   check("idea is ready_for_execution", !r.error && /ready_for_execution/.test(r.text), short(r));
-  r = await chat.exec("propose_dependency", P, { from_feature_id: IDEA, to_feature_id: F, type: "requires", rationale: "after F", accept: true });
-  const D1 = idOf(r);
+  // Agents accept edges only with an owner-approved decision: request → chat relays approve → requester decides.
+  const acceptViaOwner = async (from, to, why) => {
+    let x = await a.exec("propose_dependency", P, { from_feature_id: from, to_feature_id: to, type: "requires", rationale: why });
+    const dep = idOf(x);
+    if (x.error || !dep) return { r: x, dep };
+    x = await a.exec("request_dependency_decision", P, { dependency_id: dep, decision: "accept" });
+    const q = idOf(x);
+    if (x.error || !q) return { r: x, dep };
+    x = await chat.exec("answer_questions", P, answer(q, "approve"));
+    if (x.error) return { r: x, dep };
+    return { r: await a.exec("decide_dependency", P, { dependency_id: dep, decision: "accept", approval_question_id: q }), dep };
+  };
+  let dep = await acceptViaOwner(IDEA, F, "after F");
+  check("dependency accepted through owner decision", !dep.r.error, short(dep.r));
   r = await chat.call("get_dependency_graph", { product_id: P });
-  check("dependency graph shows the edge", !r.error && r.text.includes(IDEA) && r.text.includes(F), short(r));
-  r = await a.exec("propose_dependency", P, { from_feature_id: F, to_feature_id: IDEA, type: "requires", rationale: "cycle" });
-  const D2 = idOf(r);
-  r = D2 ? await chat.exec("decide_dependency", P, { dependency_id: D2, decision: "accept" }) : r;
-  check("cycle is rejected", r.error && /DEPENDENCY_CYCLE|cycle/i.test(r.text), short(r));
+  check("dependency graph shows the accepted edge", !r.error && r.text.includes(dep.dep) && r.text.includes(`"waiting_on":["${F}"]`), short(r));
+  dep = await acceptViaOwner(F, IDEA, "cycle");
+  check("cycle is rejected", dep.r.error && /DEPENDENCY_CYCLE/.test(dep.r.text), short(dep.r));
 
   // Stage 5: next_work is per user.
   r = await b.exec("create_feature", P, { title: `ow${ts} b feature`, problem: "p", goal: "g" });

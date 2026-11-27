@@ -30,12 +30,14 @@ type AnswerValidation struct {
 }
 
 type QuestionAnswer struct {
-	Text       string           `json:"text"`
-	OptionID   string           `json:"option_id,omitempty"`
-	AnsweredBy string           `json:"answered_by"`
-	AnsweredAt time.Time        `json:"answered_at"`
-	Validation AnswerValidation `json:"validation"`
-	Override   bool             `json:"override"`
+	Text       string `json:"text"`
+	OptionID   string `json:"option_id,omitempty"`
+	AnsweredBy string `json:"answered_by"`
+	// AnsweredByUser is the human the answer speaks for (the agent owner for a relayed chat answer).
+	AnsweredByUser string           `json:"answered_by_user,omitempty"`
+	AnsweredAt     time.Time        `json:"answered_at"`
+	Validation     AnswerValidation `json:"validation"`
+	Override       bool             `json:"override"`
 }
 
 type FeatureDependency struct {

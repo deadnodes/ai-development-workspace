@@ -161,7 +161,7 @@ func canApproveWork(ctx context.Context, st *domain.State, product *domain.Produ
 			return ErrNotFound
 		}
 		details := question.Question
-		if product != nil && question.ProductID == product.ID && question.FeatureID == parent.ID && question.Status == "answered" && details.Kind == "decision" && details.Answer != nil && details.Answer.OptionID == "approve" && details.Answer.AnsweredBy == product.Owner && details.DecisionAction == action && decisionMatches(question, parent, edge) {
+		if product != nil && question.ProductID == product.ID && question.FeatureID == parent.ID && question.Status == "answered" && details.Kind == "decision" && details.Answer != nil && details.Answer.OptionID == "approve" && (details.Answer.AnsweredBy == product.Owner || details.Answer.AnsweredByUser == product.Owner) && details.DecisionAction == action && decisionMatches(question, parent, edge) {
 			return nil
 		}
 	}
