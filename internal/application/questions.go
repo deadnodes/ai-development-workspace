@@ -263,7 +263,7 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 		if workUser(ctx) != details.AddressedTo {
 			return nil, auth.ErrForbidden
 		}
-		if details.DecisionFor != "" && !isWorkDecisionOwner(ctx, productByID(*st, question.ProductID)) {
+		if details.DecisionFor != "" && !isWorkDecisionOwner(ctx, productByID(*st, question.ProductID)) && !isDecisionRelay(ctx, productByID(*st, question.ProductID), &details) {
 			return nil, auth.ErrForbidden
 		}
 		if question.Status != "open" {
@@ -355,4 +355,13 @@ func withdrawQuestion(ctx context.Context, st *domain.State, c domain.Command, n
 	workAudit(st, question.Meta, "withdraw_question", c.Actor, now)
 	wakeResolvedQuestion(st, *question, now)
 	return *question, nil
+}
+
+// isDecisionRelay lets the Product owner answer a server-generated decision
+// from chat: an agent owned by the Product owner may submit the owner's answer,
+// but never the same agent principal that requested the decision, so an
+// orchestrator cannot approve its own request.
+func isDecisionRelay(ctx context.Context, product *domain.Product, details *domain.QuestionDetails) bool {
+	principal, ok := auth.FromContext(ctx)
+	return ok && product != nil && principal.Kind == "agent" && principal.Owner != "" && principal.Owner == product.Owner && principal.ID != details.AskedBy
 }

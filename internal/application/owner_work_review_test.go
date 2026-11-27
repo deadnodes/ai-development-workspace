@@ -92,7 +92,8 @@ func TestReviewPromotionAuthorityIgnoresFeatureOwner(t *testing.T) {
 	if question.Question.AddressedTo != "alice" {
 		t.Fatal(question.Question.AddressedTo)
 	}
-	for _, caller := range []context.Context{work.bobAgent, work.bob, work.agent} {
+	// alice's own agent may relay alice's chat answer (TestDecisionAnswerRelayedByOwnersOtherAgent); others may not.
+	for _, caller := range []context.Context{work.bobAgent, work.bob} {
 		_, err := work.apply(caller, "answer_questions", "p", "", "", "", reviewAnswer(question.ID, "approve"))
 		expectWorkError(t, err, "forbidden")
 	}
