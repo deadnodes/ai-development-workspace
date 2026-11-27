@@ -1,12 +1,13 @@
+CREATE SEQUENCE code_indexes_write_seq;
 CREATE TABLE code_indexes (
  product_id text NOT NULL REFERENCES records(id) ON DELETE CASCADE,
  repository_id text NOT NULL REFERENCES records(id) ON DELETE CASCADE,
  branch text NOT NULL, commit_sha text NOT NULL, digest text NOT NULL,
- indexed_at text NOT NULL, actor text NOT NULL, truncation jsonb NOT NULL,
+ indexed_at text NOT NULL, write_seq bigint NOT NULL DEFAULT nextval('code_indexes_write_seq'), actor text NOT NULL, truncation jsonb NOT NULL,
  document jsonb NOT NULL,
  PRIMARY KEY(product_id, repository_id, branch)
 );
-CREATE INDEX code_indexes_latest ON code_indexes(product_id, repository_id, indexed_at DESC, branch);
+CREATE INDEX code_indexes_latest ON code_indexes(product_id, repository_id, write_seq DESC);
 CREATE TABLE code_index_history (
  sequence bigserial PRIMARY KEY, product_id text NOT NULL, repository_id text NOT NULL, branch text NOT NULL,
  commit_sha text NOT NULL, digest text NOT NULL, indexed_at text NOT NULL,

@@ -152,9 +152,10 @@ func putCodeIndex(ctx context.Context, store codeTransactions, input domain.Code
 			return err
 		}
 		stamp := status.IndexedAt.UTC().Format(codeTimeLayout)
-		if err = tx.Exec(ctx, `INSERT INTO code_indexes (product_id,repository_id,branch,commit_sha,digest,indexed_at,actor,truncation,document)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (product_id,repository_id,branch) DO UPDATE SET
-		commit_sha=excluded.commit_sha,digest=excluded.digest,indexed_at=excluded.indexed_at,actor=excluded.actor,truncation=excluded.truncation,document=excluded.document`, append(args, status.Commit, status.Digest, stamp, input.Actor, string(flags), string(raw))...); err != nil {
+		writeSeq := tx.sql(`nextval('code_indexes_write_seq')`, `(SELECT coalesce(max(write_seq),0)+1 FROM code_indexes)`)
+		if err = tx.Exec(ctx, `INSERT INTO code_indexes (product_id,repository_id,branch,commit_sha,digest,indexed_at,write_seq,actor,truncation,document)
+		VALUES ($1,$2,$3,$4,$5,$6,`+writeSeq+`,$7,$8,$9) ON CONFLICT (product_id,repository_id,branch) DO UPDATE SET
+		commit_sha=excluded.commit_sha,digest=excluded.digest,indexed_at=excluded.indexed_at,write_seq=excluded.write_seq,actor=excluded.actor,truncation=excluded.truncation,document=excluded.document`, append(args, status.Commit, status.Digest, stamp, input.Actor, string(flags), string(raw))...); err != nil {
 			return err
 		}
 		where := `product_id=$1 AND repository_id=$2 AND branch=$3`
@@ -181,10 +182,9 @@ func putCodeIndex(ctx context.Context, store codeTransactions, input domain.Code
 		if err = tx.Exec(ctx, `DELETE FROM code_index_history WHERE sequence IN (SELECT sequence FROM code_index_history WHERE `+where+` ORDER BY sequence DESC LIMIT 9223372036854775807 OFFSET $4)`, append(args, domain.CodeHistorySize)...); err != nil {
 			return err
 		}
-		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
 		if err = tx.Exec(ctx, `DELETE FROM code_indexes WHERE product_id=$1 AND repository_id=$2 AND branch IN (
 			SELECT branch FROM code_indexes WHERE product_id=$1 AND repository_id=$2
-			ORDER BY indexed_at DESC,branch`+collation+` LIMIT 9223372036854775807 OFFSET $3)`, input.ProductID, input.RepositoryID, domain.CodeBranchLimit); err != nil {
+			ORDER BY write_seq DESC LIMIT 9223372036854775807 OFFSET $3)`, input.ProductID, input.RepositoryID, domain.CodeBranchLimit); err != nil {
 			return err
 		}
 		out = domain.CodeIndexWriteResult{CodeIndexStatus: status, Changed: true}
@@ -220,13 +220,13 @@ func codeStatuses(ctx context.Context, store codeTransactions, query domain.Code
 		}
 		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
 		rows, err := tx.Query(ctx, `WITH ranked AS (
-		SELECT ci.repository_id,ci.branch,ci.commit_sha,ci.digest,ci.indexed_at,ci.truncation,
-		row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.indexed_at DESC,ci.branch`+collation+`) AS rank
+		SELECT ci.repository_id,ci.branch,ci.commit_sha,ci.digest,ci.indexed_at,ci.truncation,ci.write_seq,
+		row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.write_seq DESC) AS rank
 		FROM code_indexes ci
 		JOIN records r ON r.id=ci.repository_id AND r.product_id=ci.product_id AND r.kind='repositories'
 		WHERE ci.product_id=$1 AND ($2='' OR ci.repository_id=$2) AND ($3='' OR ci.branch=$3))
 		SELECT repository_id,branch,commit_sha,digest,indexed_at,truncation FROM ranked WHERE $2<>'' OR rank=1
-		ORDER BY repository_id`+collation+`,indexed_at DESC,branch`+collation+` LIMIT $4`, query.ProductID, query.RepositoryID, query.Branch, limit)
+		ORDER BY repository_id`+collation+`,write_seq DESC LIMIT $4`, query.ProductID, query.RepositoryID, query.Branch, limit)
 		if err != nil {
 			return err
 		}
@@ -255,8 +255,7 @@ func readCodeIndex(ctx context.Context, store codeTransactions, product, repo, b
 		if err := codeScope(ctx, tx, product, repo); err != nil {
 			return err
 		}
-		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
-		rows, err := tx.Query(ctx, `SELECT document FROM code_indexes WHERE product_id=$1 AND repository_id=$2 AND ($3='' OR branch=$3) ORDER BY indexed_at DESC,branch`+collation+` LIMIT 1`, product, repo, branch)
+		rows, err := tx.Query(ctx, `SELECT document FROM code_indexes WHERE product_id=$1 AND repository_id=$2 AND ($3='' OR branch=$3) ORDER BY write_seq DESC LIMIT 1`, product, repo, branch)
 		if err != nil {
 			return err
 		}
@@ -303,7 +302,7 @@ func findCodeWithinBudget(ctx context.Context, store codeTransactions, query dom
 		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
 		literal := `(` + pos + `(c.text_body,$4)>0 OR ` + pos + `(c.title,$4)>0)`
 		latest := `WITH latest AS (
-		 SELECT ci.repository_id,ci.branch,ci.commit_sha, row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.indexed_at DESC,ci.branch` + collation + `) AS rank
+		 SELECT ci.repository_id,ci.branch,ci.commit_sha, row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.write_seq DESC) AS rank
 		 FROM code_indexes ci JOIN records r ON r.id=ci.repository_id AND r.product_id=ci.product_id AND r.kind='repositories'
 		 WHERE ci.product_id=$1 AND ($2='' OR ci.repository_id=$2)
 		)`

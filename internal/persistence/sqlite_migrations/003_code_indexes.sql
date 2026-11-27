@@ -2,11 +2,11 @@ CREATE TABLE code_indexes (
  product_id text NOT NULL REFERENCES records(id) ON DELETE CASCADE,
  repository_id text NOT NULL REFERENCES records(id) ON DELETE CASCADE,
  branch text NOT NULL, commit_sha text NOT NULL, digest text NOT NULL,
- indexed_at text NOT NULL, actor text NOT NULL, truncation text NOT NULL CHECK(json_valid(truncation)),
+ indexed_at text NOT NULL, write_seq integer NOT NULL, actor text NOT NULL, truncation text NOT NULL CHECK(json_valid(truncation)),
  document text NOT NULL CHECK(json_valid(document)),
  PRIMARY KEY(product_id, repository_id, branch)
 );
-CREATE INDEX code_indexes_latest ON code_indexes(product_id, repository_id, indexed_at DESC, branch);
+CREATE INDEX code_indexes_latest ON code_indexes(product_id, repository_id, write_seq DESC);
 CREATE TABLE code_index_history (
  sequence integer PRIMARY KEY AUTOINCREMENT, product_id text NOT NULL, repository_id text NOT NULL, branch text NOT NULL,
  commit_sha text NOT NULL, digest text NOT NULL, indexed_at text NOT NULL,

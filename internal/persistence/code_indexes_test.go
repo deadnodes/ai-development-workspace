@@ -55,7 +55,7 @@ func TestCodeIndexRetentionAndSnippetParity(t *testing.T) {
 			commit := strings.Repeat("a", 40)
 			put := func(repo, branch string, files []domain.CodeFile) {
 				t.Helper()
-				doc := domain.CodeIndex{RepositoryID: repo, Branch: branch, Commit: commit, IndexedAt: time.Now(), Version: domain.CodeIndexVersion, Files: files}
+				doc := domain.CodeIndex{RepositoryID: repo, Branch: branch, Commit: commit, IndexedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Version: domain.CodeIndexVersion, Files: files}
 				if result, err := service.UpsertCodeIndex(ctx, domain.CodeIndexWrite{ProductID: "p", RepositoryID: repo, Document: doc}); err != nil || !result.Changed {
 					t.Fatalf("index %s/%s: %+v, %v", repo, branch, result, err)
 				}

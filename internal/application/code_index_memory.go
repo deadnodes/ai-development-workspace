@@ -21,12 +21,14 @@ type codeMemoryRecord struct {
 	history  []domain.CodeIndexStatus
 	entries  []domain.CodeSearchEntry
 	postings map[string][]int
+	writeSeq uint64
 }
 
 type memoryCodeIndexes struct {
-	view    func(context.Context, func(*domain.State) error) error
-	mutex   sync.RWMutex
-	records map[codeMemoryKey]codeMemoryRecord
+	view     func(context.Context, func(*domain.State) error) error
+	mutex    sync.RWMutex
+	records  map[codeMemoryKey]codeMemoryRecord
+	writeSeq uint64
 }
 
 func (m *memoryCodeIndexes) scoped(ctx context.Context, product, repo string, fn func(*domain.State) error) error {
@@ -59,8 +61,9 @@ func (m *memoryCodeIndexes) PutCodeIndex(ctx context.Context, in domain.CodeInde
 			return err
 		}
 		status.Truncated = slices.Clone(status.Truncated)
+		m.writeSeq++
 		history := append([]domain.CodeIndexStatus{status}, prior.history...)
-		record := codeMemoryRecord{document: data, status: status, actor: in.Actor, history: history[:min(domain.CodeHistorySize, len(history))], postings: map[string][]int{}}
+		record := codeMemoryRecord{document: data, status: status, actor: in.Actor, history: history[:min(domain.CodeHistorySize, len(history))], postings: map[string][]int{}, writeSeq: m.writeSeq}
 		for entry := range in.Document.SearchEntries {
 			ordinal := len(record.entries)
 			record.entries = append(record.entries, entry)
@@ -77,7 +80,7 @@ func (m *memoryCodeIndexes) PutCodeIndex(ctx context.Context, in domain.CodeInde
 		for candidate, record := range m.records {
 			if candidate.product == key.product && candidate.repository == key.repository {
 				count++
-				if count == 1 || codeIndexNewer(m.records[oldest].status, record.status) {
+				if count == 1 || m.records[oldest].writeSeq > record.writeSeq {
 					oldest = candidate
 				}
 			}
@@ -105,6 +108,7 @@ func (m *memoryCodeIndexes) statuses(st *domain.State, in domain.CodeStatusReque
 	defer m.mutex.RUnlock()
 	var out []domain.CodeIndexStatus
 	latest := map[string]domain.CodeIndexStatus{}
+	latestSeq := map[string]uint64{}
 	attached := map[string]bool{}
 	for _, repo := range st.Repositories {
 		if repo.ProductID == in.ProductID {
@@ -116,8 +120,9 @@ func (m *memoryCodeIndexes) statuses(st *domain.State, in domain.CodeStatusReque
 			continue
 		}
 		if in.RepositoryID == "" {
-			if codeIndexNewer(record.status, latest[key.repository]) {
+			if record.writeSeq > latestSeq[key.repository] {
 				latest[key.repository] = record.status
+				latestSeq[key.repository] = record.writeSeq
 			}
 		} else if in.RepositoryID == key.repository && (in.Branch == "" || in.Branch == key.branch) {
 			out = append(out, record.status)
@@ -126,7 +131,17 @@ func (m *memoryCodeIndexes) statuses(st *domain.State, in domain.CodeStatusReque
 	for _, status := range latest {
 		out = append(out, status)
 	}
-	domain.SortCodeStatuses(out)
+	if in.RepositoryID == "" {
+		domain.SortCodeStatuses(out)
+	} else {
+		seqByBranch := make(map[string]uint64, len(out))
+		for key, record := range m.records {
+			if key.product == in.ProductID && key.repository == in.RepositoryID {
+				seqByBranch[key.branch] = record.writeSeq
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return seqByBranch[out[i].Branch] > seqByBranch[out[j].Branch] })
+	}
 	out = out[:min(limit, len(out))]
 	for index := range out {
 		out[index].Truncated = slices.Clone(out[index].Truncated)
@@ -144,8 +159,8 @@ func (m *memoryCodeIndexes) deleteProduct(product string) {
 	}
 }
 
-func codeIndexNewer(candidate, prior domain.CodeIndexStatus) bool {
-	return prior.IndexedAt.IsZero() || candidate.IndexedAt.After(prior.IndexedAt) || candidate.IndexedAt.Equal(prior.IndexedAt) && candidate.Branch < prior.Branch
+func codeMemoryNewer(candidate, prior codeMemoryRecord) bool {
+	return prior.writeSeq == 0 || candidate.writeSeq > prior.writeSeq
 }
 
 func (m *memoryCodeIndexes) ReadCodeIndex(ctx context.Context, product, repo, branch string) (out domain.CodeIndex, err error) {
@@ -154,7 +169,7 @@ func (m *memoryCodeIndexes) ReadCodeIndex(ctx context.Context, product, repo, br
 		defer m.mutex.RUnlock()
 		var selected codeMemoryRecord
 		for key, record := range m.records {
-			if key.product == product && key.repository == repo && (branch == "" || key.branch == branch) && codeIndexNewer(record.status, selected.status) {
+			if key.product == product && key.repository == repo && (branch == "" || key.branch == branch) && codeMemoryNewer(record, selected) {
 				selected = record
 			}
 		}
@@ -180,7 +195,7 @@ func (m *memoryCodeIndexes) FindCode(ctx context.Context, in domain.CodeSearchRe
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if key.product == in.ProductID && (in.RepositoryID == "" || key.repository == in.RepositoryID) && attachedCodeRepo(st, key.product, key.repository) && codeIndexNewer(record.status, latest[key.repository].status) {
+			if key.product == in.ProductID && (in.RepositoryID == "" || key.repository == in.RepositoryID) && attachedCodeRepo(st, key.product, key.repository) && codeMemoryNewer(record, latest[key.repository]) {
 				latest[key.repository] = record
 			}
 		}
