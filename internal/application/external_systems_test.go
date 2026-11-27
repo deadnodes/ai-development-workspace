@@ -79,3 +79,26 @@ func TestExternalScopeHistoryAndIntegrationFiltering(t *testing.T) {
 	reject(t, s, domain.Command{Action: "create_system_relationship", ProductID: "p", Data: map[string]any{"external_system_id": "a", "component_id": "missing", "type": "CONSUMES"}})
 	reject(t, s, domain.Command{Action: "create_external_system", Data: map[string]any{"name": "A"}})
 }
+
+// Evidence recorded before a scope change stays stale even when both share a
+// timestamp (coarse Windows clocks).
+func TestExternalGateEvidenceStaleOnEqualTimestamps(t *testing.T) {
+	s, m := fixture(t)
+	exec(t, s, domain.Command{Action: "create_external_system", ID: "billing", ProductID: "p", Data: map[string]any{"name": "Billing"}})
+	exec(t, s, domain.Command{Action: "create_gate", ID: "g", FeatureID: "f", Data: map[string]any{"title": "Partner", "reason": "API", "integration_ids": []string{"i"}}})
+	exec(t, s, domain.Command{Action: "add_check", ID: "c", GateID: "g", Data: map[string]any{"title": "Contract", "mechanism": "integration"}})
+	exec(t, s, domain.Command{Action: "record_check_result", CheckID: "c", Data: map[string]any{"result": "passed", "commit": "abc"}})
+	exec(t, s, domain.Command{Action: "set_external_scope", GateID: "g", Data: map[string]any{"external_system_ids": []string{"billing"}}})
+	at := m.state.Results[len(m.state.Results)-1].CreatedAt
+	for i := range m.state.ExternalScopes {
+		m.state.ExternalScopes[i].CreatedAt = at
+	}
+	g := *gate(&m.state, "g")
+	if externalGateEvidenceCurrent(&m.state, g) {
+		t.Fatal("result recorded before the scope change counted as current")
+	}
+	exec(t, s, domain.Command{Action: "record_check_result", CheckID: "c", Data: map[string]any{"result": "passed", "commit": "abc"}})
+	if !externalGateEvidenceCurrent(&m.state, g) {
+		t.Fatal("result recorded under the current scope not accepted")
+	}
+}

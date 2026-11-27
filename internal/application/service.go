@@ -1020,6 +1020,8 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		m.FeatureID = ch.FeatureID
 		v.Meta = m
 		v.CheckID = ch.ID
+		scopeID := currentGateScopeID(st, ch.GateID)
+		v.ExternalScopeID = &scopeID
 		if v.Commit == "" && v.Deployment == "" {
 			return nil, invalid("tested commit or deployment required")
 		}

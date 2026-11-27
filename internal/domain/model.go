@@ -219,6 +219,9 @@ type CheckResult struct {
 	Observations  string     `json:"observations"`
 	Logs          string     `json:"logs"`
 	Artifacts     []Artifact `json:"artifacts"`
+	// ExternalScopeID is the gate's external scope in force when the result was
+	// recorded ("" for none); nil only on results recorded before it existed.
+	ExternalScopeID *string `json:"external_scope_id,omitempty"`
 }
 type Finding struct {
 	ReviewSource *ReviewSource `json:"review_source,omitempty"`
