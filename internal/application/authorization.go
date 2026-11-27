@@ -134,9 +134,13 @@ func filterScopedStateForContext(ctx context.Context, st domain.State, p auth.Pr
 		visibleEdges[edge.ID] = visibleProducts[featureProducts[edge.FromFeatureID]] && visibleProducts[featureProducts[edge.ToFeatureID]]
 	}
 	workEventOwners := map[string]string{}
+	hiddenIdleEvents := map[string]bool{}
 	for _, event := range st.ExecutionEvents {
 		if event.Type == "work_available" {
 			workEventOwners[event.ID] = event.Owner
+		}
+		if domain.IsGroupIdleEvent(event.Type) && !groupIdleOwnerVisible(ctx, event.Owner) {
+			hiddenIdleEvents[event.ID] = true
 		}
 	}
 	for i := 0; i < sv.NumField(); i++ {
@@ -168,10 +172,13 @@ func filterScopedStateForContext(ctx context.Context, st domain.State, p auth.Pr
 			case domain.UserOrchestrator:
 				return false
 			case domain.ExecutionEvent:
-				if item.Type == "work_available" && item.Owner != workUser(ctx) {
+				if hiddenIdleEvents[item.ID] || item.Type == "work_available" && item.Owner != workUser(ctx) {
 					return false
 				}
 			case domain.Event:
+				if hiddenIdleEvents[item.EntityID] {
+					return false
+				}
 				if item.Action == "propose_dependency" || item.Action == "decide_dependency" {
 					return visibleEdges[item.EntityID]
 				}
@@ -249,7 +256,7 @@ func stateRowProduct(row reflect.Value, products bool) (string, bool) {
 // This allowlist deliberately fails closed for newly introduced commands.
 var memberWriteActions = []string{
 	"create_product", "adopt_product_ownership", "set_product_visibility", "add_product_member", "remove_product_member",
-	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event", "assign_integration", "unassign_integration",
+	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "set_product_idle_policy", "report_turn_end", "report_turn_start", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event", "assign_integration", "unassign_integration",
 	"queue_intelligence_task", "cancel_intelligence_task",
 	"create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution",
 	"record_package_artifact", "create_hotfix", "create_test_scenario", "revise_test_scenario", "record_scenario_run",

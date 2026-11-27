@@ -1005,7 +1005,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				}
 			}
 		}
-		if e := decodeWritable(memoryData, &v, "title", "body", "reason", "completed", "current", "remaining", "next", "warnings", "commit", "deployment", "session"); e != nil {
+		fields := []string{"title", "body", "reason", "completed", "current", "remaining", "next", "warnings", "commit", "deployment", "session"}
+		if c.Action == "add_blocker" {
+			fields = append(fields, "owner")
+		}
+		if e := decodeWritable(memoryData, &v, fields...); e != nil {
 			return nil, e
 		}
 		v.Meta = m

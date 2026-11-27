@@ -323,7 +323,7 @@ func seedPrivateReadMatrix(t *testing.T, store privateFixtureStore, workspace st
 				Digest: privateDigest(product), Result: "SIGNED", ProdImageRef: "fixture/" + product, ProdSignature: &domain.ProdSignature{SignatureTag: product + "-tag"},
 			}}})
 			members := []string{product + "-integration"}
-			state.ExecutionGroups = append(state.ExecutionGroups, domain.ExecutionGroup{ID: product + "-group", ProductID: product, Name: product + " group", MemberIntegrationIDs: members, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: members}}})
+			state.ExecutionGroups = append(state.ExecutionGroups, domain.ExecutionGroup{ID: product + "-group", ProductID: product, Name: product + " group", Owner: "A", MemberIntegrationIDs: members, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: members}}})
 			state.IntegrationExecutions = append(state.IntegrationExecutions, domain.IntegrationExecution{ID: product + "-execution", ProductID: product, IntegrationID: product + "-integration", State: "unassigned", DesiredState: "ready"})
 			state.ExecutionEvents = append(state.ExecutionEvents, domain.ExecutionEvent{ID: product + "-event", ProductID: product, IntegrationID: product + "-integration", CreatedAt: now, EscalationRequired: true})
 			state.Events = append(state.Events, domain.Event{ID: product + "-audit", ProductID: product, At: now})
@@ -460,6 +460,12 @@ func runPrivateReadMatrix(t *testing.T, service *Service) {
 					for _, product := range []string{sharedFixture, privateFixture} {
 						result, err := read(tc.ctx, service, product)
 						visible := product != privateFixture || tc.visible
+						if visible && name == "get_execution_group" && tc.name != "local" && workUser(tc.ctx) != "A" {
+							if result != nil || !errors.Is(err, auth.ErrForbidden) || !strings.Contains(err.Error(), "NOT_ASSIGNEE") {
+								t.Errorf("%s (%s): expected owned-group denial, got %v, %v", name, product, result, err)
+							}
+							continue
+						}
 						privateResult(t, name, product, result, err, visible)
 						if !visible {
 							denied = err

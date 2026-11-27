@@ -133,6 +133,9 @@ func groupWakeCurrent(st *domain.State, event domain.ExecutionEvent) bool {
 	}
 	child := integration(st, event.IntegrationID)
 	return slices.ContainsFunc(st.ExecutionGroups, func(group domain.ExecutionGroup) bool {
+		if domain.IsGroupIdleEvent(event.Type) {
+			return group.ClosedAt == nil && group.Owner == event.Owner && group.ProductID == event.ProductID && event.WakeTarget == groupWakeTarget(group)
+		}
 		return groupOwnsIntegration(group, child) && group.Owner == event.Owner && group.ProductID == event.ProductID && event.WakeTarget == groupWakeTarget(group)
 	})
 }
@@ -232,6 +235,8 @@ func effectiveStalledTimeout(st *domain.State, e *domain.IntegrationExecution, g
 
 func executionAction(a string) bool {
 	switch a {
+	case "set_product_idle_policy", "report_turn_start":
+		return true
 	case "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
 		return true
 	}
@@ -380,7 +385,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 		}
 		switch c.Action {
-		case "report_turn_end":
+		case "report_turn_end", "report_turn_start":
 			var x struct {
 				HarnessKind string `json:"harness_kind"`
 				SessionRef  string `json:"session_ref"`
@@ -411,7 +416,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			}
 			key := x.HarnessKind + "|" + identity + "|" + turn
 			matched := []string{}
-			for i := range st.IntegrationExecutions {
+			isEnd := c.Action == "report_turn_end"
+			for i := 0; isEnd && i < len(st.IntegrationExecutions); i++ {
 				e := &st.IntegrationExecutions[i]
 				if e.ProductID == c.ProductID && executionOwnedByCaller(ctx, integration(st, e.IntegrationID)) && e.Harness.Kind == x.HarnessKind && ((x.SessionRef != "" && e.Harness.SessionRef == x.SessionRef) || (x.TmuxTarget != "" && e.Harness.TmuxTarget == x.TmuxTarget)) {
 					if e.TurnEndID == key {
@@ -426,14 +432,27 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			// The orchestrator session is registered on its group and can differ
 			// from every member executor. Fan its turn-end signal into the open
 			// group's member execution records so reconciliation can debounce it.
-			for _, g := range st.ExecutionGroups {
+			for index := range st.ExecutionGroups {
+				g := &st.ExecutionGroups[index]
 				if g.ProductID != c.ProductID || g.ClosedAt != nil || g.OrchestratorHarness.Kind != x.HarnessKind || !((x.SessionRef != "" && g.OrchestratorHarness.SessionRef == x.SessionRef) || (x.TmuxTarget != "" && g.OrchestratorHarness.TmuxTarget == x.TmuxTarget)) {
 					continue
+				}
+				if requireExecutionGroupOwner(ctx, *g) != nil {
+					continue
+				}
+				if !isEnd {
+					if g.TurnStartID != key && (x.TurnID == "" || g.TurnEndID != key) {
+						g.TurnStartAt, g.TurnStartID = &now, key
+					}
+					continue
+				}
+				if g.TurnEndID != key {
+					g.TurnEndAt, g.TurnEndID = &now, key
 				}
 				for _, iid := range g.MemberIntegrationIDs {
 					e := executionFor(st, iid)
 					child := integration(st, iid)
-					if e == nil || e.ProductID != c.ProductID || !groupOwnsIntegration(g, child) || !executionOwnedByCaller(ctx, child) {
+					if e == nil || e.ProductID != c.ProductID || !groupOwnsIntegration(*g, child) || !executionOwnedByCaller(ctx, child) {
 						continue
 					}
 					if e.TurnEndID != key {
@@ -471,6 +490,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || !groupWakeCurrent(st, *ev) || !registrationEventEligible(st, *ev) {
 					return invalid("INVALID_STATE")
 				}
+				idleEvent := domain.IsGroupIdleEvent(ev.Type)
+				if idleEvent && !groupIdleEventCurrent(st, *ev, now) {
+					return invalid("INVALID_STATE")
+				}
 				if ev.Cause == domain.ExecutionCauseBlockerResolved {
 					child, execution := integration(st, ev.IntegrationID), executionFor(st, ev.IntegrationID)
 					if !blockedExecutionPending(st, child, execution) || execution.Reconciliation.Generation != ev.ConditionGeneration || guardFeatureStart(ctx, st, child) != nil {
@@ -486,7 +509,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				ev.Delivery.DeliveryID = id()
 				retry, cap, escalate := executionNotifyConfig(s)
 				delay := retry
-				for j := 1; j < ev.Delivery.Attempts && delay < cap; j++ {
+				attempts := groupIdleEffectiveAttempts(*ev)
+				for j := 1; j < attempts && delay < cap; j++ {
 					if delay > cap/2 {
 						delay = cap
 					} else {
@@ -497,7 +521,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					delay = cap
 				}
 				ev.Delivery.NextAttemptAt = now.Add(time.Duration(delay) * time.Second)
-				if ev.Delivery.Attempts >= escalate {
+				if (!idleEvent && attempts >= escalate) || (idleEvent && attempts-1 >= escalate) {
 					ev.EscalationRequired = true
 				}
 				ev.Delivery.AcknowledgedAt = nil
@@ -532,7 +556,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
-				if ev.Delivery.Attempts == 0 || x.DeliveryID == "" || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported") || ev.Delivery.AcknowledgedAt != nil {
+				idleEvent := domain.IsGroupIdleEvent(ev.Type)
+				if ev.Delivery.Attempts == 0 || x.DeliveryID == "" || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported" && !(idleEvent && x.Outcome == "skipped_active")) || ev.Delivery.AcknowledgedAt != nil {
 					return invalid("INVALID_STATE")
 				}
 				wasEscalated := ev.EscalationRequired
@@ -540,6 +565,24 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				ev.Delivery.AcknowledgedAt = &t
 				ev.Delivery.AcknowledgedBy = x.SupervisorID
 				ev.Acknowledgements = append(ev.Acknowledgements, domain.ExecutionEventAck{DeliveryID: x.DeliveryID, SupervisorID: x.SupervisorID, Outcome: x.Outcome, Detail: x.Detail, At: now})
+				if idleEvent {
+					policy := idlePolicy(st, ev.ProductID)
+					switch x.Outcome {
+					case "skipped_active":
+						delay := policy.IdleAfterSeconds
+						if delay == 0 {
+							delay = 600
+						}
+						ev.Delivery.NextAttemptAt = now.Add(time.Duration(delay) * time.Second)
+					case "delivered":
+						if ev.Type == domain.EventGroupOwnerBlocked {
+							ev.Delivery.NextAttemptAt = now.Add(time.Duration(policy.OwnerBlockedIntervalSeconds) * time.Second)
+						}
+					case "failed":
+						_, _, threshold := executionNotifyConfig(s)
+						ev.EscalationRequired = ev.EscalationRequired || groupIdleEffectiveAttempts(*ev) >= threshold
+					}
+				}
 				if ev.Type == "work_available" && x.Outcome == "delivered" && ev.Resolution.ResolvedAt == nil {
 					ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: x.SupervisorID, Evidence: "wake delivered"}
 					appendExecutionEventAudit(st, *ev, "execution_event_resolved", x.SupervisorID, now, nil)
@@ -568,7 +611,11 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				out = *ev
 				appendExecutionEventAudit(st, *ev, "execution_event_acknowledged", x.SupervisorID, now, map[string]any{"delivery_id": x.DeliveryID, "outcome": x.Outcome, "detail": x.Detail})
 				if !wasEscalated && ev.EscalationRequired {
-					appendExecutionEventAudit(st, *ev, "execution_event_escalated", x.SupervisorID, now, map[string]any{"reason": "unsupported delivery"})
+					reason := "unsupported delivery"
+					if idleEvent && x.Outcome == "failed" {
+						reason = "idle wake delivery attempts exhausted"
+					}
+					appendExecutionEventAudit(st, *ev, "execution_event_escalated", x.SupervisorID, now, map[string]any{"reason": reason})
 				}
 				return nil
 			}
@@ -594,7 +641,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
-				if ev.Resolution.ResolvedAt != nil || x.SupervisorID == "" || x.Evidence == "" {
+				if domain.IsGroupIdleEvent(ev.Type) || ev.Resolution.ResolvedAt != nil || x.SupervisorID == "" || x.Evidence == "" {
 					return invalid("INVALID_STATE")
 				}
 				ex := executionFor(st, ev.IntegrationID)
@@ -975,6 +1022,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if g.OrchestratorHarness != harness {
 				g.OrchestratorHarness = harness
 				g.HarnessRevision++
+				g.HarnessChangedAt = &now
+				g.TurnEndAt, g.TurnStartAt = nil, nil
+				g.TurnEndID, g.TurnStartID = "", ""
 				rerouteGroupWakes(st, g.ID, now)
 			}
 			out = *g
@@ -1036,7 +1086,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				rerouteGroupWakes(st, g.ID, now)
 			}
 			out = *g
-		case "set_product_stalled_timeout":
+		case "set_product_stalled_timeout", "set_product_idle_policy":
 			var p *domain.Product
 			for i := range st.Products {
 				if st.Products[i].ID == c.ProductID {
@@ -1047,7 +1097,11 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if p == nil {
 				return missing("product", c.ProductID)
 			}
-			if c.Data["clear"] == true {
+			if c.Action == "set_product_idle_policy" {
+				if err := setProductIdlePolicy(ctx, p, c.Data); err != nil {
+					return err
+				}
+			} else if c.Data["clear"] == true {
 				p.StalledTimeoutSeconds = nil
 			} else {
 				v, ok := c.Data["seconds"].(float64)
@@ -1189,7 +1243,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 			}
 		}
 	}
-	return changed
+	return reconcileGroupIdle(st, now) || changed
 }
 
 func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
@@ -1264,6 +1318,9 @@ func wakeResolvedQuestion(st *domain.State, question domain.Memory, now time.Tim
 }
 
 func executionEventVisibleTo(ctx context.Context, st *domain.State, event domain.ExecutionEvent) bool {
+	if domain.IsGroupIdleEvent(event.Type) {
+		return groupIdleOwnerVisible(ctx, event.Owner)
+	}
 	if event.Type == "work_available" {
 		return event.Owner != "" && event.Owner == workUser(ctx)
 	}
@@ -1271,7 +1328,7 @@ func executionEventVisibleTo(ctx context.Context, st *domain.State, event domain
 }
 
 func requireExecutionEventUser(ctx context.Context, st *domain.State, event *domain.ExecutionEvent) error {
-	if event.Type == "work_available" {
+	if event.Type == "work_available" || domain.IsGroupIdleEvent(event.Type) {
 		if !executionEventVisibleTo(ctx, st, *event) {
 			return missing("execution_event", event.ID)
 		}

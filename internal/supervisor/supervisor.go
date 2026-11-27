@@ -28,9 +28,10 @@ import (
 type Outcome string
 
 const (
-	Delivered   Outcome = "delivered"
-	Failed      Outcome = "failed"
-	Unsupported Outcome = "unsupported"
+	Delivered     Outcome = "delivered"
+	Failed        Outcome = "failed"
+	Unsupported   Outcome = "unsupported"
+	SkippedActive Outcome = "skipped_active"
 )
 
 type WakeResult struct {
@@ -40,6 +41,7 @@ type WakeResult struct {
 type WakeRequest struct {
 	Kind, SessionRef, TmuxTarget, GroupID, Message string
 	Events                                         []domain.ExecutionEvent
+	IdleCheck                                      bool
 }
 type Adapter interface {
 	Wake(context.Context, WakeRequest) WakeResult
@@ -132,10 +134,19 @@ func (s *Supervisor) Cycle(ctx context.Context, productID, token string) error {
 			sessionKey = "tmux:" + wake.TmuxTarget
 		}
 		key := wake.Kind + "|" + sessionKey
-		b := batches[key]
+		batchKey := "0|" + key
+		if domain.IsGroupIdleEvent(ev.Type) {
+			category := "1|idle|"
+			if ev.Type == domain.EventGroupOwnerBlocked {
+				category = "2|owner-blocked|"
+			}
+			key = category + sessionKey
+			batchKey = key + "|" + wake.GroupID
+		}
+		b := batches[batchKey]
 		if b == nil {
 			b = &sessionBatch{key: key, kind: wake.Kind, session: wake.SessionRef, target: wake.TmuxTarget}
-			batches[key] = b
+			batches[batchKey] = b
 		}
 		b.events = append(b.events, ev)
 	}
@@ -155,6 +166,19 @@ func (s *Supervisor) Cycle(ctx context.Context, productID, token string) error {
 
 // deliverBatch claims every event before waking once, then records the same durable outcome for each claim.
 func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, kind, session, target, key string, events []domain.ExecutionEvent) error {
+	idle := len(events) > 0 && domain.IsGroupIdleEvent(events[0].Type)
+	if idle {
+		limit := s.Config.IdleRateFor
+		if events[0].Type == domain.EventGroupOwnerBlocked {
+			limit = s.Config.OwnerRateFor
+		}
+		s.mu.Lock()
+		last := s.wakes[key]
+		s.mu.Unlock()
+		if !last.IsZero() && s.Now().Sub(last) < limit {
+			return nil
+		}
+	}
 	claimed := make([]struct {
 		ev domain.ExecutionEvent
 		id string
@@ -183,10 +207,30 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 		return nil
 	}
 	result := WakeResult{Outcome: Unsupported, Detail: "unsupported"}
+	var stateErr error
 	if !s.allowed(kind) {
 		result = WakeResult{Outcome: Unsupported, Detail: "harness kind not allowed"}
 	} else if target == "" && session == "" {
 		result = WakeResult{Outcome: Unsupported, Detail: "missing session_ref and tmux_target"}
+	} else if idle {
+		event := claimed[len(claimed)-1].ev
+		now := s.Now()
+		message := groupIdlePrompt(event, now)
+		if message != "" && ValidTmuxTarget(target) {
+			claimedEvents := make([]domain.ExecutionEvent, 0, len(claimed))
+			for _, delivery := range claimed {
+				claimedEvents = append(claimedEvents, delivery.ev)
+			}
+			result = s.Adapter.Wake(ctx, WakeRequest{Kind: kind, SessionRef: session, TmuxTarget: target, GroupID: event.WakeTarget.GroupID, Message: message, Events: claimedEvents, IdleCheck: true})
+			if result.Outcome == Delivered || result.Outcome == Failed {
+				s.mu.Lock()
+				s.wakes[key] = now
+				s.mu.Unlock()
+				stateErr = s.saveState()
+			}
+		} else {
+			result.Detail = "idle wake requires valid group payload and tmux target"
+		}
 	} else {
 		groupID := ""
 		workAvailable, resolvedBlocker := false, false
@@ -253,7 +297,50 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			return err
 		}
 	}
-	return nil
+	return stateErr
+}
+
+var idleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+func groupIdlePrompt(event domain.ExecutionEvent, now time.Time) string {
+	payload := event.GroupIdle
+	if payload == nil || event.WakeTarget.Source != "group_orchestrator" || payload.GroupID != event.WakeTarget.GroupID || !idleIDPattern.MatchString(payload.GroupID) || len(payload.Members) == 0 {
+		return ""
+	}
+	minutes := max(0, now.Sub(payload.GroupActivityAt)/time.Minute)
+	instruction := "Check each member's state and next_action, continue eligible work or report blockers."
+	if event.Type == domain.EventGroupOwnerBlocked {
+		instruction = "Remind the owner about the outstanding questions or blockers. Do not resume work."
+	}
+	var prompt strings.Builder
+	fmt.Fprintf(&prompt, "[RCP supervisor] Group %s: %d unfinished members, no recorded activity for %d min. Call get_execution_group with group_id=%s. %s", payload.GroupID, len(payload.Members), minutes, payload.GroupID, instruction)
+	lines := 1
+	for _, member := range payload.Members {
+		if lines == 20 {
+			break
+		}
+		if !idleIDPattern.MatchString(member.IntegrationID) {
+			continue
+		}
+		state, action := member.State, member.NextAction
+		switch state {
+		case "unassigned", "claimed", "running", "waiting_external", "blocked", "stalled", "lost", "exited_incomplete":
+		default:
+			state = "unknown"
+		}
+		switch action {
+		case "none", "claim", "wait", "resume", "takeover", "advance", "continue":
+		default:
+			action = "unknown"
+		}
+		age := "unknown"
+		if member.SecondsSinceLastProgress != nil && *member.SecondsSinceLastProgress >= 0 {
+			age = fmt.Sprintf("%ds", *member.SecondsSinceLastProgress)
+		}
+		fmt.Fprintf(&prompt, "\n%s %s progress %s next %s", member.IntegrationID, state, age, action)
+		lines++
+	}
+	return prompt.String()
 }
 
 func (s *Supervisor) allowed(k string) bool {
@@ -273,6 +360,12 @@ func workAvailabilityWake(event domain.ExecutionEvent) bool {
 }
 
 func wakeGroup(event domain.ExecutionEvent) string {
+	if domain.IsGroupIdleEvent(event.Type) {
+		if event.WakeTarget.Source == "group_orchestrator" && idleIDPattern.MatchString(event.WakeTarget.GroupID) {
+			return event.WakeTarget.GroupID
+		}
+		return ""
+	}
 	if event.WakeTarget.Source == "group_orchestrator" && idPattern.MatchString(event.WakeTarget.GroupID) {
 		return event.WakeTarget.GroupID
 	}

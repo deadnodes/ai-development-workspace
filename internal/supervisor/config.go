@@ -7,34 +7,40 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	RCPURL        string        `json:"rcp_url"`
-	Profile       string        `json:"profile,omitempty"`
-	TokenEnv      string        `json:"token_env,omitempty"`
-	SupervisorID  string        `json:"supervisor_id"`
-	ProductIDs    []string      `json:"product_ids"`
-	PollInterval  string        `json:"poll_interval,omitempty"`
-	IdleWindow    string        `json:"idle_window,omitempty"`
-	WakeTimeout   string        `json:"wake_timeout,omitempty"`
-	VerifyWindow  string        `json:"verify_for,omitempty"`
-	SubmitDelay   string        `json:"submit_delay,omitempty"`
-	RateLimit     string        `json:"rate_limit,omitempty"`
-	AllowedKinds  []string      `json:"allowed_kinds,omitempty"`
-	HeadlessKinds []string      `json:"headless_kinds,omitempty"`
-	StateFile     string        `json:"state_file,omitempty"`
-	TmuxPath      string        `json:"tmux_path,omitempty"`
-	CodexPath     string        `json:"codex_path,omitempty"`
-	ClaudePath    string        `json:"claude_path,omitempty"`
-	PgrepPath     string        `json:"pgrep_path,omitempty"`
-	PollEvery     time.Duration `json:"-"`
-	IdleFor       time.Duration `json:"-"`
-	WakeFor       time.Duration `json:"-"`
-	VerifyFor     time.Duration `json:"-"`
-	SubmitFor     time.Duration `json:"-"`
-	RateFor       time.Duration `json:"-"`
+	RCPURL         string        `json:"rcp_url"`
+	Profile        string        `json:"profile,omitempty"`
+	TokenEnv       string        `json:"token_env,omitempty"`
+	SupervisorID   string        `json:"supervisor_id"`
+	ProductIDs     []string      `json:"product_ids"`
+	PollInterval   string        `json:"poll_interval,omitempty"`
+	IdleWindow     string        `json:"idle_window,omitempty"`
+	WakeTimeout    string        `json:"wake_timeout,omitempty"`
+	VerifyWindow   string        `json:"verify_for,omitempty"`
+	SubmitDelay    string        `json:"submit_delay,omitempty"`
+	RateLimit      string        `json:"rate_limit,omitempty"`
+	IdleRateLimit  string        `json:"idle_rate_limit,omitempty"`
+	OwnerRateLimit string        `json:"owner_blocked_rate_limit,omitempty"`
+	ActiveMarkers  []string      `json:"active_markers,omitempty"`
+	AllowedKinds   []string      `json:"allowed_kinds,omitempty"`
+	HeadlessKinds  []string      `json:"headless_kinds,omitempty"`
+	StateFile      string        `json:"state_file,omitempty"`
+	TmuxPath       string        `json:"tmux_path,omitempty"`
+	CodexPath      string        `json:"codex_path,omitempty"`
+	ClaudePath     string        `json:"claude_path,omitempty"`
+	PgrepPath      string        `json:"pgrep_path,omitempty"`
+	PollEvery      time.Duration `json:"-"`
+	IdleFor        time.Duration `json:"-"`
+	WakeFor        time.Duration `json:"-"`
+	VerifyFor      time.Duration `json:"-"`
+	SubmitFor      time.Duration `json:"-"`
+	RateFor        time.Duration `json:"-"`
+	IdleRateFor    time.Duration `json:"-"`
+	OwnerRateFor   time.Duration `json:"-"`
 }
 
 var (
@@ -124,6 +130,28 @@ func (c *Config) Normalize() error {
 		return errors.New("invalid supervisor timing configuration")
 	}
 	c.PollEvery, c.IdleFor, c.WakeFor, c.VerifyFor, c.SubmitFor, c.RateFor = poll, idle, wake, verify, submit, rate
+	if c.IdleRateLimit == "" {
+		c.IdleRateLimit = "15m"
+	}
+	if c.OwnerRateLimit == "" {
+		c.OwnerRateLimit = "4h"
+	}
+	c.IdleRateFor, err = time.ParseDuration(c.IdleRateLimit)
+	if err != nil || c.IdleRateFor <= 0 {
+		return errors.New("invalid idle_rate_limit")
+	}
+	c.OwnerRateFor, err = time.ParseDuration(c.OwnerRateLimit)
+	if err != nil || c.OwnerRateFor <= 0 {
+		return errors.New("invalid owner_blocked_rate_limit")
+	}
+	if c.ActiveMarkers == nil {
+		c.ActiveMarkers = []string{"esc to interrupt", "background task", "bashes running", "agents running", "shells running", "Working ("}
+	}
+	for _, marker := range c.ActiveMarkers {
+		if strings.TrimSpace(marker) == "" || strings.ContainsAny(marker, "\r\n") {
+			return errors.New("invalid active_markers entry")
+		}
+	}
 	if c.SupervisorID == "" || len(c.SupervisorID) > 128 {
 		return errors.New("invalid supervisor_id")
 	}

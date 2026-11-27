@@ -111,6 +111,9 @@ func CommandSchema() map[string]any {
 	data["role"] = map[string]any{"type": "string", "enum": domain.RepositoryRoles()}
 	data["kind"] = enum(append(domain.ComponentKinds(), "question", "conflict", "decision")...)
 	data["harness"] = object(map[string]any{"kind": str(), "tmux_target": str(), "session_ref": str()}, "kind")
+	for _, key := range []string{"idle_after_seconds", "wait_timeout_seconds", "owner_blocked_interval_seconds"} {
+		data[key] = map[string]any{"type": "integer", "minimum": 0, "maximum": domain.MaxExecutionIdleSeconds}
+	}
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
@@ -118,6 +121,7 @@ func CommandSchema() map[string]any {
 		{"cancel_intelligence_task", "product_id id", ""},
 		{"refresh_registry_inventory", "product_id", "application_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
 		{"pin_artifact", "product_id", "application_id image_repository digest purpose request_key"},
+		{"set_product_idle_policy", "product_id", "idle_after_seconds wait_timeout_seconds owner_blocked_interval_seconds"},
 		{"release_artifact_pin", "product_id id", "application_id"},
 		{"queue_worker_publication", "product_id", "build_job_id component_id recipe_id recipe_revision recipe_hash config_revision request_key deadline"},
 		{"reconcile_worker_publication", "product_id id", ""},

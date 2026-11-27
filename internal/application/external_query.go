@@ -105,14 +105,24 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				if g.ProductID == "" {
 					return nil, invalid("SCOPE_MISMATCH")
 				}
+				if !groupIdleOwnerVisible(ctx, g.Owner) {
+					return nil, fmt.Errorf("%w: NOT_ASSIGNEE", auth.ErrForbidden)
+				}
+				ownedMembers := func(ids []string) []string {
+					return slices.DeleteFunc(slices.Clone(ids), func(iid string) bool {
+						in := integration(&st, iid)
+						return in == nil || in.ProductID != g.ProductID || in.Assignee != g.Owner
+					})
+				}
+				g.MemberIntegrationIDs = ownedMembers(g.MemberIntegrationIDs)
+				g.Revisions = slices.Clone(g.Revisions)
+				for index := range g.Revisions {
+					g.Revisions[index].MemberIntegrationIDs = ownedMembers(g.Revisions[index].MemberIntegrationIDs)
+				}
 				members := []map[string]any{}
 				for _, iid := range g.MemberIntegrationIDs {
 					in := integration(&st, iid)
 					if in == nil {
-						continue
-					}
-					if !executionVisibleTo(ctx, in) {
-						members = append(members, map[string]any{"integration": in, "next_action": map[string]string{"code": "none", "text": "assigned to " + in.Assignee}})
 						continue
 					}
 					var ex *domain.IntegrationExecution
@@ -148,7 +158,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 						return ""
 					}(), "next_action": next})
 				}
-				return map[string]any{"group": g, "members": members}, nil
+				return map[string]any{"group": g, "members": members, "idle_evaluation": groupIdleStatus(&st, g, time.Now().UTC())}, nil
 			}
 		}
 		return nil, missing("execution_group", id)
@@ -187,6 +197,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			options.Limit = 100
 		}
 		items := []domain.ExecutionEvent{}
+		now := time.Now().UTC()
 		for _, ev := range st.ExecutionEvents {
 			if ev.ProductID != productID {
 				continue
@@ -197,7 +208,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
 				continue
 			}
-			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || time.Now().UTC().Before(ev.Delivery.NextAttemptAt)) {
+			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || (domain.IsGroupIdleEvent(ev.Type) && !groupIdleEventCurrent(&st, ev, now))) {
 				continue
 			}
 			if options.Cursor != "" {

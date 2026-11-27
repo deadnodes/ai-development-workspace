@@ -193,11 +193,7 @@ func TestExecutionIsolationCoversLifecycleGroupsAndSupervisorEvents(t *testing.T
 	}
 	groupID := state.ExecutionGroups[len(state.ExecutionGroups)-1].ID
 	group, err := s.Query(b1, "get_execution_group", groupID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	member := group.(map[string]any)["members"].([]map[string]any)[0]
-	if got := member["next_action"].(map[string]string); got["code"] != "none" || got["text"] != "assigned to human/A" {
-		t.Fatalf("foreign next_action = %#v", got)
+	if err == nil || !strings.Contains(err.Error(), "NOT_ASSIGNEE") || group != nil {
+		t.Fatalf("foreign group = %#v, err = %v", group, err)
 	}
 }

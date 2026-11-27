@@ -2360,6 +2360,81 @@ Read the generated tool index or one exact tool/action/route entry.
 
 ## execution
 
+### `set_product_idle_policy` — mcp_tool
+
+Override group idle, long-wait and owner reminder thresholds for a Product.
+
+**When:** Set all three thresholds together; zero disables its corresponding check.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `idle_after_seconds` (integer, required): 0 to 604800
+- `wait_timeout_seconds` (integer, required): 0 to 604800
+- `owner_blocked_interval_seconds` (integer, required): 0 to 604800
+
+**Output:** Product with its persisted idle policy.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the Product owner or instance admin can change policy.
+- `VALIDATION`: Provide all three whole-second thresholds within range.
+
+**Example:** `{"product_id":"PRODUCT","idle_after_seconds":600,"wait_timeout_seconds":1800,"owner_blocked_interval_seconds":14400}`
+
+**Related:** `get_execution_group`
+
+**Authority:** Sets notification policy only; grants no execution authority.
+
+### `set_product_idle_policy` — execute_action
+
+Override Product group idle notification thresholds.
+
+**When:** Use via the shared command envelope.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `data.idle_after_seconds` (integer, optional): 0 to 604800
+- `data.wait_timeout_seconds` (integer, optional): 0 to 604800
+- `data.owner_blocked_interval_seconds` (integer, optional): 0 to 604800
+
+**Output:** Product with its persisted idle policy.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the Product owner or instance admin can change policy.
+- `VALIDATION`: Provide all three whole-second thresholds within range.
+
+**Example:** `{"action":"set_product_idle_policy","product_id":"PRODUCT","data":{"idle_after_seconds":600,"wait_timeout_seconds":1800,"owner_blocked_interval_seconds":14400}}`
+
+**Related:** `get_execution_group`
+
+**Authority:** Sets notification policy only; grants no execution authority.
+
+### `report_turn_start` — mcp_tool
+
+Report optional activity when a registered orchestrator starts a turn.
+
+**When:** Call on actual turn start, using the registered harness identity and a stable turn ID.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `data` (object, required): harness_kind plus session_ref or tmux_target; turn_id recommended
+
+**Output:** Recorded turn identity; no work is started.
+
+**Errors:**
+
+- `VALIDATION`: Use a valid harness kind and matching session or pane target.
+
+**Example:** `{"product_id":"PRODUCT","data":{"harness_kind":"codex","tmux_target":"orch:0.0","turn_id":"TURN"}}`
+
+**Related:** `report_turn_end`, `get_execution_group`
+
+**Authority:** Records activity only; grants no execution authority.
+
 ### `get_execution_group` — mcp_tool
 
 Restore all members of an execution group with current Integration and execution state.

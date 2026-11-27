@@ -21,6 +21,9 @@ Create `~/.config/release-control/supervisor.json` with mode `0600`:
   "wake_timeout": "120s",
   "verify_for": "5s",
   "submit_delay": "800ms",
+  "idle_rate_limit": "15m",
+  "owner_blocked_rate_limit": "4h",
+  "active_markers": ["esc to interrupt", "background task", "bashes running", "agents running", "shells running", "Working ("],
   "headless_kinds": [],
   "allowed_kinds": ["codex", "claude_code", "claude_desktop", "ccr", "other"]
 }
@@ -82,12 +85,36 @@ The supervisor waits for stable pane contents and checks the last 15 lines for
 the interactive busy marker before sending a literal message and Enter. It
 waits `submit_delay` (default `800ms`) after literal input and before sending
 Enter. A delivery is accepted only after observing the case insensitive
-`esc to interrupt` marker within `verify_for`. If the marker does not appear
+`esc to interrupt` marker within `verify_for`. For legacy wakes, if the marker does not appear
 within three seconds, it sends Enter once more and continues verification. If
 the last eight pane lines already contain `[RCP supervisor]`, it sends Enter
 without typing another copy, to submit a previous pending wake. Otherwise it
 records `wake not observed`. A busy pane is acknowledged `failed` with detail
 `busy`.
+
+### Idle and stuck orchestrator wakes
+
+The four `group_*` idle events are separate from turn-end continuation. Before
+typing, the supervisor checks the last 15 lines of two pane captures for the
+case-insensitive busy marker and configured `active_markers`. Changing output,
+active background tasks, and panes displaying a marker are left alone. The
+supervisor ACKs `skipped_active`; RCP records the skip without escalation and
+retries after the product's `idle_after` (10 minutes if that check is disabled),
+provided the condition still holds. A healthy stream of member heartbeats or
+progress clears the condition on the server, so normal waiting does not wake.
+
+Idle, wait-timeout, and actionable-member wakes share a per-session limit of
+one attempt per 15 minutes (`idle_rate_limit`). Owner reminders use their own
+per-session limit of one per four hours (`owner_blocked_rate_limit`). Both
+timestamps survive a supervisor restart in `state_file`; an active skip does
+not use the local rate limit. Locally rate-limited events are left unclaimed.
+
+These wakes require a registered tmux pane with bracketed paste enabled; there
+is no headless fallback. The fixed prompt is at most 20 lines and includes only
+validated IDs, states, progress ages and next-action codes, never titles or
+agent text. It tells the orchestrator to reload the group; an owner reminder
+explicitly tells it not to resume work. The supervisor does not retry Enter for
+these multiline prompts. Legacy continuation still follows its existing rules.
 
 On the orchestrator host, install the connection with
 `release-control connect --harness both --codex-notify --codex-auto-approve --profile default`.

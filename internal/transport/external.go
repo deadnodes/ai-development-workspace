@@ -129,10 +129,21 @@ func (in deployExistingInput) command() domain.Command {
 func registerProviderTools(server *mcp.Server, service Service) {
 	registerWorkTools(server, service)
 	registerBranchTools(server, service)
-	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event"} {
+	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "report_turn_start", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event"} {
 		registerExecutionCommandTool(server, service, action)
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "get_execution_group", Description: "Restore all execution group members and their current Integration and execution state."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "set_product_idle_policy", Description: "Set all three group idle thresholds in seconds (0 disables, maximum 604800). Product owner or instance admin only."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		ProductID                   string `json:"product_id"`
+		IdleAfterSeconds            int    `json:"idle_after_seconds"`
+		WaitTimeoutSeconds          int    `json:"wait_timeout_seconds"`
+		OwnerBlockedIntervalSeconds int    `json:"owner_blocked_interval_seconds"`
+	}) (*mcp.CallToolResult, any, error) {
+		v, e := service.Execute(ctx, domain.Command{Action: "set_product_idle_policy", Actor: "agent", ProductID: in.ProductID, Data: map[string]any{
+			"idle_after_seconds": in.IdleAfterSeconds, "wait_timeout_seconds": in.WaitTimeoutSeconds, "owner_blocked_interval_seconds": in.OwnerBlockedIntervalSeconds,
+		}})
+		return nil, v, e
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_execution_group", Description: "Read owner-scoped execution group members, their current state and next actions, and the idle evaluation."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		GroupID string `json:"group_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Query(ctx, "get_execution_group", in.GroupID)
@@ -244,6 +255,8 @@ func registerExecutionCommandTool(server *mcp.Server, service Service, action st
 	description := "Record an execution lifecycle command using the shared application policy. Fence and lease times are server managed."
 	if action == "report_turn_end" {
 		description = "Report a harness turn end. Provide harness_kind and at least one of session_ref or tmux_target; matching uses either supplied identifier."
+	} else if action == "report_turn_start" {
+		description = "Optionally report a registered group orchestrator turn start. Provide harness_kind and session_ref or tmux_target; turn_id is recommended."
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: action, Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Actor         string         `json:"actor,omitempty"`

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"os/exec"
 	"strings"
@@ -21,6 +22,9 @@ func (a ExecAdapter) Wake(ctx context.Context, req WakeRequest) WakeResult {
 		if ok, _ := a.tmuxHas(wakeCtx, req.TmuxTarget); ok {
 			return a.wakeTmux(wakeCtx, req)
 		}
+	}
+	if req.IdleCheck {
+		return WakeResult{Outcome: Unsupported, Detail: "idle check requires an available tmux pane"}
 	}
 	if !a.headlessAllowed(req.Kind) {
 		return WakeResult{Outcome: Unsupported, Detail: "headless fallback disabled"}
@@ -64,6 +68,9 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	if err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux pane unavailable"}
 	}
+	if req.IdleCheck && paneActive(before, a.Config.ActiveMarkers) {
+		return WakeResult{Outcome: SkippedActive, Detail: "active pane"}
+	}
 	if paneBusy(before) {
 		return WakeResult{Outcome: Failed, Detail: "busy"}
 	}
@@ -74,16 +81,31 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 	if err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux pane unavailable"}
 	}
+	if req.IdleCheck && (paneActive(after, a.Config.ActiveMarkers) || paneHash(before) != paneHash(after)) {
+		return WakeResult{Outcome: SkippedActive, Detail: "active or changing pane"}
+	}
 	if paneBusy(after) || paneHash(before) != paneHash(after) {
 		return WakeResult{Outcome: Failed, Detail: "busy"}
 	}
-	if !containsLastLines(after, "[RCP supervisor]", 8) {
+	if req.IdleCheck {
+		pasteMode, modeErr := a.output(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "display-message", "-p", "-t", req.TmuxTarget, "#{bracket_paste_flag}")
+		if modeErr != nil || strings.TrimSpace(string(pasteMode)) != "1" {
+			return WakeResult{Outcome: Unsupported, Detail: "idle wake requires bracketed paste mode"}
+		}
+		buffer := "rcp-idle-" + rand.Text()
+		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "set-buffer", "-b", buffer, req.Message, ";", "paste-buffer", "-dpr", "-b", buffer, "-t", req.TmuxTarget); err != nil {
+			return WakeResult{Outcome: Failed, Detail: "tmux paste failed"}
+		}
+	} else if !containsLastLines(after, "[RCP supervisor]", 8) {
 		if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "-l", req.Message); err != nil {
 			return WakeResult{Outcome: Failed, Detail: "tmux send failed"}
 		}
 		if err = waitDuration(ctx, a.Config.SubmitFor); err != nil {
 			return WakeResult{Outcome: Failed, Detail: "tmux submit interrupted"}
 		}
+	}
+	if req.IdleCheck && waitDuration(ctx, a.Config.SubmitFor) != nil {
+		return WakeResult{Outcome: Failed, Detail: "tmux submit interrupted"}
 	}
 	if err = a.run(ctx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "tmux enter failed"}
@@ -101,7 +123,7 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest) WakeResult {
 		if e == nil && paneBusy(pane) {
 			return WakeResult{Outcome: Delivered, Detail: "tmux wake observed"}
 		}
-		if !retried && !time.Now().Before(retryAt) {
+		if !req.IdleCheck && !retried && !time.Now().Before(retryAt) {
 			if err = a.run(verifyCtx, a.configPath(a.Config.TmuxPath, "tmux"), "send-keys", "-t", req.TmuxTarget, "Enter"); err != nil {
 				return WakeResult{Outcome: Failed, Detail: "tmux retry enter failed"}
 			}
@@ -183,12 +205,16 @@ func (a ExecAdapter) configPath(configured, fallback string) string {
 	return fallback
 }
 func paneBusy(p []byte) bool {
-	lines := strings.Split(strings.TrimRight(strings.ToLower(string(p)), "\n"), "\n")
-	if len(lines) > 15 {
-		lines = lines[len(lines)-15:]
+	return paneActive(p, nil)
+}
+
+func paneActive(p []byte, markers []string) bool {
+	lower := []byte(strings.ToLower(string(p)))
+	if containsLastLines(lower, "esc to interrupt", 15) {
+		return true
 	}
-	for _, line := range lines {
-		if strings.Contains(line, "esc to interrupt") {
+	for _, marker := range markers {
+		if containsLastLines(lower, strings.ToLower(marker), 15) {
 			return true
 		}
 	}
