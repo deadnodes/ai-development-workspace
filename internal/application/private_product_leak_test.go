@@ -310,7 +310,7 @@ func seedPrivateReadMatrix(t *testing.T, store privateFixtureStore, workspace st
 			}
 			state.Products = append(state.Products, entry)
 			state.Features = append(state.Features, domain.Feature{Meta: meta("-feature"), Title: product + " feature title", Goal: product + " fixturekeyword text", Status: "planned"})
-			state.Memories = append(state.Memories, domain.Memory{Meta: featureMeta("-question"), Kind: "question", Status: "open", Title: product + " owner question", Question: &domain.QuestionDetails{Kind: "question", AddressedTo: "A", AskedBy: "fixture"}})
+			state.Memories = append(state.Memories, domain.Memory{Meta: featureMeta("-question"), Kind: "question", Status: "open", Title: product + " owner question", Question: &domain.QuestionDetails{Kind: "owner_action", AddressedTo: "A", AskedBy: "fixture", Script: "echo private", Why: "Private details", Verify: "Check privately"}})
 			state.Integrations = append(state.Integrations, domain.Integration{Meta: featureMeta("-integration"), Title: product + " integration title", Objective: product + " fixturekeyword integration", Status: "planned"})
 			state.Repositories = append(state.Repositories, domain.Repository{Meta: meta("-repository"), Name: product + " repository", URL: "https://example.invalid/fixture/" + product, Role: "APPLICATION"})
 			state.RepositoryBindings = append(state.RepositoryBindings, domain.RepositoryBinding{Meta: meta("-binding"), RepositoryID: product + "-repository", ConnectionID: "matrix-connection", FullName: "fixture/" + product, Role: "APPLICATION"})

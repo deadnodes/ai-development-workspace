@@ -16,6 +16,16 @@ RCP stores owner questions as `Memory` records. They appear in search and featur
 {"action":"answer_questions","data":{"answers":[{"question_id":"question-1","text":"Stable clients only.","option_id":"stable","validation":{"verdict":"consistent","note":"Matches the recorded scope constraint."}}]}}
 ```
 
+## Owner actions
+
+Use `kind: "owner_action"` when only the owner can perform the required step. Include `why` and `verify`, plus exactly one of a ready-to-run `script` or a `url` with `look_for`. A script is stored verbatim as code or as a path in the repository/output directory; RCP never executes it. Owner-action fields are capped at 16 KiB for `script` and 2 KiB for each other action field. Options and a recommendation are optional.
+
+```json
+{"action":"ask_question","feature_id":"feature-1","integration_id":"integration-1","data":{"title":"Grant registry access","body":"The image cannot publish until the owner grants access.","kind":"owner_action","script":"gh auth login --hostname github.com","why":"Lets the release workflow publish the image.","blocks":"Image build and Dev deployment","verify":"Retry the registry access check and confirm authentication succeeds.","blocking":true}}
+```
+
+The owner can answer in their own words, which are recorded verbatim. After the owner says it is done, the agent runs `verify` and closes the action with `answer_questions`, putting the verification result in `validation.note`. If verification fails, leave the action open and report the failure. An authorized relaying agent may close it only after successful verification, with `validation.verdict: "consistent"` and a non-empty note containing the result. A blocking owner action resolves its Integration blocker like any other question. `list_questions` accepts `kind: "owner_action"`; responses include an `owner_action` marker and all action fields.
+
 ## Ideas and dependencies
 
 - Use `create_feature` with `status: "idea"`. The default remains `active`. The Product owner can promote an idea with `update_feature`. Agents ask by default; `request_idea_promotion` opens a decision for the Product owner, regardless of the Feature's editable owner. Approval promotes the exact requested revision in the same transaction. Edits supersede the stale request and remove it from the actionable inbox without deleting it. The Product owner can use `set_idea_promotion` to choose `agent_allowed` instead.

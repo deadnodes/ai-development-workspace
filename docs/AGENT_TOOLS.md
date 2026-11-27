@@ -4339,9 +4339,9 @@ Request reconciliation of an existing deployment.
 
 ### `ask_question` — execute_action
 
-Store an owner question with its context and recommendation.
+Store an owner question, decision, or owner action with its context.
 
-**When:** Before pausing for owner input; reference visible records in the same Product.
+**When:** Before pausing for owner input; owner actions require why, verify, and exactly one script or URL plus look_for.
 
 **Inputs:**
 
@@ -4349,21 +4349,27 @@ Store an owner question with its context and recommendation.
 - `data` (object, required): Action-specific payload
 - `feature_id` (string, required): Visible feature that owns the question or proposal
 - `integration_id` (string, optional): Optional Integration scope
-- `kind` (string, required): question, conflict, or decision
+- `kind` (string, required): question, conflict, decision, or owner_action
 - `options` (array[object], optional): Stable option IDs, labels and consequences
 - `context_refs` (array[string], optional): Same-Product feature, integration, memory, or finding IDs
+- `script` (string, optional): Ready-to-run command or repository/output script path; max 16 KiB
+- `why` (string, optional): What the action gives; max 2 KiB
+- `blocks` (string, optional): Who or what waits; max 2 KiB
+- `verify` (string, optional): How an agent checks completion; max 2 KiB
+- `url` (string, optional): URL for a UI or sign-in action; max 2 KiB
+- `look_for` (string, optional): What to check at the URL; max 2 KiB
 
 **Output:** Open question memory; a blocking question can pause the caller's live lease.
 
 **Errors:**
 
-- `VALIDATION`: Supply a recommendation for conflicts and decisions.
+- `VALIDATION`: Supply why and verify plus either script or url with look_for for owner_action; use a recommendation for conflicts and decisions.
 
-**Example:** `{"action":"ask_question","feature_id":"FEATURE","integration_id":"INTEGRATION","data":{"title":"Keep v1?","body":"Two consumers still use v1.","kind":"decision","options":[{"id":"keep","label":"Keep v1","consequence":"No client migration"}],"recommendation":"keep","context_refs":["FEATURE"],"blocking":true}}`
+**Example:** `{"action":"ask_question","feature_id":"FEATURE","integration_id":"INTEGRATION","data":{"title":"Authorize registry access","body":"The release cannot publish until the owner grants access.","kind":"owner_action","script":"gh auth login --hostname github.com","why":"Allows the release workflow to publish the image.","blocks":"Image build and Dev deployment","verify":"Retry the registry access check; confirm authentication succeeds.","blocking":true}}`
 
 **Related:** `list_questions`, `get_dependency_graph`, `next_work`
 
-**Authority:** The server resolves the addressee and asker. This does not grant a lease.
+**Authority:** The server stores the supplied code verbatim and never executes it. The server resolves the addressee and asker; this does not grant a lease.
 
 ### `answer_questions` — execute_action
 
@@ -4603,17 +4609,18 @@ List visible questions addressed to the selected human.
 - `product_id` (string, optional): Product scope; omission means all visible products
 - `addressed_to` (string, optional): Human ID; defaults to me
 - `status` (string, optional): open, answered or withdrawn
+- `kind` (string, optional): question, conflict, decision, or owner_action
 - `feature_id` (string, optional): Optional visible feature filter
 - `limit` (integer, optional): Page size, max 100
 - `cursor` (string, optional): Continuation from previous page
 
-**Output:** Question titles, bodies, options, resolved context titles and pagination cursor.
+**Output:** Question titles, bodies, owner-action details, options, resolved context titles and pagination cursor.
 
 **Errors:**
 
 - `NOT_FOUND`: Check that the requested scope is visible for list_questions.
 
-**Example:** `{"status":"open","addressed_to":"me"}`
+**Example:** `{"status":"open","addressed_to":"me","kind":"owner_action"}`
 
 **Related:** `list_questions`, `next_work`
 
@@ -4630,11 +4637,12 @@ List visible questions addressed to the selected human.
 - `product_id` (string, optional): Product scope; omission means all visible products
 - `addressed_to` (string, optional): Human ID; defaults to me
 - `status` (string, optional): open, answered or withdrawn
+- `kind` (string, optional): question, conflict, decision, or owner_action
 - `feature_id` (string, optional): Optional visible feature filter
 - `limit` (integer, optional): Page size, max 100
 - `cursor` (string, optional): Continuation from previous page
 
-**Output:** Question titles, bodies, options, resolved context titles and pagination cursor.
+**Output:** Question titles, bodies, owner-action details, options, resolved context titles and pagination cursor.
 
 **Errors:**
 

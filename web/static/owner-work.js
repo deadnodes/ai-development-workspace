@@ -29,15 +29,28 @@ function ownerWorkDecisionOwner(product) {
   return authMode === 'local' ? !owner || owner === 'local' : authPrincipal?.kind === 'human' && authPrincipal.id === owner;
 }
 
+function ownerActionURL(value) {
+  try {
+    const url = new URL(value, window.location.href);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch { return ''; }
+}
+
 function questionsView() {
   const key = `questions:${productID}`;
   const page = ownerWorkCache.get(key);
   return `<div class="page-heading"><div><span class="eyebrow">OWNER INBOX</span><h1>My open questions</h1></div><button type="button" data-work-refresh>Refresh</button></div>
     ${page?.error ? `<p class="error" role="alert">${esc(page.error)}</p>` : ''}
     ${page?.items?.length ? `<form data-owner-answers>
-      ${page.items.map(question => `<fieldset class="owner-question" data-question-id="${esc(question.id)}" data-live-key="question-${esc(question.id)}">
-        <legend>${esc(question.title)}</legend><p class="meta">${esc(question.kind)}${question.blocking ? ' · Blocking' : ''} · ${Math.floor(question.age_seconds / 60)} min old</p>
+      ${[...page.items].sort((a,b) => Number(b.owner_action) - Number(a.owner_action)).map(question => `<fieldset class="owner-question" data-question-id="${esc(question.id)}" data-live-key="question-${esc(question.id)}">
+        <legend>${esc(question.title)}</legend><p class="meta">${question.owner_action ? 'Действие для владельца · ' : ''}${esc(question.kind)}${question.blocking ? ' · Blocking' : ''} · ${Math.floor(question.age_seconds / 60)} min old</p>
         <p class="owner-question-body">${esc(question.body)}</p>
+        ${question.why ? `<p><strong>Why:</strong> ${esc(question.why)}</p>` : ''}
+        ${question.blocks ? `<p><strong>Blocks:</strong> ${esc(question.blocks)}</p>` : ''}
+        ${question.script ? `<pre>${esc(question.script)}</pre>` : ''}
+        ${question.url ? `<p>${ownerActionURL(question.url) ? `<a href="${esc(ownerActionURL(question.url))}" target="_blank" rel="noopener noreferrer">${esc(question.url)}</a>` : esc(question.url)}</p>` : ''}
+        ${question.look_for ? `<p><strong>Look for:</strong> ${esc(question.look_for)}</p>` : ''}
+        ${question.verify ? `<p><strong>Verify:</strong> ${esc(question.verify)}</p>` : ''}
         ${question.context_refs?.length ? `<p class="meta">Context: ${question.context_refs.map(ref => esc(ref.title)).join(', ')}</p>` : ''}
         ${question.recommendation ? `<p><strong>Recommendation:</strong> ${esc(question.options?.find(option => option.id === question.recommendation)?.label || question.recommendation)}</p>` : ''}
         ${list(question.options).map(option => `<label class="owner-option"><input type="radio" name="option-${esc(question.id)}" value="${esc(option.id)}"> ${esc(option.label)}${option.consequence ? ` — ${esc(option.consequence)}` : ''}</label>`).join('')}

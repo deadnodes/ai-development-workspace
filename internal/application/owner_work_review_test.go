@@ -84,6 +84,96 @@ func reviewQuestion(blocking bool) map[string]any {
 	return map[string]any{"title": "Question", "body": "What should we do?", "kind": "question", "blocking": blocking}
 }
 
+func ownerActionData() map[string]any {
+	return map[string]any{"title": "Grant registry access", "body": "The image cannot publish yet.", "kind": "owner_action", "script": "gh auth login --hostname github.com", "why": "Allows image publishing.", "blocks": "Build and deployment", "verify": "Retry the registry access check and confirm success."}
+}
+
+func TestOwnerActionValidationAndProjection(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	for name, fields := range map[string]map[string]any{
+		"missing script and url": {"script": "", "url": ""},
+		"url without look_for":   {"url": "https://github.com/login"},
+		"script and url":         {"script": "echo ok", "url": "https://github.com/login", "look_for": "Signed in"},
+	} {
+		data := ownerActionData()
+		for key, value := range fields {
+			data[key] = value
+		}
+		if _, err := work.apply(work.agent, "ask_question", "p", "f", "i", "", data); err == nil || !strings.Contains(err.Error(), "OWNER_ACTION_REQUIRES_SCRIPT") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for name, fields := range map[string]map[string]any{
+		"script cap": {"script": strings.Repeat("x", 16*1024+1)},
+		"why cap":    {"why": strings.Repeat("x", 2*1024+1)},
+		"verify cap": {"verify": strings.Repeat("x", 2*1024+1)},
+	} {
+		data := ownerActionData()
+		for key, value := range fields {
+			data[key] = value
+		}
+		if _, err := work.apply(work.agent, "ask_question", "p", "f", "i", "", data); err == nil || !strings.Contains(err.Error(), "exceeds size limits") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	data := ownerActionData()
+	data["script"] = "  echo ready  "
+	data["blocks"] = "  build  "
+	question := work.run(work.agent, "ask_question", "p", "f", "i", "", data).(domain.Memory)
+	if question.Question.Script != "  echo ready  " || question.Question.Blocks != "  build  " {
+		t.Fatalf("owner action fields were normalized: %+v", question.Question)
+	}
+	gotRaw, err := work.service.Query(work.owner, "get_question", question.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := gotRaw.(questionView)
+	if !got.OwnerAction || got.Kind != "owner_action" || got.Script != "  echo ready  " || got.Why != data["why"] || got.Blocks != "  build  " || got.Verify != data["verify"] {
+		t.Fatalf("incomplete owner action projection: %+v", got)
+	}
+	list := work.query(work.owner, "list_questions", `{"product_id":"p","addressed_to":"me","kind":"owner_action"}`)["items"].([]questionView)
+	if len(list) != 1 || !list[0].OwnerAction || list[0].URL != "" {
+		t.Fatalf("owner action kind filter/marker failed: %+v", list)
+	}
+	overview := work.query(work.owner, "status_overview", "p")["products"].([]map[string]any)[0]["counts"].(map[string]int)
+	if overview["open_owner_actions"] != 1 {
+		t.Fatalf("owner action count missing: %+v", overview)
+	}
+}
+
+func TestOwnerActionCanCloseAfterVerificationByRelayingAgent(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	question := work.run(work.agent, "ask_question", "p", "f", "i", "", ownerActionData()).(domain.Memory)
+	chat := userCtx("agent/alice-chat", "agent", "alice", "member")
+	data := map[string]any{"answers": []map[string]any{{"question_id": question.ID, "text": "сделал", "validation": map[string]any{"verdict": "consistent", "note": "Registry access check now succeeds."}}}}
+	work.run(chat, "answer_questions", "p", "", "", "", data)
+	answer := questionByID(&work.store.state, question.ID).Question.Answer
+	if answer == nil || answer.Text != "сделал" || answer.Validation.Note != "Registry access check now succeeds." {
+		t.Fatalf("answer or verification evidence not preserved: %+v", answer)
+	}
+	question = work.run(work.agent, "ask_question", "p", "f", "i", "", ownerActionData()).(domain.Memory)
+	data["answers"] = []map[string]any{{"question_id": question.ID, "text": "done", "validation": map[string]any{"verdict": "consistent"}}}
+	if _, err := work.apply(chat, "answer_questions", "p", "", "", "", data); err == nil || !strings.Contains(err.Error(), "verification result") {
+		t.Fatalf("relaying agent closed without verify evidence: %v", err)
+	}
+}
+
+func TestBlockingOwnerActionResolvesIntegrationBlocker(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	work.run(work.owner, "assign_integration", "p", "", "i", "", map[string]any{"assignee": "alice"})
+	work.run(work.agent, "claim_execution", "p", "", "i", "", work.claimData("executor"))
+	data := ownerActionData()
+	data["blocking"] = true
+	question := work.run(work.agent, "ask_question", "p", "f", "i", "", data).(domain.Memory)
+	if execution := executionFor(&work.store.state, "i"); execution.State != "blocked" || execution.BlockerRef != question.ID {
+		t.Fatalf("owner action did not block execution: %+v", execution)
+	}
+	work.run(work.owner, "answer_questions", "p", "", "", "", map[string]any{"answers": []map[string]any{{"question_id": question.ID, "text": "done", "validation": map[string]any{"verdict": "consistent", "note": "Owner confirmed completion."}}}})
+	if execution := executionFor(&work.store.state, "i"); !execution.Reconciliation.ActionRequired || execution.Reconciliation.Cause != domain.ExecutionCauseBlockerResolved {
+		t.Fatalf("answer did not resolve owner action blocker: %+v", execution)
+	}
+}
+
 func TestReviewPromotionAuthorityIgnoresFeatureOwner(t *testing.T) {
 	work := ownerWorkReviewFixture(t)
 	work.idea("idea")

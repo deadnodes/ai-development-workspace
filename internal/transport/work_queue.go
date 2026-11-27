@@ -23,6 +23,7 @@ type questionListQuery struct {
 	FeatureID   string `json:"feature_id,omitempty"`
 	AddressedTo string `json:"addressed_to,omitempty"`
 	Status      string `json:"status,omitempty"`
+	Kind        string `json:"kind,omitempty"`
 	Limit       int    `json:"limit,omitempty"`
 	Cursor      string `json:"cursor,omitempty"`
 }
@@ -60,7 +61,7 @@ func registerWorkRoutes(mux routeRegistrar, service Service) {
 						limit = parsed
 					}
 				}
-				payload, _ := json.Marshal(map[string]any{"product_id": productID, "feature_id": query.Get("feature_id"), "status": query.Get("status"), "addressed_to": query.Get("addressed_to"), "cursor": query.Get("cursor"), "limit": limit, "include_proposed": query.Get("include_proposed") == "true"})
+				payload, _ := json.Marshal(map[string]any{"product_id": productID, "feature_id": query.Get("feature_id"), "status": query.Get("status"), "kind": query.Get("kind"), "addressed_to": query.Get("addressed_to"), "cursor": query.Get("cursor"), "limit": limit, "include_proposed": query.Get("include_proposed") == "true"})
 				input = string(payload)
 			}
 			value, err := service.Query(request.Context(), tool, input)
@@ -81,8 +82,8 @@ func registerWorkTool[Input any](server *mcp.Server, service Service, tool *mcp.
 }
 
 func registerWorkTools(server *mcp.Server, service Service) {
-	registerWorkTool[questionListQuery](server, service, &mcp.Tool{Name: "list_questions", Description: "List visible owner questions, defaulting to open and addressed to me (the agent's human owner). Follow next_cursor."})
-	mcp.AddTool(server, &mcp.Tool{Name: "get_question", Description: "Read a visible question with options, recommendation, resolved reference titles and any durable answer."}, func(ctx context.Context, _ *mcp.CallToolRequest, input struct {
+	registerWorkTool[questionListQuery](server, service, &mcp.Tool{Name: "list_questions", Description: "List visible owner questions and actions, defaulting to open and addressed to me. Filter by kind and follow next_cursor."})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_question", Description: "Read a visible question or owner action with options, recommendation, action instructions, resolved reference titles and any durable answer."}, func(ctx context.Context, _ *mcp.CallToolRequest, input struct {
 		ID string `json:"question_id"`
 	}) (*mcp.CallToolResult, any, error) {
 		value, err := service.Query(ctx, "get_question", input.ID)
