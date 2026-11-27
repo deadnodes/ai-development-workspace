@@ -131,6 +131,18 @@ func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any,
 				*execution = domain.IntegrationExecution{ID: execution.ID, ProductID: in.ProductID, IntegrationID: in.ID, DesiredState: execution.DesiredState, State: "unassigned", Fence: execution.Fence + 1, Reconciliation: domain.ExecutionReconciliation{Enabled: execution.Reconciliation.Enabled, Generation: execution.Reconciliation.Generation}}
 			}
 			resolveExecutionEvents(st, in.ID, now, "assignment changed")
+			for index := range st.Memories {
+				question := &st.Memories[index]
+				if in.Assignee == "" || question.IntegrationID != in.ID || question.FeatureID != in.FeatureID || question.ProductID != in.ProductID || !questionBlocked(*question) || question.Question.AddressedTo == in.Assignee {
+					continue
+				}
+				details := *question.Question
+				previous := details.AddressedTo
+				details.AddressedTo = in.Assignee
+				question.Question, question.UpdatedAt = &details, now
+				const action = "question_readdressed"
+				st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: c.Actor, At: now, EntityID: question.ID, ProductID: in.ProductID, FeatureID: in.FeatureID, Data: domain.Command{Action: action, Actor: c.Actor, IntegrationID: in.ID, Data: map[string]any{"previous_addressed_to": previous, "addressed_to": in.Assignee}}})
+			}
 			for index := range st.ExecutionGroups {
 				group := &st.ExecutionGroups[index]
 				if group.ClosedAt != nil || !slices.Contains(group.MemberIntegrationIDs, in.ID) {

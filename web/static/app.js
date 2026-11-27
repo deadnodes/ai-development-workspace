@@ -58,10 +58,9 @@ async function request(path, body, options={}) {
  try {
   const token = browserToken();
   const response = await fetch(path,{credentials:'same-origin',method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json',...(authCSRF?{'X-CSRF-Token':authCSRF}:{})}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{}),...options});
-  if(response.status===401&&authMode==='oidc'){requireSignIn();throw new Error('Sign in to continue.');}
-  const data = await response.json();
-  if(!response.ok) throw Object.assign(new Error(data.error?.message || data.error || data.message || `Request failed (${response.status})`),{status:response.status});
-  return data;
+  if(response.status===401&&authMode==='oidc'){requireSignIn();throw Object.assign(new Error('Sign in to continue.'),{status:401});}
+  if(!response.ok){const data=await response.json().catch(()=>({}));throw Object.assign(new Error(data?.error?.message || data?.error || data?.message || `Request failed (${response.status})`),{status:response.status});}
+  return response.json();
  } finally { finish(); }
 }
 function notice(message,error=false){$('#notice').textContent=message;$('#notice').className=error?'error':'';}
@@ -71,6 +70,7 @@ let refreshAllInFlight=false;
 function uiStateURL(){const q=new URLSearchParams();if(productID)q.set("product_id",productID);const f=featureID();if(f&&!["configuration","delivery","operations","main","pipelines","questions"].includes(f))q.set("feature_id",f);return "/api/ui-state?"+q.toString();}
 async function refresh(){
  if(typeof invalidateOwnerWorkGraphs==='function')invalidateOwnerWorkGraphs();
+ if(typeof invalidateOwnerWorkQuestions==='function')invalidateOwnerWorkQuestions();
  if(authExpired){await loadIdentity();if(authExpired)return;}
  if(typeof invalidateLive==='function')invalidateLive();
  const ticket=typeof liveEpoch==='number'?liveEpoch:null;let loaded=false;refreshInFlight++;

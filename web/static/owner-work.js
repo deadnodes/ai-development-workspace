@@ -11,6 +11,19 @@ function invalidateOwnerWorkGraphs() {
   document.querySelectorAll('.owner-dependencies').forEach(panel => panel.remove());
 }
 
+function invalidateOwnerWorkQuestions() {
+  for (const key of ownerWorkCache.keys()) {
+    if (key.startsWith('questions:')) ownerWorkCache.delete(key);
+  }
+  document.querySelectorAll('[data-owner-answers], [data-work-more]').forEach(element => element.remove());
+}
+
+function revalidateOwnerQuestions() {
+  if (featureID() === 'questions' && !refreshInFlight) {
+    void loadOwnerWork(`questions:${productID}`, questionListURL());
+  }
+}
+
 function ownerWorkDecisionOwner(product) {
   const owner = list(state.products).find(item => item.id === product)?.owner;
   return authMode === 'local' ? !owner || owner === 'local' : authPrincipal?.kind === 'human' && authPrincipal.id === owner;
@@ -61,13 +74,15 @@ async function loadOwnerWork(key, path, append = false) {
   ownerWorkCache.set(key, pending);
   const current = () => key === `questions:${productID}` && featureID() === 'questions' || key === `graph:${selectedFeature()?.product_id}`;
   try {
-    const result = await request(path, undefined, graph ? {cache: 'no-store'} : undefined);
+    const result = await request(path, undefined, {cache: 'no-store'});
     if (ownerWorkCache.get(key) !== pending) return;
     if (append) result.items = [...previous.items, ...result.items];
     ownerWorkCache.set(key, {...result, loaded: true});
   } catch (error) {
     if (ownerWorkCache.get(key) !== pending) return;
-    ownerWorkCache.set(key, {...(graph ? {} : previous), loading:false, error:error.message});
+    const denied = [401, 403, 404].includes(error.status);
+    if (!graph && denied) invalidateOwnerWorkQuestions();
+    ownerWorkCache.set(key, {...(graph || denied ? {} : previous), loading:false, error:error.message});
   }
   if (current()) render(true);
 }
@@ -80,8 +95,8 @@ function questionListURL(cursor = '') {
 }
 
 function syncOwnerWork(route, feature) {
-  if (route === 'questions' && !ownerWorkCache.has(`questions:${productID}`)) {
-    void loadOwnerWork(`questions:${productID}`, questionListURL());
+  if (route === 'questions' && !refreshInFlight && !ownerWorkCache.has(`questions:${productID}`)) {
+    revalidateOwnerQuestions();
   } else if (feature && !refreshInFlight && !ownerWorkCache.has(`graph:${feature.product_id}`)) {
     revalidateOwnerGraph(feature);
   }
@@ -110,10 +125,12 @@ $('#main').addEventListener('submit', async event => {
   control.disabled = true;
   try {
     await request('/api/commands', {action:'answer_questions', data:{answers}});
-    ownerWorkCache.delete(key);
-    await loadOwnerWork(key,path);
+    if (form.isConnected && !refreshInFlight) {
+      ownerWorkCache.delete(key);
+      await loadOwnerWork(key,path);
+    }
     notice(`Saved ${answers.length} answer${answers.length === 1 ? '' : 's'}.`);
-  } catch (error) { notice(error.message,true); }
+  } catch (error) { if ([401, 403, 404].includes(error.status)) invalidateOwnerWorkQuestions(); notice(error.message,true); }
   finally { control.disabled = false; }
 });
 
@@ -121,7 +138,10 @@ $('#main').addEventListener('click', async event => {
   const control = event.target.closest('button');
   if (!control) return;
   const questionKey = `questions:${productID}`;
-  if (control.hasAttribute('data-work-refresh')) return loadOwnerWork(questionKey,questionListURL());
+  if (control.hasAttribute('data-work-refresh')) {
+    invalidateOwnerWorkQuestions();
+    return revalidateOwnerQuestions();
+  }
   if (control.hasAttribute('data-work-more')) return loadOwnerWork(questionKey,questionListURL(ownerWorkCache.get(questionKey)?.next_cursor),true);
   const feature = selectedFeature();
   let command;

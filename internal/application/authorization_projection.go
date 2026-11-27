@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -18,6 +19,10 @@ func commandReferenceIDs(c domain.Command) ([]string, error) {
 }
 
 func commandAuthorizationInputs(c domain.Command) ([]string, bool, error) {
+	if c.Action == "update_feature" {
+		c.Data = maps.Clone(c.Data)
+		delete(c.Data, "approval_question_id")
+	}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return nil, false, err

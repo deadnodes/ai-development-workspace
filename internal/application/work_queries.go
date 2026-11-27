@@ -108,6 +108,9 @@ func (s *Service) queryWork(ctx context.Context, name, input string) (any, error
 			rows := []domain.Memory{}
 			for _, memory := range st.Memories {
 				if memory.Kind == "question" && memory.Question != nil && memory.Status == options.Status && memory.Question.AddressedTo == options.AddressedTo && (options.ProductID == "" || memory.ProductID == options.ProductID) && (options.FeatureID == "" || memory.FeatureID == options.FeatureID) && (memory.CreatedAt.After(cursorTime) || memory.CreatedAt.Equal(cursorTime) && memory.ID > cursorID) {
+					if memory.Status == "open" && memory.Question.DecisionFor == "idea_promotion" && !decisionMatches(&memory, feature(&st, memory.FeatureID), nil) {
+						continue
+					}
 					rows = append(rows, memory)
 				}
 			}

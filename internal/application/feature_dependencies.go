@@ -11,6 +11,43 @@ import (
 	"releasecontrol/internal/domain"
 )
 
+func featureRestoreStatus(st *domain.State, parent *domain.Feature) string {
+	if parent.ArchivedFrom != "" {
+		return parent.ArchivedFrom
+	}
+	foundArchive := false
+	for index := len(st.Events) - 1; index >= 0; index-- {
+		event := st.Events[index]
+		if event.EntityID != parent.ID || event.ProductID != parent.ProductID || event.FeatureID != parent.ID {
+			continue
+		}
+		status, _ := event.Data.Data["status"].(string)
+		switch event.Action {
+		case "create_feature":
+			if status == "" {
+				status = "active"
+			}
+		case "approve_idea_promotion":
+			status = "ready_for_execution"
+		case "update_feature":
+		default:
+			continue
+		}
+		if !domain.ValidStatus("feature", status) {
+			continue
+		}
+		if !foundArchive {
+			if status != "archived" {
+				break
+			}
+			foundArchive = true
+		} else if status != "archived" {
+			return status
+		}
+	}
+	return "planned"
+}
+
 func featureStartBlocker(st *domain.State, parentID, integrationID string, visible func(string) bool) workItem {
 	for _, memory := range st.Memories {
 		if memory.FeatureID == parentID && (memory.IntegrationID == "" || memory.IntegrationID == integrationID) && questionBlocked(memory) {
@@ -39,25 +76,36 @@ func integrationWaitingOn(st *domain.State, child *domain.Integration) string {
 	return ""
 }
 
-func guardFeatureStart(ctx context.Context, st *domain.State, child *domain.Integration) error {
+func integrationStartBlocker(st *domain.State, child *domain.Integration, visible func(string) bool) workItem {
 	if child == nil {
-		return invalid("FEATURE_NOT_READY")
+		return workItem{Reason: "feature not ready"}
 	}
 	if parent := feature(st, child.FeatureID); parent == nil || parent.Status == "idea" || parent.Status == "archived" {
+		return workItem{Reason: "feature not ready"}
+	}
+	if blocker := featureStartBlocker(st, child.FeatureID, child.ID, visible); blocker.Reason != "" {
+		return blocker
+	}
+	if dependency := integrationWaitingOn(st, child); dependency != "" {
+		return workItem{Reason: "integration dependency not ready", DependencyID: dependency}
+	}
+	return workItem{}
+}
+
+func guardFeatureStart(ctx context.Context, st *domain.State, child *domain.Integration) error {
+	blocker := integrationStartBlocker(st, child, func(productID string) bool { return workProductReadable(ctx, st, productID) })
+	switch blocker.Reason {
+	case "feature not ready":
 		return invalid("FEATURE_NOT_READY")
-	}
-	blocker := featureStartBlocker(st, child.FeatureID, child.ID, func(productID string) bool { return workProductReadable(ctx, st, productID) })
-	if blocker.QuestionID != "" {
+	case "open blocking question":
 		return invalid("OPEN_BLOCKING_QUESTION: %s", blocker.QuestionID)
-	}
-	if blocker.Reason != "" {
+	case "required feature not completed":
 		if blocker.WaitingOn != "" {
 			return invalid("FEATURE_DEPENDENCY_NOT_COMPLETED: %s", blocker.WaitingOn)
 		}
 		return invalid("FEATURE_DEPENDENCY_NOT_COMPLETED")
-	}
-	if dependencyID := integrationWaitingOn(st, child); dependencyID != "" {
-		return invalid("INTEGRATION_DEPENDENCY_NOT_READY: %s", dependencyID)
+	case "integration dependency not ready":
+		return invalid("INTEGRATION_DEPENDENCY_NOT_READY: %s", blocker.DependencyID)
 	}
 	return nil
 }
@@ -70,7 +118,7 @@ func canApproveWork(ctx context.Context, st *domain.State, product *domain.Produ
 	if principal.Kind == "agent" && workUser(ctx) != "" && approvalID != "" {
 		question := questionByID(st, approvalID)
 		if question == nil || !workProductReadable(ctx, st, question.ProductID) {
-			return missing("question", approvalID)
+			return ErrNotFound
 		}
 		details := question.Question
 		if product != nil && question.ProductID == product.ID && question.FeatureID == parent.ID && question.Status == "answered" && details.Kind == "decision" && details.Answer != nil && details.Answer.OptionID == "approve" && details.Answer.AnsweredBy == product.Owner && details.DecisionAction == action && decisionMatches(question, parent, edge) {

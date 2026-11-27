@@ -152,6 +152,21 @@ func TestWorkAvailableUsesRegisteredTargetAndFixedPrompt(t *testing.T) {
 	}
 }
 
+func TestQuestionContinuationPointsToTriggeringAnswers(t *testing.T) {
+	adapter := &fakeAdapter{}
+	event := testEvent("questionEvent", "codex", "session-12345678", "orch:0.1", "", "work_available")
+	event.Cause = domain.ExecutionCauseQuestionContinuation
+	event.IntegrationID, event.GroupIDs = "", nil
+	runCycle(t, []domain.ExecutionEvent{event}, adapter)
+	if len(adapter.requests) != 1 {
+		t.Fatalf("wake=%+v", adapter.requests)
+	}
+	message := adapter.requests[0].Message
+	if !strings.Contains(message, "question_ids on event questionEvent") || !strings.Contains(message, "list_execution_events") || !strings.Contains(message, "get_question") || strings.Contains(message, "UNTRUSTED") {
+		t.Fatalf("unexpected wake message: %s", message)
+	}
+}
+
 func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	ctx := context.Background()
 	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "app.db"))

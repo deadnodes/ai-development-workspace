@@ -37,7 +37,7 @@ func nextWork(st *domain.State, user, productID string, visible func(string) boo
 	items, skipped := []workItem{}, []workItem{}
 	parents := []domain.Feature{}
 	for _, parent := range st.Features {
-		if (productID == "" || parent.ProductID == productID) && visible(parent.ProductID) && (parent.Status == "ready_for_execution" || parent.Status == "active") {
+		if (productID == "" || parent.ProductID == productID) && visible(parent.ProductID) {
 			parents = append(parents, parent)
 		}
 	}
@@ -85,28 +85,28 @@ func nextWork(st *domain.State, user, productID string, visible func(string) boo
 			return first.ID < second.ID
 		})
 		for _, child := range children[parent.ID] {
-			if child.Assignee != "" && child.Assignee != user || child.Status == "ready" || child.Status == "released" {
+			if child.Assignee != "" && child.Assignee != user {
+				continue
+			}
+			execution := executions[child.ID]
+			resume := user != "" && child.Assignee == user && blockedExecutionPending(st, &child, &execution)
+			fresh := (parent.Status == "ready_for_execution" || parent.Status == "active") && child.Status != "ready" && child.Status != "released"
+			if !resume && !fresh {
 				continue
 			}
 			item := base
 			item.Kind, item.IntegrationID, item.IntegrationTitle = "integration", child.ID, child.Title
-			blocker := featureStartBlocker(st, parent.ID, child.ID, visible)
+			blocker := integrationStartBlocker(st, &child, visible)
 			item.Reason, item.QuestionID, item.DependencyID, item.WaitingOn = blocker.Reason, blocker.QuestionID, blocker.DependencyID, blocker.WaitingOn
-			if item.Reason == "" {
-				if dependency := integrationWaitingOn(st, &child); dependency != "" {
-					item.Reason, item.DependencyID = "integration dependency not ready", dependency
-				}
-			}
-			execution := executions[child.ID]
 			switch execution.State {
 			case "", "unassigned", "lost", "exited_incomplete":
 			case "blocked":
-				if item.Reason == "" {
-					if child.Assignee == "" || child.Assignee != user || !executionBlockerResolved(st, &execution) {
-						continue
-					}
+				if resume && item.Reason == "" {
 					item.Kind, item.ExecutionFence, item.NextAction = "resume_integration", &execution.Fence, "report_execution with state=running and the supplied execution_fence as fence"
 					appendItem(item, "execution blocker resolved")
+					continue
+				}
+				if item.Reason == "" {
 					continue
 				}
 			default:
@@ -198,13 +198,32 @@ func retireRegistrationEvents(st *domain.State, registrationID string, now time.
 	}
 }
 
-func raiseWorkEvent(st *domain.State, registration *domain.UserOrchestrator, productID, reason string, cause domain.ExecutionEventCause, integrationID string, fence uint64, now time.Time) {
+func raiseWorkEvent(st *domain.State, registration *domain.UserOrchestrator, event domain.ExecutionEvent, now time.Time) {
 	registration.Generation++
 	wake := domain.ExecutionWakeTarget{Kind: registration.Harness.Kind, SessionRef: registration.Harness.SessionRef, TmuxTarget: registration.Harness.TmuxTarget, Source: "user_orchestrator"}
-	event := domain.ExecutionEvent{ID: id(), ProductID: productID, Owner: registration.UserID, RegistrationID: registration.ID, Type: "work_available", Cause: cause, ConditionGeneration: registration.Generation, Reason: reason, DedupeKey: fmt.Sprintf("%s|work_available|%d", registration.ID, registration.Generation), WakeTarget: wake, HarnessKind: wake.Kind, SessionRef: wake.SessionRef, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
-	event.IntegrationID, event.Fence = integrationID, fence
+	event.ID, event.Owner, event.RegistrationID, event.Type = id(), registration.UserID, registration.ID, "work_available"
+	event.ConditionGeneration, event.DedupeKey = registration.Generation, fmt.Sprintf("%s|work_available|%d", registration.ID, registration.Generation)
+	event.WakeTarget, event.HarnessKind, event.SessionRef, event.TmuxTarget = wake, wake.Kind, wake.SessionRef, wake.TmuxTarget
+	event.CreatedAt, event.Delivery = now, domain.ExecutionEventDelivery{NextAttemptAt: now}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": event.Type, "generation": event.ConditionGeneration})
+}
+
+func registeredQueue(st *domain.State, registration domain.UserOrchestrator, productID string) []workItem {
+	items, _ := nextWork(st, registration.UserID, productID, func(productID string) bool { return registrationVisible(st, registration, productID) }, 1)
+	return items
+}
+
+func registrationEventEligible(st *domain.State, event domain.ExecutionEvent) bool {
+	if event.Type != "work_available" {
+		return true
+	}
+	for _, registration := range st.UserOrchestrators {
+		if registration.ID == event.RegistrationID && registration.UnregisteredAt == nil && registration.UserID == event.Owner && (registration.ProductID == "" || registration.ProductID == event.ProductID) && registrationVisible(st, registration, event.ProductID) {
+			return event.Cause != domain.ExecutionCauseQueueAvailable || len(registeredQueue(st, registration, event.ProductID)) != 0
+		}
+	}
+	return false
 }
 
 func reconcileUserWork(st *domain.State, now time.Time) bool {
@@ -214,24 +233,32 @@ func reconcileUserWork(st *domain.State, now time.Time) bool {
 		if registration.UnregisteredAt != nil {
 			continue
 		}
-		items, _ := nextWork(st, registration.UserID, registration.ProductID, func(productID string) bool { return registrationVisible(st, *registration, productID) }, 1)
+		items := registeredQueue(st, *registration, registration.ProductID)
 		available := len(items) > 0
-		if !available {
-			for eventIndex := range st.ExecutionEvents {
-				event := &st.ExecutionEvents[eventIndex]
-				if event.RegistrationID == registration.ID && event.Cause == domain.ExecutionCauseQueueAvailable && event.Resolution.ResolvedAt == nil {
-					event.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: "system", Evidence: "work queue drained"}
-					appendExecutionEventAudit(st, *event, "execution_event_resolved", "system/execution-reconciler", now, nil)
-					changed = true
-				}
+		retiredQueue, pendingQueue := false, false
+		for eventIndex := range st.ExecutionEvents {
+			event := &st.ExecutionEvents[eventIndex]
+			if event.RegistrationID != registration.ID || event.Resolution.ResolvedAt != nil {
+				continue
+			}
+			queueWake := event.Cause == domain.ExecutionCauseQueueAvailable
+			eligible := registrationVisible(st, *registration, event.ProductID)
+			if queueWake && eligible {
+				eligible = available && (items[0].ProductID == event.ProductID || len(registeredQueue(st, *registration, event.ProductID)) != 0)
+			}
+			if !eligible {
+				retireExecutionEvent(st, event, now, "work is no longer eligible in this product")
+				retiredQueue, changed = retiredQueue || queueWake, true
+			} else {
+				pendingQueue = pendingQueue || queueWake
 			}
 		}
-		if available == registration.Available {
-			continue
+		if available && !pendingQueue && (!registration.Available || retiredQueue) {
+			raiseWorkEvent(st, registration, domain.ExecutionEvent{ProductID: items[0].ProductID, Reason: "work queue has eligible work", Cause: domain.ExecutionCauseQueueAvailable}, now)
+			changed = true
 		}
-		registration.Available, registration.UpdatedAt, changed = available, now, true
-		if available {
-			raiseWorkEvent(st, registration, items[0].ProductID, "work queue became non-empty", domain.ExecutionCauseQueueAvailable, "", 0, now)
+		if available != registration.Available {
+			registration.Available, registration.UpdatedAt, changed = available, now, true
 		}
 	}
 	return changed
@@ -250,23 +277,35 @@ func wakeQuestionOwner(st *domain.State, question domain.Memory, now time.Time) 
 			fence = execution.Fence
 		}
 	}
-	wakeUserContinuation(st, owner, question.ProductID, "owner question answered", question.IntegrationID, fence, now)
+	wakeUserContinuation(st, owner, domain.ExecutionEvent{ProductID: question.ProductID, FeatureID: question.FeatureID, IntegrationID: question.IntegrationID, Fence: fence, Reason: "owner question answered", QuestionIDs: []string{question.ID}}, now)
 }
 
-func wakeUserContinuation(st *domain.State, owner, productID, reason, integrationID string, fence uint64, now time.Time) {
+func wakeUserContinuation(st *domain.State, owner string, trigger domain.ExecutionEvent, now time.Time) {
 	if owner == "" {
 		return
 	}
-	for _, scope := range []string{productID, ""} {
+	for _, scope := range []string{trigger.ProductID, ""} {
 		for index := range st.UserOrchestrators {
 			registration := &st.UserOrchestrators[index]
-			if registration.UnregisteredAt == nil && registration.UserID == owner && registration.ProductID == scope && registrationVisible(st, *registration, productID) {
-				for _, event := range st.ExecutionEvents {
-					if event.IntegrationID == integrationID && event.Fence == fence && event.Cause == domain.ExecutionCauseQuestionContinuation && event.RegistrationID == registration.ID && event.ProductID == productID && event.CreatedAt.Equal(now) && event.Resolution.ResolvedAt == nil {
+			if registration.UnregisteredAt == nil && registration.UserID == owner && registration.ProductID == scope && registrationVisible(st, *registration, trigger.ProductID) {
+				for eventIndex := range st.ExecutionEvents {
+					event := &st.ExecutionEvents[eventIndex]
+					if event.IntegrationID == trigger.IntegrationID && event.FeatureID == trigger.FeatureID && event.Fence == trigger.Fence && event.Cause == domain.ExecutionCauseQuestionContinuation && event.RegistrationID == registration.ID && event.ProductID == trigger.ProductID && event.Resolution.ResolvedAt == nil {
+						var added []string
+						for _, questionID := range trigger.QuestionIDs {
+							if !slices.Contains(event.QuestionIDs, questionID) {
+								added = append(added, questionID)
+							}
+						}
+						if len(added) != 0 {
+							event.QuestionIDs = append(slices.Clone(event.QuestionIDs), added...)
+							event.Delivery.DeliveryID = ""
+							appendExecutionEventAudit(st, *event, "execution_event_questions_added", "system/execution-reconciler", now, map[string]any{"question_ids": added})
+						}
 						return
 					}
 				}
-				raiseWorkEvent(st, registration, productID, reason, domain.ExecutionCauseQuestionContinuation, integrationID, fence, now)
+				raiseWorkEvent(st, registration, domain.ExecutionEvent{ProductID: trigger.ProductID, FeatureID: trigger.FeatureID, IntegrationID: trigger.IntegrationID, Fence: trigger.Fence, Reason: trigger.Reason, QuestionIDs: trigger.QuestionIDs, Cause: domain.ExecutionCauseQuestionContinuation}, now)
 				return
 			}
 		}

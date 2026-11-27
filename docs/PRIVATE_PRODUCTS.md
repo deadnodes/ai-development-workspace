@@ -11,8 +11,11 @@ Products only within their configured permissions and Product, environment,
 or other applicable scope. An operator who can mint service tokens is trusted
 infrastructure.
 New shared Products also record their authenticated creator as owner (the
-owning human for an agent). Only a genuinely ownerless Product can be claimed
-via `set_product_visibility`. A credential with a limited Product grant must
+owning human for an agent). An authenticated human with Product write access
+can claim an unowned Product or one with the synthetic owner `local` through
+`adopt_product_ownership`. An administrator can explicitly name a human
+`user_id` for recovery. Agents cannot adopt ownership, and changing visibility
+never assigns an owner. A credential with a limited Product grant must
 explicitly choose an ID in that grant; server-generated IDs require `*`.
 
 The Product owner invites a person with `add_product_member` and the person's

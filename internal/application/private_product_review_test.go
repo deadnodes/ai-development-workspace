@@ -198,6 +198,9 @@ func TestPrivateProductOwnershipGrantsAndImport(t *testing.T) {
 		}
 		privateReviewCreate(t, service, context.Background(), "ownerless", "shared")
 		claim.ProductID = "ownerless"
+		if _, err := service.Execute(outsider, domain.Command{Action: "adopt_product_ownership", ProductID: "ownerless"}); err != nil {
+			t.Fatal(err)
+		}
 		if got, err := service.Execute(outsider, claim); err != nil || got.(domain.Product).Owner != "outsider" {
 			t.Fatal(got, err)
 		}

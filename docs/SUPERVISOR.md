@@ -63,7 +63,10 @@ For work without a current executor target, also use `register_user_orchestrator
 with the same harness. Use a Product-specific registration or omit the Product
 for a single registration across the caller's visible Products. `work_available`
 wakes the session with a fixed prompt to read `next_work` and the question inbox.
-No question text is sent to the terminal by the supervisor.
+A question continuation also points to the event's triggering `question_ids`.
+No question text is sent to the terminal by the supervisor. Replacing a group
+harness or removing a member retires pending blocker wakes for the old target
+and reroutes them to the current eligible target.
 
 ```sh
 ssh -t <host> tmux attach -t orch-backend

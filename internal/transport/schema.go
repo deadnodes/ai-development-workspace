@@ -157,7 +157,7 @@ func CommandSchema() map[string]any {
 		{"deploy_integration", "integration_id", "environment_id"},
 		{"cancel_native_delivery", "product_id id", ""},
 		{"deploy_existing_artifact", "integration_id", "environment_id application_id revision_id artifact_id"},
-		{"create_product", "", "name"}, {"set_product_visibility", "product_id", "visibility"}, {"add_product_member remove_product_member", "product_id", "user_id"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},
+		{"create_product", "", "name"}, {"adopt_product_ownership", "product_id", ""}, {"set_product_visibility", "product_id", "visibility"}, {"add_product_member remove_product_member", "product_id", "user_id"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},
 		{"ask_question", "feature_id", "title body kind"}, {"answer_questions", "", "answers"}, {"withdraw_question", "", "question_id reason"},
 		{"set_idea_promotion", "product_id", "idea_promotion"}, {"request_idea_promotion", "feature_id", "rationale"},
 		{"propose_dependency", "", "from_feature_id to_feature_id type rationale"}, {"decide_dependency", "", "dependency_id decision"}, {"request_dependency_decision", "", "dependency_id"},
@@ -193,7 +193,7 @@ func CommandSchema() map[string]any {
 				dataRule["properties"] = map[string]any{"visibility": map[string]any{"type": "string", "enum": []string{"shared", "private"}}}
 			case "set_product_visibility":
 				dataRule["properties"] = map[string]any{"visibility": map[string]any{"type": "string", "enum": []string{"shared", "private"}}}
-			case "add_product_member", "remove_product_member":
+			case "adopt_product_ownership", "add_product_member", "remove_product_member":
 				dataRule["properties"] = map[string]any{"user_id": str()}
 			case "assign_integration":
 				dataRule["properties"] = map[string]any{"assignee": str(), "force": map[string]any{"type": "boolean"}}

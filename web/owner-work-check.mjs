@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
 
-async function checkRevokedDependency() {
+async function checkRevokedOwnerWork() {
   const result = document.body.appendChild(document.createElement('output'));
   result.id = 'owner-work-check';
   const snapshot = {products:[{id:'p',name:'Shared source'}],features:[{id:'f',product_id:'p',title:'Source',status:'active'}]};
@@ -14,7 +14,9 @@ async function checkRevokedDependency() {
     nodes:[{id:'hidden',title:'Private prerequisite'}],
     edges:[{id:'edge',product_id:'p',from_feature_id:'f',to_feature_id:'hidden',status:'accepted',type:'requires',rationale:'Private edge rationale'}],
   };
+  const privateQuestions = {items:[{id:'secret',title:'Private question',body:'Private answer context',kind:'decision',age_seconds:0,context_refs:[{title:'Private context title'}]}],next_cursor:'secret-cursor'};
   let graph = privateGraph, graphReads = 0, stateStatus = 200, delayedGraph;
+  let questions = privateQuestions, questionReads = 0, delayedQuestions;
   const json = (value, status = 200) => new Response(JSON.stringify(value), {status});
   window.setInterval = () => 0;
   window.fetch = async (path, options) => {
@@ -29,6 +31,12 @@ async function checkRevokedDependency() {
       return graph === 'delay' ? new Promise(resolve => { delayedGraph = () => resolve(json(privateGraph)); }) :
         graph === 'denied' ? json({error:'Access denied'}, 403) : json(graph);
     }
+    if (path.startsWith('/api/questions?')) {
+      if (options.cache !== 'no-store') throw new Error('Inbox fetch must bypass browser cache');
+      questionReads++;
+      return questions === 'delay' ? new Promise(resolve => { delayedQuestions = () => resolve(json(privateQuestions)); }) :
+        questions === 'denied' ? new Response('Not found', {status:404}) : json(questions);
+    }
     return json({}, 404);
   };
   const visible = () => document.querySelector('.owner-dependencies')?.textContent || '';
@@ -37,11 +45,17 @@ async function checkRevokedDependency() {
       if (predicate()) return;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    throw new Error('Expected graph render did not occur');
+    throw new Error(`Expected render did not occur: ${document.querySelector('#main').textContent.trim().slice(0, 180)}`);
   };
   const absent = () => {
     if (/Private prerequisite|Private edge rationale/.test(document.querySelector('#main').textContent)) throw new Error('Revoked graph details are still visible');
   };
+  const inboxAbsent = () => {
+    if (/Private question|Private answer context|Private context title/.test(document.querySelector('#main').textContent) || document.querySelector('[data-work-more]')) throw new Error('Revoked inbox details or pagination are still visible');
+    const page = ownerWorkCache.get('questions:p');
+    if (page?.items?.length || page?.next_cursor) throw new Error('Revoked inbox details or pagination are still cached');
+  };
+  const inboxVisible = () => /Private answer context/.test(document.querySelector('#main').textContent) && /Private context title/.test(document.querySelector('#main').textContent) && document.querySelector('[data-work-more]');
   try {
     await refresh();
     await waitFor(() => /Private prerequisite/.test(visible()) && /Private edge rationale/.test(visible()));
@@ -76,7 +90,40 @@ async function checkRevokedDependency() {
     stateStatus = 503;
     await refresh();
     absent();
-    result.textContent = 'PASS: dependency graph revocation';
+    stateStatus = 200;
+    history.replaceState(null, '', '#questions');
+    await refresh();
+    await waitFor(inboxVisible);
+
+    questions = 'denied';
+    document.querySelector('[data-work-refresh]').click();
+    inboxAbsent();
+    await waitFor(() => ownerWorkCache.get('questions:p')?.error);
+    inboxAbsent();
+
+    questions = privateQuestions;
+    await refresh();
+    await waitFor(inboxVisible);
+    questions = 'delay';
+    revalidateOwnerQuestions();
+    await waitFor(() => delayedQuestions);
+    questions = 'denied';
+    await pollLive();
+    await waitFor(() => ownerWorkCache.get('questions:p')?.error);
+    delayedQuestions();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    inboxAbsent();
+
+    questions = privateQuestions;
+    await refresh();
+    await waitFor(inboxVisible);
+    questions = 'denied';
+    stateStatus = 304;
+    const readsBeforeDenial = questionReads;
+    await pollLive();
+    await waitFor(() => questionReads > readsBeforeDenial && ownerWorkCache.get('questions:p')?.error);
+    inboxAbsent();
+    result.textContent = 'PASS: dependency graph and question inbox revocation';
   } catch (error) {
     result.textContent = `FAIL: ${error.message}`;
   }
@@ -91,7 +138,7 @@ const server = createServer(async (request, response) => {
   try {
     if (path === '/owner-work-check.js') {
       response.setHeader('Content-Type', 'text/javascript');
-      response.end(`(${checkRevokedDependency.toString()})();`);
+      response.end(`(${checkRevokedOwnerWork.toString()})();`);
     } else if (path === '/') {
       response.setHeader('Content-Type', 'text/html');
       response.end((await readFile(new URL('index.html', root), 'utf8')).replace('</head>', '<script defer src="/owner-work-check.js"></script></head>'));
@@ -109,7 +156,7 @@ try {
   await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve));
   const {stdout} = await promisify(execFile)(browser, ['--headless','--no-sandbox','--single-process','--disable-gpu','--no-first-run',`--user-data-dir=${profile}`,'--dump-dom','--virtual-time-budget=4000',`http://127.0.0.1:${server.address().port}/?product=p#f`], {timeout:20000});
   const outcome = stdout.match(/<output id="owner-work-check">([^<]*)/);
-  assert.equal(outcome?.[1], 'PASS: dependency graph revocation');
+  assert.equal(outcome?.[1], 'PASS: dependency graph and question inbox revocation');
   console.log(outcome[1]);
 } finally {
   server.close();

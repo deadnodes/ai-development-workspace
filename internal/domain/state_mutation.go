@@ -17,8 +17,9 @@ type StateMutationScope struct {
 	RequireAbsentIDs    []string
 	// Record reuse is admitted by application replay policy; orphan journal IDs
 	// still cannot become new record identities.
-	AllowExistingRecords bool
-	EventReferences      []string
-	MutableCollections   []string
-	AppendCollections    []string
+	AllowExistingRecords    bool
+	EventReferences         []string
+	FeatureRestoreHistoryID string
+	MutableCollections      []string
+	AppendCollections       []string
 }

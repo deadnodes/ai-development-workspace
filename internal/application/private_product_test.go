@@ -24,7 +24,7 @@ func TestLocalSharedProductCanBeClaimedAfterEnablingOIDC(t *testing.T) {
 		store.state.Products[0].Owner = owner
 		server := New(store)
 		alice := userCtx("oidc-alice", "human", "", "admin")
-		claim := domain.Command{Action: "set_product_visibility", ProductID: product.ID, Data: map[string]any{"visibility": "shared"}}
+		claim := domain.Command{Action: "adopt_product_ownership", ProductID: product.ID}
 		if _, err := server.Execute(alice, claim); err != nil || store.state.Products[0].Owner != "oidc-alice" {
 			t.Fatalf("could not claim shared product with owner %q: %v", owner, err)
 		}
@@ -139,6 +139,9 @@ func TestSharedProductCanBeClaimedAndBootstrapCanManage(t *testing.T) {
 		t.Fatal(err)
 	}
 	alice := userCtx("alice", "human", "", "member")
+	if _, err := s.Execute(alice, domain.Command{Action: "adopt_product_ownership", ProductID: "p"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Execute(alice, domain.Command{Action: "set_product_visibility", ProductID: "p", Data: map[string]any{"visibility": "private"}}); err != nil {
 		t.Fatal(err)
 	}

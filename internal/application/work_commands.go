@@ -66,6 +66,7 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 			if err := decode(command.Data, &input); err != nil {
 				return err
 			}
+			supersedeIdeaDecisions(st, parent, command.Actor, now)
 			output, err = decisionQuestion(ctx, st, command, *parent, *product, "idea_promotion", "ready_for_execution", "Promote idea: "+parent.Title, input.Rationale, now)
 			return err
 		case "propose_dependency":

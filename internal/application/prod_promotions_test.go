@@ -160,6 +160,9 @@ func promotionPtrTime(t time.Time) *time.Time { return &t }
 func TestPrivateProdPromotionRequiresPinnedVerifiedSignature(t *testing.T) {
 	s, _, _ := promotionFixture(t)
 	owner := userCtx("owner", "human", "", "member")
+	if _, err := s.Execute(owner, domain.Command{Action: "adopt_product_ownership", ProductID: "p"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Execute(owner, domain.Command{Action: "set_product_visibility", ProductID: "p", Data: map[string]any{"visibility": "private"}}); err != nil {
 		t.Fatal(err)
 	}

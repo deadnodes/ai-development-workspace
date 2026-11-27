@@ -218,6 +218,11 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			if workAvailable {
 				message += " Call next_work and list_questions as your current principal. Follow the fenced next action on resume items, claim eligible unstarted integrations, and plan ready features with no integrations."
 			}
+			for _, delivery := range claimed {
+				if (delivery.ev.Cause == domain.ExecutionCauseQuestionContinuation || len(delivery.ev.QuestionIDs) > 0) && idPattern.MatchString(delivery.ev.ID) {
+					message += " Read question_ids on event " + delivery.ev.ID + " via list_execution_events in this product. Call get_question for each ID to read the triggering answer or withdrawal."
+				}
+			}
 			s.mu.Lock()
 			last := s.wakes[key]
 			now := s.Now()
@@ -268,6 +273,12 @@ func workAvailabilityWake(event domain.ExecutionEvent) bool {
 }
 
 func wakeGroup(event domain.ExecutionEvent) string {
+	if event.WakeTarget.Source == "group_orchestrator" && idPattern.MatchString(event.WakeTarget.GroupID) {
+		return event.WakeTarget.GroupID
+	}
+	if event.WakeTarget.Source == "executor" && blockerResolutionWake(event) {
+		return ""
+	}
 	for _, groupID := range event.GroupIDs {
 		if idPattern.MatchString(groupID) {
 			return groupID

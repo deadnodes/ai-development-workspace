@@ -64,6 +64,21 @@ func questionBlocked(memory domain.Memory) bool {
 	return memory.Kind == "question" && memory.Status == "open" && memory.Question != nil && memory.Question.Blocking
 }
 
+const supersededIdeaReason = "Superseded by a change to the idea revision"
+
+func supersedeIdeaDecisions(st *domain.State, parent *domain.Feature, actor string, now time.Time) {
+	for index := range st.Memories {
+		question := &st.Memories[index]
+		if question.FeatureID != parent.ID || question.ProductID != parent.ProductID || question.Status != "open" || question.Question == nil || question.Question.DecisionFor != "idea_promotion" || decisionMatches(question, parent, nil) {
+			continue
+		}
+		details := *question.Question
+		details.WithdrawnReason = supersededIdeaReason
+		question.Question, question.Status, question.UpdatedAt = &details, "withdrawn", now
+		workAudit(st, question.Meta, "supersede_idea_promotion", actor, now)
+	}
+}
+
 func questionScope(ctx context.Context, st *domain.State, command domain.Command) (*domain.Feature, *domain.Integration, *domain.Product, error) {
 	parent := feature(st, command.FeatureID)
 	if parent == nil || !workProductReadable(ctx, st, parent.ProductID) {
@@ -190,6 +205,8 @@ func askQuestion(ctx context.Context, st *domain.State, c domain.Command, now ti
 	if execution != nil && execution.LeaseUntil != nil && now.Before(*execution.LeaseUntil) && (execution.State == "running" || execution.State == "stalled") {
 		executionCondition(st, execution, "blocked", false, "owner question", now)
 		execution.WaitingRef, execution.BlockerRef = "", question.ID
+		fence := execution.Fence
+		execution.BlockerFence = &fence
 	}
 	return question, nil
 }
@@ -250,6 +267,9 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 			return nil, auth.ErrForbidden
 		}
 		if question.Status != "open" {
+			if details.DecisionFor == "idea_promotion" && details.WithdrawnReason == supersededIdeaReason {
+				return nil, invalid("STALE_DECISION")
+			}
 			return nil, invalid("question %s is not open", question.ID)
 		}
 		optionIndex := slices.IndexFunc(details.Options, func(option domain.QuestionOption) bool { return option.ID == answer.OptionID })
@@ -296,6 +316,9 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 		}
 		st.Memories = append(st.Memories, domain.Memory{Meta: workMeta(c, snapshot.ProductID, snapshot.FeatureID, now), IntegrationID: snapshot.IntegrationID, Kind: "decision", Title: snapshot.Title, Reason: "Answer to question " + snapshot.ID, Body: fmt.Sprintf("Question: %s\n\n%s\n\nAnswer: %s%s", snapshot.Title, snapshot.Body, answer.Text, optionText)})
 		workAudit(st, snapshot.Meta, "answer_question", c.Actor, now)
+		if details.DecisionFor == "idea_promotion" && answer.OptionID == "approve" {
+			supersedeIdeaDecisions(st, feature(st, snapshot.FeatureID), c.Actor, now)
+		}
 		answered = append(answered, snapshot)
 	}
 	for _, question := range answered {

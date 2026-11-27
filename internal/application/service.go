@@ -123,7 +123,7 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 	if slices.Contains(domain.WorkActions, c.Action) {
 		return s.executeWorkCommand(ctx, c)
 	}
-	if c.Action == "set_product_visibility" || c.Action == "add_product_member" || c.Action == "remove_product_member" {
+	if c.Action == "adopt_product_ownership" || c.Action == "set_product_visibility" || c.Action == "add_product_member" || c.Action == "remove_product_member" {
 		return s.executeProductMembership(ctx, c)
 	}
 	if c.Action == "assign_integration" || c.Action == "unassign_integration" {
@@ -184,11 +184,6 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 				return invalid("native component requires exact operator publication configuration")
 			}
 		}
-		if c.IntegrationID != "" && (c.Action == "record_progress" || c.Action == "transition_integration") {
-			if err := rejectForeignWork(ctx, integration(st, c.IntegrationID)); err != nil {
-				return err
-			}
-		}
 		var err error
 		result, err = applyAuthorizedOrigin(ctx, st, c, s.externalWorkers, origin)
 		if err == nil && (c.Action == "record_progress" || c.Action == "transition_integration") {
@@ -197,6 +192,9 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 				if ex != nil && executionFence(c.Data, "execution_fence") == ex.Fence {
 					now := time.Now().UTC()
 					if ex.State == "lost" || ex.State == "stalled" {
+						if err := guardFeatureStart(ctx, st, integration(st, c.IntegrationID)); err != nil {
+							return err
+						}
 						executionCondition(st, ex, "running", false, "", now)
 					}
 					if ex.State == "running" {
@@ -794,10 +792,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("feature transition %s -> %s is not allowed", old.Status, v.Status)
 		}
 		if old != nil && old.Status != v.Status && old.Status == "archived" {
-			restore := old.ArchivedFrom
-			if restore == "" {
-				restore = "idea"
-			}
+			restore := featureRestoreStatus(st, old)
 			if v.Status != restore {
 				return nil, invalid("archived feature must be restored to %s", restore)
 			}
@@ -843,6 +838,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if old != nil {
 			*old = v
+			supersedeIdeaDecisions(st, old, c.Actor, m.UpdatedAt)
 			for _, child := range st.Integrations {
 				if child.FeatureID == v.ID {
 					if err := validateIntegration(st, child); err != nil {
@@ -892,6 +888,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, e
 		}
 		if old != nil && v.Status == "ready" {
+			if err := rejectForeignWork(ctx, old); err != nil {
+				return nil, err
+			}
 			if err := guardFeatureStart(ctx, st, &v); err != nil {
 				return nil, err
 			}
@@ -917,6 +916,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		v := integration(st, c.IntegrationID)
 		if v == nil {
 			return nil, missing("integration", c.IntegrationID)
+		}
+		if err := rejectForeignWork(ctx, v); err != nil {
+			return nil, err
 		}
 		if v.Status == "released" {
 			return nil, invalid("released integration is immutable")
@@ -992,6 +994,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if c.Action == "record_progress" && c.IntegrationID != "" {
 			in := integration(st, c.IntegrationID)
+			if err := rejectForeignWork(ctx, in); err != nil {
+				return nil, err
+			}
 			if in.Status == "released" {
 				return nil, invalid("released integration is immutable")
 			}

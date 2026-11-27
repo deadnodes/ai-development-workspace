@@ -5861,27 +5861,51 @@ Append a structured checkpoint for the next agent or session.
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+### `adopt_product_ownership` — execute_action
+
+Explicitly adopt an unowned or locally owned Product without changing visibility.
+
+**When:** An authenticated human with Product write access may adopt it for themselves; an administrator may designate a human owner.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product to adopt
+- `user_id` (string, optional): Administrator-only human owner ID; defaults to the authenticated human caller
+
+**Output:** Product with its assigned owner.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is missing or not visible to this caller.
+- `FORBIDDEN`: Agents cannot adopt ownership, and an existing human owner cannot be replaced.
+
+**Example:** `{"action":"adopt_product_ownership","product_id":"PRODUCT","data":{}}`
+
+**Related:** `set_product_visibility`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
 ### `set_product_visibility` — execute_action
 
-Set a Product to shared or private; only its owner or bootstrap service may change visibility.
+Set a Product to shared or private without changing its owner.
 
-**When:** Use to restrict an existing Product or share it again.
+**When:** Use to restrict an existing Product or share it again. Adopt an unowned Product explicitly before making it private.
 
 **Inputs:**
 
 - `product_id` (string, optional): Product to update
 - `visibility` (string, optional): shared or private
 
-**Output:** Updated Product visibility and owner metadata.
+**Output:** Updated Product visibility.
 
 **Errors:**
 
 - `NOT_FOUND`: Product is missing or not visible to this caller.
-- `FORBIDDEN`: Only the owner or bootstrap service may change visibility.
+- `FORBIDDEN`: Only the owner, local administrator or bootstrap service may change visibility.
 
 **Example:** `{"action":"set_product_visibility","product_id":"PRODUCT","data":{"visibility":"private"}}`
 
-**Related:** `create_product`, `add_product_member`
+**Related:** `adopt_product_ownership`, `create_product`, `add_product_member`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 

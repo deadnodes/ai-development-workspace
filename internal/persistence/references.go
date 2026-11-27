@@ -94,3 +94,33 @@ func referenceEvents(ctx context.Context, tx stateTransaction, ids []string, kno
 	}
 	return events, rows.Err()
 }
+
+func featureRestoreEvents(ctx context.Context, tx stateTransaction, feature domain.Feature, known []domain.Event) ([]domain.Event, error) {
+	rows, err := tx.Query(ctx, `WITH history AS (
+		SELECT sequence, document, document->'data'->'data'->>'status' AS status FROM events WHERE product_id=$1 AND feature_id=$2
+		AND document->>'entity_id'=$2 AND (document->>'action' IN ('create_feature','approve_idea_promotion')
+		OR (document->>'action'='update_feature' AND document->'data'->'data'->>'status' IN ('idea','ready_for_execution','planned','active','blocked','completed','archived'))))
+		SELECT document FROM history WHERE sequence=(SELECT MAX(sequence) FROM history) OR COALESCE(status,'')<>'archived'
+		ORDER BY sequence DESC LIMIT 2`, feature.ProductID, feature.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var history []domain.Event
+	for rows.Next() {
+		var raw []byte
+		var event domain.Event
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return nil, err
+		}
+		history = append(history, event)
+	}
+	events := append([]domain.Event(nil), known...)
+	for index := len(history) - 1; index >= 0; index-- {
+		events = append(events, history[index])
+	}
+	return events, rows.Err()
+}

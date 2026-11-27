@@ -112,6 +112,8 @@ type ExecutionEvent struct {
 	RegistrationID      string                   `json:"registration_id,omitempty"`
 	ID                  string                   `json:"id"`
 	ProductID           string                   `json:"product_id"`
+	FeatureID           string                   `json:"feature_id,omitempty"`
+	QuestionIDs         []string                 `json:"question_ids,omitempty"`
 	IntegrationID       string                   `json:"integration_id"`
 	GroupIDs            []string                 `json:"group_ids"`
 	Type                string                   `json:"type"`
@@ -131,10 +133,12 @@ type ExecutionEvent struct {
 	Acknowledgements    []ExecutionEventAck      `json:"acknowledgements,omitempty"`
 }
 type ExecutionWakeTarget struct {
-	Kind       string `json:"kind,omitempty"`
-	SessionRef string `json:"session_ref,omitempty"`
-	TmuxTarget string `json:"tmux_target,omitempty"`
-	Source     string `json:"source,omitempty"`
+	GroupID         string `json:"group_id,omitempty"`
+	HarnessRevision uint64 `json:"harness_revision,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	SessionRef      string `json:"session_ref,omitempty"`
+	TmuxTarget      string `json:"tmux_target,omitempty"`
+	Source          string `json:"source,omitempty"`
 }
 type ExecutionEventAck struct {
 	DeliveryID   string    `json:"delivery_id"`
@@ -162,6 +166,7 @@ type IntegrationExecution struct {
 	ExitReason            string                  `json:"exit_reason,omitempty"`
 	WaitingRef            string                  `json:"waiting_ref,omitempty"`
 	BlockerRef            string                  `json:"blocker_ref,omitempty"`
+	BlockerFence          *uint64                 `json:"blocker_fence,omitempty"`
 	StalledTimeoutSeconds *int                    `json:"stalled_timeout_seconds,omitempty"`
 	Reconciliation        ExecutionReconciliation `json:"reconciliation"`
 	TurnEndAt             *time.Time              `json:"turn_end_at,omitempty"`
@@ -178,6 +183,7 @@ type ExecutionGroup struct {
 	Name                 string                   `json:"name"`
 	OrchestratorID       string                   `json:"orchestrator_id"`
 	OrchestratorHarness  ExecutionHarness         `json:"orchestrator_harness,omitempty"`
+	HarnessRevision      uint64                   `json:"harness_revision,omitempty"`
 	MemberIntegrationIDs []string                 `json:"member_integration_ids"`
 	Revisions            []ExecutionGroupRevision `json:"revisions"`
 	CreatedAt            time.Time                `json:"created_at"`
@@ -417,4 +423,4 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-var Actions = append([]string{"set_product_visibility", "add_product_member", "remove_product_member", "assign_integration", "unassign_integration", "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "queue_intelligence_task", "cancel_intelligence_task", "request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration", "capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "reserve_candidate_dev", "release_candidate_dev", "refresh_registry_inventory", "pin_artifact", "release_artifact_pin", "cancel_native_delivery", "queue_worker_publication", "reconcile_worker_publication", "queue_worker_job", "cancel_worker_job", "reconcile_worker_job", "refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}, WorkActions...)
+var Actions = append([]string{"adopt_product_ownership", "set_product_visibility", "add_product_member", "remove_product_member", "assign_integration", "unassign_integration", "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "queue_intelligence_task", "cancel_intelligence_task", "request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration", "capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "reserve_candidate_dev", "release_candidate_dev", "refresh_registry_inventory", "pin_artifact", "release_artifact_pin", "cancel_native_delivery", "queue_worker_publication", "reconcile_worker_publication", "queue_worker_job", "cancel_worker_job", "reconcile_worker_job", "refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}, WorkActions...)
