@@ -4,6 +4,8 @@ import (
 	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
+
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // CommandSchema is shared by HTTP discovery and MCP. The domain remains the
@@ -16,6 +18,11 @@ func CommandSchema() map[string]any {
 	}
 	props["actor"] = map[string]any{"type": "string", "minLength": 1, "description": "Attribution; defaults to agent for legacy commands. Restoration requires explicit attribution. This is not authentication."}
 	data := map[string]any{}
+	codeDocument, err := jsonschema.For[domain.CodeIndex](nil)
+	if err != nil {
+		panic(err)
+	}
+	data["document"] = codeDocument
 	for _, k := range strings.Fields("idempotency_key request_key recipe_id recipe_revision recipe_hash config_revision deadline outcome conflict_id name description title problem goal context owner assignee objective rationale status body reason current commit deployment session environment_id mechanism instructions result observations logs severity url provider notes repository_id path cluster namespace branch base_commit head_commit private_key_ref owner api_url registry_credential_ref connection_id full_name role default_branch application_id workflow image_repository workflow_ref purpose ref image_field digest_field revision_id artifact_id expected_digest team contact component_id external_system_id type base_branch finding_id gitops_commit artifact_digest details scenario_id scenario_version_id composition_id candidate_operation_id kind format registry_url package_name publication_target_id source_commit source_sha version checksum uri build_url visibility user_id build_job_id") {
 		data[k] = str()
 	}
@@ -174,6 +181,7 @@ func CommandSchema() map[string]any {
 		{"plan_composition", "product_id", "environment_id name components"},
 		{"select_composition", "id", ""},
 		{"create_repository", "product_id", "name url"}, {"plan_release", "product_id", "name integration_ids"}, {"record_release", "product_id", "name environment_id integration_ids"},
+		{"upsert_code_index", "product_id", "repository_id document"},
 	}
 	var variants []any
 	for _, a := range actions {
@@ -189,6 +197,13 @@ func CommandSchema() map[string]any {
 				dataRule["required"] = strings.Fields(a.required)
 			}
 			switch name {
+			case "upsert_code_index":
+				dataRule["properties"] = map[string]any{"repository_id": str(), "document": codeDocument}
+				dataRule["type"] = "object"
+				dataRule["additionalProperties"] = false
+				for _, field := range strings.Fields("id feature_id integration_id gate_id check_id result_id") {
+					branch["properties"].(map[string]any)[field] = false
+				}
 			case "create_product":
 				dataRule["properties"] = map[string]any{"visibility": map[string]any{"type": "string", "enum": []string{"shared", "private"}}}
 			case "set_product_visibility":

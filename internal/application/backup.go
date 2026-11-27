@@ -16,6 +16,7 @@ import (
 
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workspace"
 )
 
 const MaxBackupCompressed = 8 << 20
@@ -319,6 +320,16 @@ func (s *Service) RestoreBackup(ctx context.Context, actor, archive, expected st
 	return map[string]any{"restored": true, "sha256": expected, "restore_event_id": restoreID, "quarantined_build_ids": quarantinedBuilds, "cancelled_operation_ids": cancelled, "reconciliation_required_operation_ids": reconciliationRequired}, nil
 }
 func validateBackupState(st domain.State) error {
+	for _, repo := range st.Repositories {
+		if workspace.CloneURLHasCredentials(repo.URL) {
+			return invalid("backup contains an unsafe repository clone URL")
+		}
+	}
+	for _, repo := range st.RegisteredRepositories {
+		if workspace.CloneURLHasCredentials(repo.URL) {
+			return invalid("backup contains an unsafe registered repository clone URL")
+		}
+	}
 	if err := domain.ValidateStateStatuses(st); err != nil {
 		return invalid("backup status validation: %s", err)
 	}

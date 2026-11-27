@@ -1,0 +1,254 @@
+package application
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+
+	"releasecontrol/internal/domain"
+)
+
+type codeMemoryKey struct{ product, repository, branch string }
+
+type codeMemoryRecord struct {
+	document []byte
+	status   domain.CodeIndexStatus
+	actor    string
+	history  []domain.CodeIndexStatus
+	entries  []domain.CodeSearchEntry
+	postings map[string][]int
+	writeSeq uint64
+}
+
+type memoryCodeIndexes struct {
+	view     func(context.Context, func(*domain.State) error) error
+	mutex    sync.RWMutex
+	records  map[codeMemoryKey]codeMemoryRecord
+	writeSeq uint64
+}
+
+func (m *memoryCodeIndexes) scoped(ctx context.Context, product, repo string, fn func(*domain.State) error) error {
+	return m.view(ctx, func(st *domain.State) error {
+		p := productByID(*st, product)
+		if p == nil || !productVisibleTo(ctx, p) || repo != "" && !attachedCodeRepo(st, product, repo) {
+			return domain.ErrReadScopeNotFound
+		}
+		return fn(st)
+	})
+}
+
+func attachedCodeRepo(st *domain.State, product, repo string) bool {
+	return slices.ContainsFunc(st.Repositories, func(record domain.Repository) bool { return record.ID == repo && record.ProductID == product })
+}
+
+func (m *memoryCodeIndexes) PutCodeIndex(ctx context.Context, in domain.CodeIndexWrite, status domain.CodeIndexStatus) (out domain.CodeIndexWriteResult, err error) {
+	err = m.scoped(ctx, in.ProductID, in.RepositoryID, func(_ *domain.State) error {
+		m.mutex.Lock()
+		defer m.mutex.Unlock()
+		key := codeMemoryKey{in.ProductID, in.RepositoryID, in.Document.Branch}
+		prior := m.records[key]
+		if prior.status.Digest == status.Digest {
+			out.CodeIndexStatus = prior.status
+			out.Truncated = slices.Clone(out.Truncated)
+			return nil
+		}
+		data, err := json.Marshal(in.Document)
+		if err != nil {
+			return err
+		}
+		status.Truncated = slices.Clone(status.Truncated)
+		m.writeSeq++
+		history := append([]domain.CodeIndexStatus{status}, prior.history...)
+		record := codeMemoryRecord{document: data, status: status, actor: in.Actor, history: history[:min(domain.CodeHistorySize, len(history))], postings: map[string][]int{}, writeSeq: m.writeSeq}
+		for entry := range in.Document.SearchEntries {
+			ordinal := len(record.entries)
+			record.entries = append(record.entries, entry)
+			for word := range strings.FieldsSeq(domain.CodeSearchPhrase(entry.Body)) {
+				posting := record.postings[word]
+				if len(posting) == 0 || posting[len(posting)-1] != ordinal {
+					record.postings[word] = append(posting, ordinal)
+				}
+			}
+		}
+		m.records[key] = record
+		count := 0
+		var oldest codeMemoryKey
+		for candidate, record := range m.records {
+			if candidate.product == key.product && candidate.repository == key.repository {
+				count++
+				if count == 1 || m.records[oldest].writeSeq > record.writeSeq {
+					oldest = candidate
+				}
+			}
+		}
+		if count > domain.CodeBranchLimit {
+			delete(m.records, oldest)
+		}
+		out = domain.CodeIndexWriteResult{CodeIndexStatus: status, Changed: true}
+		out.Truncated = slices.Clone(status.Truncated)
+		return nil
+	})
+	return out, err
+}
+
+func (m *memoryCodeIndexes) CodeStatuses(ctx context.Context, in domain.CodeStatusRequest, limit int) (out []domain.CodeIndexStatus, err error) {
+	err = m.scoped(ctx, in.ProductID, in.RepositoryID, func(st *domain.State) error {
+		out = m.statuses(st, in, limit)
+		return nil
+	})
+	return out, err
+}
+
+func (m *memoryCodeIndexes) statuses(st *domain.State, in domain.CodeStatusRequest, limit int) []domain.CodeIndexStatus {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	var out []domain.CodeIndexStatus
+	latest := map[string]domain.CodeIndexStatus{}
+	latestSeq := map[string]uint64{}
+	attached := map[string]bool{}
+	for _, repo := range st.Repositories {
+		if repo.ProductID == in.ProductID {
+			attached[repo.ID] = true
+		}
+	}
+	for key, record := range m.records {
+		if key.product != in.ProductID || !attached[key.repository] {
+			continue
+		}
+		if in.RepositoryID == "" {
+			if record.writeSeq > latestSeq[key.repository] {
+				latest[key.repository] = record.status
+				latestSeq[key.repository] = record.writeSeq
+			}
+		} else if in.RepositoryID == key.repository && (in.Branch == "" || in.Branch == key.branch) {
+			out = append(out, record.status)
+		}
+	}
+	for _, status := range latest {
+		out = append(out, status)
+	}
+	if in.RepositoryID == "" {
+		domain.SortCodeStatuses(out)
+	} else {
+		seqByBranch := make(map[string]uint64, len(out))
+		for key, record := range m.records {
+			if key.product == in.ProductID && key.repository == in.RepositoryID {
+				seqByBranch[key.branch] = record.writeSeq
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return seqByBranch[out[i].Branch] > seqByBranch[out[j].Branch] })
+	}
+	out = out[:min(limit, len(out))]
+	for index := range out {
+		out[index].Truncated = slices.Clone(out[index].Truncated)
+	}
+	return out
+}
+
+func (m *memoryCodeIndexes) deleteProduct(product string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for key := range m.records {
+		if key.product == product {
+			delete(m.records, key)
+		}
+	}
+}
+
+func codeMemoryNewer(candidate, prior codeMemoryRecord) bool {
+	return prior.writeSeq == 0 || candidate.writeSeq > prior.writeSeq
+}
+
+func (m *memoryCodeIndexes) ReadCodeIndex(ctx context.Context, product, repo, branch string) (out domain.CodeIndex, err error) {
+	err = m.scoped(ctx, product, repo, func(_ *domain.State) error {
+		m.mutex.RLock()
+		defer m.mutex.RUnlock()
+		var selected codeMemoryRecord
+		for key, record := range m.records {
+			if key.product == product && key.repository == repo && (branch == "" || key.branch == branch) && codeMemoryNewer(record, selected) {
+				selected = record
+			}
+		}
+		if selected.document == nil {
+			return domain.ErrReadScopeNotFound
+		}
+		return json.Unmarshal(selected.document, &out)
+	})
+	return out, err
+}
+
+func (m *memoryCodeIndexes) FindCode(ctx context.Context, in domain.CodeSearchRequest) ([]domain.CodeCard, error) {
+	type scored struct {
+		card  domain.CodeCard
+		score int
+	}
+	best := make([]scored, 0, in.Limit+2)
+	err := m.scoped(ctx, in.ProductID, in.RepositoryID, func(st *domain.State) error {
+		m.mutex.RLock()
+		defer m.mutex.RUnlock()
+		latest := map[string]codeMemoryRecord{}
+		for key, record := range m.records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if key.product == in.ProductID && (in.RepositoryID == "" || key.repository == in.RepositoryID) && attachedCodeRepo(st, key.product, key.repository) && codeMemoryNewer(record, latest[key.repository]) {
+				latest[key.repository] = record
+			}
+		}
+		add := func(entry domain.CodeSearchEntry) {
+			if score := entry.Score(in.Query); score != 0 {
+				position := sort.Search(len(best), func(index int) bool {
+					return cmp.Or(cmp.Compare(best[index].score, score), domain.CompareCodeCards(entry.Card, best[index].card)) < 0
+				})
+				if position <= in.Limit {
+					entry.Card.Snippet = domain.CodeSnippet(entry.Snippet, in.Query)
+					best = slices.Insert(best, position, scored{entry.Card, score})
+					best = best[:min(in.Limit+1, len(best))]
+				}
+			}
+		}
+		if phrase := domain.CodeSearchPhrase(in.Query); phrase != "" {
+			word, _, _ := strings.Cut(phrase, " ")
+			for _, record := range latest {
+				for _, ordinal := range record.postings[word] {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					entry := record.entries[ordinal]
+					if (in.Kind == "" || entry.Card.Kind == in.Kind) && strings.Contains(" "+domain.CodeSearchPhrase(entry.Body)+" ", " "+phrase+" ") {
+						add(entry)
+					}
+				}
+			}
+			if len(best) != 0 {
+				return nil
+			}
+		}
+		visited := 0
+		for _, record := range latest {
+			for _, entry := range record.entries {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if in.Kind != "" && entry.Card.Kind != in.Kind {
+					continue
+				}
+				visited++
+				if visited > domain.CodeSearchScanBudget {
+					return domain.ErrCodeSearchBudget
+				}
+				add(entry)
+			}
+		}
+		return nil
+	})
+	out := make([]domain.CodeCard, len(best))
+	for index, item := range best {
+		out[index] = item.card
+	}
+	return out, err
+}

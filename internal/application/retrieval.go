@@ -77,6 +77,28 @@ func (s *Service) SearchContext(ctx context.Context, q domain.ContextSearchReque
 	if e = retrievalBudget(out); e != nil {
 		return domain.ContextSearchResult{}, e
 	}
+	if q.IncludeCode {
+		code, err := s.SearchCode(ctx, domain.CodeSearchRequest{ProductID: q.ProductID, Query: q.Query, Limit: 5})
+		if err != nil {
+			out.CodeWarning = "Code search could not finish; authored results are unaffected. Try search_code with a narrower repository or kind."
+			if retrievalBudget(out) != nil {
+				out.CodeWarning = "Code search unavailable."
+			}
+			return out, nil
+		}
+		out.CodeTruncated = true
+		for _, card := range code.Items {
+			out.CodeItems = append(out.CodeItems, card)
+			if retrievalBudget(out) != nil {
+				out.CodeItems = out.CodeItems[:len(out.CodeItems)-1]
+				break
+			}
+		}
+		out.CodeTruncated = code.Truncated || len(out.CodeItems) != len(code.Items)
+		if retrievalBudget(out) != nil {
+			out.CodeItems, out.CodeTruncated = nil, false
+		}
+	}
 	return out, nil
 }
 func (s *Service) ContextExcerpt(ctx context.Context, q domain.ContextExcerptRequest) (domain.ContextExcerpt, error) {

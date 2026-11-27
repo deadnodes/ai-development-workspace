@@ -2,10 +2,11 @@ package domain
 
 // Retrieval queries deliberately return cards or text windows, never State or audit payloads.
 type ContextSearchRequest struct {
-	ProductID string `json:"product_id"`
-	FeatureID string `json:"feature_id,omitempty"`
-	Query     string `json:"query"`
-	Limit     int    `json:"limit,omitempty"`
+	ProductID   string `json:"product_id"`
+	FeatureID   string `json:"feature_id,omitempty"`
+	Query       string `json:"query"`
+	Limit       int    `json:"limit,omitempty"`
+	IncludeCode bool   `json:"include_code,omitempty"`
 }
 type ContextCard struct {
 	ID           string  `json:"id"`
@@ -21,9 +22,12 @@ type ContextCard struct {
 	Truncated    bool    `json:"truncated"`
 }
 type ContextSearchResult struct {
-	Items    []ContextCard `json:"items"`
-	HasMore  bool          `json:"has_more"`
-	Guidance string        `json:"guidance"`
+	Items         []ContextCard `json:"items"`
+	HasMore       bool          `json:"has_more"`
+	Guidance      string        `json:"guidance"`
+	CodeItems     []CodeCard    `json:"code_items,omitempty"`
+	CodeTruncated bool          `json:"code_truncated,omitempty"`
+	CodeWarning   string        `json:"code_warning,omitempty"`
 }
 type ContextExcerptRequest struct {
 	ProductID string `json:"product_id"`

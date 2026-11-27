@@ -60,6 +60,10 @@ func run() error {
 			return agentconnect.RunToken(os.Args[2:], os.Stdout)
 		case "doctor":
 			return agentconnect.RunDoctor(context.Background(), os.Args[2:], os.Stdout)
+		case "index":
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return agentconnect.RunIndex(ctx, os.Args[2:], os.Stdout)
 		case "whoami":
 			return agentconnect.RunWhoami(os.Args[2:], os.Stdout)
 		}

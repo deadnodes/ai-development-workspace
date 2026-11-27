@@ -1,0 +1,47 @@
+Cargo.toml | TOML | 2
+  dependency cargo_dependencies serde "1"
+Chart.yaml | YAML | 3
+  dependency helm dependency-chart "2.0"
+Dockerfile | Dockerfile | 3
+  dependency docker_base alpine:3 ""
+  entry docker_cmd serve
+  entry docker_entrypoint /fixture
+View.tsx | TypeScript | 3
+  component View "" 1 ""
+  const answer "" 2 ""
+  function render "" 3 ""
+app.py | Python | 9
+  class API "" 1 ""
+  def endpoint "" 5 ""
+  route GET /python 4
+  entry python_main app.py
+cmd/service/main.go | Go | 17
+  package main "" 2 "Package main provides the fixture service."
+  type Handler "" 7 "Handler serves status."
+  method Status "Handler" 10 "Status reports readiness."
+  function Register "" 13 "Register adds routes."
+  route GET /status 14
+  entry go_main cmd/service
+docker-compose.yaml | YAML | 3
+  dependency compose_service db "postgres:17"
+docs/architecture.md | Markdown | 1
+  doc "Fixture architecture overview.\n"
+go.mod | Text | 5
+  dependency go example.org/library "v1.0.0"
+kustomization.yaml | YAML | 2
+  dependency kustomize deploy.yaml ""
+migrations/001.sql | SQL | 1
+  table inventory "" 1 ""
+package.json | JSON | 1
+  dependency npm express "5.0.0"
+  dependency npm react "19.0.0"
+  entry npm_bin fixture: web.js
+  entry npm_script start
+pyproject.toml | TOML | 4
+  dependency python fastapi ">=0.10"
+  entry python_console fixture: app:endpoint
+requirements-test.txt | Text | 1
+  dependency python pytest "==8.0"
+web.js | JavaScript | 2
+  class Client "" 1 ""
+  route POST /js 2

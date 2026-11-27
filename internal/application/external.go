@@ -12,6 +12,7 @@ import (
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
+	"releasecontrol/internal/workspace"
 )
 
 var repositoryName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -235,6 +236,9 @@ func applyExternal(st *domain.State, c domain.Command, m domain.Meta, authority 
 		}
 		if input.BaseBranch == "" {
 			input.BaseBranch = input.DefaultBranch
+		}
+		if workspace.CloneURLHasCredentials(input.URL) {
+			return nil, m, invalid("repository clone URL must not contain credentials, query parameters or a fragment")
 		}
 		if !safeBranch(input.BaseBranch) {
 			return nil, m, invalid("valid base_branch required")

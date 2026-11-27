@@ -53,6 +53,10 @@ func TestPrivateDirectMutationSurface(t *testing.T) {
 			t.Fatal(err)
 		}
 		calls := map[string]func(context.Context) error{
+			"UpsertCodeIndex": func(ctx context.Context) error {
+				_, err := service.UpsertCodeIndex(ctx, domain.CodeIndexWrite{ProductID: "secret", RepositoryID: "repo"})
+				return err
+			},
 			"Execute": func(ctx context.Context) error {
 				_, err := service.Execute(ctx, domain.Command{Action: "record_progress", IntegrationID: "integration"})
 				return err

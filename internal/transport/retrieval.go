@@ -49,7 +49,15 @@ func registerRetrieval(mux routeRegistrar, server *mcp.Server, service Service) 
 			write(w, 400, map[string]string{"error": e.Error()})
 			return
 		}
-		v, e := reader.SearchContext(r.Context(), domain.ContextSearchRequest{ProductID: r.URL.Query().Get("product_id"), FeatureID: r.URL.Query().Get("feature_id"), Query: r.URL.Query().Get("query"), Limit: limit})
+		includeCode := false
+		if value := r.URL.Query().Get("include_code"); value != "" {
+			includeCode, e = strconv.ParseBool(value)
+			if e != nil {
+				write(w, 400, map[string]string{"error": "include_code must be a boolean"})
+				return
+			}
+		}
+		v, e := reader.SearchContext(r.Context(), domain.ContextSearchRequest{ProductID: r.URL.Query().Get("product_id"), FeatureID: r.URL.Query().Get("feature_id"), Query: r.URL.Query().Get("query"), Limit: limit, IncludeCode: includeCode})
 		respond(w, v, e)
 	})
 	mux.HandleFunc("GET /api/context/excerpt", func(w http.ResponseWriter, r *http.Request) {

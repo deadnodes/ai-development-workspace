@@ -320,6 +320,18 @@ func Registry() []ToolEntry {
 	out := append([]ToolEntry(nil), documented...)
 	out = append(out, completedRoutes()...)
 	out = append(out, workTools()...)
+	out = append(out, codeIndexGuides()...)
+	for index := range out {
+		entry := &out[index]
+		switch entry.Name {
+		case "search_context", "GET /api/context/search":
+			entry.Inputs = append(append([]Field(nil), entry.Inputs...), Field{"include_code", "boolean", false, "Append up to five Product-wide code cards"})
+			entry.Output += " With include_code, also returns bounded commit-attributed code cards."
+			entry.Related = append(append([]string(nil), entry.Related...), "search_code")
+		case "get_project_context", "GET /api/products/{id}/context":
+			entry.Output += " Includes bounded code index freshness by repository branch."
+		}
+	}
 	// Flow routes are alternate transports for these execute actions. Keep the
 	// route spelling on the action record so exact lookup returns one operation
 	// guide with a shared contract.
