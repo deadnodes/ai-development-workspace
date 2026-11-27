@@ -29,6 +29,21 @@ import (
 type privateRead func(context.Context, *Service, string) (any, error)
 
 var privateProductReadMatrix = map[string]privateRead{
+	"ListCodeRepositories": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.ListCodeRepositories(ctx, product, "")
+	},
+	"GetCodeMap": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.GetCodeMap(ctx, domain.CodeMapRequest{ProductID: product, RepositoryID: product + "-repository"})
+	},
+	"SearchCode": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.SearchCode(ctx, domain.CodeSearchRequest{ProductID: product, Query: "fixturekeyword"})
+	},
+	"GetCodeFileOutline": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.GetCodeFileOutline(ctx, domain.CodeOutlineRequest{ProductID: product, RepositoryID: product + "-repository", Path: "README.md"})
+	},
+	"GetCodeIndexStatus": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: product})
+	},
 	"ProjectContext": func(ctx context.Context, service *Service, product string) (any, error) {
 		return service.ProjectContext(ctx, product)
 	},
@@ -62,7 +77,7 @@ var privateProductReadMatrix = map[string]privateRead{
 		return service.UIState(ctx, "", product+"-feature")
 	},
 	"SearchContext": func(ctx context.Context, service *Service, product string) (any, error) {
-		return service.SearchContext(ctx, domain.ContextSearchRequest{ProductID: product, Query: "fixturekeyword"})
+		return service.SearchContext(ctx, domain.ContextSearchRequest{ProductID: product, Query: "fixturekeyword", IncludeCode: true})
 	},
 	"ContextExcerpt": func(ctx context.Context, service *Service, product string) (any, error) {
 		return service.ContextExcerpt(ctx, domain.ContextExcerptRequest{ProductID: product, ID: product + "-feature"})
@@ -385,6 +400,13 @@ func TestPrivateProductReadMatrix(t *testing.T) {
 			}
 			seedPrivateReadMatrix(t, store, workspace)
 			service := New(store)
+			for _, product := range []string{privateFixture, sharedFixture} {
+				repository := product + "-repository"
+				doc := domain.CodeIndex{RepositoryID: repository, Branch: "main", Commit: strings.Repeat("a", 40), Version: domain.CodeIndexVersion, IndexedAt: time.Now(), Files: []domain.CodeFile{{Path: "README.md", Language: "Markdown", Size: 128, Lines: 1, Doc: product + " fixturekeyword"}}}
+				if _, err := service.UpsertCodeIndex(context.Background(), domain.CodeIndexWrite{ProductID: product, RepositoryID: repository, Document: doc}); err != nil {
+					t.Fatal("seed code index:", err)
+				}
+			}
 			service.SetWorkspaceRoot(workspace)
 			service.provider = &privateBranchFixture{}
 			service.prodPublicKey = "fixture-public-key"

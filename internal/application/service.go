@@ -14,6 +14,7 @@ import (
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
+	"releasecontrol/internal/workspace"
 	"slices"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ type Service struct {
 	runtimeObservers        []delivery.RuntimeSnapshotObserver
 	workspaceRoot           string
 	store                   Store
+	codeMemory              *memoryCodeIndexes
 	executionDefaults       *buildconfig.Config
 	provider                delivery.Provider
 	workerID                string
@@ -62,7 +64,9 @@ func (s *Service) restorationWriteNow() time.Time {
 	return time.Now().UTC()
 }
 func New(store Store) *Service {
-	return &Service{store: store, workerID: id(), prodPromotionNotify: make(chan struct{}, 1)}
+	s := &Service{store: store, workerID: id(), prodPromotionNotify: make(chan struct{}, 1)}
+	s.codeMemory = &memoryCodeIndexes{view: s.view, records: make(map[codeMemoryKey]codeMemoryRecord)}
+	return s
 }
 func NewWithProvider(store Store, provider delivery.Provider) *Service {
 	s := New(store)
@@ -97,6 +101,19 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	if c.Action == "upsert_code_index" {
+		if c.ID != "" || c.FeatureID != "" || c.IntegrationID != "" || c.GateID != "" || c.CheckID != "" || c.ResultID != "" {
+			return nil, invalid("upsert_code_index takes only a product scope")
+		}
+		var data struct {
+			RepositoryID string           `json:"repository_id"`
+			Document     domain.CodeIndex `json:"document"`
+		}
+		if err := decode(c.Data, &data); err != nil {
+			return nil, err
+		}
+		return s.UpsertCodeIndex(ctx, domain.CodeIndexWrite{ProductID: c.ProductID, RepositoryID: data.RepositoryID, Actor: c.Actor, Document: data.Document})
+	}
 	if workerCommand(c.Action) {
 		if err := s.requireWorkers(c.Action); err != nil {
 			return nil, err
@@ -207,6 +224,9 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 		}
 		return err
 	})
+	if err == nil && c.Action == "delete_product" {
+		s.codeMemory.deleteProduct(c.ProductID)
+	}
 	return result, err
 }
 func meta(c domain.Command) domain.Meta {
@@ -1163,6 +1183,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if v.Name == "" || v.URL == "" {
 			return nil, invalid("name and url required")
+		}
+		if workspace.CloneURLHasCredentials(v.URL) {
+			return nil, invalid("repository clone URL must not contain credentials, query parameters or a fragment")
 		}
 		st.Repositories = append(st.Repositories, v)
 		out = v

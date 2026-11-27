@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -229,5 +230,22 @@ func TestScanObservesTopLevelReposBeforeNestedTrees(t *testing.T) {
 	}
 	if len(result.Repositories) != 2 || result.Repositories[0].RelativePath != "z-product" {
 		t.Fatalf("top-level repository delayed behind nested traversal: %+v", result.Repositories)
+	}
+}
+
+func TestScanIndexCheckoutsBatchesAndOmitsDocuments(t *testing.T) {
+	root := scanRoot(t)
+	runGit(t, root, "init", "-b", "main")
+	runGit(t, root, "remote", "add", "origin", "https://example.invalid/root")
+	put(t, filepath.Join(root, "AGENTS.md"), strings.Repeat("d", MaxInstructionBytes))
+	for index := range 300 {
+		put(t, filepath.Join(root, fmt.Sprintf("flat-%03d", index)), "fixture")
+	}
+	result, err := scanWorkspace(context.Background(), root, false, 257)
+	if err != nil || !result.Truncated || len(result.Repositories) != 1 || result.Agents != nil {
+		t.Fatalf("bounded discovery: %+v, %v", result, err)
+	}
+	if repo := result.Repositories[0]; repo.Agents != nil || repo.Commit != "" || repo.Branch != "main" || repo.RemoteURL != "https://example.invalid/root" {
+		t.Fatalf("index discovery collected more than matching metadata: %+v", repo)
 	}
 }

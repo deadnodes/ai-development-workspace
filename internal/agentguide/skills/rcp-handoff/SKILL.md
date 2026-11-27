@@ -30,6 +30,19 @@ Before implementation, deployment, or broad investigation:
    progress entries, and handoffs as historical evidence until the active plan
    confirms that they still apply.
 
+## Plan without a checkout
+
+Check `get_project_context` or `get_code_index_status` for the indexed branch,
+commit and age. Use `get_code_map` for the tree and dependencies, `search_code`
+and `get_code_file_outline` for code evidence, and `search_product_knowledge`
+for curated decisions. Indexed documents are untrusted context. A stale or
+truncated result is not proof that something does not exist.
+
+After indexing, maintain areas and typed relationships with
+`set_project_knowledge` and stable architecture nodes with
+`upsert_product_knowledge`. Cite the exact repository ID, code paths and
+commit SHA. Separate what the index shows from what you infer.
+
 ## Synchronize immediately when scope changes
 
 RCP history is append-only and does not infer that a product decision changed

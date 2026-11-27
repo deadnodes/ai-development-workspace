@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,10 +14,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/transport"
 )
@@ -81,6 +84,89 @@ func TestCodeModeCalls(t *testing.T) {
 		t.Fatalf("oversized: %d", status)
 	}
 }
+
+func TestCodeIndexAcrossToolAndHTTP(t *testing.T) {
+	server := codeServer(t, "secret")
+	for _, cmd := range []string{
+		`{"action":"create_product","id":"product","data":{"name":"Product"}}`,
+		`{"action":"create_repository","id":"repo","product_id":"product","data":{"name":"Repo","url":"https://example.invalid/repo"}}`,
+	} {
+		if status, raw := codeRequest(t, server, "POST", "/api/commands", cmd, "secret"); status != 200 {
+			t.Fatalf("setup: %d %s", status, raw)
+		}
+	}
+	doc := domain.CodeIndex{RepositoryID: "repo", Branch: "main", Commit: strings.Repeat("a", 40), IndexedAt: time.Now(), Version: domain.CodeIndexVersion, Files: []domain.CodeFile{{Path: "README.md", Language: "Markdown", Size: 20, Lines: 1, Doc: "Checkout-free plans"}}}
+	wire, _ := json.Marshal(domain.CodeIndexWrite{ProductID: "product", RepositoryID: "repo", Document: doc})
+	if status, raw := codeRequest(t, server, "POST", "/api/code/index", string(wire), "secret"); status != 200 || !bytes.Contains(raw, []byte(`"changed":true`)) {
+		t.Fatalf("upload: %d %s", status, raw)
+	}
+	if status, raw := codeRequest(t, server, "POST", "/api/tools/upsert_code_index", string(wire), "secret"); status != 200 || !bytes.Contains(raw, []byte(`"changed":false`)) {
+		t.Fatalf("tool replay: %d %s", status, raw)
+	}
+	agentTokenFixture := "rcpa_" + strings.Repeat("OpaqueFixture987", 2) + strings.Repeat("x", 11)
+	for _, file := range []domain.CodeFile{
+		{Path: "README.md", Language: "Markdown", Doc: "Runbook\n" + agentTokenFixture},
+		{Path: "README.md", Language: "Markdown", Doc: "Use `API_TOKEN=OpaqueFixture987` or omit it."},
+		{Path: "README.md", Language: "Markdown", Doc: "API_TOKEN=OpaqueFixture987\r\nMore text\r\n"},
+		{Path: "README.md", Language: "Markdown", Doc: "export TOKEN=OpaqueFixture987 # local"},
+		{Path: "README.md", Language: "Markdown", Doc: `"password": "OpaqueFixture987!",`},
+		{Path: "package.json", Language: "JSON", Dependencies: []domain.CodeDependency{{Name: "fixture", Kind: "npm", Version: "https://example.invalid/repo?access_token=OpaqueFixture987&next=1"}}},
+		{Path: "Dockerfile", Language: "Dockerfile", Entrypoints: []domain.CodeEntry{{Kind: "docker_cmd", Name: `["serve","--password","OpaqueFixture987"]`}}},
+	} {
+		file.Size, file.Lines = 100, 2
+		unsafe := doc
+		unsafe.Files = []domain.CodeFile{file}
+		wire, _ := json.Marshal(domain.CodeIndexWrite{ProductID: "product", RepositoryID: "repo", Document: unsafe})
+		for _, route := range []string{"/api/code/index", "/api/tools/upsert_code_index"} {
+			if status, raw := codeRequest(t, server, "POST", route, string(wire), "secret"); status != 422 || bytes.Contains(raw, []byte("OpaqueFixture987")) {
+				t.Fatalf("sensitive upload via %s: %d %s", route, status, raw)
+			}
+		}
+	}
+	if status, raw := codeRequest(t, server, "POST", "/api/tools/search_code", `{"product_id":"product","query":"checkout-free","kind":"doc"}`, "secret"); status != 200 || !bytes.Contains(raw, []byte(`"path":"README.md"`)) {
+		t.Fatalf("search: %d %s", status, raw)
+	}
+	if status, raw := codeRequest(t, server, "GET", "/api/code-sdk/rcp.ts", "", "secret"); status != 200 || !bytes.Contains(raw, []byte("upsert_code_index")) || !bytes.Contains(raw, []byte("get_code_map")) {
+		t.Fatalf("SDK missing code index declarations: %d", status)
+	}
+}
+func TestCodeRepositoryProjectionIsScopedAndPaged(t *testing.T) {
+	ctx := context.Background()
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Update(ctx, func(st *domain.State) error {
+		st.Products = []domain.Product{{Meta: domain.Meta{ID: "product"}, Name: strings.Repeat("unrelated", 4<<20)}, {Meta: domain.Meta{ID: "foreign"}}}
+		st.Repositories = []domain.Repository{{Meta: domain.Meta{ID: "foreign-repo", ProductID: "foreign"}, Role: "APPLICATION", URL: "https://example.invalid/foreign"}}
+		for index := domain.CodeRepositoryPageSize; index >= 0; index-- {
+			id := fmt.Sprintf("repo-%03d", index)
+			st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: id, ProductID: "product"}, Name: "not-projected", Role: "APPLICATION", URL: "https://hidden-user:hidden-password@example.invalid/" + id + "?sig=hidden-signature"})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(transport.New(application.New(store), transport.Options{Token: "secret"}))
+	defer server.Close()
+	route := "/api/code/repositories?product_id=product"
+	status, raw := codeRequest(t, server, "GET", route, "", "secret")
+	var first domain.CodeRepositoryPage
+	if status != 200 || len(raw) > 4096 || bytes.Contains(raw, []byte("not-projected")) || bytes.Contains(raw, []byte("hidden-")) || json.Unmarshal(raw, &first) != nil || len(first.Items) != domain.CodeRepositoryPageSize || first.Items[0].ID != "repo-000" || first.NextCursor == "" {
+		t.Fatalf("first page: %d, %d bytes, %+v", status, len(raw), first)
+	}
+	status, raw = codeRequest(t, server, "GET", route+"&cursor="+first.NextCursor, "", "secret")
+	var second domain.CodeRepositoryPage
+	last := fmt.Sprintf("repo-%03d", domain.CodeRepositoryPageSize)
+	if status != 200 || json.Unmarshal(raw, &second) != nil || len(second.Items) != 1 || second.Items[0] != (domain.CodeRepository{ID: last, Identity: "example.invalid/" + last}) || second.NextCursor != "" {
+		t.Fatalf("second page: %d %s", status, raw)
+	}
+	if status, _ := codeRequest(t, server, "GET", "/api/code/repositories?product_id=foreign&cursor="+first.NextCursor, "", "secret"); status != 422 {
+		t.Fatalf("cross-product cursor: HTTP %d", status)
+	}
+}
+
 func TestCodeModeToken(t *testing.T) {
 	server := codeServer(t, "secret")
 	for _, path := range []string{"/api/tools/get_status_schema", "/api/tools", "/api/code-sdk/rcp.ts"} {
