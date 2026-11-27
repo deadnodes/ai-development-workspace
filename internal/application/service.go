@@ -191,10 +191,12 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 				ex := executionFor(st, c.IntegrationID)
 				if ex != nil && executionFence(c.Data, "execution_fence") == ex.Fence {
 					now := time.Now().UTC()
-					if ex.State == "lost" || ex.State == "stalled" {
-						if err := guardFeatureStart(ctx, st, integration(st, c.IntegrationID)); err != nil {
+					if ex.State == "running" || ex.State == "lost" || ex.State == "stalled" {
+						if err := checkExecutionRenewal(ctx, st, ex, now); err != nil {
 							return err
 						}
+					}
+					if ex.State == "lost" || ex.State == "stalled" {
 						executionCondition(st, ex, "running", false, "", now)
 					}
 					if ex.State == "running" {
@@ -793,8 +795,24 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if old != nil && old.Status != v.Status && old.Status == "archived" {
 			restore := featureRestoreStatus(st, old)
+			warning := ""
+			if !domain.ValidStatus("feature", restore) || restore == "archived" {
+				warning = "Prior feature status could not be recovered"
+			} else if restore == "completed" && featureCompletionReady(st, v.ID) != nil {
+				warning = "Prior completed status no longer satisfies completion requirements"
+			}
+			if warning != "" {
+				restore = "planned"
+			}
 			if v.Status != restore {
 				return nil, invalid("archived feature must be restored to %s", restore)
+			}
+			if warning != "" {
+				if !isWorkDecisionOwner(ctx, productByID(*st, v.ProductID)) {
+					return nil, fmt.Errorf("%w: OWNER_APPROVAL_REQUIRED", auth.ErrForbidden)
+				}
+				const action = "feature_restore_warning"
+				st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: c.Actor, At: m.UpdatedAt, EntityID: v.ID, ProductID: v.ProductID, FeatureID: v.ID, Data: domain.Command{Action: action, Actor: c.Actor, Data: map[string]any{"warning": warning, "status": restore}}})
 			}
 			v.ArchivedFrom = ""
 		} else if old != nil && old.Status != v.Status && v.Status == "archived" {
@@ -810,22 +828,8 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			if old.Status != "completed" {
 				v.CompletedAt = &m.UpdatedAt
 			}
-			count := 0
-			for _, in := range st.Integrations {
-				if in.FeatureID == v.ID {
-					count++
-					if in.Status != "ready" && in.Status != "released" {
-						return nil, invalid("feature completion requires all integrations ready or released")
-					}
-					if in.Status == "ready" {
-						if err := readiness(st, in); err != nil {
-							return nil, err
-						}
-					}
-				}
-			}
-			if count == 0 {
-				return nil, invalid("feature completion requires integrations")
+			if err := featureCompletionReady(st, v.ID); err != nil {
+				return nil, err
 			}
 		} else if old != nil && old.Status == "completed" {
 			v.CompletedAt = nil
@@ -871,6 +875,10 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			if _, ok := c.Data["status"]; ok {
 				return nil, invalid("use transition_integration for status")
 			}
+			v.Dependencies = slices.Clone(old.Dependencies)
+			v.Commits = slices.Clone(old.Commits)
+			v.AcceptanceCriteria = slices.Clone(old.AcceptanceCriteria)
+			v.Repositories = slices.Clone(old.Repositories)
 		} else {
 			if feature(st, c.FeatureID) == nil {
 				return nil, missing("feature", c.FeatureID)
@@ -884,13 +892,15 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if old == nil && v.Status != "planned" {
 			return nil, invalid("new integrations must be planned")
 		}
+		if old != nil && (old.Status == "ready" || !slices.Equal(old.Dependencies, v.Dependencies) || !slices.Equal(old.Commits, v.Commits) || !slices.Equal(old.AcceptanceCriteria, v.AcceptanceCriteria) || !slices.Equal(old.Repositories, v.Repositories)) {
+			if err := rejectForeignWork(ctx, old); err != nil {
+				return nil, err
+			}
+		}
 		if e := validateIntegration(st, v); e != nil {
 			return nil, e
 		}
 		if old != nil && v.Status == "ready" {
-			if err := rejectForeignWork(ctx, old); err != nil {
-				return nil, err
-			}
 			if err := guardFeatureStart(ctx, st, &v); err != nil {
 				return nil, err
 			}

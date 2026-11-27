@@ -69,7 +69,7 @@ func TestExecutionCommandsUseNarrowMutationScopes(t *testing.T) {
 	if checked.calls != 5 {
 		t.Fatalf("scoped calls=%d", checked.calls)
 	}
-	wantMutable := [][]string{{"integrations", "integration_executions", "execution_events", "user_orchestrators"}, {"integration_executions", "execution_events", "user_orchestrators"}, {"integration_executions", "execution_events", "user_orchestrators"}, {"integrations", "user_orchestrators", "execution_events"}, {"products"}}
+	wantMutable := [][]string{{"integrations", "integration_executions", "execution_events", "execution_groups", "user_orchestrators"}, {"integration_executions", "execution_events", "user_orchestrators"}, {"integration_executions", "execution_events", "user_orchestrators"}, {"integrations", "user_orchestrators", "execution_events"}, {"products"}}
 	wantAppend := [][]string{{"events"}, {"events"}, {"events"}, {"integration_executions", "execution_groups", "events"}, {"events"}}
 	for i, scope := range checked.scopes {
 		if !reflect.DeepEqual(scope.MutableCollections, wantMutable[i]) || !reflect.DeepEqual(scope.AppendCollections, wantAppend[i]) {

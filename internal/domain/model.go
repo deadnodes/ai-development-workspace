@@ -180,6 +180,7 @@ type ExecutionGroupRevision struct {
 type ExecutionGroup struct {
 	ID                   string                   `json:"id"`
 	ProductID            string                   `json:"product_id"`
+	Owner                string                   `json:"owner,omitempty"`
 	Name                 string                   `json:"name"`
 	OrchestratorID       string                   `json:"orchestrator_id"`
 	OrchestratorHarness  ExecutionHarness         `json:"orchestrator_harness,omitempty"`

@@ -242,7 +242,7 @@ func reconcileUserWork(st *domain.State, now time.Time) bool {
 				continue
 			}
 			queueWake := event.Cause == domain.ExecutionCauseQueueAvailable
-			eligible := registrationVisible(st, *registration, event.ProductID)
+			eligible := registrationVisible(st, *registration, event.ProductID) && executionEventAssignmentCurrent(st, *event)
 			if queueWake && eligible {
 				eligible = available && (items[0].ProductID == event.ProductID || len(registeredQueue(st, *registration, event.ProductID)) != 0)
 			}

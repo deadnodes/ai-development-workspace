@@ -62,6 +62,27 @@ func executionOwnedByCaller(ctx context.Context, in *domain.Integration) bool {
 	return user != "" && in != nil && in.Assignee == user
 }
 
+func assignUnassigned(in *domain.Integration, user, actor string, now time.Time) {
+	if in.Assignee == "" && user != "" {
+		in.Assignee, in.Actor, in.UpdatedAt = user, actor, now
+	}
+}
+
+func detachIncompatibleExecutionGroups(st *domain.State, in *domain.Integration, now time.Time) {
+	for index := range st.ExecutionGroups {
+		group := &st.ExecutionGroups[index]
+		if group.Owner == in.Assignee || !groupContainsIntegration(*group, in) {
+			continue
+		}
+		members := slices.DeleteFunc(slices.Clone(group.MemberIntegrationIDs), func(member string) bool { return member == in.ID })
+		group.MemberIntegrationIDs = members
+		if len(members) == 0 {
+			group.ClosedAt = &now
+		}
+		group.Revisions = append(slices.Clone(group.Revisions), domain.ExecutionGroupRevision{Revision: uint64(len(group.Revisions)) + 1, MemberIntegrationIDs: members, CreatedAt: now})
+	}
+}
+
 func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any, error) {
 	if strings.TrimSpace(c.Actor) == "" {
 		return nil, invalid("actor required")
@@ -143,18 +164,7 @@ func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any,
 				const action = "question_readdressed"
 				st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: c.Actor, At: now, EntityID: question.ID, ProductID: in.ProductID, FeatureID: in.FeatureID, Data: domain.Command{Action: action, Actor: c.Actor, IntegrationID: in.ID, Data: map[string]any{"previous_addressed_to": previous, "addressed_to": in.Assignee}}})
 			}
-			for index := range st.ExecutionGroups {
-				group := &st.ExecutionGroups[index]
-				if group.ClosedAt != nil || !slices.Contains(group.MemberIntegrationIDs, in.ID) {
-					continue
-				}
-				members := slices.DeleteFunc(slices.Clone(group.MemberIntegrationIDs), func(member string) bool { return member == in.ID })
-				group.MemberIntegrationIDs = members
-				if len(members) == 0 {
-					group.ClosedAt = &now
-				}
-				group.Revisions = append(slices.Clone(group.Revisions), domain.ExecutionGroupRevision{Revision: uint64(len(group.Revisions)) + 1, MemberIntegrationIDs: members, CreatedAt: now})
-			}
+			detachIncompatibleExecutionGroups(st, in, now)
 		}
 		in.Actor, in.UpdatedAt = c.Actor, now
 		out = *in

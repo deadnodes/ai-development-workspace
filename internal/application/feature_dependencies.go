@@ -16,12 +16,24 @@ func featureRestoreStatus(st *domain.State, parent *domain.Feature) string {
 		return parent.ArchivedFrom
 	}
 	foundArchive := false
+	reopened := false
 	for index := len(st.Events) - 1; index >= 0; index-- {
 		event := st.Events[index]
-		if event.EntityID != parent.ID || event.ProductID != parent.ProductID || event.FeatureID != parent.ID {
+		if event.ProductID != parent.ProductID || event.FeatureID != parent.ID && !(event.Action == "approve_idea_promotion" && event.EntityID == parent.ID) {
 			continue
 		}
 		status, _ := event.Data.Data["status"].(string)
+		if event.EntityID != parent.ID {
+			if foundArchive {
+				switch event.Action {
+				case "create_integration", "update_integration", "start_integration":
+					reopened = true
+				case "transition_integration":
+					reopened = reopened || slices.Contains([]string{"planned", "working", "implemented", "verifying"}, status)
+				}
+			}
+			continue
+		}
 		switch event.Action {
 		case "create_feature":
 			if status == "" {
@@ -41,11 +53,39 @@ func featureRestoreStatus(st *domain.State, parent *domain.Feature) string {
 				break
 			}
 			foundArchive = true
-		} else if status != "archived" {
+		} else if status == "archived" {
+			reopened = false
+		} else {
+			if status == "completed" && reopened {
+				return "active"
+			}
 			return status
 		}
 	}
-	return "planned"
+	return ""
+}
+
+func featureCompletionReady(st *domain.State, featureID string) error {
+	found := false
+	for _, integration := range st.Integrations {
+		if integration.FeatureID != featureID {
+			continue
+		}
+		found = true
+		switch integration.Status {
+		case "ready":
+			if err := readiness(st, integration); err != nil {
+				return err
+			}
+		case "released":
+		default:
+			return invalid("feature completion requires all integrations ready or released")
+		}
+	}
+	if !found {
+		return invalid("feature completion requires integrations")
+	}
+	return nil
 }
 
 func featureStartBlocker(st *domain.State, parentID, integrationID string, visible func(string) bool) workItem {

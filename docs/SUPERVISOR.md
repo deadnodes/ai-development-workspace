@@ -59,6 +59,10 @@ Re-register it after every restart that creates a new harness session. Member
 executor harnesses belong on execution claims. Keep the orchestrator in that pane
 and attach to the same session from another Mac:
 
+Adding unassigned work to a group assigns it to the group's human owner in the
+same transaction. Work assigned to another user cannot be added; group turn-end
+and wake routing skip members whose current assignee is not the group owner.
+
 For work without a current executor target, also use `register_user_orchestrator`
 with the same harness. Use a Product-specific registration or omit the Product
 for a single registration across the caller's visible Products. `work_available`

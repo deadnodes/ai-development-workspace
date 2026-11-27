@@ -124,6 +124,12 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 			if err := decideFeatureDependency(ctx, st, edge, input.Decision, command.Actor, now); err != nil {
 				return err
 			}
+			if question := questionByID(st, edge.ApprovalQuestionID); question != nil && question.Status == "open" && question.ProductID == edge.ProductID && question.FeatureID == from.ID && question.Question.DecisionFor == "dependency_approval" {
+				details := *question.Question
+				details.WithdrawnReason = "Superseded by a direct dependency decision"
+				question.Question, question.Status, question.UpdatedAt = &details, "withdrawn", now
+				workAudit(st, question.Meta, "supersede_dependency_decision", command.Actor, now)
+			}
 			workAudit(st, edge.Meta, command.Action, command.Actor, now)
 			output = *edge
 		case "register_user_orchestrator", "unregister_user_orchestrator":

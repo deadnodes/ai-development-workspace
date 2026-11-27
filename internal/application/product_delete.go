@@ -67,6 +67,15 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 	st.FeatureDependencies = slices.DeleteFunc(st.FeatureDependencies, func(edge domain.FeatureDependency) bool {
 		return deletedFeatures[edge.FromFeatureID] || deletedFeatures[edge.ToFeatureID]
 	})
+	now := nowUTC()
+	lostWakes := map[string]bool{}
+	for index := range st.ExecutionEvents {
+		event := &st.ExecutionEvents[index]
+		if event.ProductID == c.ProductID && event.Cause == domain.ExecutionCauseQueueAvailable && event.Resolution.ResolvedAt == nil {
+			lostWakes[event.RegistrationID] = true
+			retireExecutionEvent(st, event, now, "queue wake lost because its product was deleted")
+		}
+	}
 	// State collections share product_id ownership. Instance registries and audit
 	// events deliberately survive deletion; no external provider is invoked.
 	b, err := json.Marshal(st)
@@ -105,5 +114,12 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 		return err
 	}
 	*st = next
+	for index := range st.UserOrchestrators {
+		registration := &st.UserOrchestrators[index]
+		if registration.ProductID == "" && registration.UnregisteredAt == nil && lostWakes[registration.ID] {
+			registration.Available, registration.UpdatedAt = false, now
+		}
+	}
+	reconcileUserWork(st, now)
 	return nil
 }
