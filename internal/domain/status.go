@@ -13,7 +13,9 @@ func StatusCatalog() map[string][]string {
 		"runtime_comparison":   {"MATCH", "DRIFT", "UNKNOWN"},
 		"runtime_health":       {"UNKNOWN", "NOT_READY", "HEALTHY", "SCALED_ZERO"},
 		"composition_conflict": {"requires_resolution", "claimed", "verification_required", "resolved"},
-		"feature":              {"planned", "active", "blocked", "completed", "archived"},
+		"feature":              {"idea", "ready_for_execution", "planned", "active", "blocked", "completed", "archived"},
+		"question":             {"open", "answered", "withdrawn"},
+		"feature_dependency":   {"proposed", "accepted", "rejected"},
 		"integration":          {"planned", "working", "implemented", "verifying", "ready", "released"},
 		"blocker":              {"open", "resolved"}, "finding": {"open", "resolved"},
 		"check_result": {"passed", "failed", "blocked", "skipped"}, "gate_result": {"pending", "passed", "failed", "blocked", "skipped", "stale"},
@@ -31,7 +33,8 @@ func ValidStatus(kind, value string) bool { return slices.Contains(StatusCatalog
 func StatusTransitions() map[string]map[string][]string {
 	return map[string]map[string][]string{
 		"feature": {
-			"planned": {"active", "blocked", "archived"}, "active": {"blocked", "completed", "archived"}, "blocked": {"active", "planned", "archived"}, "completed": {"active", "archived"}, "archived": {"active", "planned"},
+			"idea": {"ready_for_execution", "archived"}, "ready_for_execution": {"idea", "active", "archived"},
+			"planned": {"active", "blocked", "archived", "idea", "ready_for_execution"}, "active": {"blocked", "completed", "archived"}, "blocked": {"active", "planned", "archived"}, "completed": {"active", "archived"}, "archived": {"idea", "ready_for_execution", "planned", "active", "blocked", "completed"},
 		},
 		"integration": {
 			"planned": {"working"}, "working": {"planned", "implemented", "verifying", "ready"}, "implemented": {"planned", "working", "verifying", "ready"}, "verifying": {"planned", "working", "implemented", "ready"}, "ready": {"working", "verifying"}, "released": {},

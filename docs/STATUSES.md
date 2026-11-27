@@ -6,8 +6,9 @@ Discover the complete current catalog and transition graph with `GET /api/status
 
 | Entity | Statuses |
 | --- | --- |
-| Feature | planned, active, blocked, completed, archived |
+| Feature | idea, ready_for_execution, planned, active, blocked, completed, archived |
 | Integration | planned, working, implemented, verifying, ready, released |
+| Question memory | open, answered, withdrawn |
 | Deployment | PENDING_CHECKS, PROPOSING, MERGING, VERIFYING_ROLLOUT, SUCCEEDED, FAILED, RECONCILIATION_REQUIRED |
 
 Build source CI is an independent observation (`ci_state`: pending, success,
@@ -35,6 +36,8 @@ Same-state requests are idempotent. Unknown spellings, capitalization and whites
 
 Every route into `ready` evaluates dependencies, blockers, findings and configured verification gates. Returning to earlier work does not erase recorded checks or handoffs. Editing ready work resets it to working. Adding or reopening work reopens a completed Feature to active.
 
-Features start planned or active. Planned can become active, blocked or archived; active can become blocked, completed or archived; blocked can become active, planned or archived; completed can reopen to active or be archived; archived can reopen to active or planned. Completion requires at least one Integration, all ready/released, with current readiness checks satisfied for ready work.
+Features can start as `idea`, `planned` or `active` (the default). An idea can be promoted to `ready_for_execution` or archived. A ready idea can return to `idea`, enter `active`, or be archived. A planned Feature can move to idea, ready for execution, active, blocked or archived. Active cannot move to ready for execution; it can move to blocked, completed or archived. Blocked can move to active, planned or archived; completed can reopen to active or be archived; archived can move to active or planned. Completion requires at least one Integration, all ready/released, with current readiness checks satisfied for ready work.
+
+Questions move from `open` to `answered` or `withdrawn` only through the dedicated commands. Both terminal states resolve an execution blocker. See [Questions and ideas](QUESTIONS_AND_IDEAS.md) for owner and agent authorization.
 
 Persistence and backup restore validate current records and typed snapshots. Historical event payloads and opaque external provider responses retain their original vocabulary as provenance; they cannot extend the Control Plane's status catalog. `deployment_state` may be empty before the first worker step. Other required lifecycle fields cannot be empty.

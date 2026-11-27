@@ -18,6 +18,7 @@ import (
 )
 
 var privateMCPReads = map[string]string{
+	"get_question": "get_question", "list_questions": "list_questions", "get_dependency_graph": "get_dependency_graph", "next_work": "next_work", "status_overview": "status_overview",
 	"create_backup": "CreateBackup", "export_workspace_configuration": "ExportWorkspace",
 	"get_state": "StatePage StatePageProduct StatePageFeature", "resume": "ResumeSummary",
 	"get_project_context": "ProjectContextSummary", "search_product_knowledge": "SearchKnowledge",
@@ -35,6 +36,7 @@ var privateMCPReads = map[string]string{
 }
 
 var privateHTTPReads = map[string]string{
+	"GET /api/questions/{id}": "get_question", "GET /api/questions": "list_questions", "GET /api/products/{id}/dependency-graph": "get_dependency_graph", "GET /api/next-work": "next_work", "GET /api/status-overview": "status_overview",
 	"GET /api/state": "State", "GET /api/ui-state": "UIState UIStateProduct UIStateFeature",
 	"GET /api/products/{id}/context": "ProjectContext", "GET /api/features/{id}/context": "Resume",
 	"GET /api/products/{id}/knowledge/search": "SearchKnowledge", "GET /api/products/{id}/workspace-config": "ExportWorkspace",

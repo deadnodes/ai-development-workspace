@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"slices"
 	"strings"
@@ -25,26 +26,38 @@ func validateExecutionHarness(h domain.ExecutionHarness) error {
 	return nil
 }
 
-func resolveExecutionEvents(st *domain.State, e *domain.IntegrationExecution, now time.Time, newState string) {
+func resolveExecutionEvents(st *domain.State, integrationID string, now time.Time, newState string) {
 	for i := range st.ExecutionEvents {
 		ev := &st.ExecutionEvents[i]
-		if ev.IntegrationID == e.IntegrationID && ev.Resolution.ResolvedAt == nil && (ev.Fence != e.Fence || ev.ConditionGeneration != e.Reconciliation.Generation+1 || !e.Reconciliation.ActionRequired) {
-			t := now
-			ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &t, ResolvedBy: "system", Evidence: newState}
-			appendExecutionEventAudit(st, *ev, "execution_event_resolved", "system/execution-reconciler", now, map[string]any{"evidence": newState})
+		if ev.IntegrationID == integrationID && ev.Resolution.ResolvedAt == nil {
+			if ev.Cause == domain.ExecutionCauseQuestionContinuation && executionEventAssignmentCurrent(st, *ev) && registrationEventEligible(st, *ev) {
+				continue
+			}
+			retireExecutionEvent(st, ev, now, newState)
 		}
 	}
 }
+
+func retireExecutionEvent(st *domain.State, event *domain.ExecutionEvent, now time.Time, reason string) {
+	event.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: "system", Evidence: reason}
+	appendExecutionEventAudit(st, *event, "execution_event_resolved", "system/execution-reconciler", now, map[string]any{"evidence": reason})
+}
+
 func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ, reason string, now time.Time) {
 	key := fmt.Sprintf("%s|%d|%s|%d", e.IntegrationID, e.Fence, typ, e.Reconciliation.Generation)
+	routeExecutionEvent(st, e, typ, reason, key, now)
+}
+
+func routeExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ, reason, key string, now time.Time) {
 	for _, ev := range st.ExecutionEvents {
 		if ev.DedupeKey == key {
 			return
 		}
 	}
+	child := integration(st, e.IntegrationID)
 	groups := []string{}
 	for _, g := range st.ExecutionGroups {
-		if g.ProductID == e.ProductID && g.ClosedAt == nil && slices.Contains(g.MemberIntegrationIDs, e.IntegrationID) {
+		if groupOwnsIntegration(g, child) {
 			groups = append(groups, g.ID)
 		}
 	}
@@ -54,8 +67,8 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
 	} else {
 		for _, g := range st.ExecutionGroups {
-			if g.ProductID == e.ProductID && g.ClosedAt == nil && slices.Contains(g.MemberIntegrationIDs, e.IntegrationID) && (g.OrchestratorHarness.SessionRef != "" || g.OrchestratorHarness.TmuxTarget != "") && g.OrchestratorHarness.Kind != "" {
-				wake = domain.ExecutionWakeTarget{Kind: g.OrchestratorHarness.Kind, SessionRef: g.OrchestratorHarness.SessionRef, TmuxTarget: g.OrchestratorHarness.TmuxTarget, Source: "group_orchestrator"}
+			if groupOwnsIntegration(g, child) && (g.OrchestratorHarness.SessionRef != "" || g.OrchestratorHarness.TmuxTarget != "") && g.OrchestratorHarness.Kind != "" {
+				wake = groupWakeTarget(g)
 				wakeGroupID = g.ID
 				break
 			}
@@ -69,9 +82,87 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 			}
 		}
 	}
-	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	if wake.Kind == "" && e.Reconciliation.Cause == domain.ExecutionCauseBlockerResolved && e.Harness.Kind != "" && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") {
+		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
+	}
+	owner, featureID := "", ""
+	if child != nil {
+		owner, featureID = child.Assignee, child.FeatureID
+	}
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, FeatureID: featureID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Cause: e.Reconciliation.Cause, Owner: owner, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	if event.Cause == domain.ExecutionCauseBlockerResolved && questionByID(st, e.BlockerRef) != nil {
+		event.QuestionIDs = []string{e.BlockerRef}
+	}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
+	if event.Cause == domain.ExecutionCauseBlockerResolved && wake.Kind == "" {
+		wakeUserContinuation(st, owner, event, now)
+	}
+}
+
+func groupWakeTarget(group domain.ExecutionGroup) domain.ExecutionWakeTarget {
+	harness := group.OrchestratorHarness
+	return domain.ExecutionWakeTarget{Kind: harness.Kind, SessionRef: harness.SessionRef, TmuxTarget: harness.TmuxTarget, Source: "group_orchestrator", GroupID: group.ID, HarnessRevision: group.HarnessRevision}
+}
+
+func groupContainsIntegration(group domain.ExecutionGroup, child *domain.Integration) bool {
+	return child != nil && child.ProductID == group.ProductID && group.ClosedAt == nil && slices.Contains(group.MemberIntegrationIDs, child.ID)
+}
+
+func groupOwnsIntegration(group domain.ExecutionGroup, child *domain.Integration) bool {
+	return groupContainsIntegration(group, child) && group.Owner == child.Assignee
+}
+
+func executionAssignmentUser(ctx context.Context) string {
+	if _, authenticated := auth.FromContext(ctx); authenticated {
+		return workUser(ctx)
+	}
+	return ""
+}
+
+func requireExecutionGroupOwner(ctx context.Context, group domain.ExecutionGroup) error {
+	if user, enforced := principalUser(ctx); enforced && (user == "" || user != group.Owner) {
+		return notAssignee(group.Owner)
+	}
+	return nil
+}
+
+func groupWakeCurrent(st *domain.State, event domain.ExecutionEvent) bool {
+	if event.WakeTarget.Source != "group_orchestrator" {
+		return true
+	}
+	child := integration(st, event.IntegrationID)
+	return slices.ContainsFunc(st.ExecutionGroups, func(group domain.ExecutionGroup) bool {
+		return groupOwnsIntegration(group, child) && group.Owner == event.Owner && group.ProductID == event.ProductID && event.WakeTarget == groupWakeTarget(group)
+	})
+}
+
+func executionEventAssignmentCurrent(st *domain.State, event domain.ExecutionEvent) bool {
+	if event.IntegrationID == "" {
+		return true
+	}
+	child := integration(st, event.IntegrationID)
+	var fence uint64
+	if execution := executionFor(st, event.IntegrationID); execution != nil {
+		fence = execution.Fence
+	}
+	return child != nil && child.Assignee == event.Owner && fence == event.Fence
+}
+
+func rerouteGroupWakes(st *domain.State, groupID string, now time.Time) {
+	for index := range st.ExecutionEvents {
+		event := &st.ExecutionEvents[index]
+		if event.Resolution.ResolvedAt != nil || event.WakeTarget.Source != "group_orchestrator" || event.WakeTarget.GroupID != groupID && !(event.WakeTarget.GroupID == "" && len(event.GroupIDs) > 0 && event.GroupIDs[0] == groupID) || groupWakeCurrent(st, *event) {
+			continue
+		}
+		retireExecutionEvent(st, event, now, "group wake target changed")
+		execution := executionFor(st, event.IntegrationID)
+		child := integration(st, event.IntegrationID)
+		if execution == nil || child == nil || child.Assignee != event.Owner || !execution.Reconciliation.ActionRequired || execution.Fence != event.Fence || execution.Reconciliation.Generation != event.ConditionGeneration || event.Cause == domain.ExecutionCauseBlockerResolved && !blockedExecutionPending(st, child, execution) {
+			continue
+		}
+		routeExecutionEvent(st, execution, event.Type, event.Reason, "reroute|"+event.ID, now)
+	}
 }
 
 func appendExecutionEventAudit(st *domain.State, ev domain.ExecutionEvent, action, actor string, now time.Time, data map[string]any) {
@@ -214,15 +305,42 @@ func validateExecutionInput(data map[string]any, action string, accepted ...stri
 	return nil
 }
 func executionCondition(st *domain.State, e *domain.IntegrationExecution, state string, required bool, reason string, now time.Time) {
-	if e.State == state && e.Reconciliation.ActionRequired == required && e.Reconciliation.Reason == reason {
+	executionConditionWithCause(st, e, state, required, reason, "", now)
+}
+
+func checkExecutionRenewal(ctx context.Context, st *domain.State, execution *domain.IntegrationExecution, now time.Time) error {
+	if execution.State != "running" {
+		child := integration(st, execution.IntegrationID)
+		if err := guardFeatureStart(ctx, st, child); err != nil {
+			return err
+		}
+		if execution.BlockerFence != nil && *execution.BlockerFence == execution.Fence && slices.ContainsFunc(st.Memories, func(memory domain.Memory) bool {
+			return memory.ID == execution.BlockerRef && memory.Kind == "blocker" && memory.Status == "open" && executionBlockerInScope(memory, child)
+		}) {
+			return invalid("OPEN_BLOCKER: %s", execution.BlockerRef)
+		}
+		return nil
+	}
+	if execution.LeaseUntil == nil || !now.Before(*execution.LeaseUntil) {
+		return invalid("LEASE_EXPIRED")
+	}
+	return nil
+}
+
+func executionConditionWithCause(st *domain.State, e *domain.IntegrationExecution, state string, required bool, reason string, cause domain.ExecutionEventCause, now time.Time) {
+	if e.State == state && e.Reconciliation.ActionRequired == required && e.Reconciliation.Reason == reason && e.Reconciliation.Cause == cause {
 		return
 	}
 	e.State = state
+	if state != "blocked" {
+		e.BlockerFence = nil
+	}
 	e.Reconciliation.ActionRequired = required
 	e.Reconciliation.Reason = reason
+	e.Reconciliation.Cause = cause
 	e.Reconciliation.Since = &now
 	e.Reconciliation.Generation++
-	resolveExecutionEvents(st, e, now, state)
+	resolveExecutionEvents(st, e.IntegrationID, now, state)
 	if required {
 		typ := ""
 		switch state {
@@ -314,7 +432,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 				for _, iid := range g.MemberIntegrationIDs {
 					e := executionFor(st, iid)
-					if e == nil || e.ProductID != c.ProductID || !executionOwnedByCaller(ctx, integration(st, iid)) {
+					child := integration(st, iid)
+					if e == nil || e.ProductID != c.ProductID || !groupOwnsIntegration(g, child) || !executionOwnedByCaller(ctx, child) {
 						continue
 					}
 					if e.TurnEndID != key {
@@ -346,10 +465,19 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
-				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) {
+				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || !groupWakeCurrent(st, *ev) || !registrationEventEligible(st, *ev) {
+					return invalid("INVALID_STATE")
+				}
+				if ev.Cause == domain.ExecutionCauseBlockerResolved {
+					child, execution := integration(st, ev.IntegrationID), executionFor(st, ev.IntegrationID)
+					if !blockedExecutionPending(st, child, execution) || execution.Reconciliation.Generation != ev.ConditionGeneration || guardFeatureStart(ctx, st, child) != nil {
+						return invalid("INVALID_STATE")
+					}
+				}
+				if ev.Owner != "" && !executionEventAssignmentCurrent(st, *ev) {
 					return invalid("INVALID_STATE")
 				}
 				beforeEscalation := ev.EscalationRequired
@@ -401,10 +529,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
-				if ev.Delivery.Attempts == 0 || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported") || ev.Delivery.AcknowledgedAt != nil {
+				if ev.Delivery.Attempts == 0 || x.DeliveryID == "" || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported") || ev.Delivery.AcknowledgedAt != nil {
 					return invalid("INVALID_STATE")
 				}
 				wasEscalated := ev.EscalationRequired
@@ -412,6 +540,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				ev.Delivery.AcknowledgedAt = &t
 				ev.Delivery.AcknowledgedBy = x.SupervisorID
 				ev.Acknowledgements = append(ev.Acknowledgements, domain.ExecutionEventAck{DeliveryID: x.DeliveryID, SupervisorID: x.SupervisorID, Outcome: x.Outcome, Detail: x.Detail, At: now})
+				if ev.Type == "work_available" && x.Outcome == "delivered" && ev.Resolution.ResolvedAt == nil {
+					ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: x.SupervisorID, Evidence: "wake delivered"}
+					appendExecutionEventAudit(st, *ev, "execution_event_resolved", x.SupervisorID, now, nil)
+				}
 				if x.Outcome == "delivered" && ev.Resolution.ResolvedAt == nil {
 					ex := executionFor(st, ev.IntegrationID)
 					if ex != nil && ex.Reconciliation.ActionRequired && ex.Reconciliation.Generation == ev.ConditionGeneration {
@@ -459,7 +591,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
 				if ev.Resolution.ResolvedAt != nil || x.SupervisorID == "" || x.Evidence == "" {
@@ -492,6 +624,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if err := requireIntegrationUser(ctx, in, true); err != nil {
 					return err
 				}
+			}
+			if err := guardFeatureStart(ctx, st, in); err != nil {
+				return err
 			}
 			e := executionFor(st, c.IntegrationID)
 			var x struct {
@@ -562,18 +697,14 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 						return invalid("TAKEOVER_NOT_REQUIRED")
 					}
 				}
-				if c.Action == "claim_execution" {
-					if user, enforced := principalUser(ctx); enforced && in.Assignee == "" {
-						in.Assignee = user
-						in.Actor, in.UpdatedAt = c.Actor, now
-					}
-				}
 				e.Fence++
 				e.LeaseUntil = nil
+				e.TurnEndAt = nil
 				e.State = "running"
 				e.DesiredState = x.DesiredState
 				e.OrchestratorID = x.OrchestratorID
 				e.AgentID = x.AgentID
+				e.LeasePrincipal = c.Actor
 				e.Harness = x.Harness
 				e.StalledTimeoutSeconds = x.StalledTimeoutSeconds
 				executionCondition(st, e, "running", false, "", now)
@@ -596,12 +727,6 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if in.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if c.Action == "claim_execution" {
-					if user, enforced := principalUser(ctx); enforced && in.Assignee == "" {
-						in.Assignee = user
-						in.Actor, in.UpdatedAt = c.Actor, now
-					}
-				}
 				ttl := x.LeaseTTLSeconds
 				if ttl <= 0 {
 					ttl = 300
@@ -613,8 +738,12 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				e = &domain.IntegrationExecution{ID: id(), IntegrationID: in.ID, ProductID: in.ProductID, DesiredState: x.DesiredState, State: "running", OrchestratorID: x.OrchestratorID, AgentID: x.AgentID, Harness: x.Harness, Fence: 1, LeaseTTLSeconds: ttl, LeaseUntil: &until, ClaimedAt: &now, LastHeartbeat: &now, LastProgress: &now, Reconciliation: domain.ExecutionReconciliation{Enabled: true}}
 				e.StalledTimeoutSeconds = x.StalledTimeoutSeconds
 				e.Reconciliation.ActionRequired = false
+				e.LeasePrincipal = c.Actor
 				st.IntegrationExecutions = append(st.IntegrationExecutions, *e)
 			}
+			assignUnassigned(in, executionAssignmentUser(ctx), c.Actor, now)
+			detachIncompatibleExecutionGroups(st, in, now)
+			resolveExecutionEvents(st, in.ID, now, "execution claimed")
 			out = *e
 		case "heartbeat_execution":
 			e := executionFor(st, c.IntegrationID)
@@ -630,8 +759,8 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if e.State != "running" && e.State != "stalled" && e.State != "lost" {
 				return invalid("INVALID_STATE")
 			}
-			if e.State == "running" && (e.LeaseUntil == nil || !now.Before(*e.LeaseUntil)) {
-				return invalid("LEASE_EXPIRED")
+			if err := checkExecutionRenewal(ctx, st, e, now); err != nil {
+				return err
 			}
 			if e.State == "lost" || e.State == "stalled" {
 				executionCondition(st, e, "running", false, "", now)
@@ -678,6 +807,11 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if state != "running" && state != "waiting_external" && state != "blocked" && state != "paused" && state != "cancelled" && state != "exited_incomplete" && state != "completed" {
 				return invalid("INVALID_STATE")
 			}
+			if state == "running" {
+				if err := checkExecutionRenewal(ctx, st, e, now); err != nil {
+					return err
+				}
+			}
 			if state == "completed" {
 				in := integration(st, c.IntegrationID)
 				if in == nil || !statusReachedIntegration(in.Status, e.DesiredState) {
@@ -714,23 +848,14 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				return invalid("BLOCKER_REFERENCE_REQUIRED")
 			}
 			if state == "blocked" {
-				found := false
-				for _, m := range st.Memories {
-					if m.ID == blockerRef && m.Kind == "blocker" {
-						productID := m.ProductID
-						if productID == "" {
-							if f := feature(st, m.FeatureID); f != nil {
-								productID = f.ProductID
-							}
-						}
-						if productID == e.ProductID {
-							found = true
-						}
-					}
-				}
-				if !found {
+				child := integration(st, e.IntegrationID)
+				if !slices.ContainsFunc(st.Memories, func(memory domain.Memory) bool {
+					return memory.ID == blockerRef && executionBlockerInScope(memory, child) && (memory.Kind == "blocker" && memory.Status == "open" || questionBlocked(memory))
+				}) {
 					return invalid("SCOPE_MISMATCH")
 				}
+				fence := e.Fence
+				e.BlockerFence = &fence
 			}
 			required := state == "exited_incomplete"
 			reason, _ := c.Data["reason"].(string)
@@ -778,6 +903,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if err := validateExecutionHarness(x.Harness); err != nil {
 				return err
 			}
+			owner := executionAssignmentUser(ctx)
 			for _, iid := range x.IntegrationIDs {
 				in := integration(st, iid)
 				if in == nil {
@@ -789,10 +915,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if err := requireIntegrationUser(ctx, in, true); err != nil {
 					return err
 				}
-				if user, enforced := principalUser(ctx); enforced && in.Assignee == "" {
-					in.Assignee = user
-					in.Actor, in.UpdatedAt = c.Actor, now
+				if in.Assignee != "" && in.Assignee != owner {
+					return notAssignee(in.Assignee)
 				}
+				assignUnassigned(in, owner, c.Actor, now)
 				if executionFor(st, iid) == nil {
 					state := "unassigned"
 					required := true
@@ -805,7 +931,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 					st.IntegrationExecutions = append(st.IntegrationExecutions, domain.IntegrationExecution{ID: id(), IntegrationID: iid, ProductID: in.ProductID, DesiredState: "ready", State: state, Reconciliation: domain.ExecutionReconciliation{Enabled: true, ActionRequired: required, Reason: reason, Since: &now}})
 				}
 			}
-			g := domain.ExecutionGroup{ID: id(), ProductID: c.ProductID, Name: x.Name, OrchestratorID: x.OrchestratorID, OrchestratorHarness: x.Harness, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now}}}
+			g := domain.ExecutionGroup{ID: id(), ProductID: c.ProductID, Owner: owner, Name: x.Name, OrchestratorID: x.OrchestratorID, OrchestratorHarness: x.Harness, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: x.IntegrationIDs, CreatedAt: now}}}
+			if x.Harness != (domain.ExecutionHarness{}) {
+				g.HarnessRevision = 1
+			}
 			st.ExecutionGroups = append(st.ExecutionGroups, g)
 			for _, iid := range x.IntegrationIDs {
 				if e := executionFor(st, iid); e != nil && e.Reconciliation.ActionRequired {
@@ -840,12 +969,14 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if c.ProductID != g.ProductID {
 				return invalid("SCOPE_MISMATCH")
 			}
-			for _, iid := range g.MemberIntegrationIDs {
-				if err := requireIntegrationUser(ctx, integration(st, iid), true); err != nil {
-					return err
-				}
+			if err := requireExecutionGroupOwner(ctx, *g); err != nil {
+				return err
 			}
-			g.OrchestratorHarness = harness
+			if g.OrchestratorHarness != harness {
+				g.OrchestratorHarness = harness
+				g.HarnessRevision++
+				rerouteGroupWakes(st, g.ID, now)
+			}
 			out = *g
 		case "add_execution_group_member", "remove_execution_group_member":
 			gid, _ := c.Data["group_id"].(string)
@@ -869,13 +1000,17 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if in.ProductID != g.ProductID {
 				return invalid("SCOPE_MISMATCH")
 			}
-			if err := requireIntegrationUser(ctx, in, true); err != nil {
+			if err := requireExecutionGroupOwner(ctx, *g); err != nil {
 				return err
 			}
-			for _, memberID := range g.MemberIntegrationIDs {
-				if err := requireIntegrationUser(ctx, integration(st, memberID), true); err != nil {
-					return err
+			if c.Action == "add_execution_group_member" {
+				if g.ClosedAt != nil {
+					return invalid("INVALID_STATE")
 				}
+				if in.Assignee != "" && in.Assignee != g.Owner {
+					return notAssignee(in.Assignee)
+				}
+				assignUnassigned(in, g.Owner, c.Actor, now)
 			}
 			next := append([]string{}, g.MemberIntegrationIDs...)
 			idx := -1
@@ -897,6 +1032,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			g.MemberIntegrationIDs = next
 			rev := uint64(len(g.Revisions) + 1)
 			g.Revisions = append(g.Revisions, domain.ExecutionGroupRevision{Revision: rev, MemberIntegrationIDs: next, CreatedAt: now})
+			if c.Action == "remove_execution_group_member" {
+				rerouteGroupWakes(st, g.ID, now)
+			}
 			out = *g
 		case "set_product_stalled_timeout":
 			var p *domain.Product
@@ -954,6 +1092,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 		}
 		oldState, oldRequired, oldReason := e.State, e.Reconciliation.ActionRequired, e.Reconciliation.Reason
 		next, required, reason := oldState, oldRequired, oldReason
+		cause := e.Reconciliation.Cause
 		if statusReachedIntegration(in.Status, e.DesiredState) {
 			next, required, reason = "completed", false, ""
 		} else {
@@ -970,7 +1109,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 				}
 			case "stalled":
 				timeout, _ := effectiveStalledTimeout(st, e, globalTimeout)
-				if timeout == 0 || (e.LastProgress != nil && now.Sub(*e.LastProgress) <= time.Duration(timeout)*time.Second) {
+				if (timeout == 0 || (e.LastProgress != nil && now.Sub(*e.LastProgress) <= time.Duration(timeout)*time.Second)) && guardFeatureStart(context.Background(), st, in) == nil {
 					next, required, reason = "running", false, ""
 				}
 			case "unassigned", "lost", "exited_incomplete":
@@ -998,16 +1137,17 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 					}
 				}
 			case "blocked":
-				required = false
-				for _, m := range st.Memories {
-					if m.ID == e.BlockerRef && m.Kind == "blocker" && m.Status == "resolved" {
-						required, reason = true, "blocker resolved"
-					}
+				required, reason, cause = false, "", ""
+				if blockedExecutionPending(st, in, e) && guardFeatureStart(context.Background(), st, in) == nil {
+					required, reason, cause = true, "blocker resolved", domain.ExecutionCauseBlockerResolved
 				}
 			}
 		}
-		if next != oldState || required != oldRequired || reason != oldReason {
-			executionCondition(st, e, next, required, reason, now)
+		if next != "blocked" {
+			cause = ""
+		}
+		if next != oldState || required != oldRequired || reason != oldReason || cause != e.Reconciliation.Cause {
+			executionConditionWithCause(st, e, next, required, reason, cause, now)
 			if next == "completed" {
 				e.LeaseUntil = nil
 			}
@@ -1018,18 +1158,23 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 	// them as debounce inputs and raises continuation events for unfinished
 	// members of each still-open group owned by the same orchestrator.
 	for i := range st.IntegrationExecutions {
-		source := &st.IntegrationExecutions[i]
+		source := st.IntegrationExecutions[i]
 		if source.TurnEndAt == nil || source.TurnEndID == "" || now.Before(source.TurnEndAt.Add(time.Duration(debounce)*time.Second)) {
 			continue
 		}
+		st.IntegrationExecutions[i].TurnEndAt = nil
+		changed = true
 		for _, g := range st.ExecutionGroups {
-			if g.ProductID != source.ProductID || g.OrchestratorID != source.OrchestratorID || g.ClosedAt != nil {
+			if g.OrchestratorID != source.OrchestratorID || !groupOwnsIntegration(g, integration(st, source.IntegrationID)) {
 				continue
 			}
 			for _, iid := range g.MemberIntegrationIDs {
 				e := executionFor(st, iid)
 				in := integration(st, iid)
-				if e == nil || in == nil || e.ProductID != source.ProductID || e.State == "completed" || e.State == "paused" || e.State == "cancelled" || ((e.State == "waiting_external" || e.State == "blocked") && !e.Reconciliation.ActionRequired) || statusReachedIntegration(in.Status, e.DesiredState) {
+				if e == nil || !groupOwnsIntegration(g, in) || e.ProductID != source.ProductID || e.State == "completed" || e.State == "paused" || e.State == "cancelled" || e.State == "blocked" || (e.State == "waiting_external" && !e.Reconciliation.ActionRequired) || statusReachedIntegration(in.Status, e.DesiredState) {
+					continue
+				}
+				if e.ClaimedAt != nil && e.ClaimedAt.After(*source.TurnEndAt) {
 					continue
 				}
 				if e.State == "exited_incomplete" && e.Reconciliation.ActionRequired && e.Reconciliation.Reason == "turn ended with unfinished group work" {
@@ -1038,11 +1183,9 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 				if e.OrchestratorID == "" {
 					e.OrchestratorID = source.OrchestratorID
 				}
-				e.TurnEndAt = source.TurnEndAt
 				e.TurnEndID = source.TurnEndID
 				executionCondition(st, e, "exited_incomplete", true, "turn ended with unfinished group work", now)
-				e.TurnEndAt = nil // consume this debounced report; later claims must not replay it
-				changed = true
+				e.TurnEndAt = nil
 			}
 		}
 	}
@@ -1062,8 +1205,9 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	changed := false
 	if err := s.view(ctx, func(st *domain.State) error {
 		// Borrow read-only state and copy only the collection the plan mutates.
-		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups}
+		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups, ExecutionEvents: slices.Clone(st.ExecutionEvents), Features: st.Features, FeatureDependencies: st.FeatureDependencies, UserOrchestrators: slices.Clone(st.UserOrchestrators)}
 		changed = reconcileExecutions(&snapshot, now, globalTimeout, debounce)
+		changed = reconcileUserWork(&snapshot, now) || changed
 		return nil
 	}); err != nil {
 		return err
@@ -1077,8 +1221,61 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("execution reconciler requires UpdateScoped")
 	}
-	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
+	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events", "user_orchestrators"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
 		reconcileExecutions(st, now, globalTimeout, debounce)
+		reconcileUserWork(st, now)
 		return nil
 	})
+}
+
+func leasePrincipal(execution *domain.IntegrationExecution) string {
+	if execution.LeasePrincipal != "" {
+		return execution.LeasePrincipal
+	}
+	return execution.AgentID
+}
+
+func executionBlockerInScope(memory domain.Memory, child *domain.Integration) bool {
+	return child != nil && (memory.ProductID == child.ProductID || memory.ProductID == "") && memory.FeatureID == child.FeatureID && (memory.IntegrationID == child.ID || memory.IntegrationID == "")
+}
+
+func blockedExecutionPending(st *domain.State, child *domain.Integration, execution *domain.IntegrationExecution) bool {
+	if child == nil || execution == nil || execution.State != "blocked" || execution.BlockerFence == nil || *execution.BlockerFence != execution.Fence || statusReachedIntegration(child.Status, execution.DesiredState) {
+		return false
+	}
+	return slices.ContainsFunc(st.Memories, func(memory domain.Memory) bool {
+		return memory.ID == execution.BlockerRef && executionBlockerInScope(memory, child) && (memory.Kind == "blocker" && memory.Status == "resolved" || memory.Kind == "question" && memory.Question != nil && memory.Question.Blocking && (memory.Status == "answered" || memory.Status == "withdrawn"))
+	})
+}
+
+func wakeResolvedQuestion(st *domain.State, question domain.Memory, now time.Time) bool {
+	found := false
+	for index := range st.IntegrationExecutions {
+		execution := &st.IntegrationExecutions[index]
+		if execution.ProductID != question.ProductID || execution.State != "blocked" || execution.BlockerRef != question.ID {
+			continue
+		}
+		found = true
+		if child := integration(st, execution.IntegrationID); blockedExecutionPending(st, child, execution) && guardFeatureStart(context.Background(), st, child) == nil {
+			executionConditionWithCause(st, execution, "blocked", true, "blocker resolved", domain.ExecutionCauseBlockerResolved, now)
+		}
+	}
+	return found
+}
+
+func executionEventVisibleTo(ctx context.Context, st *domain.State, event domain.ExecutionEvent) bool {
+	if event.Type == "work_available" {
+		return event.Owner != "" && event.Owner == workUser(ctx)
+	}
+	return executionVisibleTo(ctx, integration(st, event.IntegrationID))
+}
+
+func requireExecutionEventUser(ctx context.Context, st *domain.State, event *domain.ExecutionEvent) error {
+	if event.Type == "work_available" {
+		if !executionEventVisibleTo(ctx, st, *event) {
+			return missing("execution_event", event.ID)
+		}
+		return nil
+	}
+	return requireIntegrationUser(ctx, integration(st, event.IntegrationID), false)
 }

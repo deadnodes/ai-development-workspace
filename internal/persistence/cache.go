@@ -155,6 +155,17 @@ func (s *stateSnapshots) updateCollections(ctx context.Context, tx stateTransact
 			return err
 		}
 	}
+	if scope != nil && scope.FeatureRestoreHistoryID != "" {
+		for _, feature := range before.Features {
+			if feature.ID == scope.FeatureRestoreHistoryID && feature.Status == "archived" && feature.ArchivedFrom == "" {
+				st.Events, err = featureRestoreEvents(ctx, tx, feature, st.Events)
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
 	writeEvents := st.Events
 	selected := map[string]bool{"events": true}
 	appendOnly := map[string]bool{}

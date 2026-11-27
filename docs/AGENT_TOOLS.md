@@ -4258,6 +4258,497 @@ Request reconciliation of an existing deployment.
 
 **Authority:** Queues configured reconciliation only; does not guarantee healthy runtime.
 
+## owner work
+
+### `ask_question` — execute_action
+
+Store an owner question with its context and recommendation.
+
+**When:** Before pausing for owner input; reference visible records in the same Product.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `feature_id` (string, required): Visible feature that owns the question or proposal
+- `integration_id` (string, optional): Optional Integration scope
+- `kind` (string, required): question, conflict, or decision
+- `options` (array[object], optional): Stable option IDs, labels and consequences
+- `context_refs` (array[string], optional): Same-Product feature, integration, memory, or finding IDs
+
+**Output:** Open question memory; a blocking question can pause the caller's live lease.
+
+**Errors:**
+
+- `VALIDATION`: Supply a recommendation for conflicts and decisions.
+
+**Example:** `{"action":"ask_question","feature_id":"FEATURE","integration_id":"INTEGRATION","data":{"title":"Keep v1?","body":"Two consumers still use v1.","kind":"decision","options":[{"id":"keep","label":"Keep v1","consequence":"No client migration"}],"recommendation":"keep","context_refs":["FEATURE"],"blocking":true}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** The server resolves the addressee and asker. This does not grant a lease.
+
+### `answer_questions` — execute_action
+
+Record a batch of owner-approved, context-validated answers atomically.
+
+**When:** Fetch questions from RCP, validate every answer, and object before relaying a contradiction.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `answers` (array[object], required): Question ID, text, optional option, validation verdict and note, optional override
+
+**Output:** Answered question records and durable decision memories; blockers resolve and wake when applicable.
+
+**Errors:**
+
+- `ANSWER_NEEDS_CLARIFICATION`: Explain the conflict or ambiguity to the owner; override only after they insist.
+
+**Example:** `{"action":"answer_questions","data":{"answers":[{"question_id":"QUESTION","text":"Keep v1 until clients migrate.","option_id":"keep","validation":{"verdict":"consistent","note":"Both clients still depend on v1."}}]}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Only the addressee or their agent may answer. The verdict is caller-supplied, not a server fact check.
+
+### `withdraw_question` — execute_action
+
+Withdraw an open question and retain the reason.
+
+**When:** When the question no longer needs an answer.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `question_id` (string, required): Open question ID
+- `reason` (string, required): Reason the answer is no longer needed
+
+**Output:** Withdrawn question memory and resolution of any linked blocker.
+
+**Errors:**
+
+- `NOT_FOUND`: Use the exact visible question ID from RCP.
+
+**Example:** `{"action":"withdraw_question","data":{"question_id":"QUESTION","reason":"The client migration finished."}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Only the asker, addressee, or their agents may withdraw.
+
+### `set_idea_promotion` — execute_action
+
+Set the Product's agent approval policy.
+
+**When:** When the Product owner explicitly delegates or revokes routine approvals.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `product_id` (string, required): Owned Product
+- `idea_promotion` (string, required): ask_owner or agent_allowed
+
+**Output:** Updated Product policy.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the Product owner as a human may set this policy.
+
+**Example:** `{"action":"set_idea_promotion","product_id":"PRODUCT","data":{"idea_promotion":"ask_owner"}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Default ask_owner; agent_allowed does not grant Product access or release rights.
+
+### `request_idea_promotion` — execute_action
+
+Ask the owner to promote an idea.
+
+**When:** When an idea is actionable and agent approval policy requires a decision.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `feature_id` (string, required): Visible feature that owns the question or proposal
+- `rationale` (string, required): Why the idea is ready now
+
+**Output:** Open approve/reject decision; approval atomically moves the idea to ready_for_execution.
+
+**Errors:**
+
+- `VALIDATION`: Use a feature that is still an idea and does not have an open promotion request.
+
+**Example:** `{"action":"request_idea_promotion","feature_id":"FEATURE","data":{"rationale":"Acceptance criteria and prerequisites are known."}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Asks for approval; it does not start execution.
+
+### `propose_dependency` — execute_action
+
+Propose a requires or relates edge between visible features.
+
+**When:** When planning work with the owner; requires means the target must complete first.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `from_feature_id` (string, required): Dependent feature
+- `to_feature_id` (string, required): Prerequisite or related feature
+- `type` (string, required): requires or relates
+- `rationale` (string, required): Why this relationship exists
+- `accept` (boolean, optional): Human-only direct acceptance
+
+**Output:** New proposed edge, or accepted edge for an eligible human requesting direct acceptance.
+
+**Errors:**
+
+- `DEPENDENCY_CYCLE`: Remove the proposed cycle before accepting a requires edge.
+
+**Example:** `{"action":"propose_dependency","data":{"from_feature_id":"FEATURE","to_feature_id":"PREREQUISITE","type":"requires","rationale":"Needs the schema change first."}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Requires write access to both Products; agents propose by default.
+
+### `decide_dependency` — execute_action
+
+Accept or reject a proposed dependency.
+
+**When:** After reviewing the exact proposed edge and its effect on execution.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `dependency_id` (string, required): Proposed edge
+- `decision` (string, required): accept or reject
+- `approval_question_id` (string, optional): Answered approval for this edge
+
+**Output:** Decided edge with attribution and timestamp.
+
+**Errors:**
+
+- `OWNER_APPROVAL_REQUIRED`: Ask the owner or have them explicitly enable agent_allowed.
+
+**Example:** `{"action":"decide_dependency","data":{"dependency_id":"EDGE","decision":"accept"}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Requires write access to both Products; agent acceptance needs policy or an exact approving decision.
+
+### `request_dependency_decision` — execute_action
+
+Ask the Product owner to approve an exact action on a proposed edge.
+
+**When:** When the agent cannot decide under Product policy.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `dependency_id` (string, required): Proposed edge
+- `decision` (string, optional): Action to approve: accept (default) or reject
+
+**Output:** Open decision question bound to the edge, action, and attempt.
+
+**Errors:**
+
+- `VALIDATION`: Use an open proposal the owner can review in the dependency graph.
+
+**Example:** `{"action":"request_dependency_decision","data":{"dependency_id":"EDGE","decision":"accept"}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Only creates a question; the Product owner must decide.
+
+### `register_user_orchestrator` — execute_action
+
+Register the current user's harness for work-available wakes.
+
+**When:** When starting a supervisor-backed personal work queue.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `product_id` (string, optional): Product scope; omission means all visible products
+- `harness` (object, required): Kind plus session_ref or tmux_target
+
+**Output:** User and optional Product-scoped registration and current generation.
+
+**Errors:**
+
+- `VALIDATION`: Specify a supported harness kind and session reference or tmux target.
+
+**Example:** `{"action":"register_user_orchestrator","product_id":"PRODUCT","data":{"harness":{"kind":"codex","tmux_target":"rcp:1.0"}}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Registers the caller only. A wake is not a claim or execution authority.
+
+### `unregister_user_orchestrator` — execute_action
+
+Remove the current user's work wake registration.
+
+**When:** When stopping the registered orchestrator.
+
+**Inputs:**
+
+- `action` (string, required): Exact execute action name
+- `data` (object, required): Action-specific payload
+- `product_id` (string, optional): Product scope; omission means all visible products
+
+**Output:** Reports whether a registration was removed; queued wakes are retired.
+
+**Errors:**
+
+- `FORBIDDEN`: Use the registering human identity or its agent and the same scope.
+
+**Example:** `{"action":"unregister_user_orchestrator","product_id":"PRODUCT","data":{}}`
+
+**Related:** `list_questions`, `get_dependency_graph`, `next_work`
+
+**Authority:** Cannot unregister another user or modify their execution lease.
+
+### `list_questions` — mcp_tool
+
+List visible questions addressed to the selected human.
+
+**When:** Fetch the current batch from RCP before consulting the owner.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope; omission means all visible products
+- `addressed_to` (string, optional): Human ID; defaults to me
+- `status` (string, optional): open, answered or withdrawn
+- `feature_id` (string, optional): Optional visible feature filter
+- `limit` (integer, optional): Page size, max 100
+- `cursor` (string, optional): Continuation from previous page
+
+**Output:** Question titles, bodies, options, resolved context titles and pagination cursor.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for list_questions.
+
+**Example:** `{"status":"open","addressed_to":"me"}`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `GET /api/questions` — http_route
+
+List visible questions addressed to the selected human.
+
+**When:** Fetch the current batch from RCP before consulting the owner.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope; omission means all visible products
+- `addressed_to` (string, optional): Human ID; defaults to me
+- `status` (string, optional): open, answered or withdrawn
+- `feature_id` (string, optional): Optional visible feature filter
+- `limit` (integer, optional): Page size, max 100
+- `cursor` (string, optional): Continuation from previous page
+
+**Output:** Question titles, bodies, options, resolved context titles and pagination cursor.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for list_questions.
+
+**Example:** `GET /api/questions?addressed_to=me`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `get_question` — mcp_tool
+
+Read one visible question and its answer.
+
+**When:** Verify live context, options and scope before relaying an answer.
+
+**Inputs:**
+
+- `question_id` (string, required): Exact question ID (id in HTTP path)
+
+**Output:** Full question with resolved context titles and any recorded answer.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for get_question.
+
+**Example:** `{"question_id":"QUESTION"}`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `GET /api/questions/{id}` — http_route
+
+Read one visible question and its answer.
+
+**When:** Verify live context, options and scope before relaying an answer.
+
+**Inputs:**
+
+- `question_id` (string, required): Exact question ID (id in HTTP path)
+
+**Output:** Full question with resolved context titles and any recorded answer.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for get_question.
+
+**Example:** `GET /api/questions/QUESTION`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `get_dependency_graph` — mcp_tool
+
+Read visible feature dependency edges and readiness.
+
+**When:** Before planning work or reviewing a proposed dependency.
+
+**Inputs:**
+
+- `product_id` (string, required): Visible Product (id in HTTP path)
+- `include_proposed` (boolean, optional): Include proposals in addition to accepted edges
+
+**Output:** Nodes, waiting_on prerequisites and accepted or optionally proposed edges.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for get_dependency_graph.
+
+**Example:** `{"product_id":"PRODUCT","include_proposed":true}`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `GET /api/products/{id}/dependency-graph` — http_route
+
+Read visible feature dependency edges and readiness.
+
+**When:** Before planning work or reviewing a proposed dependency.
+
+**Inputs:**
+
+- `product_id` (string, required): Visible Product (id in HTTP path)
+- `include_proposed` (boolean, optional): Include proposals in addition to accepted edges
+
+**Output:** Nodes, waiting_on prerequisites and accepted or optionally proposed edges.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for get_dependency_graph.
+
+**Example:** `GET /api/products/PRODUCT/dependency-graph?include_proposed=true`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `next_work` — mcp_tool
+
+Read the caller's ordered execution and planning queue.
+
+**When:** After a work_available wake or when looking for eligible work.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope; omission means all visible products
+- `limit` (integer, optional): Eligible item limit, max 100
+
+**Output:** Eligible items, including assignee-only resume items with a fence and next action, and up to 20 blocked items with redacted reasons.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for next_work.
+
+**Example:** `{"limit":10}`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `GET /api/next-work` — http_route
+
+Read the caller's ordered execution and planning queue.
+
+**When:** After a work_available wake or when looking for eligible work.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope; omission means all visible products
+- `limit` (integer, optional): Eligible item limit, max 100
+
+**Output:** Eligible items, including assignee-only resume items with a fence and next action, and up to 20 blocked items with redacted reasons.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for next_work.
+
+**Example:** `GET /api/next-work?limit=10`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `status_overview` — mcp_tool
+
+Read per-Product owner-work counts and short lists.
+
+**When:** For a laptop overview of questions, ideas, execution and recent completions.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope; omission means all visible products
+
+**Output:** Visible Products and bounded lists with complete counts.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for status_overview.
+
+**Example:** `{}`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
+### `GET /api/status-overview` — http_route
+
+Read per-Product owner-work counts and short lists.
+
+**When:** For a laptop overview of questions, ideas, execution and recent completions.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product scope; omission means all visible products
+
+**Output:** Visible Products and bounded lists with complete counts.
+
+**Errors:**
+
+- `NOT_FOUND`: Check that the requested scope is visible for status_overview.
+
+**Example:** `GET /api/status-overview`
+
+**Related:** `list_questions`, `next_work`
+
+**Authority:** Read-only; does not grant access or change ownership.
+
 ## release
 
 ### `confirm_candidate_dev_restoration` — execute_action
@@ -5689,27 +6180,51 @@ Append a structured checkpoint for the next agent or session.
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+### `adopt_product_ownership` — execute_action
+
+Explicitly adopt an unowned or locally owned Product without changing visibility.
+
+**When:** An authenticated human with Product write access may adopt it for themselves; an administrator may designate a human owner.
+
+**Inputs:**
+
+- `product_id` (string, optional): Product to adopt
+- `user_id` (string, optional): Administrator-only human owner ID; defaults to the authenticated human caller
+
+**Output:** Product with its assigned owner.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is missing or not visible to this caller.
+- `FORBIDDEN`: Agents cannot adopt ownership, and an existing human owner cannot be replaced.
+
+**Example:** `{"action":"adopt_product_ownership","product_id":"PRODUCT","data":{}}`
+
+**Related:** `set_product_visibility`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
 ### `set_product_visibility` — execute_action
 
-Set a Product to shared or private; only its owner or bootstrap service may change visibility.
+Set a Product to shared or private without changing its owner.
 
-**When:** Use to restrict an existing Product or share it again.
+**When:** Use to restrict an existing Product or share it again. Adopt an unowned Product explicitly before making it private.
 
 **Inputs:**
 
 - `product_id` (string, optional): Product to update
 - `visibility` (string, optional): shared or private
 
-**Output:** Updated Product visibility and owner metadata.
+**Output:** Updated Product visibility.
 
 **Errors:**
 
 - `NOT_FOUND`: Product is missing or not visible to this caller.
-- `FORBIDDEN`: Only the owner or bootstrap service may change visibility.
+- `FORBIDDEN`: Only the owner, local administrator or bootstrap service may change visibility.
 
 **Example:** `{"action":"set_product_visibility","product_id":"PRODUCT","data":{"visibility":"private"}}`
 
-**Related:** `create_product`, `add_product_member`
+**Related:** `adopt_product_ownership`, `create_product`, `add_product_member`
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 

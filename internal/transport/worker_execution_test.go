@@ -44,6 +44,9 @@ func workerTransportFixture(t *testing.T, productVisibility ...string) (*applica
 	s.ConfigureWorkers(a)
 	if len(productVisibility) > 0 {
 		owner := auth.WithPrincipal(ctx, auth.Principal{Kind: "human", ID: "human/owner", Products: []string{"p"}, Permissions: []string{"write"}})
+		if _, err := s.Execute(owner, domain.Command{Action: "adopt_product_ownership", ProductID: "p"}); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := s.Execute(owner, domain.Command{Action: "set_product_visibility", ProductID: "p", Data: map[string]any{"visibility": productVisibility[0]}}); err != nil {
 			t.Fatal(err)
 		}

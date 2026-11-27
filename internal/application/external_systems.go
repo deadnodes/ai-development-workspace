@@ -52,7 +52,7 @@ func applyExternalSystems(st *domain.State, c domain.Command, m domain.Meta) (an
 			input.Contracts = previous.Contracts
 			input.Notes = previous.Notes
 		}
-		if e := decode(c.Data, &input); e != nil {
+		if e := decodeWritable(c.Data, &input, "name", "description", "team", "contact", "interfaces", "contracts", "notes"); e != nil {
 			return nil, m, e
 		}
 		input.Name = strings.TrimSpace(input.Name)

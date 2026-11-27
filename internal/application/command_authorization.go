@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
@@ -34,12 +35,12 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	// derived gates). Other commands retain the fully isolated callback contract.
 	var scope *domain.StateMutationScope
 	switch s.command.Action {
-	case "claim_execution": // a claim also assigns an unassigned Integration to the caller's user
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
-	case "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
+	case "claim_execution", "takeover_execution":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events", "execution_groups"}, AppendCollections: []string{"events"}}
+	case "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
 	case "assign_integration", "unassign_integration":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events", "execution_groups", "memories"}, AppendCollections: []string{"events"}}
 	case "report_turn_end":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
 	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
@@ -47,9 +48,9 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	case "create_execution_group":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"integration_executions", "execution_groups", "events", "execution_events"}}
 	case "add_execution_group_member", "remove_execution_group_member":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups"}, AppendCollections: []string{"events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "execution_groups", "execution_events", "user_orchestrators"}, AppendCollections: []string{"events"}}
 	case "set_execution_group_harness":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups"}, AppendCollections: []string{"events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups", "execution_events", "user_orchestrators"}, AppendCollections: []string{"events"}}
 	case "set_product_stalled_timeout":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"products"}, AppendCollections: []string{"events"}}
 	case "record_runtime_observation":
@@ -69,8 +70,13 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 		} else {
 			scope = &domain.StateMutationScope{MutableCollections: []string{"features", "integrations", "gates"}}
 		}
-	case "create_feature", "update_feature":
+	case "create_feature":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"features", "gates"}}
+	case "update_feature":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"features", "gates", "memories", "events"}}
+		if status, _ := s.command.Data["status"].(string); status != "" && status != "archived" {
+			scope.FeatureRestoreHistoryID = s.command.FeatureID
+		}
 	case "resolve_blocker":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"memories", "gates"}}
 	}
@@ -95,6 +101,23 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 		}
 		scope.EventReferences = ids
 	}
+	reconcileWork := true
+	switch s.command.Action {
+	case "delete_product", "record_runtime_observation", "record_progress", "record_decision", "record_discovery", "add_blocker", "handoff", "resolve_blocker", "set_product_stalled_timeout", "set_execution_group_harness", "remove_execution_group_member", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
+		reconcileWork = false
+	}
+	if reconcileWork && scope != nil && !scope.AllCollections {
+		if !slices.Contains(scope.MutableCollections, "user_orchestrators") {
+			scope.MutableCollections = append(scope.MutableCollections, "user_orchestrators")
+		}
+		scope.AppendCollections = slices.DeleteFunc(scope.AppendCollections, func(name string) bool { return name == "execution_events" })
+		if !slices.Contains(scope.MutableCollections, "execution_events") {
+			scope.MutableCollections = append(scope.MutableCollections, "execution_events")
+		}
+		if !slices.Contains(scope.MutableCollections, "events") && !slices.Contains(scope.AppendCollections, "events") {
+			scope.AppendCollections = append(scope.AppendCollections, "events")
+		}
+	}
 	if scoped, ok := s.Store.(interface {
 		UpdateScoped(context.Context, domain.StateMutationScope, func(*domain.State) error) error
 	}); ok && scope != nil {
@@ -108,7 +131,13 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 				return err
 			}
 		}
-		return change(st)
+		if err := change(st); err != nil {
+			return err
+		}
+		if reconcileWork && len(st.UserOrchestrators) > 0 {
+			reconcileUserWork(st, nowUTC())
+		}
+		return nil
 	})
 	if errors.Is(err, domain.ErrIdentityExists) {
 		return invalid("id already exists")

@@ -94,3 +94,43 @@ func referenceEvents(ctx context.Context, tx stateTransaction, ids []string, kno
 	}
 	return events, rows.Err()
 }
+
+func featureRestoreEvents(ctx context.Context, tx stateTransaction, feature domain.Feature, known []domain.Event) ([]domain.Event, error) {
+	rows, err := tx.Query(ctx, `WITH history AS (
+		SELECT sequence, document, document->>'action' AS action, document->'data'->'data'->>'status' AS status
+		FROM events WHERE product_id=$1 AND feature_id=$2
+		UNION ALL
+		SELECT sequence, document, 'approve_idea_promotion', NULL
+		FROM events WHERE product_id=$1 AND feature_id='' AND document->>'entity_id'=$2 AND document->>'action'='approve_idea_promotion'
+	), last_archive AS (
+		SELECT MAX(sequence) AS sequence FROM history WHERE document->>'entity_id'=$2 AND action='update_feature' AND status='archived'
+	), transitions AS (
+		SELECT MAX(sequence) AS sequence FROM history WHERE sequence<(SELECT sequence FROM last_archive) AND document->>'entity_id'=$2
+		AND (action IN ('create_feature','approve_idea_promotion') OR (action='update_feature' AND status IN ('idea','ready_for_execution','planned','active','blocked','completed')))
+	), archive AS (
+		SELECT MIN(sequence) AS sequence FROM history WHERE sequence>COALESCE((SELECT sequence FROM transitions),0)
+		AND document->>'entity_id'=$2 AND action='update_feature' AND status='archived'
+	), reopens AS (
+		SELECT MAX(sequence) AS sequence FROM history WHERE sequence>(SELECT sequence FROM transitions) AND sequence<(SELECT sequence FROM archive) AND
+		(action IN ('create_integration','update_integration','start_integration') OR (action='transition_integration' AND status IN ('planned','working','implemented','verifying')))
+	)
+	SELECT document FROM history WHERE sequence IN (SELECT sequence FROM archive UNION ALL SELECT sequence FROM transitions UNION ALL SELECT sequence FROM reopens)
+	ORDER BY sequence`, feature.ProductID, feature.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := append([]domain.Event(nil), known...)
+	for rows.Next() {
+		var raw []byte
+		var event domain.Event
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}

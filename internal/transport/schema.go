@@ -2,6 +2,7 @@ package transport
 
 import (
 	"releasecontrol/internal/domain"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -41,6 +42,18 @@ func CommandSchema() map[string]any {
 	data["expected_selection"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"composition_id", "operation_id", "generation"}, "properties": map[string]any{"composition_id": str(), "operation_id": str(), "generation": map[string]any{"type": "integer", "minimum": 0}}}
 	data["idempotency_key"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 	data["execution_fence"] = map[string]any{"type": "integer", "minimum": 1}
+	for _, field := range strings.Fields("question_id recommendation rationale from_feature_id to_feature_id dependency_id decision approval_question_id idea_promotion") {
+		data[field] = str()
+	}
+	object := func(fields map[string]any, required ...string) map[string]any {
+		return map[string]any{"type": "object", "properties": fields, "required": required, "additionalProperties": false}
+	}
+	enum := func(values ...string) map[string]any { return map[string]any{"type": "string", "enum": values} }
+	data["accept"] = map[string]any{"type": "boolean"}
+	data["priority"] = map[string]any{"type": []string{"integer", "null"}}
+	data["context_refs"] = map[string]any{"type": "array", "items": str(), "maxItems": 50}
+	data["options"] = map[string]any{"type": "array", "maxItems": 20, "items": object(map[string]any{"id": str(), "label": str(), "consequence": str()}, "id", "label", "consequence")}
+	data["answers"] = map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": object(map[string]any{"question_id": str(), "text": str(), "option_id": str(), "override": map[string]any{"type": "boolean"}, "validation": object(map[string]any{"verdict": enum("consistent", "contradicts", "unclear"), "note": str()}, "verdict", "note")}, "question_id", "text", "validation")}
 	for _, k := range strings.Fields("resolution_conflict_ids result_ids requirements constraints repositories dependencies acceptance_criteria working_areas remaining completed next warnings integration_ids gate_ids excluded_integration_ids interfaces contracts external_system_ids relationship_ids preconditions expected_outcomes finding_ids revision_ids") {
 		data[k] = map[string]any{"type": "array", "items": str()}
 	}
@@ -96,7 +109,8 @@ func CommandSchema() map[string]any {
 	data["components"] = map[string]any{"anyOf": []any{compositionComponents, map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": scenarioComponent, "additionalProperties": false, "required": []string{"application_id", "operation_id", "source_sha", "artifact_digest"}}}}}
 	data["observations"] = map[string]any{"anyOf": []any{str(), map[string]any{"type": "array", "items": str()}}}
 	data["role"] = map[string]any{"type": "string", "enum": domain.RepositoryRoles()}
-	data["kind"] = map[string]any{"type": "string", "enum": domain.ComponentKinds()}
+	data["kind"] = enum(append(domain.ComponentKinds(), "question", "conflict", "decision")...)
+	data["harness"] = object(map[string]any{"kind": str(), "tmux_target": str(), "session_ref": str()}, "kind")
 	data["format"] = map[string]any{"type": "string", "enum": domain.PublicationFormats()}
 	props["data"] = map[string]any{"type": "object", "properties": data, "additionalProperties": false}
 	actions := []struct{ names, refs, required string }{
@@ -150,7 +164,11 @@ func CommandSchema() map[string]any {
 		{"deploy_integration", "integration_id", "environment_id"},
 		{"cancel_native_delivery", "product_id id", ""},
 		{"deploy_existing_artifact", "integration_id", "environment_id application_id revision_id artifact_id"},
-		{"create_product", "", "name"}, {"set_product_visibility", "product_id", "visibility"}, {"add_product_member remove_product_member", "product_id", "user_id"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},
+		{"create_product", "", "name"}, {"adopt_product_ownership", "product_id", ""}, {"set_product_visibility", "product_id", "visibility"}, {"add_product_member remove_product_member", "product_id", "user_id"}, {"create_feature", "product_id", "title problem goal"}, {"update_feature", "feature_id", ""},
+		{"ask_question", "feature_id", "title body kind"}, {"answer_questions", "", "answers"}, {"withdraw_question", "", "question_id reason"},
+		{"set_idea_promotion", "product_id", "idea_promotion"}, {"request_idea_promotion", "feature_id", "rationale"},
+		{"propose_dependency", "", "from_feature_id to_feature_id type rationale"}, {"decide_dependency", "", "dependency_id decision"}, {"request_dependency_decision", "", "dependency_id"},
+		{"register_user_orchestrator", "", "harness"}, {"unregister_user_orchestrator", "", ""},
 		{"assign_integration", "integration_id", "assignee"}, {"unassign_integration", "integration_id", ""},
 		{"create_integration", "feature_id", "title objective"}, {"update_integration", "integration_id", ""},
 		{"start_integration complete_integration", "integration_id", ""}, {"transition_integration", "integration_id", "status"},
@@ -190,12 +208,14 @@ func CommandSchema() map[string]any {
 				dataRule["properties"] = map[string]any{"visibility": map[string]any{"type": "string", "enum": []string{"shared", "private"}}}
 			case "set_product_visibility":
 				dataRule["properties"] = map[string]any{"visibility": map[string]any{"type": "string", "enum": []string{"shared", "private"}}}
-			case "add_product_member", "remove_product_member":
+			case "adopt_product_ownership", "add_product_member", "remove_product_member":
 				dataRule["properties"] = map[string]any{"user_id": str()}
 			case "assign_integration":
 				dataRule["properties"] = map[string]any{"assignee": str(), "force": map[string]any{"type": "boolean"}}
 			case "create_feature":
-				dataRule["properties"] = map[string]any{"status": map[string]any{"type": "string", "enum": []string{"planned", "active"}}}
+				dataRule["properties"] = map[string]any{"status": enum("planned", "active", "idea")}
+			case "configure_component", "create_application":
+				dataRule["properties"] = map[string]any{"kind": enum(domain.ComponentKinds()...)}
 			case "update_feature":
 				dataRule["properties"] = map[string]any{"status": map[string]any{"type": "string", "enum": domain.StatusCatalog()["feature"]}}
 			case "transition_integration":
@@ -238,6 +258,29 @@ func CommandSchema() map[string]any {
 				bp["product_id"] = map[string]any{"type": "string", "minLength": 1, "pattern": `\S`}
 				for _, field := range []string{"id", "feature_id", "integration_id", "gate_id", "check_id", "result_id"} {
 					bp[field] = false
+				}
+			}
+			if slices.Contains(domain.WorkActions, name) {
+				fields := map[string]any{}
+				optional := map[string]string{"ask_question": "options recommendation context_refs blocking", "propose_dependency": "accept", "decide_dependency": "approval_question_id", "request_dependency_decision": "decision"}
+				for _, field := range strings.Fields(a.required + " " + optional[name]) {
+					fields[field] = data[field]
+				}
+				switch name {
+				case "ask_question":
+					fields["kind"] = enum("question", "conflict", "decision")
+				case "set_idea_promotion":
+					fields["idea_promotion"] = enum("ask_owner", "agent_allowed")
+				case "propose_dependency":
+					fields["type"] = enum("requires", "relates")
+				case "decide_dependency":
+					fields["decision"] = enum("accept", "reject")
+				case "register_user_orchestrator":
+					fields["harness"] = object(map[string]any{"kind": str(), "tmux_target": str(), "session_ref": str()}, "kind")
+				}
+				dataRule = object(fields, strings.Fields(a.required)...)
+				if a.required == "" {
+					delete(dataRule, "required")
 				}
 			}
 			branch["properties"].(map[string]any)["data"] = dataRule

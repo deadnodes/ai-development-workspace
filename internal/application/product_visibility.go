@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -33,25 +32,33 @@ func (s *Service) executeProductMembership(ctx context.Context, c domain.Command
 		principal, authenticated := auth.FromContext(ctx)
 		bootstrap := authenticated && principal.Kind == "service" && principal.ID == "service/bootstrap"
 		user, _ := auth.PrivateProductViewer(ctx)
-		unownedShared := p.Visibility != "private" && (p.Owner == "" || p.Owner == "local")
-		claimingShared := c.Action == "set_product_visibility" && unownedShared && user != ""
 		localAdmin := auth.IsLocalAdmin(ctx)
 		if localAdmin {
 			user = "local"
 		}
-		if !bootstrap && !localAdmin && (user == "" || (p.Owner != user && !claimingShared)) {
+		if c.Action == "adopt_product_ownership" {
+			if p.Owner != "" && p.Owner != "local" || !localAdmin && (!authenticated || principal.Kind != "human" && !instanceAdmin(principal)) {
+				return auth.ErrForbidden
+			}
+			if target, supplied := c.Data["user_id"]; supplied {
+				if !localAdmin && !instanceAdmin(principal) {
+					return auth.ErrForbidden
+				}
+				user, _ = target.(string)
+			}
+			if !humanWorkID(user) || user == "local" || strings.TrimSpace(user) != user {
+				return invalid("adoption requires a human user_id")
+			}
+			p.Owner = user
+		} else if !bootstrap && !localAdmin && (user == "" || p.Owner != user) {
 			return auth.ErrForbidden
-		}
-		if c.Action == "set_product_visibility" {
+		} else if c.Action == "set_product_visibility" {
 			visibility, ok := c.Data["visibility"].(string)
 			if !ok || (visibility != "private" && visibility != "shared") {
 				return invalid("visibility must be shared or private")
 			}
-			if claimingShared || (p.Owner == "" && visibility == "private") {
-				if user == "" && !bootstrap {
-					return fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
-				}
-				p.Owner = user
+			if p.Owner == "" && visibility == "private" {
+				return invalid("adopt product ownership before making it private")
 			}
 			p.Visibility = visibility
 		} else {

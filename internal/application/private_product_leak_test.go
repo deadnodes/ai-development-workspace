@@ -163,12 +163,19 @@ var privateProductReadMatrix = map[string]privateRead{
 	"SyncReviewPreview": func(ctx context.Context, service *Service, product string) (any, error) {
 		return service.SyncReview(ctx, "fixture", product+"-integration", product+"-repository", 1, nil, true)
 	},
-	"get_integration_context":   privateQuery("get_integration_context", "-integration"),
-	"get_integration_git":       privateQuery("get_integration_git", "-integration"),
-	"get_execution_group":       privateQuery("get_execution_group", "-group"),
-	"list_executions":           privateQuery("list_executions", ""),
-	"list_execution_events":     privateQuery("list_execution_events", ""),
-	"list_attention":            privateQuery("list_attention", ""),
+	"get_integration_context": privateQuery("get_integration_context", "-integration"),
+	"get_integration_git":     privateQuery("get_integration_git", "-integration"),
+	"get_execution_group":     privateQuery("get_execution_group", "-group"),
+	"list_executions":         privateQuery("list_executions", ""),
+	"list_execution_events":   privateQuery("list_execution_events", ""),
+	"list_attention":          privateQuery("list_attention", ""),
+	"get_question":            privateQuery("get_question", "-question"),
+	"list_questions": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.Query(ctx, "list_questions", fmt.Sprintf(`{"product_id":%q,"addressed_to":"A"}`, product))
+	},
+	"get_dependency_graph":      privateQuery("get_dependency_graph", ""),
+	"next_work":                 privateQuery("next_work", ""),
+	"status_overview":           privateQuery("status_overview", ""),
 	"get_feature_graph":         privateQuery("get_feature_graph", "-feature"),
 	"get_operation":             privateQuery("get_operation", "-operation"),
 	"get_intelligence_task":     privateQuery("get_intelligence_task", "-intelligence"),
@@ -297,6 +304,7 @@ func seedPrivateReadMatrix(t *testing.T, store privateFixtureStore, workspace st
 			}
 			state.Products = append(state.Products, entry)
 			state.Features = append(state.Features, domain.Feature{Meta: meta("-feature"), Title: product + " feature title", Goal: product + " fixturekeyword text", Status: "planned"})
+			state.Memories = append(state.Memories, domain.Memory{Meta: featureMeta("-question"), Kind: "question", Status: "open", Title: product + " owner question", Question: &domain.QuestionDetails{Kind: "question", AddressedTo: "A", AskedBy: "fixture"}})
 			state.Integrations = append(state.Integrations, domain.Integration{Meta: featureMeta("-integration"), Title: product + " integration title", Objective: product + " fixturekeyword integration", Status: "planned"})
 			state.Repositories = append(state.Repositories, domain.Repository{Meta: meta("-repository"), Name: product + " repository", URL: "https://example.invalid/fixture/" + product, Role: "APPLICATION"})
 			state.RepositoryBindings = append(state.RepositoryBindings, domain.RepositoryBinding{Meta: meta("-binding"), RepositoryID: product + "-repository", ConnectionID: "matrix-connection", FullName: "fixture/" + product, Role: "APPLICATION"})
@@ -327,6 +335,7 @@ func seedPrivateReadMatrix(t *testing.T, store privateFixtureStore, workspace st
 			state.ProjectKnowledge = append(state.ProjectKnowledge, domain.ProjectKnowledge{Meta: meta("-knowledge"), Overview: product + " overview", Nodes: []domain.KnowledgeNode{{Meta: meta("-node"), Kind: "contract", Title: product + " fixturekeyword", Content: product + " knowledge", Status: "active"}}})
 		}
 		state.Products = append(state.Products, domain.Product{Meta: domain.Meta{ID: "matrix-z-shared"}, Name: "Last shared"})
+		state.FeatureDependencies = append(state.FeatureDependencies, domain.FeatureDependency{Meta: domain.Meta{ID: "matrix-cross-edge", ProductID: sharedFixture, FeatureID: sharedFixture + "-feature", CreatedAt: now, UpdatedAt: now}, FromFeatureID: sharedFixture + "-feature", ToFeatureID: privateFixture + "-feature", Type: "requires", Status: "accepted"})
 		return nil
 	})
 	if err != nil {

@@ -100,6 +100,14 @@ func decode(data map[string]any, v any) error {
 	}
 	return nil
 }
+func decodeWritable(data map[string]any, v any, fields ...string) error {
+	for key := range data {
+		if !slices.Contains(fields, key) {
+			return invalid("field %s cannot be supplied in data", key)
+		}
+	}
+	return decode(data, v)
+}
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	if c.Action == "upsert_code_index" {
 		if c.ID != "" || c.FeatureID != "" || c.IntegrationID != "" || c.GateID != "" || c.CheckID != "" || c.ResultID != "" {
@@ -137,7 +145,10 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
-	if c.Action == "set_product_visibility" || c.Action == "add_product_member" || c.Action == "remove_product_member" {
+	if slices.Contains(domain.WorkActions, c.Action) {
+		return s.executeWorkCommand(ctx, c)
+	}
+	if c.Action == "adopt_product_ownership" || c.Action == "set_product_visibility" || c.Action == "add_product_member" || c.Action == "remove_product_member" {
 		return s.executeProductMembership(ctx, c)
 	}
 	if c.Action == "assign_integration" || c.Action == "unassign_integration" {
@@ -198,11 +209,6 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 				return invalid("native component requires exact operator publication configuration")
 			}
 		}
-		if c.IntegrationID != "" && (c.Action == "record_progress" || c.Action == "transition_integration") {
-			if err := rejectForeignWork(ctx, integration(st, c.IntegrationID)); err != nil {
-				return err
-			}
-		}
 		var err error
 		result, err = applyAuthorizedOrigin(ctx, st, c, s.externalWorkers, origin)
 		if err == nil && (c.Action == "record_progress" || c.Action == "transition_integration") {
@@ -210,6 +216,11 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 				ex := executionFor(st, c.IntegrationID)
 				if ex != nil && executionFence(c.Data, "execution_fence") == ex.Fence {
 					now := time.Now().UTC()
+					if ex.State == "running" || ex.State == "lost" || ex.State == "stalled" {
+						if err := checkExecutionRenewal(ctx, st, ex, now); err != nil {
+							return err
+						}
+					}
 					if ex.State == "lost" || ex.State == "stalled" {
 						executionCondition(st, ex, "running", false, "", now)
 					}
@@ -728,7 +739,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("product ID is no longer available")
 		}
 		v := domain.Product{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "description", "visibility"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -741,9 +752,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if v.Visibility != "shared" && v.Visibility != "private" {
 			return nil, invalid("visibility must be shared or private")
 		}
-		if v.Owner != "" || len(v.Members) != 0 {
-			return nil, invalid("owner and members are server-managed")
-		}
+		v.IdeaPromotion = "ask_owner"
 		v.Owner, _ = auth.PrivateProductViewer(ctx)
 		if v.Visibility == "private" && auth.IsLocalAdmin(ctx) {
 			v.Owner = "local"
@@ -772,38 +781,84 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				return nil, missing("product", c.ProductID)
 			}
 		}
-		if e := decode(c.Data, &v); e != nil {
+		featureData := c.Data
+		approvalID := ""
+		if approval, present := c.Data["approval_question_id"]; present && old != nil {
+			var ok bool
+			if approvalID, ok = approval.(string); !ok || approvalID == "" {
+				return nil, invalid("approval_question_id must be a nonempty question ID")
+			}
+			featureData = make(map[string]any, len(c.Data)-1)
+			for key, value := range c.Data {
+				if key != "approval_question_id" {
+					featureData[key] = value
+				}
+			}
+		}
+		if e := decodeWritable(featureData, &v, "title", "problem", "goal", "requirements", "constraints", "context", "repositories", "owner", "status", "priority"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
 		v.FeatureID = ""
+		if old == nil {
+			v.Revision = 1
+		} else {
+			v.Revision++
+		}
 		if !domain.ValidStatus("feature", v.Status) {
 			return nil, invalid("invalid feature status %q", v.Status)
 		}
-		if old == nil && v.Status != "planned" && v.Status != "active" {
-			return nil, invalid("new feature must be planned or active")
+		if old == nil && v.Status != "planned" && v.Status != "active" && v.Status != "idea" {
+			return nil, invalid("new feature must be planned, active or idea")
 		}
 		if old != nil && !domain.CanTransition("feature", old.Status, v.Status) {
 			return nil, invalid("feature transition %s -> %s is not allowed", old.Status, v.Status)
 		}
-		if v.Status == "completed" {
-			count := 0
-			for _, in := range st.Integrations {
-				if in.FeatureID == v.ID {
-					count++
-					if in.Status != "ready" && in.Status != "released" {
-						return nil, invalid("feature completion requires all integrations ready or released")
-					}
-					if in.Status == "ready" {
-						if err := readiness(st, in); err != nil {
-							return nil, err
-						}
-					}
+		if old != nil && old.Status != v.Status && slices.Contains([]string{"blocked", "idea", "archived"}, v.Status) {
+			if err := requireFeatureIneligibilityAuthority(ctx, st, old); err != nil {
+				return nil, err
+			}
+		}
+		if old != nil && old.Status != v.Status && old.Status == "archived" {
+			restore := featureRestoreStatus(st, old)
+			warning := ""
+			if !domain.ValidStatus("feature", restore) || restore == "archived" {
+				warning = "Prior feature status could not be recovered"
+			} else if restore == "completed" && featureCompletionReady(st, v.ID) != nil {
+				warning = "Prior completed status no longer satisfies completion requirements"
+			}
+			if warning != "" {
+				restore = "planned"
+			}
+			if v.Status != restore {
+				return nil, invalid("archived feature must be restored to %s", restore)
+			}
+			if warning != "" {
+				if !isWorkDecisionOwner(ctx, productByID(*st, v.ProductID)) {
+					return nil, fmt.Errorf("%w: OWNER_APPROVAL_REQUIRED", auth.ErrForbidden)
 				}
+				const action = "feature_restore_warning"
+				st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: c.Actor, At: m.UpdatedAt, EntityID: v.ID, ProductID: v.ProductID, FeatureID: v.ID, Data: domain.Command{Action: action, Actor: c.Actor, Data: map[string]any{"warning": warning, "status": restore}}})
 			}
-			if count == 0 {
-				return nil, invalid("feature completion requires integrations")
+			v.ArchivedFrom = ""
+		} else if old != nil && old.Status != v.Status && v.Status == "archived" {
+			v.ArchivedFrom = old.Status
+		}
+		if old != nil && old.Status != v.Status && old.Status != "archived" && v.Status == "ready_for_execution" {
+			product := productByID(*st, v.ProductID)
+			if err := canApproveWork(ctx, st, product, old, nil, approvalID, "ready_for_execution"); err != nil {
+				return nil, err
 			}
+		}
+		if v.Status == "completed" {
+			if old.Status != "completed" {
+				v.CompletedAt = &m.UpdatedAt
+			}
+			if err := featureCompletionReady(st, v.ID); err != nil {
+				return nil, err
+			}
+		} else if old != nil && old.Status == "completed" {
+			v.CompletedAt = nil
 		}
 		if strings.TrimSpace(v.Title) == "" || strings.TrimSpace(v.Goal) == "" {
 			return nil, invalid("title and goal required")
@@ -813,6 +868,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if old != nil {
 			*old = v
+			supersedeIdeaDecisions(st, old, c.Actor, m.UpdatedAt)
 			for _, child := range st.Integrations {
 				if child.FeatureID == v.ID {
 					if err := validateIntegration(st, child); err != nil {
@@ -842,30 +898,38 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			m = old.Meta
 			m.Actor = c.Actor
 			m.UpdatedAt = time.Now().UTC()
-			if _, ok := c.Data["status"]; ok {
-				return nil, invalid("use transition_integration for status")
-			}
+			v.Dependencies = slices.Clone(old.Dependencies)
+			v.Commits = slices.Clone(old.Commits)
+			v.AcceptanceCriteria = slices.Clone(old.AcceptanceCriteria)
+			v.Repositories = slices.Clone(old.Repositories)
 		} else {
 			if feature(st, c.FeatureID) == nil {
 				return nil, missing("feature", c.FeatureID)
 			}
 			v.Status = "planned"
 		}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "objective", "rationale", "dependencies", "acceptance_criteria", "owner", "repositories", "branches", "commits", "pull_requests", "completed", "remaining", "working_areas", "position"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
-		if old == nil && v.Status != "planned" {
-			return nil, invalid("new integrations must be planned")
+		if old != nil && (old.Status == "ready" || !slices.Equal(old.Dependencies, v.Dependencies) || !slices.Equal(old.Commits, v.Commits) || !slices.Equal(old.AcceptanceCriteria, v.AcceptanceCriteria) || !slices.Equal(old.Repositories, v.Repositories)) {
+			if err := rejectForeignWork(ctx, old); err != nil {
+				return nil, err
+			}
 		}
 		if e := validateIntegration(st, v); e != nil {
 			return nil, e
 		}
 		if old != nil && v.Status == "ready" {
+			if err := guardFeatureStart(ctx, st, &v); err != nil {
+				return nil, err
+			}
 			v.Status = "working"
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"
+				parent.CompletedAt = nil
 				parent.UpdatedAt = m.UpdatedAt
+				parent.Revision++
 			}
 		}
 		if old != nil {
@@ -874,7 +938,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			st.Integrations = append(st.Integrations, v)
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"
+				parent.CompletedAt = nil
 				parent.UpdatedAt = m.UpdatedAt
+				parent.Revision++
 			}
 		}
 		out = v
@@ -882,6 +948,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		v := integration(st, c.IntegrationID)
 		if v == nil {
 			return nil, missing("integration", c.IntegrationID)
+		}
+		if err := rejectForeignWork(ctx, v); err != nil {
+			return nil, err
 		}
 		if v.Status == "released" {
 			return nil, invalid("released integration is immutable")
@@ -901,11 +970,18 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				return nil, e
 			}
 		}
+		if status == "working" && v.Status != "working" {
+			if err := guardFeatureStart(ctx, st, v); err != nil {
+				return nil, err
+			}
+		}
 		v.Status = status
 		if status != "ready" {
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"
+				parent.CompletedAt = nil
 				parent.UpdatedAt = time.Now().UTC()
+				parent.Revision++
 			}
 		}
 		if status == "working" {
@@ -929,14 +1005,12 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				}
 			}
 		}
-		if e := decode(memoryData, &v); e != nil {
+		if e := decodeWritable(memoryData, &v, "title", "body", "reason", "completed", "current", "remaining", "next", "warnings", "commit", "deployment", "session"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
 		v.IntegrationID = c.IntegrationID
 		v.Kind = map[string]string{"record_progress": "progress", "record_decision": "decision", "record_discovery": "discovery", "add_blocker": "blocker", "handoff": "handoff"}[c.Action]
-		v.Status = ""
-		v.Resolution = ""
 		if v.Kind == "blocker" {
 			v.Status = "open"
 		}
@@ -948,6 +1022,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if c.Action == "record_progress" && c.IntegrationID != "" {
 			in := integration(st, c.IntegrationID)
+			if err := rejectForeignWork(ctx, in); err != nil {
+				return nil, err
+			}
 			if in.Status == "released" {
 				return nil, invalid("released integration is immutable")
 			}
@@ -994,7 +1071,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("feature", c.FeatureID)
 		}
 		v := domain.Gate{Blocking: true}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "reason", "integration_ids", "position", "blocking", "environment_id", "commit", "deployment"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1016,7 +1093,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("gate", c.GateID)
 		}
 		v := domain.Check{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "mechanism", "instructions"); e != nil {
 			return nil, e
 		}
 		m.ProductID = g.ProductID
@@ -1037,7 +1114,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("external_scope_id is set by the server")
 		}
 		v := domain.CheckResult{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "result", "commit", "environment_id", "deployment", "steps", "observations", "logs", "artifacts"); e != nil {
 			return nil, e
 		}
 		m.ProductID = ch.ProductID
@@ -1066,7 +1143,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("findings require failed or blocked result")
 		}
 		v := domain.Finding{BlocksRelease: true}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "severity", "body", "integration_ids", "gate_ids", "blocks_release"); e != nil {
 			return nil, e
 		}
 		m.ProductID = r.ProductID
@@ -1138,7 +1215,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		} else if !productExists(st, c.ProductID) {
 			return nil, missing("product", c.ProductID)
 		}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "cluster", "namespace", "parameters", "desired", "reconciled", "runtime", "composition"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1174,7 +1251,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("product", c.ProductID)
 		}
 		v := domain.Repository{Role: "APPLICATION"}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "url", "provider", "role"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1194,7 +1271,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("product", c.ProductID)
 		}
 		v := domain.Release{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "integration_ids", "excluded_integration_ids", "notes"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1235,7 +1312,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("product", c.ProductID)
 		}
 		v := domain.Release{Status: "released", RecordedExternally: true}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "environment_id", "integration_ids", "excluded_integration_ids", "notes", "evidence", "source_commits", "artifact_digests", "gitops_commits"); e != nil {
 			return nil, e
 		}
 		if v.Name == "" || len(v.IntegrationIDs) == 0 || v.EnvironmentID == "" {

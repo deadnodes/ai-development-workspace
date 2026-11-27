@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"slices"
 	"strings"
 	"time"
 )
@@ -45,6 +46,19 @@ func rejectForeignWork(ctx context.Context, in *domain.Integration) error {
 	return notAssignee(in.Assignee)
 }
 
+func requireFeatureIneligibilityAuthority(ctx context.Context, st *domain.State, parent *domain.Feature) error {
+	user := workUser(ctx)
+	if product := productByID(*st, parent.ProductID); product != nil && user != "" && product.Owner == user {
+		return nil
+	}
+	for _, child := range st.Integrations {
+		if child.FeatureID == parent.ID && child.ProductID == parent.ProductID && child.Status != "ready" && child.Status != "released" && child.Assignee != "" && child.Assignee != user {
+			return notAssignee(child.Assignee)
+		}
+	}
+	return nil
+}
+
 func executionVisibleTo(ctx context.Context, in *domain.Integration) bool {
 	user, enforced := principalUser(ctx)
 	if !enforced {
@@ -59,6 +73,27 @@ func executionOwnedByCaller(ctx context.Context, in *domain.Integration) bool {
 		return true
 	}
 	return user != "" && in != nil && in.Assignee == user
+}
+
+func assignUnassigned(in *domain.Integration, user, actor string, now time.Time) {
+	if in.Assignee == "" && user != "" {
+		in.Assignee, in.Actor, in.UpdatedAt = user, actor, now
+	}
+}
+
+func detachIncompatibleExecutionGroups(st *domain.State, in *domain.Integration, now time.Time) {
+	for index := range st.ExecutionGroups {
+		group := &st.ExecutionGroups[index]
+		if group.Owner == in.Assignee || !groupContainsIntegration(*group, in) {
+			continue
+		}
+		members := slices.DeleteFunc(slices.Clone(group.MemberIntegrationIDs), func(member string) bool { return member == in.ID })
+		group.MemberIntegrationIDs = members
+		if len(members) == 0 {
+			group.ClosedAt = &now
+		}
+		group.Revisions = append(slices.Clone(group.Revisions), domain.ExecutionGroupRevision{Revision: uint64(len(group.Revisions)) + 1, MemberIntegrationIDs: members, CreatedAt: now})
+	}
 }
 
 func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any, error) {
@@ -102,6 +137,7 @@ func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any,
 				return notAssignee(in.Assignee)
 			}
 		}
+		previousAssignee := in.Assignee
 		if c.Action == "assign_integration" {
 			assignee, _ := c.Data["assignee"].(string)
 			if assignee == "" {
@@ -124,6 +160,25 @@ func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any,
 			in.Assignee = ""
 		}
 		now := time.Now().UTC()
+		if in.Assignee != previousAssignee {
+			if execution := executionFor(st, in.ID); execution != nil {
+				*execution = domain.IntegrationExecution{ID: execution.ID, ProductID: in.ProductID, IntegrationID: in.ID, DesiredState: execution.DesiredState, State: "unassigned", Fence: execution.Fence + 1, Reconciliation: domain.ExecutionReconciliation{Enabled: execution.Reconciliation.Enabled, Generation: execution.Reconciliation.Generation}}
+			}
+			resolveExecutionEvents(st, in.ID, now, "assignment changed")
+			for index := range st.Memories {
+				question := &st.Memories[index]
+				if in.Assignee == "" || question.IntegrationID != in.ID || question.FeatureID != in.FeatureID || question.ProductID != in.ProductID || !questionBlocked(*question) || question.Question.AddressedTo == in.Assignee {
+					continue
+				}
+				details := *question.Question
+				previous := details.AddressedTo
+				details.AddressedTo = in.Assignee
+				question.Question, question.UpdatedAt = &details, now
+				const action = "question_readdressed"
+				st.Events = append(st.Events, domain.Event{ID: id(), Action: action, Actor: c.Actor, At: now, EntityID: question.ID, ProductID: in.ProductID, FeatureID: in.FeatureID, Data: domain.Command{Action: action, Actor: c.Actor, IntegrationID: in.ID, Data: map[string]any{"previous_addressed_to": previous, "addressed_to": in.Assignee}}})
+			}
+			detachIncompatibleExecutionGroups(st, in, now)
+		}
 		in.Actor, in.UpdatedAt = c.Actor, now
 		out = *in
 		st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: now, EntityID: in.ID, ProductID: in.ProductID, FeatureID: in.FeatureID, Data: c})

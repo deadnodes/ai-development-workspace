@@ -67,6 +67,8 @@ func runExecutionLifecycle(t *testing.T, store Store) {
 	if err := store.Update(ctx, func(st *domain.State) error {
 		e := executionFor(st, "life-i")
 		past := time.Now().UTC().Add(-time.Minute)
+		claimed := past.Add(-time.Second)
+		e.ClaimedAt = &claimed
 		e.TurnEndAt = &past
 		return nil
 	}); err != nil {

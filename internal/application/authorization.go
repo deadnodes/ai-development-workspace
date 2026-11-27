@@ -125,6 +125,20 @@ func filterScopedStateForContext(ctx context.Context, st domain.State, p auth.Pr
 			visibleProducts[pr.ID] = true
 		}
 	}
+	featureProducts := map[string]string{}
+	for _, feature := range st.Features {
+		featureProducts[feature.ID] = feature.ProductID
+	}
+	visibleEdges := map[string]bool{}
+	for _, edge := range st.FeatureDependencies {
+		visibleEdges[edge.ID] = visibleProducts[featureProducts[edge.FromFeatureID]] && visibleProducts[featureProducts[edge.ToFeatureID]]
+	}
+	workEventOwners := map[string]string{}
+	for _, event := range st.ExecutionEvents {
+		if event.Type == "work_available" {
+			workEventOwners[event.ID] = event.Owner
+		}
+	}
 	for i := 0; i < sv.NumField(); i++ {
 		field := sv.Field(i)
 		dst := ov.Field(i)
@@ -148,6 +162,23 @@ func filterScopedStateForContext(ctx context.Context, st domain.State, p auth.Pr
 		isProducts := sv.Type().Field(i).Name == "Products"
 		isEvents := sv.Type().Field(i).Name == "Events"
 		keep := func(row reflect.Value) bool {
+			switch item := row.Interface().(type) {
+			case domain.FeatureDependency:
+				return visibleEdges[item.ID]
+			case domain.UserOrchestrator:
+				return false
+			case domain.ExecutionEvent:
+				if item.Type == "work_available" && item.Owner != workUser(ctx) {
+					return false
+				}
+			case domain.Event:
+				if item.Action == "propose_dependency" || item.Action == "decide_dependency" {
+					return visibleEdges[item.EntityID]
+				}
+				if owner := workEventOwners[item.EntityID]; owner != "" && owner != workUser(ctx) {
+					return false
+				}
+			}
 			product, found := stateRowProduct(row, isProducts)
 			if !found {
 				return false
@@ -217,7 +248,7 @@ func stateRowProduct(row reflect.Value, products bool) (string, bool) {
 
 // This allowlist deliberately fails closed for newly introduced commands.
 var memberWriteActions = []string{
-	"create_product", "set_product_visibility", "add_product_member", "remove_product_member",
+	"create_product", "adopt_product_ownership", "set_product_visibility", "add_product_member", "remove_product_member",
 	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event", "assign_integration", "unassign_integration",
 	"queue_intelligence_task", "cancel_intelligence_task",
 	"create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution",
@@ -228,6 +259,9 @@ var memberWriteActions = []string{
 var memberDeployActions = []string{"deploy_integration", "deploy_existing_artifact", "assemble_environment", "reconcile_composition"}
 
 func authorizeCommand(ctx context.Context, st domain.State, c domain.Command, fullSnapshot bool) error {
+	if slices.Contains(domain.WorkActions, c.Action) {
+		return nil
+	}
 	p, ok := auth.FromContext(ctx)
 	if !ok {
 		return nil

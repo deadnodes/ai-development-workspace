@@ -54,17 +54,20 @@ async function pollLive(){
   const response=await fetch(uiStateURL(),{credentials:'same-origin',headers:{...(liveETag?{'If-None-Match':liveETag}:{}),...(token?{'Authorization':`Bearer ${token}`}:{})},cache:'no-store',signal:controller.signal});
   if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==browserToken()||!canPollLive())return;
   if(response.status===401&&authMode==='oidc'){requireSignIn();return;}
-  if(response.status===304){if(liveFailed)notice('Connection restored. Shared state is current.');liveFailed=false;return;}
+  if(response.status===304){if(typeof revalidateOwnerGraph==='function')revalidateOwnerGraph(selectedFeature());if(typeof revalidateOwnerQuestions==='function')revalidateOwnerQuestions();if(liveFailed)notice('Connection restored. Shared state is current.');liveFailed=false;return;}
+  if([401,403,404].includes(response.status)&&typeof invalidateOwnerWorkQuestions==='function')invalidateOwnerWorkQuestions();
   if(!response.ok)throw new Error(`State refresh failed (${response.status})`);
   const next=await response.json();
   if(epoch!==liveEpoch||route!==location.hash||product!==productID||token!==browserToken()||!canPollLive())return;
   const x=window.scrollX,y=window.scrollY,focused=document.activeElement;
+  if(typeof invalidateOwnerWorkQuestions==='function')invalidateOwnerWorkQuestions();
   state=next;if(!list(state.products).some(p=>p.id===productID))productID=state.products?.[0]?.id||'';
   const feature=selectedFeature();if(feature)productID=feature.product_id;
+  if(typeof revalidateOwnerGraph==='function')revalidateOwnerGraph(feature);
   render(true);if(focused?.isConnected&&document.activeElement!==focused)focused.focus({preventScroll:true});liveETag=response.headers.get('ETag')||'';
   if(window.scrollX!==x||window.scrollY!==y)window.scrollTo(x,y);
   if(liveFailed)notice('Connection restored. Shared state is current.');liveFailed=false;
- }catch(error){if(epoch===liveEpoch&&!liveFailed){notice('Live update unavailable. Your current view is retained; retry with Refresh.',true);liveFailed=true;}}
+ }catch(error){if(epoch===liveEpoch){if(typeof invalidateOwnerWorkGraphs==='function')invalidateOwnerWorkGraphs();if(!liveFailed){notice('Live update unavailable. Your current view is retained; retry with Refresh.',true);liveFailed=true;}}}
  finally{window.clearTimeout(timeout);liveInFlight=false;}
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollLive();});

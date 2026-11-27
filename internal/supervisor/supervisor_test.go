@@ -119,6 +119,54 @@ func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 	}
 }
 
+func TestStandaloneBlockerWakeRequiresTypedCause(t *testing.T) {
+	for _, cause := range []domain.ExecutionEventCause{"", domain.ExecutionCauseBlockerResolved} {
+		t.Run(string(cause), func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			event := testEvent("event", "codex", "session-12345678", "orch:0.1", "", "execution_continuation_required")
+			event.GroupIDs, event.Reason, event.Cause = nil, "blocker resolved", cause
+			_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
+			if cause == "" {
+				if len(adapter.requests) != 0 || len(api.acks) != 1 || api.acks[0].Outcome != "unsupported" {
+					t.Fatalf("caller text admitted wake: %+v %+v", adapter.requests, api.acks)
+				}
+			} else if len(adapter.requests) != 1 || !strings.Contains(adapter.requests[0].Message, "fenced resume") {
+				t.Fatalf("typed wake not delivered: %+v %+v", adapter.requests, api.acks)
+			}
+		})
+	}
+}
+
+func TestWorkAvailableUsesRegisteredTargetAndFixedPrompt(t *testing.T) {
+	adapter := &fakeAdapter{}
+	event := testEvent("work-event", "codex", "session-12345678", "orch:0.1", "", "work_available")
+	event.Cause = domain.ExecutionCauseQueueAvailable
+	event.IntegrationID, event.GroupIDs = "", nil
+	_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
+	if len(adapter.requests) != 1 || len(api.acks) != 1 || api.acks[0].Outcome != "delivered" {
+		t.Fatalf("wake=%+v, ack=%+v", adapter.requests, api.acks)
+	}
+	request := adapter.requests[0]
+	if !strings.Contains(request.Message, "next_work") || !strings.Contains(request.Message, "list_questions") || strings.Contains(request.Message, "UNTRUSTED") {
+		t.Fatalf("unexpected wake message: %s", request.Message)
+	}
+}
+
+func TestQuestionContinuationPointsToTriggeringAnswers(t *testing.T) {
+	adapter := &fakeAdapter{}
+	event := testEvent("questionEvent", "codex", "session-12345678", "orch:0.1", "", "work_available")
+	event.Cause = domain.ExecutionCauseQuestionContinuation
+	event.IntegrationID, event.GroupIDs = "", nil
+	runCycle(t, []domain.ExecutionEvent{event}, adapter)
+	if len(adapter.requests) != 1 {
+		t.Fatalf("wake=%+v", adapter.requests)
+	}
+	message := adapter.requests[0].Message
+	if !strings.Contains(message, "question_ids on event questionEvent") || !strings.Contains(message, "list_execution_events") || !strings.Contains(message, "get_question") || strings.Contains(message, "UNTRUSTED") {
+		t.Fatalf("unexpected wake message: %s", message)
+	}
+}
+
 func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	ctx := context.Background()
 	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "app.db"))
