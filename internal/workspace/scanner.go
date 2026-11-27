@@ -348,6 +348,10 @@ func git(ctx context.Context, path string, args ...string) (string, error) {
 }
 
 func gitOutput(ctx context.Context, path string, limit int, args ...string) (string, error) {
+	return runGitOutput(ctx, gitReadCommand(ctx, path, args...), limit)
+}
+
+func gitReadCommand(ctx context.Context, path string, args ...string) *exec.Cmd {
 	fixed := []string{"--no-pager", "-c", "safe.directory=" + filepath.ToSlash(path), "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-C", path}
 	cmd := exec.CommandContext(ctx, "git", append(fixed, args...)...)
 	// Do not inherit injected GIT_DIR/GIT_CONFIG_COUNT/credential helpers or user
@@ -356,10 +360,17 @@ func gitOutput(ctx context.Context, path string, limit int, args ...string) (str
 	if runtime.GOOS == "windows" {
 		cmd.Env = append(cmd.Env, "SystemRoot="+os.Getenv("SystemRoot"))
 	}
+	return cmd
+}
+
+func runGitOutput(ctx context.Context, cmd *exec.Cmd, limit int) (string, error) {
 	output := &cappedOutput{limit: limit}
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard
 	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	if output.overflow {
 		return string(output.data), errPathBudget
 	}

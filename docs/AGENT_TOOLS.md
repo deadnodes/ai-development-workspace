@@ -1165,6 +1165,30 @@ Accept a filtered index snapshot up to the dedicated upload limit.
 
 **Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
 
+### `GET /api/code/repositories` — http_route
+
+List attached repository IDs and remote URLs without loading Product context.
+
+**When:** Match local workspace checkouts to already attached repositories.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `cursor` (string, optional): Continuation from the same Product
+
+**Output:** Up to 32 attachments in ID order and a next_cursor when more remain.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is unavailable to the caller.
+- `VALIDATION`: Invalid scope or cursor, or oversized repository metadata.
+
+**Example:** `GET /api/code/repositories?product_id=p`
+
+**Related:** `match_local_repositories`
+
+**Authority:** Read-only projection of existing Product attachments.
+
 ### `get_code_map` — mcp_tool
 
 Summarize the indexed repository tree with languages, sizes, symbol counts, manifests and entry points.
@@ -1337,7 +1361,7 @@ Report upload freshness and truncation for indexed repository branches.
 - `repository_id` (string, optional): Limit to one attached repository
 - `branch` (string, optional): Exact indexed branch; omit for default selection
 
-**Output:** Up to 200 branch cards (64 KiB maximum), with SHA, age and truncation flags.
+**Output:** Up to 200 cards (64 KiB maximum), with SHA, age and truncation flags. Product-wide results show the latest snapshot per repository.
 
 **Errors:**
 
@@ -1362,7 +1386,7 @@ Report upload freshness and truncation for indexed repository branches.
 - `repository_id` (string, optional): Limit to one attached repository
 - `branch` (string, optional): Exact indexed branch; omit for default selection
 
-**Output:** Up to 200 branch cards (64 KiB maximum), with SHA, age and truncation flags.
+**Output:** Up to 200 cards (64 KiB maximum), with SHA, age and truncation flags. Product-wide results show the latest snapshot per repository.
 
 **Errors:**
 

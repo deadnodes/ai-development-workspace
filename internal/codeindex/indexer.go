@@ -22,7 +22,12 @@ import (
 
 var generated = regexp.MustCompile(`(?im)^(?:.{0,12})?(?:code generated .*do not edit|@generated\b|automatically generated\b|this file (?:was|is) (?:auto|automatically) generated)`)
 
-func Build(ctx context.Context, repository, checkout string, now time.Time, exclude ...string) (domain.CodeIndex, error) {
+type Options struct {
+	IncludeUntracked bool
+	Exclude          []string
+}
+
+func Build(ctx context.Context, repository, checkout string, now time.Time, options Options) (domain.CodeIndex, error) {
 	var doc domain.CodeIndex
 	checkout, err := filepath.Abs(checkout)
 	if err != nil {
@@ -33,7 +38,7 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, excl
 		return doc, err
 	}
 	defer root.Close()
-	commit, branch, paths, partial, err := workspace.CodeIndexPaths(ctx, checkout)
+	commit, branch, paths, partial, err := workspace.CodeIndexPaths(ctx, checkout, options.IncludeUntracked)
 	if err != nil {
 		return doc, err
 	}
@@ -61,7 +66,7 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, excl
 		if err := ctx.Err(); err != nil {
 			return doc, err
 		}
-		if slices.Contains(exclude, name) || !domain.CodePathValid(name) || domain.CodeSecretPath(name) || generatedPath(name) || !regularParent(path.Dir(name)) {
+		if slices.Contains(options.Exclude, name) || !domain.CodePathValid(name) || domain.CodeSecretPath(name) || generatedPath(name) || !regularParent(path.Dir(name)) {
 			continue
 		}
 		info, err := root.Lstat(name)
@@ -72,15 +77,20 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, excl
 			return doc, err
 		}
 		lock := domain.CodeLockfile(name)
-		if !info.Mode().IsRegular() || (!lock && info.Size() > domain.CodeFileBytes) {
+		if !info.Mode().IsRegular() || (!lock && info.Size() > 2*domain.CodeFileBytes) {
 			continue
 		}
 		file := domain.CodeFile{Path: name, Language: language(name), Size: int(info.Size())}
-		if !lock {
+		if lock && commit != "" {
+			if size, ok := workspace.CodeIndexTrackedSize(ctx, checkout, name); ok {
+				file.Size = size
+			}
+		} else if !lock {
 			content, err := readFile(root, name)
 			if err != nil {
 				return doc, err
 			}
+			content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
 			if len(content) > domain.CodeFileBytes || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 || generated.Match(content[:min(len(content), 4096)]) || strings.ContainsFunc(string(content), binaryControl) || domain.CodeHasSecret(string(content)) || minified(file.Language, content) {
 				continue
 			}
@@ -137,7 +147,7 @@ func readFile(root *os.Root, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer file.Close()
-	return io.ReadAll(io.LimitReader(file, domain.CodeFileBytes+1))
+	return io.ReadAll(io.LimitReader(file, 2*domain.CodeFileBytes+1))
 }
 
 func binaryControl(value rune) bool {

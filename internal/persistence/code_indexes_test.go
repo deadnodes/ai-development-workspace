@@ -2,8 +2,10 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,92 @@ import (
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/domain"
 )
+
+type memoryCodeIndexBackend struct{ application.Store }
+
+func TestCodeIndexRetentionAndSnippetParity(t *testing.T) {
+	var baseline map[string]domain.CodeSearchResult
+	for _, backend := range []string{"memory", "sqlite", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := context.Background()
+			var store application.Store
+			if backend == "postgres" {
+				store = retrievalPostgres(t)
+			} else {
+				local, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "index.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(local.Close)
+				store = local
+				if backend == "memory" {
+					store = memoryCodeIndexBackend{local}
+				}
+			}
+			if err := store.Update(ctx, func(st *domain.State) error {
+				*st = retrievalFixture()
+				st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: "second", ProductID: "p"}, Name: "Second", Role: "APPLICATION", URL: "https://example.invalid/second"})
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			service := application.New(store)
+			commit := strings.Repeat("a", 40)
+			put := func(repo, branch string, files []domain.CodeFile) {
+				t.Helper()
+				doc := domain.CodeIndex{RepositoryID: repo, Branch: branch, Commit: commit, IndexedAt: time.Now(), Version: domain.CodeIndexVersion, Files: files}
+				if result, err := service.UpsertCodeIndex(ctx, domain.CodeIndexWrite{ProductID: "p", RepositoryID: repo, Document: doc}); err != nil || !result.Changed {
+					t.Fatalf("index %s/%s: %+v, %v", repo, branch, result, err)
+				}
+			}
+			put("second", "stable", []domain.CodeFile{})
+			for index := 0; index < domain.CodeBranchLimit; index++ {
+				put("r", fmt.Sprintf("branch-%03d", index), []domain.CodeFile{{Path: "README.md", Language: "Markdown"}})
+			}
+			longDoc := "\n\nlong needle " + strings.Repeat("界", 200) + "  "
+			put("r", "newest", []domain.CodeFile{
+				{Path: "README.md", Language: "Markdown", Size: len(longDoc), Lines: 3, Doc: longDoc},
+				{Path: "docs/short.md", Language: "Markdown", Size: 30, Lines: 3, Doc: "\n\n short needle \n"},
+			})
+			status, err := service.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: "p"})
+			if err != nil || status.Truncated || len(status.Items) != 2 || status.Items[0].Branch != "newest" || status.Items[1].Branch != "stable" {
+				t.Fatalf("product status: %+v, %v", status, err)
+			}
+			status, err = service.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: "p", RepositoryID: "r"})
+			if err != nil || len(status.Items) != domain.CodeBranchLimit || status.Items[0].Branch != "newest" {
+				t.Fatalf("repository status: %+v, %v", status, err)
+			}
+			if _, err := service.GetCodeMap(ctx, domain.CodeMapRequest{ProductID: "p", RepositoryID: "r", Branch: "branch-000"}); !errors.Is(err, application.ErrNotFound) {
+				t.Fatalf("evicted snapshot: %v", err)
+			}
+			if transactional, ok := store.(codeTransactions); ok {
+				if err := transactional.codeTransaction(ctx, false, func(tx stateTransaction) error {
+					var count int
+					err := tx.QueryRow(ctx, `SELECT (SELECT count(*) FROM code_index_history WHERE branch='branch-000')+(SELECT count(*) FROM code_index_cards WHERE branch='branch-000')`).Scan(&count)
+					if err == nil && count != 0 {
+						return fmt.Errorf("evicted branch left %d cards or receipts", count)
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			results := map[string]domain.CodeSearchResult{}
+			for query, want := range map[string]string{"short needle": "short needle", "long needle": "long needle " + strings.Repeat("界", 156), "needle": "needle " + strings.Repeat("界", 157)} {
+				found, err := service.SearchCode(ctx, domain.CodeSearchRequest{ProductID: "p", Kind: "doc", Query: query})
+				if err != nil || len(found.Items) == 0 || found.Items[0].Snippet != want {
+					t.Fatalf("search %q: %+v, %v", query, found, err)
+				}
+				results[query] = found
+			}
+			if backend == "memory" {
+				baseline = results
+			} else if !reflect.DeepEqual(results, baseline) {
+				t.Fatalf("snippets differ from memory: %+v vs %+v", results, baseline)
+			}
+		})
+	}
+}
 
 func TestCodeIndexStores(t *testing.T) {
 	for _, backend := range []string{"sqlite", "postgres"} {

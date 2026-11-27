@@ -2,6 +2,7 @@ package codeindex
 
 import (
 	"cmp"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -203,7 +204,24 @@ func collectLine(file *domain.CodeFile, line string, number int) {
 				}
 			}
 		case "CMD", "ENTRYPOINT":
-			addEntry(file, "docker_"+strings.ToLower(parts[0]), strings.TrimPrefix(strings.TrimSpace(line), parts[0]))
+			command := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), parts[0]))
+			executable := parts[1]
+			if strings.HasPrefix(command, "[") {
+				decoder := json.NewDecoder(strings.NewReader(command))
+				if _, err := decoder.Token(); err != nil {
+					return
+				}
+				first, err := decoder.Token()
+				if err != nil {
+					return
+				}
+				executable, _ = first.(string)
+			} else if len(executable) > 1 && (executable[0] == '\'' || executable[0] == '"') && executable[0] == executable[len(executable)-1] {
+				executable = executable[1 : len(executable)-1]
+			}
+			if domain.CodeDockerExecutableValid(executable) {
+				addEntry(file, "docker_"+strings.ToLower(parts[0]), executable)
+			}
 		}
 	}
 }

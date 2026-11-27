@@ -19,6 +19,7 @@ type codeIndexService interface {
 	SearchCode(context.Context, domain.CodeSearchRequest) (domain.CodeSearchResult, error)
 	GetCodeFileOutline(context.Context, domain.CodeOutlineRequest) (any, error)
 	GetCodeIndexStatus(context.Context, domain.CodeStatusRequest) (domain.CodeStatusResult, error)
+	ListCodeRepositories(context.Context, string, string) (domain.CodeRepositoryPage, error)
 }
 
 func registerCodeIndex(mux routeRegistrar, server *mcp.Server, service Service) {
@@ -69,6 +70,9 @@ func registerCodeIndex(mux routeRegistrar, server *mcp.Server, service Service) 
 	})
 	codeGet(mux, "GET /api/code/status", func(ctx context.Context, query url.Values, _, _ int) (any, error) {
 		return index.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: query.Get("product_id"), RepositoryID: query.Get("repository_id"), Branch: query.Get("branch")})
+	})
+	codeGet(mux, "GET /api/code/repositories", func(ctx context.Context, query url.Values, _, _ int) (any, error) {
+		return index.ListCodeRepositories(ctx, query.Get("product_id"), query.Get("cursor"))
 	})
 }
 

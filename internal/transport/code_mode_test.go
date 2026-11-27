@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +103,21 @@ func TestCodeIndexAcrossToolAndHTTP(t *testing.T) {
 	if status, raw := codeRequest(t, server, "POST", "/api/tools/upsert_code_index", string(wire), "secret"); status != 200 || !bytes.Contains(raw, []byte(`"changed":false`)) {
 		t.Fatalf("tool replay: %d %s", status, raw)
 	}
+	for _, file := range []domain.CodeFile{
+		{Path: "README.md", Language: "Markdown", Doc: "Use `API_TOKEN=OpaqueFixture987` or omit it."},
+		{Path: "README.md", Language: "Markdown", Doc: "API_TOKEN=OpaqueFixture987\r\nMore text\r\n"},
+		{Path: "Dockerfile", Language: "Dockerfile", Entrypoints: []domain.CodeEntry{{Kind: "docker_cmd", Name: `["serve","--password","OpaqueFixture987"]`}}},
+	} {
+		file.Size, file.Lines = 100, 2
+		unsafe := doc
+		unsafe.Files = []domain.CodeFile{file}
+		wire, _ := json.Marshal(domain.CodeIndexWrite{ProductID: "product", RepositoryID: "repo", Document: unsafe})
+		for _, route := range []string{"/api/code/index", "/api/tools/upsert_code_index"} {
+			if status, raw := codeRequest(t, server, "POST", route, string(wire), "secret"); status != 422 || bytes.Contains(raw, []byte("OpaqueFixture987")) {
+				t.Fatalf("sensitive upload via %s: %d %s", route, status, raw)
+			}
+		}
+	}
 	if status, raw := codeRequest(t, server, "POST", "/api/tools/search_code", `{"product_id":"product","query":"checkout-free","kind":"doc"}`, "secret"); status != 200 || !bytes.Contains(raw, []byte(`"path":"README.md"`)) {
 		t.Fatalf("search: %d %s", status, raw)
 	}
@@ -109,6 +125,43 @@ func TestCodeIndexAcrossToolAndHTTP(t *testing.T) {
 		t.Fatalf("SDK missing code index declarations: %d", status)
 	}
 }
+func TestCodeRepositoryProjectionIsScopedAndPaged(t *testing.T) {
+	ctx := context.Background()
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Update(ctx, func(st *domain.State) error {
+		st.Products = []domain.Product{{Meta: domain.Meta{ID: "product"}, Name: strings.Repeat("unrelated", 4<<20)}, {Meta: domain.Meta{ID: "foreign"}}}
+		st.Repositories = []domain.Repository{{Meta: domain.Meta{ID: "foreign-repo", ProductID: "foreign"}, Role: "APPLICATION", URL: "https://example.invalid/foreign"}}
+		for index := domain.CodeRepositoryPageSize; index >= 0; index-- {
+			id := fmt.Sprintf("repo-%03d", index)
+			st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: id, ProductID: "product"}, Name: "not-projected", Role: "APPLICATION", URL: "https://example.invalid/" + id})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(transport.New(application.New(store), transport.Options{Token: "secret"}))
+	defer server.Close()
+	route := "/api/code/repositories?product_id=product"
+	status, raw := codeRequest(t, server, "GET", route, "", "secret")
+	var first domain.CodeRepositoryPage
+	if status != 200 || len(raw) > 4096 || bytes.Contains(raw, []byte("not-projected")) || json.Unmarshal(raw, &first) != nil || len(first.Items) != domain.CodeRepositoryPageSize || first.Items[0].ID != "repo-000" || first.NextCursor == "" {
+		t.Fatalf("first page: %d, %d bytes, %+v", status, len(raw), first)
+	}
+	status, raw = codeRequest(t, server, "GET", route+"&cursor="+first.NextCursor, "", "secret")
+	var second domain.CodeRepositoryPage
+	last := fmt.Sprintf("repo-%03d", domain.CodeRepositoryPageSize)
+	if status != 200 || json.Unmarshal(raw, &second) != nil || len(second.Items) != 1 || second.Items[0] != (domain.CodeRepository{ID: last, URL: "https://example.invalid/" + last}) || second.NextCursor != "" {
+		t.Fatalf("second page: %d %s", status, raw)
+	}
+	if status, _ := codeRequest(t, server, "GET", "/api/code/repositories?product_id=foreign&cursor="+first.NextCursor, "", "secret"); status != 422 {
+		t.Fatalf("cross-product cursor: HTTP %d", status)
+	}
+}
+
 func TestCodeModeToken(t *testing.T) {
 	server := codeServer(t, "secret")
 	for _, path := range []string{"/api/tools/get_status_schema", "/api/tools", "/api/code-sdk/rcp.ts"} {

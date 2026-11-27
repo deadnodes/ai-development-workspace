@@ -31,6 +31,10 @@ type remoteIndex struct {
 	endpoint, token string
 }
 
+func noRedirectClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 func (r remoteIndex) call(ctx context.Context, method, route string, input, output any, budget int64) error {
 	var body io.Reader
 	if input != nil {
@@ -50,7 +54,7 @@ func (r remoteIndex) call(ctx context.Context, method, route string, input, outp
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := noRedirectClient(2 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -80,16 +84,39 @@ func (r remoteIndex) UpsertCodeIndex(ctx context.Context, in domain.CodeIndexWri
 	return
 }
 
-func (r remoteIndex) repositories(ctx context.Context, product string) ([]domain.Repository, error) {
-	var result struct {
-		Product      domain.Product      `json:"product"`
-		Repositories []domain.Repository `json:"repositories"`
+func (r remoteIndex) ListCodeRepositories(ctx context.Context, product, cursor string) (out domain.CodeRepositoryPage, err error) {
+	query := url.Values{"product_id": {product}, "cursor": {cursor}}
+	err = r.call(ctx, "GET", "/api/code/repositories?"+query.Encode(), nil, &out, domain.CodeRepositoryPageBytes)
+	return
+}
+
+type codeRepositoryPager interface {
+	ListCodeRepositories(context.Context, string, string) (domain.CodeRepositoryPage, error)
+}
+
+func indexRepositories(ctx context.Context, pager codeRepositoryPager, product string) ([]domain.CodeRepository, error) {
+	var repos []domain.CodeRepository
+	cursor, last := "", ""
+	for {
+		page, err := pager.ListCodeRepositories(ctx, product, cursor)
+		if err != nil {
+			return nil, err
+		}
+		if page.ProductID != product || len(page.Items) > domain.CodeRepositoryPageSize || page.NextCursor != "" && (page.NextCursor == cursor || len(page.Items) == 0) {
+			return nil, errors.New("invalid RCP repository page")
+		}
+		for _, repo := range page.Items {
+			if !validProductID(repo.ID) || repo.ID <= last || len(repo.URL) > domain.CodeRepositoryURLBytes {
+				return nil, errors.New("invalid RCP repository identity, order or URL")
+			}
+			last = repo.ID
+		}
+		repos = append(repos, page.Items...)
+		cursor = page.NextCursor
+		if cursor == "" {
+			return repos, nil
+		}
 	}
-	err := r.call(ctx, "GET", "/api/products/"+url.PathEscape(product)+"/context", nil, &result, 32<<20)
-	if err == nil && result.Product.ID != product {
-		err = errors.New("RCP returned a different Product than requested")
-	}
-	return result.Repositories, err
 }
 
 func readIndexBinding(dir string) Binding {
@@ -111,7 +138,7 @@ func readIndexBinding(dir string) Binding {
 
 type indexCheckout struct{ repository, path string }
 
-func matchingIndexCheckouts(ctx context.Context, dir string, repos []domain.Repository, out io.Writer) ([]indexCheckout, error) {
+func matchingIndexCheckouts(ctx context.Context, dir string, repos []domain.CodeRepository, out io.Writer) ([]indexCheckout, error) {
 	scan, err := workspace.Scan(ctx, dir)
 	if err != nil {
 		return nil, err
@@ -150,7 +177,7 @@ func matchingIndexCheckouts(ctx context.Context, dir string, repos []domain.Repo
 
 func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 	var endpoint, profile, tokenEnv, data, product, repo, checkout, workspaceRoot, export string
-	var dryRun bool
+	var dryRun, includeUntracked bool
 	flags := flag.NewFlagSet("release-control index", flag.ContinueOnError)
 	flags.SetOutput(out)
 	flags.StringVar(&repo, "repo-id", "", "attached repository ID for one checkout")
@@ -163,6 +190,7 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 	flags.StringVar(&data, "data", "", "standalone SQLite database path")
 	flags.StringVar(&export, "out", "", "write the filtered index JSON to a new file")
 	flags.BoolVar(&dryRun, "dry-run", false, "build the index without uploading it")
+	flags.BoolVar(&includeUntracked, "include-untracked", false, "include non-ignored untracked files in Git checkouts")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -195,7 +223,7 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		binding := readIndexBinding(absolute)
-		var repos []domain.Repository
+		var pager codeRepositoryPager
 		if data != "" {
 			open := persistence.OpenSQLite
 			if dryRun {
@@ -206,19 +234,14 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 				return err
 			}
 			defer store.Close()
-			backend = application.New(store)
-			if workspaceRoot != "" || product == "" {
+			service := application.New(store)
+			backend, pager = service, service
+			if product == "" {
 				err = store.View(ctx, func(st *domain.State) error {
-					if product == "" {
-						for _, record := range st.Repositories {
-							if record.ID == repo {
-								product = record.ProductID
-							}
-						}
-					}
 					for _, record := range st.Repositories {
-						if record.ProductID == product {
-							repos = append(repos, record)
+						if record.ID == repo {
+							product = record.ProductID
+							break
 						}
 					}
 					return nil
@@ -255,15 +278,9 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 				return err
 			}
 			remote := remoteIndex{endpoint, token}
-			backend = remote
+			backend, pager = remote, remote
 			if product == "" {
 				product, err = discoverProduct(ctx, endpoint, token)
-				if err != nil {
-					return err
-				}
-			}
-			if workspaceRoot != "" {
-				repos, err = remote.repositories(ctx, product)
 				if err != nil {
 					return err
 				}
@@ -273,6 +290,10 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 			return errors.New("no Product found for repository; specify --product-id")
 		}
 		if workspaceRoot != "" {
+			repos, err := indexRepositories(ctx, pager, product)
+			if err != nil {
+				return err
+			}
 			targets, err = matchingIndexCheckouts(ctx, workspaceRoot, repos, out)
 			if err != nil {
 				return err
@@ -283,15 +304,14 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 		fmt.Fprintln(out, "No checkouts matched attached repositories")
 	}
 	for _, target := range targets {
-		if err := indexTarget(ctx, target, backend, product, export, dryRun, out); err != nil {
+		if err := indexTarget(ctx, target, backend, product, export, dryRun, codeindex.Options{IncludeUntracked: includeUntracked}, out); err != nil {
 			return fmt.Errorf("index %s: %w", target.repository, err)
 		}
 	}
 	return nil
 }
 
-func indexTarget(ctx context.Context, target indexCheckout, backend indexBackend, product, export string, dryRun bool, out io.Writer) error {
-	var excludes []string
+func indexTarget(ctx context.Context, target indexCheckout, backend indexBackend, product, export string, dryRun bool, options codeindex.Options, out io.Writer) error {
 	if export != "" {
 		root, err := filepath.Abs(target.path)
 		if err != nil {
@@ -302,10 +322,10 @@ func indexTarget(ctx context.Context, target indexCheckout, backend indexBackend
 			return err
 		}
 		if rel, err := filepath.Rel(root, destination); err == nil {
-			excludes = append(excludes, filepath.ToSlash(rel))
+			options.Exclude = []string{filepath.ToSlash(rel)}
 		}
 	}
-	doc, err := codeindex.Build(ctx, target.repository, target.path, time.Now(), excludes...)
+	doc, err := codeindex.Build(ctx, target.repository, target.path, time.Now(), options)
 	if err != nil {
 		return err
 	}

@@ -66,6 +66,7 @@ func (entry CodeSearchEntry) Score(query string) int {
 }
 
 func CodeSnippet(snippet, query string) string {
+	snippet = strings.TrimSpace(snippet)
 	if len(snippet) <= 480 {
 		return snippet
 	}

@@ -58,6 +58,19 @@ func (m *memoryCodeIndexes) PutCodeIndex(ctx context.Context, in domain.CodeInde
 		status.Truncated = slices.Clone(status.Truncated)
 		history := append([]domain.CodeIndexStatus{status}, prior.history...)
 		m.records[key] = codeMemoryRecord{data, status, in.Actor, history[:min(domain.CodeHistorySize, len(history))]}
+		count := 0
+		var oldest codeMemoryKey
+		for candidate, record := range m.records {
+			if candidate.product == key.product && candidate.repository == key.repository {
+				count++
+				if count == 1 || codeIndexNewer(m.records[oldest].status, record.status) {
+					oldest = candidate
+				}
+			}
+		}
+		if count > domain.CodeBranchLimit {
+			delete(m.records, oldest)
+		}
 		out = domain.CodeIndexWriteResult{CodeIndexStatus: status, Changed: true}
 		out.Truncated = slices.Clone(status.Truncated)
 		return nil
@@ -77,15 +90,34 @@ func (m *memoryCodeIndexes) statuses(st *domain.State, in domain.CodeStatusReque
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	var out []domain.CodeIndexStatus
-	for key, record := range m.records {
-		if key.product == in.ProductID && (in.RepositoryID == "" || in.RepositoryID == key.repository) && (in.Branch == "" || in.Branch == key.branch) && attachedCodeRepo(st, key.product, key.repository) {
-			item := record.status
-			item.Truncated = slices.Clone(item.Truncated)
-			out = append(out, item)
+	latest := map[string]domain.CodeIndexStatus{}
+	attached := map[string]bool{}
+	for _, repo := range st.Repositories {
+		if repo.ProductID == in.ProductID {
+			attached[repo.ID] = true
 		}
 	}
+	for key, record := range m.records {
+		if key.product != in.ProductID || !attached[key.repository] {
+			continue
+		}
+		if in.RepositoryID == "" {
+			if codeIndexNewer(record.status, latest[key.repository]) {
+				latest[key.repository] = record.status
+			}
+		} else if in.RepositoryID == key.repository && (in.Branch == "" || in.Branch == key.branch) {
+			out = append(out, record.status)
+		}
+	}
+	for _, status := range latest {
+		out = append(out, status)
+	}
 	domain.SortCodeStatuses(out)
-	return out[:min(limit, len(out))]
+	out = out[:min(limit, len(out))]
+	for index := range out {
+		out[index].Truncated = slices.Clone(out[index].Truncated)
+	}
+	return out
 }
 
 func (m *memoryCodeIndexes) deleteProduct(product string) {

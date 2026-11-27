@@ -14,14 +14,18 @@ import (
 )
 
 const (
-	CodeIndexVersion = "1"
-	CodeIndexBytes   = 8 << 20
-	CodeFileBytes    = 512 << 10
-	CodeDocBytes     = 64 << 10
-	CodeDocsBytes    = 2 << 20
-	CodeMaxFiles     = 20000
-	CodeMaxSymbols   = 100000
-	CodeHistorySize  = 20
+	CodeIndexVersion        = "1"
+	CodeIndexBytes          = 8 << 20
+	CodeFileBytes           = 512 << 10
+	CodeDocBytes            = 64 << 10
+	CodeDocsBytes           = 2 << 20
+	CodeMaxFiles            = 20000
+	CodeMaxSymbols          = 100000
+	CodeHistorySize         = 20
+	CodeBranchLimit         = 20
+	CodeRepositoryPageSize  = 32
+	CodeRepositoryURLBytes  = 4096
+	CodeRepositoryPageBytes = 1 << 20
 )
 
 type CodeIndex struct {
@@ -104,6 +108,17 @@ type CodeIndexWriteResult struct {
 	Changed bool `json:"changed"`
 }
 
+type CodeRepository struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+type CodeRepositoryPage struct {
+	ProductID  string           `json:"product_id"`
+	Items      []CodeRepository `json:"items"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+}
+
 type CodeMapRequest struct {
 	ProductID    string `json:"product_id"`
 	RepositoryID string `json:"repository_id"`
@@ -144,7 +159,11 @@ type CodeSearchResult struct {
 }
 
 var codeCommit = regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`)
-var codeSecrets = regexp.MustCompile(`(?im)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\b(?:gh[pousr]_[a-z0-9]{25,}|github_pat_[a-z0-9_]{35,}|glpat-[a-z0-9_-]{18,}|xox[baprs]-[a-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-(?:proj-|live-|test-)?[a-z0-9_-]{20,}|sk_(?:live|test)_[a-z0-9]{12,}|AIza[a-z0-9_-]{35}|eyJ[a-z0-9_-]{6,}\.eyJ[a-z0-9_-]{6,}\.[a-z0-9_-]{8,}|bearer[ \t]+[a-z0-9_.=-]{20,})\b|\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|\b(?:[a-z0-9_-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|token))['"]?[ \t]*[:=][ \t]*['"]?[a-z0-9_./+=-]{8,}(?:['"]|[ \t]*$)`)
+var codeSecrets = regexp.MustCompile(`(?im)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\b(?:gh[pousr]_[a-z0-9]{25,}|github_pat_[a-z0-9_]{35,}|glpat-[a-z0-9_-]{18,}|xox[baprs]-[a-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-(?:proj-|live-|test-)?[a-z0-9_-]{20,}|sk_(?:live|test)_[a-z0-9]{12,}|AIza[a-z0-9_-]{35}|eyJ[a-z0-9_-]{6,}\.eyJ[a-z0-9_-]{6,}\.[a-z0-9_-]{8,}|bearer[ \t]+[a-z0-9_.=-]{20,})\b|\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|\b(?:[a-z0-9_-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|token))['"\x60]?[ \t]*[:=][ \t]*['"\x60]?[a-z0-9_./+=-]{8,}(?:['"\x60]|[ \t]*\r?$)`)
+
+var codeDockerExecutable = regexp.MustCompile(`^[a-zA-Z0-9_./:\\+@-]+$`)
+
+func CodeDockerExecutableValid(name string) bool { return codeDockerExecutable.MatchString(name) }
 
 func CodeHasSecret(text string) bool { return codeSecrets.MatchString(text) }
 
@@ -243,7 +262,8 @@ func (doc CodeIndex) Validate(repository string) error {
 			}
 		}
 		for _, entry := range file.Entrypoints {
-			if !validCodeText(entry.Name, 512, true) || !validCodeText(entry.Kind, 48, true) {
+			dockerCommand := entry.Kind == "docker_cmd" || entry.Kind == "docker_entrypoint"
+			if !validCodeText(entry.Name, 512, true) || !validCodeText(entry.Kind, 48, true) || dockerCommand && !CodeDockerExecutableValid(entry.Name) {
 				return fmt.Errorf("invalid or sensitive entry point")
 			}
 		}

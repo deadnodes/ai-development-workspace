@@ -2,9 +2,12 @@ package application
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"path"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -42,6 +45,62 @@ func codeScopeError(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+func (s *Service) ListCodeRepositories(ctx context.Context, product, cursor string) (domain.CodeRepositoryPage, error) {
+	if err := s.codeScope(ctx, "read", product, ""); err != nil {
+		return domain.CodeRepositoryPage{}, err
+	}
+	after := ""
+	if cursor != "" {
+		if len(cursor) > 1024 {
+			return domain.CodeRepositoryPage{}, invalid("invalid repository cursor")
+		}
+		scope, encoded, found := strings.Cut(cursor, ".")
+		last, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+		if !found || scope != encodeCursorID(product) || err != nil || !stateID(string(last)) {
+			return domain.CodeRepositoryPage{}, invalid("invalid repository cursor for Product")
+		}
+		after = string(last)
+	}
+	const limit = domain.CodeRepositoryPageSize + 1
+	out := domain.CodeRepositoryPage{ProductID: product, Items: []domain.CodeRepository{}}
+	if reader, ok := s.store.(interface {
+		ReadCodeRepositories(context.Context, string, string, int) ([]domain.CodeRepository, error)
+	}); ok {
+		items, err := reader.ReadCodeRepositories(ctx, product, after, limit)
+		if err != nil {
+			return domain.CodeRepositoryPage{}, codeScopeError(err)
+		}
+		out.Items = append(out.Items, items...)
+	} else if err := s.view(ctx, func(st *domain.State) error {
+		if record := productByID(*st, product); record == nil || !productVisibleTo(ctx, record) {
+			return ErrNotFound
+		}
+		for _, repo := range st.Repositories {
+			if repo.ProductID != product || repo.ID <= after {
+				continue
+			}
+			position := sort.Search(len(out.Items), func(index int) bool { return out.Items[index].ID >= repo.ID })
+			if position < limit {
+				out.Items = slices.Insert(out.Items, position, domain.CodeRepository{ID: repo.ID, URL: repo.URL})
+				out.Items = out.Items[:min(limit, len(out.Items))]
+			}
+		}
+		return nil
+	}); err != nil {
+		return domain.CodeRepositoryPage{}, err
+	}
+	if len(out.Items) == limit {
+		out.Items = out.Items[:domain.CodeRepositoryPageSize]
+		out.NextCursor = encodeCursorID(product) + "." + encodeCursorID(out.Items[len(out.Items)-1].ID)
+	}
+	for _, item := range out.Items {
+		if !stateID(item.ID) || len(item.URL) > domain.CodeRepositoryURLBytes {
+			return domain.CodeRepositoryPage{}, invalid("invalid or oversized repository identity or URL")
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) UpsertCodeIndex(ctx context.Context, in domain.CodeIndexWrite) (domain.CodeIndexWriteResult, error) {

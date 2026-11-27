@@ -4,8 +4,8 @@ Chart.yaml | YAML | 3
   dependency helm dependency-chart "2.0"
 Dockerfile | Dockerfile | 3
   dependency docker_base alpine:3 ""
-  entry docker_cmd ["serve"]
-  entry docker_entrypoint ["/fixture"]
+  entry docker_cmd serve
+  entry docker_entrypoint /fixture
 View.tsx | TypeScript | 3
   component View "" 1 ""
   const answer "" 2 ""

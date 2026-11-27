@@ -40,6 +40,7 @@ var privateHTTPReads = map[string]string{
 	"GET /api/products/{id}/knowledge/search": "SearchKnowledge", "GET /api/products/{id}/workspace-config": "ExportWorkspace",
 	"GET /api/context/search": "SearchContext", "GET /api/context/excerpt": "ContextExcerpt", "GET /api/context/graph": "GraphNeighbors",
 	"GET /api/code/map": "GetCodeMap", "GET /api/code/search": "SearchCode", "GET /api/code/outline": "GetCodeFileOutline", "GET /api/code/status": "GetCodeIndexStatus",
+	"GET /api/code/repositories":     "ListCodeRepositories",
 	"GET /api/execution-groups/{id}": "get_execution_group", "GET /api/products/{id}/executions": "list_executions", "GET /api/products/{id}/execution-events": "list_execution_events",
 	"GET /api/attention": "list_attention", "GET /api/features/{id}/graph": "get_feature_graph", "GET /api/operations/{id}": "get_operation",
 	"GET /api/intelligence-tasks/{id}": "get_intelligence_task", "GET /api/environments/{id}/state": "get_environment_state",

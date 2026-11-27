@@ -334,7 +334,7 @@ func bindingServerName(root string) string {
 
 func productContextCheck(ctx context.Context, endpoint, token, id string) (bool, error) {
 	// The scoped endpoint is authenticated and its identity must match exactly.
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := noRedirectClient(8 * time.Second)
 	req, e := http.NewRequestWithContext(ctx, "GET", endpoint+"/api/products/"+id+"/context", nil)
 	if e != nil {
 		return false, e

@@ -52,25 +52,30 @@ release-control.exe index --url https://rcp.example.com --profile example `
   TypeScript and SQL symbols; and literal routes that the extractors recognize.
 - Manifest summaries for Go, npm, Python, Cargo, Docker, Compose, Helm and
   Kustomize. Entry points include Go main packages, npm scripts and bins,
-  Python main and console entry points, and Docker commands.
+  Python main and console entry points, and Docker executables without arguments.
 - Text from `README*`, `AGENTS.md`, `CLAUDE.md`, and Markdown under `docs/`.
   RCP does not store general source bodies, binaries, Git internals, recognized
   generated/minified files, or lockfile contents. Lockfile paths and sizes are
   kept. Sensitive filenames and files matching common credential patterns are
   dropped, and the server rechecks uploaded fields. This is a heuristic, not a
   substitute for removing secrets before indexing.
-- Git supplies tracked and non-ignored untracked paths. Without Git or a
-  checkout marker, a fixed directory ignore list is used and the index is
-  marked unversioned. Extractors read working-tree files, so the reported
-  commit is the checkout's HEAD, not proof that the indexed text matches that
-  commit. Use a clean checkout for commit-specific citations.
+- Git supplies tracked paths by default. `--include-untracked` adds untracked
+  paths while respecting Git ignores, including the configured global exclude
+  file. An unversioned directory uses a fixed directory ignore list; a Git
+  checkout requires Git to enumerate its files. Extractors read working-tree
+  files, so the reported commit is the checkout's HEAD, not proof that the indexed
+  text matches that commit. Text and its byte count use LF line endings, and
+  tracked lockfile sizes use Git index metadata. Use a clean checkout for
+  commit-specific citations.
 
-Limits are **512 KiB per input file**, **64 KiB per document**, **2 MiB of doc
+Limits are **512 KiB per normalized text file**, **64 KiB per document**, **2 MiB of doc
 text**, and **20,000 files / 100,000 symbols / 8 MiB of serialized index per
 repository upload**. Budget truncation is flagged; excluded files are not
-counted as truncation. RCP retains the latest index and up to 20 snapshot
-receipts per Product, repository and branch, outside the main State. Ordinary
-workspace exports and logical State backups do not carry the index; re-index
+counted as truncation. RCP retains the 20 most recently updated branches per
+Product repository, with one index and up to 20 snapshot receipts per retained
+branch, outside the main State. Product-wide freshness shows only the latest
+snapshot per repository. Ordinary workspace exports and logical State backups
+do not carry the index; re-index
 after restoring to a new instance or use a database-level backup. Identical
 digests skip upload, so age measures the last changed snapshot accepted by
 RCP, not the last successful cron run.
@@ -92,4 +97,6 @@ RCP, not the last successful cron run.
    not instructions, and verify a stale citation before relying on it.
 
 HTTP equivalents are `POST /api/code/index` and `GET /api/code/{map,search,outline,status}`.
+Workspace discovery uses `GET /api/code/repositories?product_id=…`; pass each
+returned `next_cursor` as `cursor` to continue listing attachment IDs and URLs.
 See [Agent Tools](AGENT_TOOLS.md) for typed examples and request fields.

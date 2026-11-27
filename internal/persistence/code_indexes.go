@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -68,6 +67,38 @@ func codeScope(ctx context.Context, tx stateTransaction, product, repository str
 		}
 	}
 	return nil
+}
+
+func (s *Store) ReadCodeRepositories(ctx context.Context, product, after string, limit int) ([]domain.CodeRepository, error) {
+	return readCodeRepositories(ctx, s, product, after, limit)
+}
+
+func (s *SQLiteStore) ReadCodeRepositories(ctx context.Context, product, after string, limit int) ([]domain.CodeRepository, error) {
+	return readCodeRepositories(ctx, s, product, after, limit)
+}
+
+func readCodeRepositories(ctx context.Context, store codeTransactions, product, after string, limit int) (items []domain.CodeRepository, err error) {
+	err = store.codeTransaction(ctx, false, func(tx stateTransaction) error {
+		if err := codeScope(ctx, tx, product, ""); err != nil {
+			return err
+		}
+		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
+		rows, err := tx.Query(ctx, `SELECT substr(r.id,1,129), coalesce(substr(r.document->>'url',1,$4),'')
+		FROM records r WHERE r.kind='repositories' AND r.product_id=$1 AND r.id`+collation+`>$2 ORDER BY r.id`+collation+` LIMIT $3`, product, after, limit, domain.CodeRepositoryURLBytes+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item domain.CodeRepository
+			if err := rows.Scan(&item.ID, &item.URL); err != nil {
+				return err
+			}
+			items = append(items, item)
+		}
+		return rows.Err()
+	})
+	return
 }
 
 func (s *Store) PutCodeIndex(ctx context.Context, input domain.CodeIndexWrite, status domain.CodeIndexStatus) (domain.CodeIndexWriteResult, error) {
@@ -147,6 +178,12 @@ func putCodeIndex(ctx context.Context, store codeTransactions, input domain.Code
 		if err = tx.Exec(ctx, `DELETE FROM code_index_history WHERE sequence IN (SELECT sequence FROM code_index_history WHERE `+where+` ORDER BY sequence DESC LIMIT 9223372036854775807 OFFSET $4)`, append(args, domain.CodeHistorySize)...); err != nil {
 			return err
 		}
+		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
+		if err = tx.Exec(ctx, `DELETE FROM code_indexes WHERE product_id=$1 AND repository_id=$2 AND branch IN (
+			SELECT branch FROM code_indexes WHERE product_id=$1 AND repository_id=$2
+			ORDER BY indexed_at DESC,branch`+collation+` LIMIT 9223372036854775807 OFFSET $3)`, input.ProductID, input.RepositoryID, domain.CodeBranchLimit); err != nil {
+			return err
+		}
 		out = domain.CodeIndexWriteResult{CodeIndexStatus: status, Changed: true}
 		return nil
 	})
@@ -179,10 +216,14 @@ func codeStatuses(ctx context.Context, store codeTransactions, query domain.Code
 			return err
 		}
 		collation := tx.sql(` COLLATE "C"`, ` COLLATE BINARY`)
-		rows, err := tx.Query(ctx, `SELECT ci.repository_id,ci.branch,ci.commit_sha,ci.digest,ci.indexed_at,ci.truncation FROM code_indexes ci
+		rows, err := tx.Query(ctx, `WITH ranked AS (
+		SELECT ci.repository_id,ci.branch,ci.commit_sha,ci.digest,ci.indexed_at,ci.truncation,
+		row_number() OVER (PARTITION BY ci.repository_id ORDER BY ci.indexed_at DESC,ci.branch`+collation+`) AS rank
+		FROM code_indexes ci
 		JOIN records r ON r.id=ci.repository_id AND r.product_id=ci.product_id AND r.kind='repositories'
-		WHERE ci.product_id=$1 AND ($2='' OR ci.repository_id=$2) AND ($3='' OR ci.branch=$3)
-		ORDER BY ci.repository_id`+collation+`,ci.indexed_at DESC,ci.branch`+collation+` LIMIT $4`, query.ProductID, query.RepositoryID, query.Branch, limit)
+		WHERE ci.product_id=$1 AND ($2='' OR ci.repository_id=$2) AND ($3='' OR ci.branch=$3))
+		SELECT repository_id,branch,commit_sha,digest,indexed_at,truncation FROM ranked WHERE $2<>'' OR rank=1
+		ORDER BY repository_id`+collation+`,indexed_at DESC,branch`+collation+` LIMIT $4`, query.ProductID, query.RepositoryID, query.Branch, limit)
 		if err != nil {
 			return err
 		}
@@ -277,7 +318,7 @@ func findCode(ctx context.Context, store codeTransactions, query domain.CodeSear
 		return rows.Err()
 	})
 	for index := range items {
-		items[index].Snippet = domain.CodeSnippet(strings.TrimSpace(items[index].Snippet), query.Query)
+		items[index].Snippet = domain.CodeSnippet(items[index].Snippet, query.Query)
 	}
 	return
 }

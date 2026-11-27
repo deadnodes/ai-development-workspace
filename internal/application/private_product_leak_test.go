@@ -29,6 +29,9 @@ import (
 type privateRead func(context.Context, *Service, string) (any, error)
 
 var privateProductReadMatrix = map[string]privateRead{
+	"ListCodeRepositories": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.ListCodeRepositories(ctx, product, "")
+	},
 	"GetCodeMap": func(ctx context.Context, service *Service, product string) (any, error) {
 		return service.GetCodeMap(ctx, domain.CodeMapRequest{ProductID: product, RepositoryID: product + "-repository"})
 	},
