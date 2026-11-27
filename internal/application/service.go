@@ -800,6 +800,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		v.Meta = m
 		v.FeatureID = ""
+		if old == nil {
+			v.Revision = 1
+		} else {
+			v.Revision++
+		}
 		if !domain.ValidStatus("feature", v.Status) {
 			return nil, invalid("invalid feature status %q", v.Status)
 		}
@@ -924,6 +929,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				parent.Status = "active"
 				parent.CompletedAt = nil
 				parent.UpdatedAt = m.UpdatedAt
+				parent.Revision++
 			}
 		}
 		if old != nil {
@@ -934,6 +940,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				parent.Status = "active"
 				parent.CompletedAt = nil
 				parent.UpdatedAt = m.UpdatedAt
+				parent.Revision++
 			}
 		}
 		out = v
@@ -974,6 +981,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				parent.Status = "active"
 				parent.CompletedAt = nil
 				parent.UpdatedAt = time.Now().UTC()
+				parent.Revision++
 			}
 		}
 		if status == "working" {

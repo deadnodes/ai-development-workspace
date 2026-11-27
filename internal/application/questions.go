@@ -295,6 +295,7 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 			}
 			if answer.OptionID == "approve" {
 				parent.Status, parent.Actor, parent.UpdatedAt = "ready_for_execution", c.Actor, now
+				parent.Revision++
 				workAudit(st, parent.Meta, "approve_idea_promotion", c.Actor, now)
 			}
 		}

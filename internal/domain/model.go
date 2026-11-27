@@ -22,6 +22,8 @@ type Product struct {
 }
 type Feature struct {
 	Meta
+	Revision int64 `json:"revision,omitempty"`
+
 	Title        string     `json:"title"`
 	Problem      string     `json:"problem"`
 	Goal         string     `json:"goal"`

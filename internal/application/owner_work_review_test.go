@@ -665,7 +665,7 @@ func TestRereviewEditedIdeaSupersedesInboxRequestWithoutBlockingBatch(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if stale := questionByID(&st, old.ID); stale.Status != "withdrawn" || stale.Question.WithdrawnReason == "" || stale.Question.DecisionRevision == nil || !slices.ContainsFunc(st.Events, func(event domain.Event) bool {
+		if stale := questionByID(&st, old.ID); stale.Status != "withdrawn" || stale.Question.WithdrawnReason == "" || stale.Question.DecisionRevision == 0 || !slices.ContainsFunc(st.Events, func(event domain.Event) bool {
 			return event.EntityID == old.ID && event.Action == "supersede_idea_promotion"
 		}) {
 			t.Fatal(stale)

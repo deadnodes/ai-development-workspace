@@ -14,7 +14,7 @@ type QuestionDetails struct {
 	Answer           *QuestionAnswer  `json:"answer,omitempty"`
 	DecisionFor      string           `json:"decision_for,omitempty"`
 	DecisionAction   string           `json:"decision_action,omitempty"`
-	DecisionRevision *time.Time       `json:"decision_revision,omitempty"`
+	DecisionRevision int64            `json:"decision_revision,omitempty"`
 	WithdrawnReason  string           `json:"withdrawn_reason,omitempty"`
 }
 

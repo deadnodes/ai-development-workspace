@@ -181,7 +181,7 @@ func decisionMatches(question *domain.Memory, parent *domain.Feature, edge *doma
 	if edge != nil {
 		return details.DecisionFor == "dependency_approval" && edge.Status == "proposed" && edge.ApprovalQuestionID == question.ID
 	}
-	return details.DecisionFor == "idea_promotion" && parent != nil && parent.Status == "idea" && details.DecisionRevision != nil && details.DecisionRevision.Equal(parent.UpdatedAt)
+	return details.DecisionFor == "idea_promotion" && parent != nil && parent.Status == "idea" && details.DecisionRevision == parent.Revision
 }
 
 func decisionQuestion(ctx context.Context, st *domain.State, c domain.Command, parent domain.Feature, product domain.Product, purpose, action, title, rationale string, now time.Time) (domain.Memory, error) {
@@ -205,7 +205,7 @@ func decisionQuestion(ctx context.Context, st *domain.State, c domain.Command, p
 		Options: []domain.QuestionOption{{ID: "approve", Label: "Approve", Consequence: "Authorize the proposed change"}, {ID: "reject", Label: "Reject", Consequence: "Leave the proposal unapplied"}},
 	}}
 	if purpose == "idea_promotion" {
-		question.Question.DecisionRevision = &parent.UpdatedAt
+		question.Question.DecisionRevision = parent.Revision
 	}
 	return question, storeQuestion(st, question, now)
 }
