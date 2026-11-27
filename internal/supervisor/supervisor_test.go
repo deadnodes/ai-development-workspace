@@ -624,3 +624,20 @@ func TestConfigDefaultsAndTmuxValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestAnsweredQuestionIDsAreInTheWakeMessage(t *testing.T) {
+	adapter := &fakeAdapter{}
+	event := testEvent("answerEvent", "codex", "session-12345678", "orch:0.1", "", "work_available")
+	event.Cause = domain.ExecutionCauseQuestionContinuation
+	event.WakeTarget.Source = "user_orchestrator"
+	event.IntegrationID, event.GroupIDs = "", nil
+	event.QuestionIDs = []string{"ab6d57c6be4792fdf5f529b03ba9737c", "bad id; rm -rf /"}
+	runCycle(t, []domain.ExecutionEvent{event}, adapter)
+	if len(adapter.requests) != 1 {
+		t.Fatalf("wake=%+v", adapter.requests)
+	}
+	message := adapter.requests[0].Message
+	if !strings.Contains(message, "Owner answered questions: ab6d57c6be4792fdf5f529b03ba9737c.") || strings.Contains(message, "rm -rf") {
+		t.Fatalf("unexpected wake message: %s", message)
+	}
+}

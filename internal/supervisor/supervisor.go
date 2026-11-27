@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -324,9 +325,22 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			if workAvailable {
 				message += " Call next_work and list_questions as your current principal. Follow the fenced next action on resume items, claim eligible unstarted integrations, and plan ready features with no integrations."
 			}
+			var answered []string
 			for _, delivery := range claimed {
-				if (delivery.ev.Cause == domain.ExecutionCauseQuestionContinuation || len(delivery.ev.QuestionIDs) > 0) && idPattern.MatchString(delivery.ev.ID) {
-					message += " Read question_ids on event " + delivery.ev.ID + " via list_execution_events in this product. Call get_question for each ID to read the triggering answer or withdrawal."
+				for _, questionID := range delivery.ev.QuestionIDs {
+					if idPattern.MatchString(questionID) && !slices.Contains(answered, questionID) && len(answered) < 10 {
+						answered = append(answered, questionID)
+					}
+				}
+			}
+			if len(answered) > 0 {
+				message += " Owner answered questions: " + strings.Join(answered, ", ") + ". Call get_question for each to read the answer, then continue the affected work."
+			} else {
+				for _, delivery := range claimed {
+					if delivery.ev.Cause == domain.ExecutionCauseQuestionContinuation && idPattern.MatchString(delivery.ev.ID) {
+						message += " Read question_ids on event " + delivery.ev.ID + " via list_execution_events in this product. Call get_question for each ID to read the triggering answer or withdrawal."
+						break
+					}
 				}
 			}
 			if reminder := orchestratorSkillReminder(claimed[0].ev); reminder != "" {
