@@ -31,6 +31,7 @@ type Feature struct {
 	Repositories []string   `json:"repositories"`
 	Owner        string     `json:"owner"`
 	Status       string     `json:"status"`
+	ArchivedFrom string     `json:"archived_from,omitempty"`
 	Priority     *int       `json:"priority,omitempty"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
 }
@@ -78,11 +79,12 @@ type ExecutionHarness struct {
 	Host       string `json:"host"`
 }
 type ExecutionReconciliation struct {
-	Enabled        bool       `json:"enabled"`
-	ActionRequired bool       `json:"action_required"`
-	Reason         string     `json:"reason,omitempty"`
-	Since          *time.Time `json:"since,omitempty"`
-	Generation     uint64     `json:"generation"`
+	Enabled        bool                `json:"enabled"`
+	ActionRequired bool                `json:"action_required"`
+	Reason         string              `json:"reason,omitempty"`
+	Cause          ExecutionEventCause `json:"cause,omitempty"`
+	Since          *time.Time          `json:"since,omitempty"`
+	Generation     uint64              `json:"generation"`
 }
 type ExecutionEventDelivery struct {
 	Attempts       int        `json:"attempts"`
@@ -97,6 +99,14 @@ type ExecutionEventResolution struct {
 	ResolvedBy string     `json:"resolved_by,omitempty"`
 	Evidence   string     `json:"evidence,omitempty"`
 }
+type ExecutionEventCause string
+
+const (
+	ExecutionCauseBlockerResolved      ExecutionEventCause = "blocker_resolved"
+	ExecutionCauseQueueAvailable       ExecutionEventCause = "queue_available"
+	ExecutionCauseQuestionContinuation ExecutionEventCause = "question_continuation"
+)
+
 type ExecutionEvent struct {
 	Owner               string                   `json:"owner,omitempty"`
 	RegistrationID      string                   `json:"registration_id,omitempty"`
@@ -105,6 +115,7 @@ type ExecutionEvent struct {
 	IntegrationID       string                   `json:"integration_id"`
 	GroupIDs            []string                 `json:"group_ids"`
 	Type                string                   `json:"type"`
+	Cause               ExecutionEventCause      `json:"cause,omitempty"`
 	Fence               uint64                   `json:"fence"`
 	ConditionGeneration uint64                   `json:"condition_generation"`
 	Reason              string                   `json:"reason"`

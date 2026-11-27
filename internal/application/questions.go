@@ -37,6 +37,11 @@ func workProduct(ctx context.Context, st *domain.State, productID, permission st
 	return product, authorize(ctx, permission, productID)
 }
 
+func workProductReadable(ctx context.Context, st *domain.State, productID string) bool {
+	_, err := workProduct(ctx, st, productID, "read")
+	return err == nil
+}
+
 func workMeta(c domain.Command, productID, featureID string, now time.Time) domain.Meta {
 	return domain.Meta{ID: id(), ProductID: productID, FeatureID: featureID, Actor: c.Actor, CreatedAt: now, UpdatedAt: now}
 }
@@ -61,7 +66,7 @@ func questionBlocked(memory domain.Memory) bool {
 
 func questionScope(ctx context.Context, st *domain.State, command domain.Command) (*domain.Feature, *domain.Integration, *domain.Product, error) {
 	parent := feature(st, command.FeatureID)
-	if parent == nil {
+	if parent == nil || !workProductReadable(ctx, st, parent.ProductID) {
 		return nil, nil, nil, missing("feature", command.FeatureID)
 	}
 	product, err := workProduct(ctx, st, parent.ProductID, "write")
@@ -157,21 +162,34 @@ func askQuestion(ctx context.Context, st *domain.State, c domain.Command, now ti
 	if addressee == "" && !authenticated {
 		addressee = workUser(ctx)
 	}
+	var execution *domain.IntegrationExecution
+	if input.Blocking {
+		if child == nil {
+			if !isWorkDecisionOwner(ctx, product) {
+				return domain.Memory{}, auth.ErrForbidden
+			}
+		} else {
+			if err := requireIntegrationUser(ctx, child, false); err != nil {
+				return domain.Memory{}, err
+			}
+			if authenticated && (child.Assignee == "" || child.Assignee != workUser(ctx)) {
+				return domain.Memory{}, notAssignee(child.Assignee)
+			}
+			execution = executionFor(st, child.ID)
+			if execution != nil && execution.LeaseUntil != nil && now.Before(*execution.LeaseUntil) && (execution.State == "running" || execution.State == "stalled") && leasePrincipal(execution) != c.Actor {
+				return domain.Memory{}, fmt.Errorf("%w: ACTIVE_EXECUTION", ErrConflict)
+			}
+		}
+	}
 	question := domain.Memory{Meta: workMeta(c, product.ID, parent.ID, now), IntegrationID: c.IntegrationID, Kind: "question", Title: input.Title, Body: input.Body, Status: "open", Question: &domain.QuestionDetails{
 		AddressedTo: addressee, AskedBy: c.Actor, AskedByUser: workUser(ctx), Kind: input.Kind, Options: input.Options, Recommendation: input.Recommendation, ContextRefs: input.ContextRefs, Blocking: input.Blocking,
 	}}
 	if err := storeQuestion(st, question, now); err != nil {
 		return domain.Memory{}, err
 	}
-	if input.Blocking && child != nil {
-		execution := executionFor(st, child.ID)
-		if execution != nil && execution.LeaseUntil != nil && now.Before(*execution.LeaseUntil) && (execution.State == "running" || execution.State == "stalled") && leasePrincipal(execution) == c.Actor {
-			if err := requireIntegrationUser(ctx, child, false); err != nil {
-				return domain.Memory{}, err
-			}
-			executionCondition(st, execution, "blocked", false, "owner question", now)
-			execution.WaitingRef, execution.BlockerRef = "", question.ID
-		}
+	if execution != nil && execution.LeaseUntil != nil && now.Before(*execution.LeaseUntil) && (execution.State == "running" || execution.State == "stalled") {
+		executionCondition(st, execution, "blocked", false, "owner question", now)
+		execution.WaitingRef, execution.BlockerRef = "", question.ID
 	}
 	return question, nil
 }
@@ -199,7 +217,7 @@ type answerInput struct {
 
 func editableQuestion(ctx context.Context, st *domain.State, c domain.Command, questionID string) (*domain.Memory, error) {
 	question := questionByID(st, questionID)
-	if question == nil || c.ProductID != "" && question.ProductID != c.ProductID {
+	if question == nil || c.ProductID != "" && question.ProductID != c.ProductID || !workProductReadable(ctx, st, question.ProductID) {
 		return nil, missing("question", questionID)
 	}
 	if _, err := workProduct(ctx, st, question.ProductID, "write"); err != nil {
@@ -228,6 +246,9 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 		if workUser(ctx) != details.AddressedTo {
 			return nil, auth.ErrForbidden
 		}
+		if details.DecisionFor != "" && !isWorkDecisionOwner(ctx, productByID(*st, question.ProductID)) {
+			return nil, auth.ErrForbidden
+		}
 		if question.Status != "open" {
 			return nil, invalid("question %s is not open", question.ID)
 		}
@@ -248,15 +269,22 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 			if answer.OptionID != "approve" && answer.OptionID != "reject" {
 				return nil, invalid("choose approve or reject for idea promotion")
 			}
+			parent := feature(st, question.FeatureID)
+			if details.DecisionAction != "ready_for_execution" || !decisionMatches(question, parent, nil) {
+				return nil, invalid("STALE_DECISION")
+			}
 			if answer.OptionID == "approve" {
-				parent := feature(st, question.FeatureID)
-				if parent == nil || parent.Status != "idea" && parent.Status != "ready_for_execution" {
-					return nil, invalid("feature is no longer an idea")
-				}
-				if parent.Status == "idea" {
-					parent.Status, parent.Actor, parent.UpdatedAt = "ready_for_execution", c.Actor, now
-					workAudit(st, parent.Meta, "approve_idea_promotion", c.Actor, now)
-				}
+				parent.Status, parent.Actor, parent.UpdatedAt = "ready_for_execution", c.Actor, now
+				workAudit(st, parent.Meta, "approve_idea_promotion", c.Actor, now)
+			}
+		}
+		if details.DecisionFor == "dependency_approval" {
+			index := slices.IndexFunc(st.FeatureDependencies, func(edge domain.FeatureDependency) bool { return edge.ApprovalQuestionID == question.ID })
+			if index < 0 || !decisionMatches(question, nil, &st.FeatureDependencies[index]) {
+				return nil, invalid("STALE_DECISION")
+			}
+			if _, _, err := dependencyProducts(ctx, st, &st.FeatureDependencies[index]); err != nil {
+				return nil, missing("question", question.ID)
 			}
 		}
 		details.Answer = &domain.QuestionAnswer{Text: answer.Text, OptionID: answer.OptionID, AnsweredBy: c.Actor, AnsweredAt: now, Validation: answer.Validation, Override: answer.Override}
@@ -270,7 +298,6 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 		workAudit(st, snapshot.Meta, "answer_question", c.Actor, now)
 		answered = append(answered, snapshot)
 	}
-	reconcileUserWork(st, now)
 	for _, question := range answered {
 		if !wakeResolvedQuestion(st, question, now) {
 			wakeQuestionOwner(st, question, now)

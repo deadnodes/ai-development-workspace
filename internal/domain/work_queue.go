@@ -3,17 +3,19 @@ package domain
 import "time"
 
 type QuestionDetails struct {
-	AddressedTo     string           `json:"addressed_to"`
-	AskedBy         string           `json:"asked_by"`
-	AskedByUser     string           `json:"asked_by_user,omitempty"`
-	Kind            string           `json:"kind"`
-	Options         []QuestionOption `json:"options,omitempty"`
-	Recommendation  string           `json:"recommendation,omitempty"`
-	ContextRefs     []string         `json:"context_refs,omitempty"`
-	Blocking        bool             `json:"blocking"`
-	Answer          *QuestionAnswer  `json:"answer,omitempty"`
-	DecisionFor     string           `json:"decision_for,omitempty"`
-	WithdrawnReason string           `json:"withdrawn_reason,omitempty"`
+	AddressedTo      string           `json:"addressed_to"`
+	AskedBy          string           `json:"asked_by"`
+	AskedByUser      string           `json:"asked_by_user,omitempty"`
+	Kind             string           `json:"kind"`
+	Options          []QuestionOption `json:"options,omitempty"`
+	Recommendation   string           `json:"recommendation,omitempty"`
+	ContextRefs      []string         `json:"context_refs,omitempty"`
+	Blocking         bool             `json:"blocking"`
+	Answer           *QuestionAnswer  `json:"answer,omitempty"`
+	DecisionFor      string           `json:"decision_for,omitempty"`
+	DecisionAction   string           `json:"decision_action,omitempty"`
+	DecisionRevision *time.Time       `json:"decision_revision,omitempty"`
+	WithdrawnReason  string           `json:"withdrawn_reason,omitempty"`
 }
 
 type QuestionOption struct {

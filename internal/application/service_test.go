@@ -114,8 +114,11 @@ func TestDependencyCycleAndAtomicFailure(t *testing.T) {
 	if len(m.state.Events) != n || len(m.state.Integrations[0].Dependencies) != 0 {
 		t.Fatal("failure persisted")
 	}
-	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "j"})
+	reject(t, s, domain.Command{Action: "start_integration", IntegrationID: "j"})
 	reject(t, s, domain.Command{Action: "complete_integration", IntegrationID: "j"})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "i"})
+	exec(t, s, domain.Command{Action: "complete_integration", IntegrationID: "i"})
+	exec(t, s, domain.Command{Action: "start_integration", IntegrationID: "j"})
 	reject(t, s, domain.Command{Action: "update_feature", FeatureID: "f", Data: map[string]any{"id": "pwn"}})
 }
 func TestBlockerAndHandoffHistory(t *testing.T) {

@@ -83,7 +83,7 @@ func TestOwnerWorkAcrossStores(t *testing.T) {
 				{"question_id": request.ID, "text": "Proceed", "option_id": "approve", "validation": map[string]any{"verdict": "consistent", "note": "Reviewed"}},
 				{"question_id": second.ID, "text": "Tomorrow", "validation": map[string]any{"verdict": "unclear", "note": "Local date unclear"}},
 			}
-			if _, err := apply(agent, "answer_questions", "", "", "", "", map[string]any{"answers": entries}); err == nil || !strings.Contains(err.Error(), "ANSWER_NEEDS_CLARIFICATION") {
+			if _, err := apply(owner, "answer_questions", "", "", "", "", map[string]any{"answers": entries}); err == nil || !strings.Contains(err.Error(), "ANSWER_NEEDS_CLARIFICATION") {
 				t.Fatalf("contradiction should reject the batch: %v", err)
 			}
 			if got := query(owner, "get_question", request.ID).(questionView); got.Status != "open" || got.Answer != nil {
@@ -93,7 +93,7 @@ func TestOwnerWorkAcrossStores(t *testing.T) {
 			if _, err := apply(other, "answer_questions", "", "", "", "", map[string]any{"answers": entries}); !errors.Is(err, auth.ErrForbidden) {
 				t.Fatalf("non-owner answered: %v", err)
 			}
-			run(agent, "answer_questions", "", "", "", "", map[string]any{"answers": entries})
+			run(owner, "answer_questions", "", "", "", "", map[string]any{"answers": entries})
 			work := query(owner, "next_work", "p").(map[string]any)["items"].([]workItem)
 			if len(work) != 1 || work[0].Kind != "plan_feature" || work[0].FeatureID != "idea" {
 				t.Fatalf("wrong plan work: %+v", work)
@@ -109,7 +109,7 @@ func TestOwnerWorkAcrossStores(t *testing.T) {
 			countWork := func(state domain.State) int {
 				count := 0
 				for _, event := range state.ExecutionEvents {
-					if event.Type == "work_available" {
+					if event.Cause == domain.ExecutionCauseQueueAvailable {
 						count++
 						if event.Owner != "alice" || event.WakeTarget.TmuxTarget != "owner:1.0" || event.DedupeKey == "" {
 							t.Fatalf("wrong work wake: %+v", event)
@@ -220,7 +220,7 @@ func TestBlockingQuestionReconcilesExecution(t *testing.T) {
 		t.Fatalf("execution not actionable: %+v", execution)
 	}
 	if !slices.ContainsFunc(store.state.ExecutionEvents, func(event domain.ExecutionEvent) bool {
-		return event.IntegrationID == "i" && event.Reason == "blocker resolved" && event.WakeTarget.TmuxTarget == "executor:0.0"
+		return event.IntegrationID == "i" && event.Cause == domain.ExecutionCauseBlockerResolved && event.WakeTarget.TmuxTarget == "executor:0.0"
 	}) {
 		t.Fatalf("missing targeted blocker wake: %+v", store.state.ExecutionEvents)
 	}

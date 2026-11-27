@@ -20,7 +20,7 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 	err := s.store.Update(ctx, func(st *domain.State) error {
 		now := nowUTC()
 		var err error
-		if command.ProductID != "" {
+		if command.ProductID != "" && (command.Action == "register_user_orchestrator" || command.Action == "unregister_user_orchestrator") {
 			if _, err := workProduct(ctx, st, command.ProductID, "write"); err != nil {
 				return err
 			}
@@ -37,7 +37,7 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 			if err != nil {
 				return err
 			}
-			if !humanWorkCaller(ctx) || product.Owner != workUser(ctx) && !(product.Owner == "" && auth.IsLocalAdmin(ctx)) {
+			if !isWorkDecisionOwner(ctx, product) {
 				return auth.ErrForbidden
 			}
 			var input struct {
@@ -66,7 +66,7 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 			if err := decode(command.Data, &input); err != nil {
 				return err
 			}
-			output, err = decisionQuestion(ctx, st, command, *parent, *product, "idea_promotion", "Promote idea: "+parent.Title, input.Rationale, now)
+			output, err = decisionQuestion(ctx, st, command, *parent, *product, "idea_promotion", "ready_for_execution", "Promote idea: "+parent.Title, input.Rationale, now)
 			return err
 		case "propose_dependency":
 			output, err = proposeDependency(ctx, st, command, now)
@@ -88,31 +88,36 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 				return err
 			}
 			product := productByID(*st, from.ProductID)
-			purpose := "dependency:" + edge.ID
 			if command.Action == "request_dependency_decision" {
-				if len(command.Data) != 1 || edge.Status != "proposed" {
+				if input.Approval != "" || edge.Status != "proposed" {
 					return invalid("request a decision only for a proposed dependency")
+				}
+				if input.Decision == "" {
+					input.Decision = "accept"
+				}
+				if input.Decision != "accept" && input.Decision != "reject" {
+					return invalid("decision must be accept or reject")
 				}
 				if prior := questionByID(st, edge.ApprovalQuestionID); prior != nil && prior.Status == "open" {
 					return invalid("a decision question is already open: %s", prior.ID)
 				}
-				title, rationale := "Approve dependency on "+to.Title, edge.Rationale
+				title, rationale := "Approve request to "+input.Decision+" dependency on "+to.Title, edge.Rationale
 				if to.ProductID != from.ProductID {
 					targetProduct := productByID(*st, to.ProductID)
-					owner := featureDecisionOwner(*from, *product)
+					owner := product.Owner
 					if targetProduct.Visibility == "private" && owner != targetProduct.Owner && !slices.Contains(targetProduct.Members, owner) {
 						return invalid("feature decision owner must be able to review both endpoints")
 					}
-					title, rationale = "Review a proposed dependency", "Review this proposal in the dependency graph before deciding. The graph shows the linked question only to readers who can see both endpoints. Do not include restricted endpoint details in this answer."
+					title, rationale = "Review request to "+input.Decision+" a dependency", "Review this proposal in the dependency graph before deciding. The graph shows the linked question only to readers who can see both endpoints. Do not include restricted endpoint details in this answer."
 				}
-				question, err := decisionQuestion(ctx, st, command, *from, *product, "dependency_approval", title, rationale, now)
+				question, err := decisionQuestion(ctx, st, command, *from, *product, "dependency_approval", input.Decision, title, rationale, now)
 				if err == nil {
 					edge.ApprovalQuestionID, edge.UpdatedAt = question.ID, now
 				}
 				output = question
 				return err
 			}
-			if err := canApproveWork(ctx, st, product, from.ID, input.Approval, purpose); err != nil {
+			if err := canApproveWork(ctx, st, product, from, edge, input.Approval, input.Decision); err != nil {
 				return err
 			}
 			if err := decideFeatureDependency(ctx, st, edge, input.Decision, command.Actor, now); err != nil {
@@ -122,6 +127,9 @@ func (s *Service) executeWorkCommand(ctx context.Context, command domain.Command
 			output = *edge
 		case "register_user_orchestrator", "unregister_user_orchestrator":
 			output, err = changeUserOrchestrator(ctx, st, command, now)
+		}
+		if err == nil && command.Action != "register_user_orchestrator" && command.Action != "unregister_user_orchestrator" && len(st.UserOrchestrators) != 0 {
+			reconcileUserWork(st, now)
 		}
 		return err
 	})

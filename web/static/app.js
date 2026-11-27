@@ -70,9 +70,10 @@ let refreshInFlight=0;
 let refreshAllInFlight=false;
 function uiStateURL(){const q=new URLSearchParams();if(productID)q.set("product_id",productID);const f=featureID();if(f&&!["configuration","delivery","operations","main","pipelines","questions"].includes(f))q.set("feature_id",f);return "/api/ui-state?"+q.toString();}
 async function refresh(){
+ if(typeof invalidateOwnerWorkGraphs==='function')invalidateOwnerWorkGraphs();
  if(authExpired){await loadIdentity();if(authExpired)return;}
  if(typeof invalidateLive==='function')invalidateLive();
- const ticket=typeof liveEpoch==='number'?liveEpoch:null;refreshInFlight++;
+ const ticket=typeof liveEpoch==='number'?liveEpoch:null;let loaded=false;refreshInFlight++;
  try{
   const url=uiStateURL(),defaultURL='/api/ui-state?';
   const loadState=request(url).catch(async error=>{
@@ -92,9 +93,9 @@ async function refresh(){
   if(ticket!==null&&ticket!==liveEpoch)return;
   state=next;statusMetadata=metadata;if(next.projection?.product_id)productID=next.projection.product_id;
   if(!list(state.products).some(p=>p.id===productID))productID=state.products?.[0]?.id||'';
-  const f=selectedFeature();if(f)productID=f.product_id;render(typeof patchLiveHTML==='function');
+  const f=selectedFeature();if(f)productID=f.product_id;render(typeof patchLiveHTML==='function');loaded=true;
  }catch(e){if(authExpired)return;notice(e.message,true);if(!list(state.products).length){$('#main').innerHTML='<div class="empty"><h2>Workspace unavailable</h2><p>Check the server connection and your access settings.</p><button id="retry">Try again</button></div>';$('#retry').onclick=refresh;}}
- finally{refreshInFlight--;}
+ finally{refreshInFlight--;if(loaded&&!authExpired&&typeof syncOwnerWork==='function')syncOwnerWork(featureID(),selectedFeature());}
 }
 async function refreshEverything(){
  if(refreshAllInFlight)return;

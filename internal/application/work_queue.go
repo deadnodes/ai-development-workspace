@@ -12,16 +12,18 @@ import (
 )
 
 type workItem struct {
-	Kind             string `json:"kind"`
-	ProductID        string `json:"product_id"`
-	FeatureID        string `json:"feature_id"`
-	FeatureTitle     string `json:"feature_title"`
-	IntegrationID    string `json:"integration_id,omitempty"`
-	IntegrationTitle string `json:"integration_title,omitempty"`
-	Reason           string `json:"reason"`
-	QuestionID       string `json:"question_id,omitempty"`
-	DependencyID     string `json:"dependency_id,omitempty"`
-	WaitingOn        string `json:"waiting_on,omitempty"`
+	Kind             string  `json:"kind"`
+	ProductID        string  `json:"product_id"`
+	FeatureID        string  `json:"feature_id"`
+	FeatureTitle     string  `json:"feature_title"`
+	IntegrationID    string  `json:"integration_id,omitempty"`
+	IntegrationTitle string  `json:"integration_title,omitempty"`
+	Reason           string  `json:"reason"`
+	QuestionID       string  `json:"question_id,omitempty"`
+	DependencyID     string  `json:"dependency_id,omitempty"`
+	WaitingOn        string  `json:"waiting_on,omitempty"`
+	ExecutionFence   *uint64 `json:"execution_fence,omitempty"`
+	NextAction       string  `json:"next_action,omitempty"`
 }
 
 func featurePriority(parent domain.Feature) int {
@@ -50,37 +52,15 @@ func nextWork(st *domain.State, user, productID string, visible func(string) boo
 		return first.ID < second.ID
 	})
 	children := map[string][]domain.Integration{}
-	statuses := map[string]string{}
 	for _, child := range st.Integrations {
 		children[child.FeatureID] = append(children[child.FeatureID], child)
-		statuses[child.ID] = child.Status
 	}
 	executions := map[string]domain.IntegrationExecution{}
 	for _, execution := range st.IntegrationExecutions {
 		executions[execution.IntegrationID] = execution
 	}
-	featureQuestions, integrationQuestions := map[string]string{}, map[string]string{}
-	for _, question := range st.Memories {
-		if questionBlocked(question) {
-			if question.IntegrationID == "" {
-				featureQuestions[question.FeatureID] = question.ID
-			} else {
-				integrationQuestions[question.IntegrationID] = question.ID
-			}
-		}
-	}
 	for _, parent := range parents {
 		base := workItem{ProductID: parent.ProductID, FeatureID: parent.ID, FeatureTitle: parent.Title}
-		if questionID := featureQuestions[parent.ID]; questionID != "" {
-			base.Reason, base.QuestionID = "open blocking question", questionID
-		} else {
-			for _, dependency := range featurePrerequisites(st, parent.ID) {
-				if target := feature(st, dependency.ToFeatureID); target != nil && visible(target.ProductID) {
-					base.Reason, base.DependencyID, base.WaitingOn = "required feature not completed", dependency.ID, target.ID
-					break
-				}
-			}
-		}
 		appendItem := func(item workItem, reason string) {
 			if item.Reason != "" {
 				if len(skipped) < 20 {
@@ -92,8 +72,10 @@ func nextWork(st *domain.State, user, productID string, visible func(string) boo
 			}
 		}
 		if len(children[parent.ID]) == 0 && parent.Status == "ready_for_execution" && (!humanWorkID(parent.Owner) || parent.Owner == user) {
-			base.Kind = "plan_feature"
-			appendItem(base, "ready feature needs integrations")
+			item := base
+			blocker := featureStartBlocker(st, parent.ID, "", visible)
+			item.Kind, item.Reason, item.QuestionID, item.DependencyID, item.WaitingOn = "plan_feature", blocker.Reason, blocker.QuestionID, blocker.DependencyID, blocker.WaitingOn
+			appendItem(item, "ready feature needs integrations")
 		}
 		sort.Slice(children[parent.ID], func(left, right int) bool {
 			first, second := children[parent.ID][left], children[parent.ID][right]
@@ -108,15 +90,11 @@ func nextWork(st *domain.State, user, productID string, visible func(string) boo
 			}
 			item := base
 			item.Kind, item.IntegrationID, item.IntegrationTitle = "integration", child.ID, child.Title
-			if questionID := integrationQuestions[child.ID]; questionID != "" {
-				item.Reason, item.QuestionID, item.DependencyID, item.WaitingOn = "open blocking question", questionID, "", ""
-			}
+			blocker := featureStartBlocker(st, parent.ID, child.ID, visible)
+			item.Reason, item.QuestionID, item.DependencyID, item.WaitingOn = blocker.Reason, blocker.QuestionID, blocker.DependencyID, blocker.WaitingOn
 			if item.Reason == "" {
-				for _, dependency := range child.Dependencies {
-					if statuses[dependency] != "ready" && statuses[dependency] != "released" {
-						item.Reason, item.DependencyID = "integration dependency not ready", dependency
-						break
-					}
+				if dependency := integrationWaitingOn(st, &child); dependency != "" {
+					item.Reason, item.DependencyID = "integration dependency not ready", dependency
 				}
 			}
 			execution := executions[child.ID]
@@ -124,6 +102,11 @@ func nextWork(st *domain.State, user, productID string, visible func(string) boo
 			case "", "unassigned", "lost", "exited_incomplete":
 			case "blocked":
 				if item.Reason == "" {
+					if child.Assignee == "" || child.Assignee != user || !executionBlockerResolved(st, &execution) {
+						continue
+					}
+					item.Kind, item.ExecutionFence, item.NextAction = "resume_integration", &execution.Fence, "report_execution with state=running and the supplied execution_fence as fence"
+					appendItem(item, "execution blocker resolved")
 					continue
 				}
 			default:
@@ -215,10 +198,11 @@ func retireRegistrationEvents(st *domain.State, registrationID string, now time.
 	}
 }
 
-func raiseWorkEvent(st *domain.State, registration *domain.UserOrchestrator, productID, reason string, now time.Time) {
+func raiseWorkEvent(st *domain.State, registration *domain.UserOrchestrator, productID, reason string, cause domain.ExecutionEventCause, integrationID string, fence uint64, now time.Time) {
 	registration.Generation++
 	wake := domain.ExecutionWakeTarget{Kind: registration.Harness.Kind, SessionRef: registration.Harness.SessionRef, TmuxTarget: registration.Harness.TmuxTarget, Source: "user_orchestrator"}
-	event := domain.ExecutionEvent{ID: id(), ProductID: productID, Owner: registration.UserID, RegistrationID: registration.ID, Type: "work_available", ConditionGeneration: registration.Generation, Reason: reason, DedupeKey: fmt.Sprintf("%s|work_available|%d", registration.ID, registration.Generation), WakeTarget: wake, HarnessKind: wake.Kind, SessionRef: wake.SessionRef, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	event := domain.ExecutionEvent{ID: id(), ProductID: productID, Owner: registration.UserID, RegistrationID: registration.ID, Type: "work_available", Cause: cause, ConditionGeneration: registration.Generation, Reason: reason, DedupeKey: fmt.Sprintf("%s|work_available|%d", registration.ID, registration.Generation), WakeTarget: wake, HarnessKind: wake.Kind, SessionRef: wake.SessionRef, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	event.IntegrationID, event.Fence = integrationID, fence
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": event.Type, "generation": event.ConditionGeneration})
 }
@@ -232,28 +216,57 @@ func reconcileUserWork(st *domain.State, now time.Time) bool {
 		}
 		items, _ := nextWork(st, registration.UserID, registration.ProductID, func(productID string) bool { return registrationVisible(st, *registration, productID) }, 1)
 		available := len(items) > 0
+		if !available {
+			for eventIndex := range st.ExecutionEvents {
+				event := &st.ExecutionEvents[eventIndex]
+				if event.RegistrationID == registration.ID && event.Cause == domain.ExecutionCauseQueueAvailable && event.Resolution.ResolvedAt == nil {
+					event.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: "system", Evidence: "work queue drained"}
+					appendExecutionEventAudit(st, *event, "execution_event_resolved", "system/execution-reconciler", now, nil)
+					changed = true
+				}
+			}
+		}
 		if available == registration.Available {
 			continue
 		}
 		registration.Available, registration.UpdatedAt, changed = available, now, true
 		if available {
-			raiseWorkEvent(st, registration, items[0].ProductID, "work queue became non-empty", now)
+			raiseWorkEvent(st, registration, items[0].ProductID, "work queue became non-empty", domain.ExecutionCauseQueueAvailable, "", 0, now)
 		}
 	}
 	return changed
 }
 
 func wakeQuestionOwner(st *domain.State, question domain.Memory, now time.Time) {
-	for _, scope := range []string{question.ProductID, ""} {
+	owner := question.Question.AddressedTo
+	var fence uint64
+	if question.IntegrationID != "" {
+		child := integration(st, question.IntegrationID)
+		if child == nil {
+			return
+		}
+		owner = child.Assignee
+		if execution := executionFor(st, child.ID); execution != nil {
+			fence = execution.Fence
+		}
+	}
+	wakeUserContinuation(st, owner, question.ProductID, "owner question answered", question.IntegrationID, fence, now)
+}
+
+func wakeUserContinuation(st *domain.State, owner, productID, reason, integrationID string, fence uint64, now time.Time) {
+	if owner == "" {
+		return
+	}
+	for _, scope := range []string{productID, ""} {
 		for index := range st.UserOrchestrators {
 			registration := &st.UserOrchestrators[index]
-			if registration.UnregisteredAt == nil && registration.UserID == question.Question.AddressedTo && registration.ProductID == scope && registrationVisible(st, *registration, question.ProductID) {
+			if registration.UnregisteredAt == nil && registration.UserID == owner && registration.ProductID == scope && registrationVisible(st, *registration, productID) {
 				for _, event := range st.ExecutionEvents {
-					if event.RegistrationID == registration.ID && event.ProductID == question.ProductID && event.CreatedAt.Equal(now) && event.Resolution.ResolvedAt == nil {
+					if event.IntegrationID == integrationID && event.Fence == fence && event.Cause == domain.ExecutionCauseQuestionContinuation && event.RegistrationID == registration.ID && event.ProductID == productID && event.CreatedAt.Equal(now) && event.Resolution.ResolvedAt == nil {
 						return
 					}
 				}
-				raiseWorkEvent(st, registration, question.ProductID, "owner question answered", now)
+				raiseWorkEvent(st, registration, productID, reason, domain.ExecutionCauseQuestionContinuation, integrationID, fence, now)
 				return
 			}
 		}

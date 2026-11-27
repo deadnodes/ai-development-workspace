@@ -781,6 +781,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if _, present := featureData["completed_at"]; present {
 			return nil, invalid("completed_at is server managed")
 		}
+		if _, present := featureData["archived_from"]; present {
+			return nil, invalid("archived_from is server managed")
+		}
 		if !domain.ValidStatus("feature", v.Status) {
 			return nil, invalid("invalid feature status %q", v.Status)
 		}
@@ -790,9 +793,21 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if old != nil && !domain.CanTransition("feature", old.Status, v.Status) {
 			return nil, invalid("feature transition %s -> %s is not allowed", old.Status, v.Status)
 		}
-		if old != nil && old.Status != v.Status && v.Status == "ready_for_execution" {
+		if old != nil && old.Status != v.Status && old.Status == "archived" {
+			restore := old.ArchivedFrom
+			if restore == "" {
+				restore = "idea"
+			}
+			if v.Status != restore {
+				return nil, invalid("archived feature must be restored to %s", restore)
+			}
+			v.ArchivedFrom = ""
+		} else if old != nil && old.Status != v.Status && v.Status == "archived" {
+			v.ArchivedFrom = old.Status
+		}
+		if old != nil && old.Status != v.Status && old.Status != "archived" && v.Status == "ready_for_execution" {
 			product := productByID(*st, v.ProductID)
-			if err := canApproveWork(ctx, st, product, v.ID, approvalID, "idea_promotion"); err != nil {
+			if err := canApproveWork(ctx, st, product, old, nil, approvalID, "ready_for_execution"); err != nil {
 				return nil, err
 			}
 		}
@@ -877,6 +892,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, e
 		}
 		if old != nil && v.Status == "ready" {
+			if err := guardFeatureStart(ctx, st, &v); err != nil {
+				return nil, err
+			}
 			v.Status = "working"
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"

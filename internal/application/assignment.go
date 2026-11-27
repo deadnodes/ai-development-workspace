@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"slices"
 	"strings"
 	"time"
 )
@@ -102,6 +103,7 @@ func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any,
 				return notAssignee(in.Assignee)
 			}
 		}
+		previousAssignee := in.Assignee
 		if c.Action == "assign_integration" {
 			assignee, _ := c.Data["assignee"].(string)
 			if assignee == "" {
@@ -124,6 +126,24 @@ func (s *Service) executeAssignment(ctx context.Context, c domain.Command) (any,
 			in.Assignee = ""
 		}
 		now := time.Now().UTC()
+		if in.Assignee != previousAssignee {
+			if execution := executionFor(st, in.ID); execution != nil {
+				*execution = domain.IntegrationExecution{ID: execution.ID, ProductID: in.ProductID, IntegrationID: in.ID, DesiredState: execution.DesiredState, State: "unassigned", Fence: execution.Fence + 1, Reconciliation: domain.ExecutionReconciliation{Enabled: execution.Reconciliation.Enabled, Generation: execution.Reconciliation.Generation}}
+			}
+			resolveExecutionEvents(st, in.ID, now, "assignment changed")
+			for index := range st.ExecutionGroups {
+				group := &st.ExecutionGroups[index]
+				if group.ClosedAt != nil || !slices.Contains(group.MemberIntegrationIDs, in.ID) {
+					continue
+				}
+				members := slices.DeleteFunc(slices.Clone(group.MemberIntegrationIDs), func(member string) bool { return member == in.ID })
+				group.MemberIntegrationIDs = members
+				if len(members) == 0 {
+					group.ClosedAt = &now
+				}
+				group.Revisions = append(slices.Clone(group.Revisions), domain.ExecutionGroupRevision{Revision: uint64(len(group.Revisions)) + 1, MemberIntegrationIDs: members, CreatedAt: now})
+			}
+		}
 		in.Actor, in.UpdatedAt = c.Actor, now
 		out = *in
 		st.Events = append(st.Events, domain.Event{ID: id(), Action: c.Action, Actor: c.Actor, At: now, EntityID: in.ID, ProductID: in.ProductID, FeatureID: in.FeatureID, Data: c})

@@ -247,7 +247,7 @@ func CommandSchema() map[string]any {
 			}
 			if slices.Contains(domain.WorkActions, name) {
 				fields := map[string]any{}
-				optional := map[string]string{"ask_question": "options recommendation context_refs blocking", "propose_dependency": "accept", "decide_dependency": "approval_question_id"}
+				optional := map[string]string{"ask_question": "options recommendation context_refs blocking", "propose_dependency": "accept", "decide_dependency": "approval_question_id", "request_dependency_decision": "decision"}
 				for _, field := range strings.Fields(a.required + " " + optional[name]) {
 					fields[field] = data[field]
 				}

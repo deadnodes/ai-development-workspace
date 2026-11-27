@@ -34,7 +34,7 @@ func StatusTransitions() map[string]map[string][]string {
 	return map[string]map[string][]string{
 		"feature": {
 			"idea": {"ready_for_execution", "archived"}, "ready_for_execution": {"idea", "active", "archived"},
-			"planned": {"active", "blocked", "archived", "idea", "ready_for_execution"}, "active": {"blocked", "completed", "archived"}, "blocked": {"active", "planned", "archived"}, "completed": {"active", "archived"}, "archived": {"active", "planned"},
+			"planned": {"active", "blocked", "archived", "idea", "ready_for_execution"}, "active": {"blocked", "completed", "archived"}, "blocked": {"active", "planned", "archived"}, "completed": {"active", "archived"}, "archived": {"idea", "ready_for_execution", "planned", "active", "blocked", "completed"},
 		},
 		"integration": {
 			"planned": {"working"}, "working": {"planned", "implemented", "verifying", "ready"}, "implemented": {"planned", "working", "verifying", "ready"}, "verifying": {"planned", "working", "implemented", "ready"}, "ready": {"working", "verifying"}, "released": {},

@@ -166,6 +166,13 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			continue
 		}
 		if out != "" {
+			if wakeGroup(ev) == "" && !workAvailabilityWake(ev) && !blockerResolutionWake(ev) {
+				data := map[string]any{"event_id": ev.ID, "delivery_id": out, "supervisor_id": s.Config.SupervisorID, "outcome": string(Unsupported), "detail": "missing valid execution group"}
+				if err := s.request(ctx, http.MethodPost, "/api/commands", token, command("ack_execution_event", productID, s.Config.SupervisorID, data), nil); err != nil {
+					return err
+				}
+				continue
+			}
 			claimed = append(claimed, struct {
 				ev domain.ExecutionEvent
 				id string
@@ -184,23 +191,13 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 		groupID := ""
 		workAvailable, resolvedBlocker := false, false
 		for _, delivery := range claimed {
-			workAvailable = workAvailable || delivery.ev.Type == "work_available"
-			resolvedBlocker = resolvedBlocker || (delivery.ev.Type == "execution_continuation_required" && delivery.ev.Reason == "blocker resolved" && idPattern.MatchString(delivery.ev.IntegrationID))
-		}
-		for _, c := range claimed {
-			for _, gid := range c.ev.GroupIDs {
-				if idPattern.MatchString(gid) {
-					groupID = gid
-					break
-				}
-			}
-			if groupID != "" {
-				break
+			workAvailable = workAvailable || workAvailabilityWake(delivery.ev)
+			resolvedBlocker = resolvedBlocker || blockerResolutionWake(delivery.ev)
+			if groupID == "" {
+				groupID = wakeGroup(delivery.ev)
 			}
 		}
-		if groupID == "" && !workAvailable && !resolvedBlocker {
-			result = WakeResult{Outcome: Unsupported, Detail: "missing valid execution group"}
-		} else if !ValidSessionRef(session) && target == "" {
+		if !ValidSessionRef(session) && target == "" {
 			result = WakeResult{Outcome: Unsupported, Detail: "invalid session_ref"}
 		} else {
 			types := make([]string, 0, len(claimed))
@@ -213,13 +210,13 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			}
 			if resolvedBlocker && groupID == "" {
 				for _, delivery := range claimed {
-					if delivery.ev.Type == "execution_continuation_required" && delivery.ev.Reason == "blocker resolved" && idPattern.MatchString(delivery.ev.IntegrationID) {
-						message += " A blocker was resolved. Call get_integration_context with integration_id=" + delivery.ev.IntegrationID + " and verify its current state and fence before continuing."
+					if blockerResolutionWake(delivery.ev) {
+						message += " A blocker was resolved. Call next_work as the current assignee and follow the fenced resume item for integration_id=" + delivery.ev.IntegrationID + "."
 					}
 				}
 			}
 			if workAvailable {
-				message += " Work is available for your user. Call next_work and list_questions as your current principal. Claim eligible integrations before starting them; plan ready features that have no integrations."
+				message += " Call next_work and list_questions as your current principal. Follow the fenced next action on resume items, claim eligible unstarted integrations, and plan ready features with no integrations."
 			}
 			s.mu.Lock()
 			last := s.wakes[key]
@@ -262,6 +259,23 @@ func (s *Supervisor) allowed(k string) bool {
 	}
 	return false
 }
+func blockerResolutionWake(event domain.ExecutionEvent) bool {
+	return event.Type == "execution_continuation_required" && event.Cause == domain.ExecutionCauseBlockerResolved && idPattern.MatchString(event.IntegrationID)
+}
+
+func workAvailabilityWake(event domain.ExecutionEvent) bool {
+	return event.Type == "work_available" && (event.Cause == domain.ExecutionCauseQueueAvailable || event.Cause == domain.ExecutionCauseQuestionContinuation)
+}
+
+func wakeGroup(event domain.ExecutionEvent) string {
+	for _, groupID := range event.GroupIDs {
+		if idPattern.MatchString(groupID) {
+			return groupID
+		}
+	}
+	return ""
+}
+
 func safeEventType(t string) string {
 	switch t {
 	case "execution_lost", "execution_stalled", "execution_unassigned", "execution_continuation_required", "work_available":

@@ -41,6 +41,9 @@ func registerWorkRoutes(mux routeRegistrar, service Service) {
 		"GET /api/status-overview":                "status_overview",
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, request *http.Request) {
+			if tool == "get_dependency_graph" {
+				w.Header().Set("Cache-Control", "no-store")
+			}
 			input := request.PathValue("id")
 			if tool != "get_question" {
 				query := request.URL.Query()

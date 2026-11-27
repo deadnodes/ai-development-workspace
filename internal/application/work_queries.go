@@ -132,11 +132,11 @@ func (s *Service) queryWork(ctx context.Context, name, input string) (any, error
 			if options.ProductID == "" {
 				return invalid("product_id is required")
 			}
-			output = dependencyGraph(&st, options)
+			output = dependencyGraph(raw, options, visible)
 		case "next_work":
 			items, skipped := []workItem{}, []workItem{}
 			if user != "" {
-				items, skipped = nextWork(&st, user, options.ProductID, visible, options.Limit)
+				items, skipped = nextWork(raw, user, options.ProductID, visible, options.Limit)
 			}
 			output = map[string]any{"product_id": options.ProductID, "items": items, "skipped": skipped}
 		case "status_overview":
@@ -149,12 +149,12 @@ func (s *Service) queryWork(ctx context.Context, name, input string) (any, error
 	return output, err
 }
 
-func dependencyGraph(st *domain.State, options workQueryInput) any {
+func dependencyGraph(st *domain.State, options workQueryInput, visible func(string) bool) any {
 	selected := map[string]bool{}
 	edges := []domain.FeatureDependency{}
 	for _, edge := range st.FeatureDependencies {
 		from, to := feature(st, edge.FromFeatureID), feature(st, edge.ToFeatureID)
-		if from == nil || to == nil || from.ProductID != options.ProductID && to.ProductID != options.ProductID || edge.Status != "accepted" && !(options.IncludeProposed && edge.Status == "proposed") {
+		if from == nil || to == nil || !visible(from.ProductID) || !visible(to.ProductID) || from.ProductID != options.ProductID && to.ProductID != options.ProductID || edge.Status != "accepted" && !(options.IncludeProposed && edge.Status == "proposed") {
 			continue
 		}
 		selected[from.ID], selected[to.ID] = true, true
@@ -163,8 +163,8 @@ func dependencyGraph(st *domain.State, options workQueryInput) any {
 	nodes := []map[string]any{}
 	for _, parent := range st.Features {
 		if parent.ProductID == options.ProductID || selected[parent.ID] {
-			waiting := featureWaitingOn(st, parent.ID)
-			nodes = append(nodes, map[string]any{"id": parent.ID, "product_id": parent.ProductID, "title": parent.Title, "status": parent.Status, "unblocked": len(waiting) == 0, "waiting_on": waiting})
+			waiting, unblocked := featureWaitingOn(st, parent.ID, visible)
+			nodes = append(nodes, map[string]any{"id": parent.ID, "product_id": parent.ProductID, "title": parent.Title, "status": parent.Status, "unblocked": unblocked, "waiting_on": waiting})
 		}
 	}
 	return map[string]any{"nodes": nodes, "edges": edges}

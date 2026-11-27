@@ -25,10 +25,10 @@ func validateExecutionHarness(h domain.ExecutionHarness) error {
 	return nil
 }
 
-func resolveExecutionEvents(st *domain.State, e *domain.IntegrationExecution, now time.Time, newState string) {
+func resolveExecutionEvents(st *domain.State, integrationID string, now time.Time, newState string) {
 	for i := range st.ExecutionEvents {
 		ev := &st.ExecutionEvents[i]
-		if ev.IntegrationID == e.IntegrationID && ev.Resolution.ResolvedAt == nil && (ev.Fence != e.Fence || ev.ConditionGeneration != e.Reconciliation.Generation+1 || !e.Reconciliation.ActionRequired) {
+		if ev.IntegrationID == integrationID && ev.Resolution.ResolvedAt == nil {
 			t := now
 			ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &t, ResolvedBy: "system", Evidence: newState}
 			appendExecutionEventAudit(st, *ev, "execution_event_resolved", "system/execution-reconciler", now, map[string]any{"evidence": newState})
@@ -69,12 +69,19 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 			}
 		}
 	}
-	if wake.Kind == "" && reason == "blocker resolved" && e.Harness.Kind != "" && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") {
+	if wake.Kind == "" && e.Reconciliation.Cause == domain.ExecutionCauseBlockerResolved && e.Harness.Kind != "" && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") {
 		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
 	}
-	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	owner := ""
+	if child := integration(st, e.IntegrationID); child != nil {
+		owner = child.Assignee
+	}
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Cause: e.Reconciliation.Cause, Owner: owner, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
+	if event.Cause == domain.ExecutionCauseBlockerResolved && wake.Kind == "" {
+		wakeUserContinuation(st, owner, e.ProductID, reason, e.IntegrationID, e.Fence, now)
+	}
 }
 
 func appendExecutionEventAudit(st *domain.State, ev domain.ExecutionEvent, action, actor string, now time.Time, data map[string]any) {
@@ -217,15 +224,20 @@ func validateExecutionInput(data map[string]any, action string, accepted ...stri
 	return nil
 }
 func executionCondition(st *domain.State, e *domain.IntegrationExecution, state string, required bool, reason string, now time.Time) {
-	if e.State == state && e.Reconciliation.ActionRequired == required && e.Reconciliation.Reason == reason {
+	executionConditionWithCause(st, e, state, required, reason, "", now)
+}
+
+func executionConditionWithCause(st *domain.State, e *domain.IntegrationExecution, state string, required bool, reason string, cause domain.ExecutionEventCause, now time.Time) {
+	if e.State == state && e.Reconciliation.ActionRequired == required && e.Reconciliation.Reason == reason && e.Reconciliation.Cause == cause {
 		return
 	}
 	e.State = state
 	e.Reconciliation.ActionRequired = required
 	e.Reconciliation.Reason = reason
+	e.Reconciliation.Cause = cause
 	e.Reconciliation.Since = &now
 	e.Reconciliation.Generation++
-	resolveExecutionEvents(st, e, now, state)
+	resolveExecutionEvents(st, e.IntegrationID, now, state)
 	if required {
 		typ := ""
 		switch state {
@@ -354,6 +366,16 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				}
 				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) {
 					return invalid("INVALID_STATE")
+				}
+				if ev.IntegrationID != "" && ev.Owner != "" {
+					child, execution := integration(st, ev.IntegrationID), executionFor(st, ev.IntegrationID)
+					var fence uint64
+					if execution != nil {
+						fence = execution.Fence
+					}
+					if child == nil || child.Assignee != ev.Owner || fence != ev.Fence {
+						return invalid("INVALID_STATE")
+					}
 				}
 				beforeEscalation := ev.EscalationRequired
 				ev.Delivery.Attempts++
@@ -588,6 +610,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				e.Harness = x.Harness
 				e.StalledTimeoutSeconds = x.StalledTimeoutSeconds
 				executionCondition(st, e, "running", false, "", now)
+				resolveExecutionEvents(st, e.IntegrationID, now, "running")
 				e.LeaseTTLSeconds = x.LeaseTTLSeconds
 				if e.LeaseTTLSeconds <= 0 {
 					e.LeaseTTLSeconds = 300
@@ -646,6 +669,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				return invalid("LEASE_EXPIRED")
 			}
 			if e.State == "lost" || e.State == "stalled" {
+				if err := guardFeatureStart(ctx, st, integration(st, c.IntegrationID)); err != nil {
+					return err
+				}
 				executionCondition(st, e, "running", false, "", now)
 			}
 			nowp := now
@@ -973,6 +999,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 		}
 		oldState, oldRequired, oldReason := e.State, e.Reconciliation.ActionRequired, e.Reconciliation.Reason
 		next, required, reason := oldState, oldRequired, oldReason
+		cause := e.Reconciliation.Cause
 		if statusReachedIntegration(in.Status, e.DesiredState) {
 			next, required, reason = "completed", false, ""
 		} else {
@@ -989,7 +1016,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 				}
 			case "stalled":
 				timeout, _ := effectiveStalledTimeout(st, e, globalTimeout)
-				if timeout == 0 || (e.LastProgress != nil && now.Sub(*e.LastProgress) <= time.Duration(timeout)*time.Second) {
+				if (timeout == 0 || (e.LastProgress != nil && now.Sub(*e.LastProgress) <= time.Duration(timeout)*time.Second)) && guardFeatureStart(context.Background(), st, in) == nil {
 					next, required, reason = "running", false, ""
 				}
 			case "unassigned", "lost", "exited_incomplete":
@@ -1017,16 +1044,17 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 					}
 				}
 			case "blocked":
-				required = false
-				for _, m := range st.Memories {
-					if m.ID == e.BlockerRef && resolvedExecutionBlocker(m) {
-						required, reason = true, "blocker resolved"
-					}
+				required, reason, cause = false, "", ""
+				if executionBlockerResolved(st, e) && guardFeatureStart(context.Background(), st, in) == nil {
+					required, reason, cause = true, "blocker resolved", domain.ExecutionCauseBlockerResolved
 				}
 			}
 		}
-		if next != oldState || required != oldRequired || reason != oldReason {
-			executionCondition(st, e, next, required, reason, now)
+		if next != "blocked" {
+			cause = ""
+		}
+		if next != oldState || required != oldRequired || reason != oldReason || cause != e.Reconciliation.Cause {
+			executionConditionWithCause(st, e, next, required, reason, cause, now)
 			if next == "completed" {
 				e.LeaseUntil = nil
 			}
@@ -1081,7 +1109,7 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	changed := false
 	if err := s.view(ctx, func(st *domain.State) error {
 		// Borrow read-only state and copy only the collection the plan mutates.
-		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups, Features: st.Features, FeatureDependencies: st.FeatureDependencies, UserOrchestrators: slices.Clone(st.UserOrchestrators)}
+		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups, ExecutionEvents: slices.Clone(st.ExecutionEvents), Features: st.Features, FeatureDependencies: st.FeatureDependencies, UserOrchestrators: slices.Clone(st.UserOrchestrators)}
 		changed = reconcileExecutions(&snapshot, now, globalTimeout, debounce)
 		changed = reconcileUserWork(&snapshot, now) || changed
 		return nil
@@ -1115,17 +1143,22 @@ func resolvedExecutionBlocker(memory domain.Memory) bool {
 	return memory.Kind == "blocker" && memory.Status == "resolved" || memory.Kind == "question" && (memory.Status == "answered" || memory.Status == "withdrawn")
 }
 
+func executionBlockerResolved(st *domain.State, execution *domain.IntegrationExecution) bool {
+	return slices.ContainsFunc(st.Memories, func(memory domain.Memory) bool {
+		return memory.ID == execution.BlockerRef && memory.ProductID == execution.ProductID && resolvedExecutionBlocker(memory)
+	})
+}
+
 func wakeResolvedQuestion(st *domain.State, question domain.Memory, now time.Time) bool {
 	found := false
 	for index := range st.IntegrationExecutions {
 		execution := &st.IntegrationExecutions[index]
-		if execution.ProductID != question.ProductID || execution.State != "blocked" || execution.BlockerRef != question.ID || !execution.Reconciliation.Enabled {
+		if execution.ProductID != question.ProductID || execution.State != "blocked" || execution.BlockerRef != question.ID {
 			continue
 		}
-		first := len(st.ExecutionEvents)
-		executionCondition(st, execution, "blocked", true, "blocker resolved", now)
-		for _, event := range st.ExecutionEvents[first:] {
-			found = found || event.WakeTarget.Kind != ""
+		found = true
+		if child := integration(st, execution.IntegrationID); child != nil && guardFeatureStart(context.Background(), st, child) == nil {
+			executionConditionWithCause(st, execution, "blocked", true, "blocker resolved", domain.ExecutionCauseBlockerResolved, now)
 		}
 	}
 	return found

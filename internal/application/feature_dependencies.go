@@ -11,68 +11,94 @@ import (
 	"releasecontrol/internal/domain"
 )
 
+func featureStartBlocker(st *domain.State, parentID, integrationID string, visible func(string) bool) workItem {
+	for _, memory := range st.Memories {
+		if memory.FeatureID == parentID && (memory.IntegrationID == "" || memory.IntegrationID == integrationID) && questionBlocked(memory) {
+			return workItem{Reason: "open blocking question", QuestionID: memory.ID}
+		}
+	}
+	waiting := featurePrerequisites(st, parentID)
+	for _, dependency := range waiting {
+		if target := feature(st, dependency.ToFeatureID); target != nil && visible(target.ProductID) {
+			return workItem{Reason: "required feature not completed", DependencyID: dependency.ID, WaitingOn: target.ID}
+		}
+	}
+	if len(waiting) != 0 {
+		return workItem{Reason: "required feature not completed"}
+	}
+	return workItem{}
+}
+
+func integrationWaitingOn(st *domain.State, child *domain.Integration) string {
+	for _, dependencyID := range child.Dependencies {
+		dependency := integration(st, dependencyID)
+		if dependency == nil || dependency.Status != "ready" && dependency.Status != "released" {
+			return dependencyID
+		}
+	}
+	return ""
+}
+
 func guardFeatureStart(ctx context.Context, st *domain.State, child *domain.Integration) error {
-	if parent := feature(st, child.FeatureID); parent != nil && parent.Status == "idea" {
+	if child == nil {
 		return invalid("FEATURE_NOT_READY")
 	}
-	for _, memory := range st.Memories {
-		if memory.FeatureID == child.FeatureID && (memory.IntegrationID == "" || memory.IntegrationID == child.ID) && memory.Status == "open" && memory.Question != nil && memory.Question.Blocking {
-			return invalid("OPEN_BLOCKING_QUESTION: %s", memory.ID)
-		}
+	if parent := feature(st, child.FeatureID); parent == nil || parent.Status == "idea" || parent.Status == "archived" {
+		return invalid("FEATURE_NOT_READY")
 	}
-	for _, targetID := range featureWaitingOn(st, child.FeatureID) {
-		if target := feature(st, targetID); target != nil {
-			if _, err := workProduct(ctx, st, target.ProductID, "read"); err == nil {
-				return invalid("FEATURE_DEPENDENCY_NOT_COMPLETED: %s", targetID)
-			}
+	blocker := featureStartBlocker(st, child.FeatureID, child.ID, func(productID string) bool { return workProductReadable(ctx, st, productID) })
+	if blocker.QuestionID != "" {
+		return invalid("OPEN_BLOCKING_QUESTION: %s", blocker.QuestionID)
+	}
+	if blocker.Reason != "" {
+		if blocker.WaitingOn != "" {
+			return invalid("FEATURE_DEPENDENCY_NOT_COMPLETED: %s", blocker.WaitingOn)
 		}
+		return invalid("FEATURE_DEPENDENCY_NOT_COMPLETED")
+	}
+	if dependencyID := integrationWaitingOn(st, child); dependencyID != "" {
+		return invalid("INTEGRATION_DEPENDENCY_NOT_READY: %s", dependencyID)
 	}
 	return nil
 }
 
-func canApproveWork(ctx context.Context, st *domain.State, product *domain.Product, parentID, approvalID, purpose string) error {
-	if humanWorkCaller(ctx) {
+func canApproveWork(ctx context.Context, st *domain.State, product *domain.Product, parent *domain.Feature, edge *domain.FeatureDependency, approvalID, action string) error {
+	if isWorkDecisionOwner(ctx, product) {
 		return nil
 	}
 	principal, _ := auth.FromContext(ctx)
-	if principal.Kind != "agent" || workUser(ctx) == "" {
-		return auth.ErrForbidden
-	}
-	if approvalID != "" {
+	if principal.Kind == "agent" && workUser(ctx) != "" && approvalID != "" {
 		question := questionByID(st, approvalID)
-		if question == nil {
+		if question == nil || !workProductReadable(ctx, st, question.ProductID) {
 			return missing("question", approvalID)
 		}
-		if _, err := workProduct(ctx, st, question.ProductID, "read"); err != nil {
-			return err
-		}
-		parent := feature(st, parentID)
-		matchesPurpose := question.Question.DecisionFor == purpose
-		if edgeID, dependency := strings.CutPrefix(purpose, "dependency:"); dependency && question.Question.DecisionFor == "dependency_approval" {
-			edge := dependencyByID(st, edgeID)
-			matchesPurpose = edge != nil && edge.ApprovalQuestionID == question.ID
-		}
-		if parent != nil && question.ProductID == product.ID && question.FeatureID == parentID && question.Status == "answered" && question.Question.Kind == "decision" && question.Question.Answer != nil && question.Question.Answer.OptionID == "approve" && (matchesPurpose || purpose == "idea_promotion" && question.Question.DecisionFor == "" && question.Question.AddressedTo == featureDecisionOwner(*parent, *product)) {
+		details := question.Question
+		if product != nil && question.ProductID == product.ID && question.FeatureID == parent.ID && question.Status == "answered" && details.Kind == "decision" && details.Answer != nil && details.Answer.OptionID == "approve" && details.Answer.AnsweredBy == product.Owner && details.DecisionAction == action && decisionMatches(question, parent, edge) {
 			return nil
 		}
 	}
-	if product.IdeaPromotion == "agent_allowed" {
+	if principal.Kind == "agent" && workUser(ctx) != "" && approvalID == "" && product != nil && product.IdeaPromotion == "agent_allowed" {
 		return nil
 	}
 	return fmt.Errorf("%w: OWNER_APPROVAL_REQUIRED", auth.ErrForbidden)
 }
 
-func featureDecisionOwner(parent domain.Feature, product domain.Product) string {
-	addressee := product.Owner
-	if humanWorkID(parent.Owner) && (product.Visibility != "private" || parent.Owner == product.Owner || slices.Contains(product.Members, parent.Owner)) {
-		addressee = parent.Owner
-	}
-	return addressee
+func isWorkDecisionOwner(ctx context.Context, product *domain.Product) bool {
+	_, authenticated := auth.FromContext(ctx)
+	return product != nil && humanWorkCaller(ctx) && (product.Owner == workUser(ctx) || !authenticated && product.Owner == "")
 }
 
-func decisionQuestion(ctx context.Context, st *domain.State, c domain.Command, parent domain.Feature, product domain.Product, purpose, title, rationale string, now time.Time) (domain.Memory, error) {
-	addressee := featureDecisionOwner(parent, product)
-	if addressee == "" && humanWorkCaller(ctx) {
+func decisionMatches(question *domain.Memory, parent *domain.Feature, edge *domain.FeatureDependency) bool {
+	details := question.Question
+	if edge != nil {
+		return details.DecisionFor == "dependency_approval" && edge.Status == "proposed" && edge.ApprovalQuestionID == question.ID
+	}
+	return details.DecisionFor == "idea_promotion" && parent != nil && parent.Status == "idea" && details.DecisionRevision != nil && details.DecisionRevision.Equal(parent.UpdatedAt)
+}
+
+func decisionQuestion(ctx context.Context, st *domain.State, c domain.Command, parent domain.Feature, product domain.Product, purpose, action, title, rationale string, now time.Time) (domain.Memory, error) {
+	addressee := product.Owner
+	if addressee == "" && isWorkDecisionOwner(ctx, &product) {
 		addressee = workUser(ctx)
 	}
 	if !humanWorkID(addressee) {
@@ -82,14 +108,17 @@ func decisionQuestion(ctx context.Context, st *domain.State, c domain.Command, p
 		return domain.Memory{}, invalid("decision rationale required (up to 16384 bytes)")
 	}
 	for _, memory := range st.Memories {
-		if purpose != "dependency_approval" && memory.FeatureID == parent.ID && memory.Status == "open" && memory.Question != nil && memory.Question.DecisionFor == purpose {
+		if purpose == "idea_promotion" && memory.FeatureID == parent.ID && memory.Status == "open" && memory.Question != nil && decisionMatches(&memory, &parent, nil) {
 			return domain.Memory{}, invalid("a decision question is already open: %s", memory.ID)
 		}
 	}
 	question := domain.Memory{Meta: workMeta(c, product.ID, parent.ID, now), Kind: "question", Title: title, Body: rationale, Status: "open", Question: &domain.QuestionDetails{
-		AddressedTo: addressee, AskedBy: c.Actor, AskedByUser: workUser(ctx), Kind: "decision", DecisionFor: purpose, Recommendation: "approve", ContextRefs: []string{parent.ID},
+		AddressedTo: addressee, AskedBy: c.Actor, AskedByUser: workUser(ctx), Kind: "decision", DecisionFor: purpose, DecisionAction: action, Recommendation: "approve", ContextRefs: []string{parent.ID},
 		Options: []domain.QuestionOption{{ID: "approve", Label: "Approve", Consequence: "Authorize the proposed change"}, {ID: "reject", Label: "Reject", Consequence: "Leave the proposal unapplied"}},
 	}}
+	if purpose == "idea_promotion" {
+		question.Question.DecisionRevision = &parent.UpdatedAt
+	}
 	return question, storeQuestion(st, question, now)
 }
 
@@ -104,8 +133,16 @@ func dependencyByID(st *domain.State, dependencyID string) *domain.FeatureDepend
 
 func dependencyProducts(ctx context.Context, st *domain.State, edge *domain.FeatureDependency) (*domain.Feature, *domain.Feature, error) {
 	from, to := feature(st, edge.FromFeatureID), feature(st, edge.ToFeatureID)
-	if from == nil || to == nil {
-		return nil, nil, missing("feature dependency", edge.ID)
+	for _, endpoint := range []struct {
+		id      string
+		feature *domain.Feature
+	}{{edge.FromFeatureID, from}, {edge.ToFeatureID, to}} {
+		if endpoint.feature == nil || !workProductReadable(ctx, st, endpoint.feature.ProductID) {
+			if edge.ID == "" {
+				return nil, nil, missing("feature", endpoint.id)
+			}
+			return nil, nil, missing("feature dependency", edge.ID)
+		}
 	}
 	for _, parent := range []*domain.Feature{from, to} {
 		if _, err := workProduct(ctx, st, parent.ProductID, "write"); err != nil {
@@ -194,7 +231,7 @@ func proposeDependency(ctx context.Context, st *domain.State, c domain.Command, 
 	}
 	edge.Meta = workMeta(c, from.ProductID, from.ID, now)
 	if input.Accept {
-		if !humanWorkCaller(ctx) {
+		if !isWorkDecisionOwner(ctx, productByID(*st, from.ProductID)) {
 			return domain.FeatureDependency{}, auth.ErrForbidden
 		}
 		if err := decideFeatureDependency(ctx, st, &edge, "accept", c.Actor, now); err != nil {
@@ -210,7 +247,7 @@ func featurePrerequisites(st *domain.State, parentID string) []domain.FeatureDep
 	waiting := []domain.FeatureDependency{}
 	for _, edge := range st.FeatureDependencies {
 		if edge.FromFeatureID == parentID && edge.Type == "requires" && edge.Status == "accepted" {
-			if target := feature(st, edge.ToFeatureID); target != nil && target.Status != "completed" {
+			if target := feature(st, edge.ToFeatureID); target == nil || target.Status != "completed" {
 				waiting = append(waiting, edge)
 			}
 		}
@@ -221,10 +258,14 @@ func featurePrerequisites(st *domain.State, parentID string) []domain.FeatureDep
 	return waiting
 }
 
-func featureWaitingOn(st *domain.State, parentID string) []string {
+func featureWaitingOn(st *domain.State, parentID string, visible func(string) bool) ([]string, bool) {
 	waiting := []string{}
+	unblocked := true
 	for _, dependency := range featurePrerequisites(st, parentID) {
-		waiting = append(waiting, dependency.ToFeatureID)
+		unblocked = false
+		if target := feature(st, dependency.ToFeatureID); target != nil && visible(target.ProductID) {
+			waiting = append(waiting, dependency.ToFeatureID)
+		}
 	}
-	return waiting
+	return waiting, unblocked
 }

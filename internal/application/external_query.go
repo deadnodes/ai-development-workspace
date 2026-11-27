@@ -26,6 +26,8 @@ func executionNextAction(in *domain.Integration, ex *domain.IntegrationExecution
 		text = fmt.Sprintf("Integration status is %s; desired_state is %s. Call claim_execution to resume work. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired)
 	} else if ex.State == "completed" || ex.State == "cancelled" {
 		code, text = "none", fmt.Sprintf("Integration status is %s; desired_state is %s. No action required.", current, desired)
+	} else if ex.State == "blocked" && ex.Reconciliation.Cause == domain.ExecutionCauseBlockerResolved {
+		code, text = "resume", fmt.Sprintf("Call next_work as the current assignee to confirm eligibility, then report_execution with state=running and fence=%d.", ex.Fence)
 	} else if ex.State == "waiting_external" || ex.State == "blocked" {
 		ref := ex.WaitingRef
 		if ref == "" {
@@ -48,7 +50,7 @@ func executionNextAction(in *domain.Integration, ex *domain.IntegrationExecution
 				break
 			}
 		}
-		if delivered != "" && group.OrchestratorID != ex.OrchestratorID {
+		if delivered != "" && group != nil && group.OrchestratorID != ex.OrchestratorID {
 			code = "takeover"
 			text = fmt.Sprintf("Integration status is %s; desired_state is %s. Different executor: call takeover_execution with delivered event id %s. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired, delivered)
 		} else {

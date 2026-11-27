@@ -4,8 +4,16 @@ function resetOwnerWork() {
   ownerWorkCache.clear();
 }
 
-function ownerWorkHuman() {
-  return authMode === 'local' || authPrincipal?.kind === 'human';
+function invalidateOwnerWorkGraphs() {
+  for (const key of ownerWorkCache.keys()) {
+    if (key.startsWith('graph:')) ownerWorkCache.delete(key);
+  }
+  document.querySelectorAll('.owner-dependencies').forEach(panel => panel.remove());
+}
+
+function ownerWorkDecisionOwner(product) {
+  const owner = list(state.products).find(item => item.id === product)?.owner;
+  return authMode === 'local' ? !owner || owner === 'local' : authPrincipal?.kind === 'human' && authPrincipal.id === owner;
 }
 
 function questionsView() {
@@ -32,7 +40,7 @@ function featureOwnerWork(feature) {
   const graph = ownerWorkCache.get(`graph:${feature.product_id}`);
   const edges = list(graph?.edges).filter(edge => edge.from_feature_id === feature.id || edge.to_feature_id === feature.id);
   const titles = new Map(list(graph?.nodes).map(node => [node.id, node.title]));
-  const promote = feature.status === 'idea' && ownerWorkHuman() ? `<button type="button" data-promote-idea="${esc(feature.id)}">Promote to ready for execution</button>` : '';
+  const promote = feature.status === 'idea' && ownerWorkDecisionOwner(feature.product_id) ? `<button type="button" data-promote-idea="${esc(feature.id)}">Promote to ready for execution</button>` : '';
   if (!promote && !edges.length && !graph?.error) return '';
   return `<section class="owner-dependencies" aria-label="Feature planning">${promote}
     ${graph?.error ? `<p class="error" role="alert">${esc(graph.error)}</p>` : ''}
@@ -41,24 +49,25 @@ function featureOwnerWork(feature) {
       const other = outgoing ? edge.to_feature_id : edge.from_feature_id;
       const relation = edge.type === 'relates' ? 'Relates to' : outgoing ? 'Requires' : 'Required by';
       return `<li>${esc(relation)} <strong>${esc(titles.get(other) || other)}</strong> ${badge(edge.status)}${edge.rationale ? `<p class="meta">${esc(edge.rationale)}</p>` : ''}
-        ${edge.status === 'proposed' && ownerWorkHuman() ? `<div class="owner-edge-actions"><button type="button" data-dependency="${esc(edge.id)}" data-decision="accept">Accept</button><button type="button" data-dependency="${esc(edge.id)}" data-decision="reject">Reject</button></div>` : ''}</li>`;
+        ${edge.status === 'proposed' && ownerWorkDecisionOwner(edge.product_id) ? `<div class="owner-edge-actions"><button type="button" data-dependency="${esc(edge.id)}" data-decision="accept">Accept</button><button type="button" data-dependency="${esc(edge.id)}" data-decision="reject">Reject</button></div>` : ''}</li>`;
     }).join('')}</ul>` : ''}</section>`;
 }
 
 async function loadOwnerWork(key, path, append = false) {
   const previous = ownerWorkCache.get(key);
+  const graph = key.startsWith('graph:');
   if (previous?.loading) return;
   const pending = {...previous, loading: true, error: ''};
   ownerWorkCache.set(key, pending);
   const current = () => key === `questions:${productID}` && featureID() === 'questions' || key === `graph:${selectedFeature()?.product_id}`;
   try {
-    const result = await request(path);
+    const result = await request(path, undefined, graph ? {cache: 'no-store'} : undefined);
     if (ownerWorkCache.get(key) !== pending) return;
     if (append) result.items = [...previous.items, ...result.items];
     ownerWorkCache.set(key, {...result, loaded: true});
   } catch (error) {
     if (ownerWorkCache.get(key) !== pending) return;
-    ownerWorkCache.set(key, {...previous, loading:false, error:error.message});
+    ownerWorkCache.set(key, {...(graph ? {} : previous), loading:false, error:error.message});
   }
   if (current()) render(true);
 }
@@ -73,7 +82,13 @@ function questionListURL(cursor = '') {
 function syncOwnerWork(route, feature) {
   if (route === 'questions' && !ownerWorkCache.has(`questions:${productID}`)) {
     void loadOwnerWork(`questions:${productID}`, questionListURL());
-  } else if (feature && !ownerWorkCache.has(`graph:${feature.product_id}`)) {
+  } else if (feature && !refreshInFlight && !ownerWorkCache.has(`graph:${feature.product_id}`)) {
+    revalidateOwnerGraph(feature);
+  }
+}
+
+function revalidateOwnerGraph(feature) {
+  if (feature && !refreshInFlight) {
     void loadOwnerWork(`graph:${feature.product_id}`, `/api/products/${encodeURIComponent(feature.product_id)}/dependency-graph?include_proposed=true`);
   }
 }

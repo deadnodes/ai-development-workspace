@@ -4124,7 +4124,7 @@ Accept or reject a proposed dependency.
 
 ### `request_dependency_decision` — execute_action
 
-Ask the owner to decide a proposed edge.
+Ask the Product owner to approve an exact action on a proposed edge.
 
 **When:** When the agent cannot decide under Product policy.
 
@@ -4133,18 +4133,19 @@ Ask the owner to decide a proposed edge.
 - `action` (string, required): Exact execute action name
 - `data` (object, required): Action-specific payload
 - `dependency_id` (string, required): Proposed edge
+- `decision` (string, optional): Action to approve: accept (default) or reject
 
-**Output:** Open decision question linked to the proposal.
+**Output:** Open decision question bound to the edge, action, and attempt.
 
 **Errors:**
 
 - `VALIDATION`: Use an open proposal the owner can review in the dependency graph.
 
-**Example:** `{"action":"request_dependency_decision","data":{"dependency_id":"EDGE"}}`
+**Example:** `{"action":"request_dependency_decision","data":{"dependency_id":"EDGE","decision":"accept"}}`
 
 **Related:** `list_questions`, `get_dependency_graph`, `next_work`
 
-**Authority:** Only creates a question; the owner must decide.
+**Authority:** Only creates a question; the Product owner must decide.
 
 ### `register_user_orchestrator` — execute_action
 
@@ -4350,7 +4351,7 @@ Read the caller's ordered execution and planning queue.
 - `product_id` (string, optional): Product scope; omission means all visible products
 - `limit` (integer, optional): Eligible item limit, max 100
 
-**Output:** Eligible items and up to 20 blocked items with reasons.
+**Output:** Eligible items, including assignee-only resume items with a fence and next action, and up to 20 blocked items with redacted reasons.
 
 **Errors:**
 
@@ -4373,7 +4374,7 @@ Read the caller's ordered execution and planning queue.
 - `product_id` (string, optional): Product scope; omission means all visible products
 - `limit` (integer, optional): Eligible item limit, max 100
 
-**Output:** Eligible items and up to 20 blocked items with reasons.
+**Output:** Eligible items, including assignee-only resume items with a fence and next action, and up to 20 blocked items with redacted reasons.
 
 **Errors:**
 

@@ -40,7 +40,7 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	case "takeover_execution", "heartbeat_execution", "report_execution", "release_execution", "set_desired_state":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
 	case "assign_integration", "unassign_integration":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events", "execution_groups"}, AppendCollections: []string{"events"}}
 	case "report_turn_end":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
 	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
@@ -103,8 +103,9 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	}
 	if reconcileWork && scope != nil && !scope.AllCollections {
 		scope.MutableCollections = append(scope.MutableCollections, "user_orchestrators")
-		if !slices.Contains(scope.MutableCollections, "execution_events") && !slices.Contains(scope.AppendCollections, "execution_events") {
-			scope.AppendCollections = append(scope.AppendCollections, "execution_events")
+		scope.AppendCollections = slices.DeleteFunc(scope.AppendCollections, func(name string) bool { return name == "execution_events" })
+		if !slices.Contains(scope.MutableCollections, "execution_events") {
+			scope.MutableCollections = append(scope.MutableCollections, "execution_events")
 		}
 		if !slices.Contains(scope.MutableCollections, "events") && !slices.Contains(scope.AppendCollections, "events") {
 			scope.AppendCollections = append(scope.AppendCollections, "events")

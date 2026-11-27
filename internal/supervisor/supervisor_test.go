@@ -119,9 +119,28 @@ func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 	}
 }
 
+func TestStandaloneBlockerWakeRequiresTypedCause(t *testing.T) {
+	for _, cause := range []domain.ExecutionEventCause{"", domain.ExecutionCauseBlockerResolved} {
+		t.Run(string(cause), func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			event := testEvent("event", "codex", "session-12345678", "orch:0.1", "", "execution_continuation_required")
+			event.GroupIDs, event.Reason, event.Cause = nil, "blocker resolved", cause
+			_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
+			if cause == "" {
+				if len(adapter.requests) != 0 || len(api.acks) != 1 || api.acks[0].Outcome != "unsupported" {
+					t.Fatalf("caller text admitted wake: %+v %+v", adapter.requests, api.acks)
+				}
+			} else if len(adapter.requests) != 1 || !strings.Contains(adapter.requests[0].Message, "fenced resume") {
+				t.Fatalf("typed wake not delivered: %+v %+v", adapter.requests, api.acks)
+			}
+		})
+	}
+}
+
 func TestWorkAvailableUsesRegisteredTargetAndFixedPrompt(t *testing.T) {
 	adapter := &fakeAdapter{}
 	event := testEvent("work-event", "codex", "session-12345678", "orch:0.1", "", "work_available")
+	event.Cause = domain.ExecutionCauseQueueAvailable
 	event.IntegrationID, event.GroupIDs = "", nil
 	_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
 	if len(adapter.requests) != 1 || len(api.acks) != 1 || api.acks[0].Outcome != "delivered" {
