@@ -78,7 +78,8 @@ func idleTestEvent(kind string, now time.Time) domain.ExecutionEvent {
 
 func TestIdleWakeRateLimitsAndPrompt(t *testing.T) {
 	now := time.Now().UTC()
-	event := idleTestEvent(domain.EventGroupIdle, now)
+	event := idleTestEvent(domain.EventGroupMemberStale, now)
+	event.OrchestratorSkill = "team-orchestrator"
 	event.GroupIdle.Members[0].State, event.GroupIdle.Members[0].NextAction = "untrusted\nstate", "untrusted\naction"
 	active := &fakeAdapter{results: []WakeResult{{Outcome: SkippedActive}}}
 	supervisor, api := runCycle(t, []domain.ExecutionEvent{event, idleTestEvent(domain.EventGroupWaitTimeout, now)}, active)
@@ -86,7 +87,7 @@ func TestIdleWakeRateLimitsAndPrompt(t *testing.T) {
 		t.Fatalf("active wake requests=%#v acks=%#v", active.requests, api.acks)
 	}
 	prompt := active.requests[0].Message
-	if !active.requests[0].IdleCheck || len(strings.Split(prompt, "\n")) != 20 || !strings.Contains(prompt, "member-1 unassigned progress 125s next claim") || !strings.Contains(prompt, "get_execution_group with group_id=group-id") || strings.Contains(prompt, "UNTRUSTED") || strings.Contains(prompt, "untrusted") || strings.Contains(prompt, "private-feature") {
+	if !active.requests[0].IdleCheck || len(strings.Split(prompt, "\n")) != 20 || !strings.Contains(prompt, "member-1 unassigned progress 125s next claim") || !strings.Contains(prompt, "get_execution_group with group_id=group-id") || !strings.Contains(prompt, `Load get_agent_skill(name="team-orchestrator", product_id="product1")`) || strings.Contains(prompt, "UNTRUSTED") || strings.Contains(prompt, "untrusted") || strings.Contains(prompt, "private-feature") {
 		t.Fatalf("invalid idle prompt: %q", prompt)
 	}
 	cycle := func(s *Supervisor) {

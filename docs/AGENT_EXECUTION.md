@@ -248,7 +248,14 @@ A turn-end report is advisory input; the server still derives the condition from
 stored state. Supervisors deduplicate a wake by session when lost and
 continuation-required events target the same idle orchestrator. ACK records a
 delivery receipt and never resolves the cause; acknowledged unresolved events
-become due again at their retry time until the condition clears. Each event stores a server-resolved `wake_target` (`kind`, `session_ref`, `tmux_target`, and source `executor` or `group_orchestrator`). The supervisor groups and wakes by this field. Running/stalled work targets its executor; other actionable states target the first open containing group with an orchestrator harness. With no registered target, the event has an empty wake target and an unsupported ACK triggers escalation. Legacy event harness fields remain compatibility projections only.
+become due again at their retry time until the condition clears. Every member
+condition, including stalled work and turn-end continuation, targets the first
+open containing group with a registered orchestrator harness. Without one, RCP
+uses the assignee's Product-specific user orchestrator, then the global registration.
+If neither exists, RCP records an empty wake target and escalation. Event harness
+fields mirror the orchestrator target. The execution's executor harness is display
+and turn-end metadata only. The orchestrator claims and heartbeats each member,
+and wakes its executors itself. Workers only send fenced `record_progress`.
 
 ### Group idle and wait detection
 
@@ -264,6 +271,7 @@ and optional `turn_id`; no new hook is required.
 | `group_idle` | A turn ended and work is pending, with no newer activity inside the idle window. | 10 minutes |
 | `group_wait_timeout` | Work is pending and all activity went quiet, even if the latest reported turn is still open. | 30 minutes |
 | `group_member_actionable` | A turn ended and the group has a newly added, unassigned, lost, exited-incomplete or action-required member, with no activity in the window. | 1 minute, fixed |
+| `group_member_stale` | An unfinished member has no `record_progress` within the interval, regardless of turn state or heartbeats. | 15 minutes per member |
 | `group_owner_blocked` | All remaining members are blocked only on a human; ask the orchestrator to remind the owner, not to resume work. | 4 hours between reminders |
 
 Pending excludes members already at their desired state, terminal executions
@@ -271,13 +279,17 @@ Pending excludes members already at their desired state, terminal executions
 an open blocking question addressed to a human, or a blocked execution pointing to
 an open blocker with a human `owner`. An unassigned **execution** is actionable;
 removing human ownership removes the integration from the old owner's group.
-Fresh member heartbeats or progress postpone idle wakes. Empty, finished, closed
+Fresh member heartbeats or progress postpone group inactivity wakes. The stale
+clock starts when a member joins the group and advances only on that member's
+`record_progress`. Stale events list only stale members, with `next_action` and
+`seconds_since_last_progress` (time since joining if no newer progress exists).
+Empty, finished, closed
 and unregistered groups do not wake. The supervisor also checks the live pane for
 background activity before proceeding; see [SUPERVISOR.md](SUPERVISOR.md).
 
 The product owner (human) or an instance admin can call `set_product_idle_policy
-{product_id, idle_after_seconds, wait_timeout_seconds, owner_blocked_interval_seconds}`.
-Supply all three integer thresholds, each from 0 to 604800 seconds (seven days).
+{product_id, idle_after_seconds, wait_timeout_seconds, owner_blocked_interval_seconds, member_stale_after_seconds}`.
+Supply all four integer thresholds, each from 0 to 604800 seconds (seven days).
 Zero disables that check only; the fixed actionable-member check is unchanged.
 Unset product policies use the instance defaults in the table.
 

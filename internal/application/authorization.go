@@ -255,6 +255,7 @@ func stateRowProduct(row reflect.Value, products bool) (string, bool) {
 
 // This allowlist deliberately fails closed for newly introduced commands.
 var memberWriteActions = []string{
+	"upsert_agent_skill", "delete_agent_skill", "set_product_agent_roles",
 	"create_product", "adopt_product_ownership", "set_product_visibility", "add_product_member", "remove_product_member",
 	"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "set_product_idle_policy", "report_turn_end", "report_turn_start", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event", "assign_integration", "unassign_integration",
 	"queue_intelligence_task", "cancel_intelligence_task",

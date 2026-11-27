@@ -23,7 +23,7 @@ type ExecutionIdlePolicy struct {
 	IdleAfterSeconds            int `json:"idle_after_seconds"`
 	WaitTimeoutSeconds          int `json:"wait_timeout_seconds"`
 	OwnerBlockedIntervalSeconds int `json:"owner_blocked_interval_seconds"`
-	MemberStaleAfterSeconds      int `json:"member_stale_after_seconds"`
+	MemberStaleAfterSeconds     int `json:"member_stale_after_seconds"`
 }
 
 type ExecutionGroupIdlePayload struct {
@@ -33,12 +33,12 @@ type ExecutionGroupIdlePayload struct {
 }
 
 type ExecutionGroupIdleMember struct {
-	IntegrationID            string `json:"integration_id"`
-	FeatureID                string `json:"feature_id"`
-	State                    string `json:"state"`
-	DesiredState             string `json:"desired_state"`
-	SecondsSinceLastProgress *int64 `json:"seconds_since_last_progress"`
-	SecondsSinceHeartbeat    *int64 `json:"seconds_since_heartbeat"`
-	NextAction               string `json:"next_action"`
+	IntegrationID            string     `json:"integration_id"`
+	FeatureID                string     `json:"feature_id"`
+	State                    string     `json:"state"`
+	DesiredState             string     `json:"desired_state"`
+	SecondsSinceLastProgress *int64     `json:"seconds_since_last_progress"`
+	SecondsSinceHeartbeat    *int64     `json:"seconds_since_heartbeat"`
+	NextAction               string     `json:"next_action"`
 	ProgressClockAt          *time.Time `json:"progress_clock_at,omitempty"`
 }

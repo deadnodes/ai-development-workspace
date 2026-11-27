@@ -617,6 +617,16 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 	}
 
 	switch c.Action {
+	case "upsert_agent_skill", "delete_agent_skill", "set_product_agent_roles":
+		var err error
+		out, err = changeProductAgentSkills(ctx, st, c, m)
+		if err != nil {
+			return nil, err
+		}
+		if skill, ok := out.(domain.ProductAgentSkill); ok {
+			m.ID = skill.ID
+			c.Data = map[string]any{"name": skill.Name, "version": skill.Version, "sha256": skill.SHA256}
+		}
 	case "pin_artifact", "release_artifact_pin":
 		var changed bool
 		var err error

@@ -137,7 +137,7 @@ func registerProviderTools(server *mcp.Server, service Service) {
 		IdleAfterSeconds            int    `json:"idle_after_seconds"`
 		WaitTimeoutSeconds          int    `json:"wait_timeout_seconds"`
 		OwnerBlockedIntervalSeconds int    `json:"owner_blocked_interval_seconds"`
-		MemberStaleAfterSeconds      int    `json:"member_stale_after_seconds"`
+		MemberStaleAfterSeconds     int    `json:"member_stale_after_seconds"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, domain.Command{Action: "set_product_idle_policy", Actor: "agent", ProductID: in.ProductID, Data: map[string]any{
 			"idle_after_seconds": in.IdleAfterSeconds, "wait_timeout_seconds": in.WaitTimeoutSeconds, "owner_blocked_interval_seconds": in.OwnerBlockedIntervalSeconds,

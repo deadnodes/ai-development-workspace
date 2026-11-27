@@ -236,7 +236,7 @@ func TestReviewFallbackWakeSurfacesFencedAssigneeResume(t *testing.T) {
 	question := work.run(work.agent, "ask_question", "p", "f", "i", "", reviewQuestion(true)).(domain.Memory)
 	work.run(work.owner, "answer_questions", "p", "", "", "", reviewAnswer(question.ID, ""))
 	if !slices.ContainsFunc(work.store.state.ExecutionEvents, func(event domain.ExecutionEvent) bool {
-		return event.Cause == domain.ExecutionCauseQuestionContinuation && event.IntegrationID == "i" && event.Owner == "alice" && event.Fence == execution.Fence && event.WakeTarget.TmuxTarget == "alice-orchestrator"
+		return event.Cause == domain.ExecutionCauseBlockerResolved && event.IntegrationID == "i" && event.Owner == "alice" && event.Fence == execution.Fence && event.WakeTarget.TmuxTarget == "alice-orchestrator"
 	}) {
 		t.Fatal("no fenced fallback wake")
 	}
@@ -248,6 +248,66 @@ func TestReviewFallbackWakeSurfacesFencedAssigneeResume(t *testing.T) {
 		t.Fatal(items)
 	}
 	work.run(work.agent, "report_execution", "p", "", "i", "", map[string]any{"fence": execution.Fence, "state": "running"})
+}
+
+func TestMemberWakeRoutesEveryConditionToAnOrchestrator(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	work.run(work.owner, "assign_integration", "p", "", "i", "", map[string]any{"assignee": "alice"})
+	state := work.store.state
+	now := time.Now().UTC()
+	harness := func(target string) domain.ExecutionHarness {
+		return domain.ExecutionHarness{Kind: "codex", TmuxTarget: target}
+	}
+	group := func(id, owner, target string) domain.ExecutionGroup {
+		row := domain.ExecutionGroup{ID: id, ProductID: "p", Owner: owner, MemberIntegrationIDs: []string{"i"}, HarnessRevision: 2}
+		if target != "" {
+			row.OrchestratorHarness = harness(target)
+		}
+		return row
+	}
+	closed := group("closed", "alice", "closed-pane")
+	closed.ClosedAt = &now
+	unregistered := group("unregistered", "alice", "")
+	foreign := group("foreign", "bob", "foreign-pane")
+	first := group("first", "alice", "first-pane")
+	second := group("second", "alice", "second-pane")
+	productRegistration := domain.UserOrchestrator{Meta: domain.Meta{ID: "product-registration", ProductID: "p"}, UserID: "alice", Products: []string{"p"}, Harness: harness("product-pane")}
+	globalRegistration := domain.UserOrchestrator{Meta: domain.Meta{ID: "global-registration"}, UserID: "alice", Products: []string{"*"}, Harness: harness("global-pane")}
+	for _, test := range []struct {
+		name          string
+		groups        []domain.ExecutionGroup
+		registrations []domain.UserOrchestrator
+		want          domain.ExecutionWakeTarget
+	}{
+		{"first group", []domain.ExecutionGroup{closed, unregistered, foreign, first, second}, []domain.UserOrchestrator{globalRegistration}, groupWakeTarget(first)},
+		{"product fallback", []domain.ExecutionGroup{unregistered}, []domain.UserOrchestrator{globalRegistration, productRegistration}, userWakeTarget(productRegistration)},
+		{"global fallback", nil, []domain.UserOrchestrator{globalRegistration}, userWakeTarget(globalRegistration)},
+		{"no harness", []domain.ExecutionGroup{unregistered}, nil, domain.ExecutionWakeTarget{}},
+		{"no group", nil, nil, domain.ExecutionWakeTarget{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := state
+			state.ExecutionGroups, state.UserOrchestrators = test.groups, test.registrations
+			for _, condition := range []string{"running", "stalled", "lost", "unassigned", "exited_incomplete", "waiting_external", "blocked"} {
+				execution := domain.IntegrationExecution{IntegrationID: "i", ProductID: "p", Fence: 7, Harness: harness("executor-pane")}
+				state.ExecutionEvents = nil
+				if condition == "running" {
+					execution.State = condition
+					createExecutionEvent(&state, &execution, "execution_continuation_required", "turn ended", now)
+				} else {
+					executionConditionWithCause(&state, &execution, condition, true, "needs attention", "", now)
+				}
+				if len(state.ExecutionEvents) != 1 {
+					t.Fatalf("%s: expected one event, got %+v", condition, state.ExecutionEvents)
+				}
+				event := state.ExecutionEvents[0]
+				createExecutionEvent(&state, &execution, event.Type, "repeated", now)
+				if event.WakeTarget != test.want || event.EscalationRequired != (test.want.Kind == "") || event.Fence != 7 || len(state.ExecutionEvents) != 1 {
+					t.Fatalf("%s: wrong wake or dedupe: %+v", condition, state.ExecutionEvents)
+				}
+			}
+		})
+	}
 }
 
 func TestReviewTransferInvalidatesExecutorAndGroupWakeTargets(t *testing.T) {
@@ -565,7 +625,7 @@ func TestRereviewGroupWakeReroutesOnReplacementAndRemoval(t *testing.T) {
 		}
 		work.run(work.agent, "remove_execution_group_member", "p", "", "", "", map[string]any{"group_id": group.ID, "integration_id": "i"})
 		fallback := pending()
-		if fallback.WakeTarget.Source != "executor" || fallback.WakeTarget.TmuxTarget != "executor" || fallback.Fence != old.Fence {
+		if fallback.WakeTarget != (domain.ExecutionWakeTarget{}) || !fallback.EscalationRequired || fallback.Fence != old.Fence {
 			t.Fatal(fallback)
 		}
 		for _, stale := range []domain.ExecutionEvent{old, replacement} {

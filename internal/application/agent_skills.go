@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 
@@ -29,8 +30,11 @@ func changeProductAgentSkills(ctx context.Context, st *domain.State, command dom
 	if product == nil || !productVisibleTo(ctx, product) {
 		return nil, missing("product", command.ProductID)
 	}
-	if principal, ok := auth.FromContext(ctx); ok && !instanceAdmin(principal) && (principal.Kind != "human" || principal.ID != product.Owner) {
-		return nil, auth.ErrForbidden
+	if principal, ok := auth.FromContext(ctx); ok {
+		owner := principal.Kind == "human" && principal.ID == product.Owner
+		if !owner && (command.Action == "set_product_agent_roles" || !instanceAdmin(principal)) {
+			return nil, auth.ErrForbidden
+		}
 	}
 	if command.ID != "" || command.FeatureID != "" || command.IntegrationID != "" || command.GateID != "" || command.CheckID != "" || command.ResultID != "" {
 		return nil, invalid("agent skills and roles take only a product scope")
@@ -55,7 +59,9 @@ func changeProductAgentSkills(ctx context.Context, st *domain.State, command dom
 		product.AgentRoles = &roles
 		return roles, nil
 	case "delete_agent_skill":
-		var input struct{ Name string `json:"name"` }
+		var input struct {
+			Name string `json:"name"`
+		}
 		if err := decodeWritable(command.Data, &input, "name"); err != nil {
 			return nil, err
 		}
@@ -107,7 +113,28 @@ func changeProductAgentSkills(ctx context.Context, st *domain.State, command dom
 	}
 }
 
-func (s *Service) queryAgentGuide(ctx context.Context, query, product, name string) (any, error) {
+func (s *Service) AgentSkill(ctx context.Context, product, name string) (any, error) {
+	return s.queryAgentGuide(ctx, product, &name)
+}
+
+func (s *Service) AgentKit(ctx context.Context, product string) (agentguide.Kit, error) {
+	value, err := s.queryAgentGuide(ctx, product, nil)
+	if err != nil {
+		return agentguide.Kit{}, err
+	}
+	return value.(agentguide.Kit), nil
+}
+
+func (s *Service) queryAgentGuide(ctx context.Context, product string, name *string) (any, error) {
+	if product == "" {
+		if name == nil {
+			return agentguide.Get(), nil
+		}
+		if skill, exists := agentguide.Lookup(*name); exists {
+			return skill, nil
+		}
+		return nil, missing("agent skill", *name)
+	}
 	var result any
 	err := s.view(ctx, func(st *domain.State) error {
 		var roles *domain.AgentRoles
@@ -116,39 +143,48 @@ func (s *Service) queryAgentGuide(ctx context.Context, query, product, name stri
 			if record == nil || !productVisibleTo(ctx, record) {
 				return missing("product", product)
 			}
-			roles = record.AgentRoles
+			if err := authorize(ctx, "read", product); err != nil {
+				return err
+			}
+			if record.AgentRoles != nil {
+				copy := *record.AgentRoles
+				roles = &copy
+			}
 		}
-		if query == "get_agent_skill" {
-			if skill, exists := agentguide.Lookup(name); exists {
+		if name != nil {
+			if skill, exists := agentguide.Lookup(*name); exists {
 				result = skill
 				return nil
 			}
-			if index := agentSkillIndex(st, product, name); product != "" && index >= 0 {
-				result = st.ProductAgentSkills[index]
+			if index := agentSkillIndex(st, product, *name); index >= 0 {
+				skill := st.ProductAgentSkills[index]
+				skill.Files, skill.FilesSHA256 = maps.Clone(skill.Files), maps.Clone(skill.FilesSHA256)
+				result = skill
 				return nil
 			}
-			return missing("agent skill", name)
+			return missing("agent skill", *name)
 		}
 		kit := agentguide.Get()
 		kit.AgentRoles = roles
 		for _, skill := range st.ProductAgentSkills {
-			if product == "" || skill.ProductID != product {
+			if skill.ProductID != product {
 				continue
 			}
-			when := "Load when the workflow calls for this skill."
-			if roles != nil {
+			kit.Skills = append(kit.Skills, agentguide.SkillSummary{Name: skill.Name, Description: skill.Description, When: "Load when the workflow calls for this skill.", Version: skill.Version, SHA256: skill.SHA256})
+		}
+		if roles != nil {
+			for index, item := range kit.Skills {
 				var assigned []string
-				if skill.Name == roles.OrchestratorSkill {
+				if item.Name == roles.OrchestratorSkill {
 					assigned = append(assigned, "orchestrator")
 				}
-				if skill.Name == roles.WorkerSkill {
+				if item.Name == roles.WorkerSkill {
 					assigned = append(assigned, "worker")
 				}
 				if len(assigned) != 0 {
-					when = "Load before acting as " + strings.Join(assigned, " or ") + "."
+					kit.Skills[index].When = "Load before acting as " + strings.Join(assigned, " or ") + "."
 				}
 			}
-			kit.Skills = append(kit.Skills, agentguide.SkillSummary{Name: skill.Name, Description: skill.Description, When: when, Version: skill.Version, SHA256: skill.SHA256})
 		}
 		result = kit
 		return nil

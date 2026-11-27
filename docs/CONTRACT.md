@@ -135,19 +135,29 @@ identities and do not grant permissions. Historical attribution remains unchange
 
 ## Workspace agent kit
 
-`GET /api/agent-kit` and MCP `get_agent_kit` share `instructions`, the existing
-`skill` (`rcp-handoff`) and the separate `delivery_skill` (`rcp-delivery`). Each
-skill has exact `name`, `content` and lowercase SHA-256. `get_agent_skill` accepts
-only these two names; each has a fixed `rcp://skills/<name>/SKILL.md` resource.
+`GET /api/agent-kit` and MCP `get_agent_kit` ship `rcp-handoff`, `rcp-delivery`
+and `rcp-execution` with exact Markdown content and SHA-256 digests. Each built-in
+has a fixed `rcp://skills/<name>/SKILL.md` resource. The optional MCP `product_id`
+adds visible product skills (name, description, when to load) and `agent_roles`.
+`get_agent_skill` takes `name` and optional `product_id`. A product skill returns
+Markdown `body`, optional text `files`, version, aggregate, body and file SHA-256
+digests, and updater. Inaccessible product scopes return `NOT_FOUND` even for a
+built-in lookup. Built-in names are reserved.
 Embedded public snapshots and their repository/commit/path/checksum provenance
 are tracked under `internal/agentguide/skills/`. Guidance does not grant adoption,
 external execution or a main-first/human-only Flux policy cutover.
 
-`connect` validates both skill identities/frontmatter/checksums before writes.
-Its seven fixed project paths are `.codex/config.toml`, `AGENTS.md`,
-`.release-control.json` and both skills under `.agents/skills/` and `.claude/skills/`.
+`upsert_agent_skill` and `delete_agent_skill` require the Product owner or an
+instance admin with visibility. Names use `^[a-z0-9][a-z0-9-]{1,62}$`; Markdown
+is capped at 64 KiB and files at 256 KiB total. Only the Product owner can set
+`orchestrator_skill` and `worker_skill` with `set_product_agent_roles`; both
+names must resolve. Change a role before deleting its assigned skill. Nothing
+is seeded. See [AGENT_CONNECT.md](AGENT_CONNECT.md) for publishing and loading.
+
+`connect` validates built-in skill identities, frontmatter and checksums before
+writes. It installs the three bundled skills and project-local harness setup.
 It preserves managed blocks, unrelated configuration, file modes and token-name/
-credential-profile semantics; no credential values or global/Claude configuration
+credential-profile semantics; no credentials or global harness configuration
 are installed. Identical raw canonical skill bytes may be adopted; differing
 unmanaged content or symlinks refuse the entire install. Staging and rollback
 retain the existing process-failure atomicity, not multi-file crash atomicity.

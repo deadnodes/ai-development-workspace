@@ -52,6 +52,8 @@ func run() error {
 		switch os.Args[1] {
 		case "login":
 			return agentconnect.RunLogin(context.Background(), os.Args[2:], os.Stdout)
+		case "skill":
+			return agentconnect.RunSkill(context.Background(), os.Args[2:], os.Stdout)
 		case "mcp":
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()

@@ -59,7 +59,7 @@ func setProductIdlePolicy(ctx context.Context, product *domain.Product, data map
 		IdleAfterSeconds            *int `json:"idle_after_seconds"`
 		WaitTimeoutSeconds          *int `json:"wait_timeout_seconds"`
 		OwnerBlockedIntervalSeconds *int `json:"owner_blocked_interval_seconds"`
-		MemberStaleAfterSeconds      *int `json:"member_stale_after_seconds"`
+		MemberStaleAfterSeconds     *int `json:"member_stale_after_seconds"`
 	}
 	if err := decode(data, &input); err != nil {
 		return err

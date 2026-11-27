@@ -22,6 +22,70 @@ func idleEvents(events []domain.ExecutionEvent, groupID string, openOnly bool) m
 	return result
 }
 
+func idleTestPolicy(idle, wait, owner, stale int) map[string]any {
+	return map[string]any{"idle_after_seconds": idle, "wait_timeout_seconds": wait, "owner_blocked_interval_seconds": owner, "member_stale_after_seconds": stale}
+}
+
+func TestMemberStalenessStoreMatrix(t *testing.T) {
+	privateReviewStores(t, func(t *testing.T, store Store) {
+		work := ownerWorkReviewOnStore(t, store)
+		group := thirdReviewGroup(work)
+		work.run(work.owner, "create_integration", "p", "f", "", "fresh", map[string]any{"title": "Fresh", "objective": "Ship"})
+		work.run(work.agent, "add_execution_group_member", "p", "", "", "", map[string]any{"group_id": group.ID, "integration_id": "fresh"})
+		execution := work.run(work.agent, "claim_execution", "p", "", "i", "", work.claimData("executor-pane")).(domain.IntegrationExecution)
+		ctx := context.Background()
+		sweep := func(now time.Time) domain.ExecutionEvent {
+			t.Helper()
+			if err := store.Update(ctx, func(state *domain.State) error { reconcileGroupIdle(state, now); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			return idleEvents(thirdReviewState(t, store).ExecutionEvents, group.ID, true)[domain.EventGroupMemberStale]
+		}
+		state := thirdReviewState(t, store)
+		if idlePolicy(&state, "p").MemberStaleAfterSeconds != 900 {
+			t.Fatal("default staleness is not 15 minutes")
+		}
+		clock := time.Now().UTC()
+		if got := sweep(clock); got.ID != "" {
+			t.Fatalf("fresh member already stale: %+v", got)
+		}
+		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", idleTestPolicy(0, 0, 0, 60))
+		old := clock.Add(-2 * time.Minute)
+		if err := store.Update(ctx, func(state *domain.State) error {
+			state.ExecutionGroups[0].CreatedAt = old
+			state.ExecutionGroups[0].Revisions[0].CreatedAt = old
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		work.run(work.agent, "heartbeat_execution", "p", "", "i", "", map[string]any{"fence": execution.Fence})
+		stale := sweep(time.Now().UTC())
+		if stale.ID == "" || stale.WakeTarget != groupWakeTarget(group) || len(stale.GroupIdle.Members) != 1 {
+			t.Fatalf("expected stale-only wake to orchestrator: %+v", stale)
+		}
+		member := stale.GroupIdle.Members[0]
+		if member.IntegrationID != "i" || member.NextAction == "" || member.SecondsSinceLastProgress == nil || *member.SecondsSinceLastProgress < 120 {
+			t.Fatalf("invalid stale member: %+v", member)
+		}
+		work.run(work.agent, "heartbeat_execution", "p", "", "i", "", map[string]any{"fence": execution.Fence})
+		if got := sweep(time.Now().UTC()); got.ID != stale.ID {
+			t.Fatalf("heartbeat reset or duplicated the stale episode: %+v", got)
+		}
+		worker := userCtx("agent/worker", "agent", "alice", "member")
+		work.run(worker, "record_progress", "p", "f", "i", "", map[string]any{"title": "Checkpoint", "body": "Worker advanced", "execution_fence": execution.Fence})
+		if current := thirdReviewState(t, store).IntegrationExecutions[0]; current.LeasePrincipal != execution.LeasePrincipal || current.Fence != execution.Fence {
+			t.Fatalf("worker progress changed execution ownership: %+v", current)
+		}
+		if got := sweep(time.Now().UTC()); got.ID != "" {
+			t.Fatalf("progress did not clear stale episode: %+v", got)
+		}
+		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", idleTestPolicy(0, 0, 0, 0))
+		if got := sweep(clock.Add(time.Hour)); got.ID != "" {
+			t.Fatalf("disabled stale policy raised an event: %+v", got)
+		}
+	})
+}
+
 func TestGroupIdleStoreMatrix(t *testing.T) {
 	privateReviewStores(t, func(t *testing.T, store Store) {
 		work := ownerWorkReviewOnStore(t, store)
@@ -45,7 +109,7 @@ func TestGroupIdleStoreMatrix(t *testing.T) {
 			}
 			return idleEvents(thirdReviewState(t, store).ExecutionEvents, group.ID, true)
 		}
-		policy := map[string]any{"idle_after_seconds": 10, "wait_timeout_seconds": 120, "owner_blocked_interval_seconds": 180}
+		policy := idleTestPolicy(10, 120, 180, 900)
 		_, err := work.apply(work.bob, "set_product_idle_policy", "p", "", "", "", policy)
 		if !errors.Is(err, auth.ErrForbidden) {
 			t.Fatalf("foreign policy change: %v", err)
@@ -140,7 +204,7 @@ func TestGroupIdleStoreMatrix(t *testing.T) {
 		if fresh := sweep(); len(fresh) != 0 {
 			t.Fatalf("ongoing progress must suppress wakes: %#v", fresh)
 		}
-		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", map[string]any{"idle_after_seconds": 0, "wait_timeout_seconds": 0, "owner_blocked_interval_seconds": 0})
+		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", idleTestPolicy(0, 0, 0, 0))
 		change(func(state *domain.State) { executionFor(state, "i").LastProgress = &old })
 		if disabled := sweep(); len(disabled) != 0 {
 			t.Fatalf("disabled idle policy produced wakes: %#v", disabled)
@@ -154,7 +218,7 @@ func TestGroupIdleOwnerReminderAndAddedMemberStoreMatrix(t *testing.T) {
 		group := thirdReviewGroup(work)
 		thirdReviewTurnEnd(work)
 		question := work.run(work.agent, "ask_question", "p", "f", "i", "", reviewQuestion(true)).(domain.Memory)
-		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", map[string]any{"idle_after_seconds": 10, "wait_timeout_seconds": 20, "owner_blocked_interval_seconds": 60})
+		work.run(work.owner, "set_product_idle_policy", "p", "", "", "", idleTestPolicy(10, 20, 60, 60))
 		ctx := context.Background()
 		sweepAt := func(now time.Time) map[string]domain.ExecutionEvent {
 			t.Helper()

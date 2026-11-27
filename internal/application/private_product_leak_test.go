@@ -47,6 +47,12 @@ var privateProductReadMatrix = map[string]privateRead{
 	"ProjectContext": func(ctx context.Context, service *Service, product string) (any, error) {
 		return service.ProjectContext(ctx, product)
 	},
+	"AgentKit": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.AgentKit(ctx, product)
+	},
+	"AgentSkill": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.AgentSkill(ctx, product, product+"-role")
+	},
 	"ProjectContextSummary": func(ctx context.Context, service *Service, product string) (any, error) {
 		result, err := service.ProjectContextSummary(ctx, product)
 		if err == nil && product == privateFixture {
@@ -410,6 +416,9 @@ func TestPrivateProductReadMatrix(t *testing.T) {
 			seedPrivateReadMatrix(t, store, workspace)
 			service := New(store)
 			for _, product := range []string{privateFixture, sharedFixture} {
+				if _, err := service.Execute(context.Background(), domain.Command{Action: "upsert_agent_skill", Actor: "fixture", ProductID: product, Data: map[string]any{"name": product + "-role", "description": "Fixture role", "body": "Fixture instructions"}}); err != nil {
+					t.Fatal("seed agent skill:", err)
+				}
 				repository := product + "-repository"
 				doc := domain.CodeIndex{RepositoryID: repository, Branch: "main", Commit: strings.Repeat("a", 40), Version: domain.CodeIndexVersion, IndexedAt: time.Now(), Files: []domain.CodeFile{{Path: "README.md", Language: "Markdown", Size: 128, Lines: 1, Doc: product + " fixturekeyword"}}}
 				if _, err := service.UpsertCodeIndex(context.Background(), domain.CodeIndexWrite{ProductID: product, RepositoryID: repository, Document: doc}); err != nil {

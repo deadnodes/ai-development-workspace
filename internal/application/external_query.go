@@ -53,7 +53,7 @@ func executionNextAction(in *domain.Integration, ex *domain.IntegrationExecution
 		}
 		if delivered != "" && group != nil && group.OrchestratorID != ex.OrchestratorID {
 			code = "takeover"
-			text = fmt.Sprintf("Integration status is %s; desired_state is %s. Different executor: call takeover_execution with delivered event id %s. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired, delivered)
+			text = fmt.Sprintf("Integration status is %s; desired_state is %s. Replacement orchestrator: call takeover_execution with delivered event id %s. Use the returned fence for every transition_integration and record_progress; reach desired_state, then call release_execution(outcome=completed).", current, desired, delivered)
 		} else {
 			text = fmt.Sprintf("Integration status is %s; desired_state is %s. You hold fence %d. Call heartbeat_execution(integration_id, fence=%d) to resume, finish the work, then transition_integration to %s (current: %s) with execution_fence=%d and call release_execution(outcome=completed).", current, desired, ex.Fence, ex.Fence, desired, current, ex.Fence)
 		}
@@ -197,6 +197,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			options.Limit = 100
 		}
 		items := []domain.ExecutionEvent{}
+		product := productByID(st, productID)
 		now := time.Now().UTC()
 		for _, ev := range st.ExecutionEvents {
 			if ev.ProductID != productID {
@@ -219,6 +220,10 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 				if ev.CreatedAt.Before(cursorTime) || ev.CreatedAt.Equal(cursorTime) && ev.ID <= cursorID {
 					continue
 				}
+			}
+			ev.OrchestratorSkill = ""
+			if product != nil && product.AgentRoles != nil {
+				ev.OrchestratorSkill = product.AgentRoles.OrchestratorSkill
 			}
 			items = append(items, ev)
 		}

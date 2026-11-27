@@ -23,6 +23,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 	"releasecontrol/internal/agentguide"
+	"releasecontrol/internal/domain"
 )
 
 const configStart = "# BEGIN release-control managed MCP"
@@ -37,16 +38,17 @@ type Options struct {
 	CodexAutoApprove                                                                  bool
 }
 type Binding struct {
-	URL        string `json:"url"`
-	ProductID  string `json:"product_id"`
-	ServerName string `json:"server_name"`
-	TokenEnv   string `json:"token_env,omitempty"`
-	Profile    string `json:"credential_profile,omitempty"`
+	URL        string             `json:"url"`
+	ProductID  string             `json:"product_id"`
+	ServerName string             `json:"server_name"`
+	TokenEnv   string             `json:"token_env,omitempty"`
+	Profile    string             `json:"credential_profile,omitempty"`
+	AgentRoles *domain.AgentRoles `json:"-"`
 }
 type kit = agentguide.Kit
 
 func installPaths() []string {
-	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md", ".agents/skills/rcp-execution/SKILL.md", ".claude/skills/rcp-execution/SKILL.md", ".mcp.json", ".claude/settings.json"}
+	return []string{".codex/config.toml", ".agents/skills/rcp-handoff/SKILL.md", "AGENTS.md", ".release-control.json", ".agents/skills/rcp-delivery/SKILL.md", ".claude/skills/rcp-handoff/SKILL.md", ".claude/skills/rcp-delivery/SKILL.md", ".agents/skills/rcp-execution/SKILL.md", ".claude/skills/rcp-execution/SKILL.md", ".mcp.json", ".claude/settings.json", "CLAUDE.md"}
 }
 
 func Run(ctx context.Context, args []string, out io.Writer) error {
@@ -81,14 +83,22 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	if o.DataPath != "" {
-		_, err = fmt.Fprintf(out, "Installed local SQLite MCP configuration for %s. No server or token is needed.\n", o.Harness)
+		_, err = fmt.Fprintf(out, "Installed local SQLite MCP configuration for %s. No server or token is needed.\n%s\n", o.Harness, agentguide.RoleInstructions)
 		return err
 	}
-	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled MCP configuration and all three skills for %s, plus turn-end hook wiring and AGENTS.md instructions.\n", binding.ProductID, binding.URL, o.Harness)
+	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled MCP configuration, three built-in skills, turn-end hook wiring, and agent instructions for %s.\n%s\n%s\n", binding.ProductID, binding.URL, o.Harness, agentguide.RoleInstructions, roleCalls(binding))
 	if err == nil && (o.Harness == "codex" || o.Harness == "both") {
 		_, err = fmt.Fprintf(out, "Codex turn-end hook line: %s\n", codexNotifyLine(o))
 	}
 	return err
+}
+
+func roleCalls(binding Binding) string {
+	roles := binding.AgentRoles
+	if roles == nil || !domain.ValidAgentRoleProductID(binding.ProductID) || !domain.ValidAgentSkillName(roles.OrchestratorSkill) || !domain.ValidAgentSkillName(roles.WorkerSkill) {
+		return "No Product role skills are currently configured."
+	}
+	return fmt.Sprintf("Orchestrator: read get_agent_skill(name=%q, product_id=%q).\nWorker: read get_agent_skill(name=%q, product_id=%q).", roles.OrchestratorSkill, binding.ProductID, roles.WorkerSkill, binding.ProductID)
 }
 
 func Install(ctx context.Context, o Options) (Binding, error) {
@@ -206,7 +216,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return binding, errors.New("invalid agent kit JSON")
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "execution_skill", "instructions") {
+	if json.Unmarshal(kitJSON, &fields) != nil || !exactFields(fields, "skill", "delivery_skill", "execution_skill", "instructions", "skills") {
 		return binding, errors.New("invalid agent kit fields")
 	}
 	for _, role := range []string{"skill", "delivery_skill", "execution_skill"} {
@@ -247,15 +257,19 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 	if !validProductID(o.ProductID) {
 		return binding, errors.New("invalid Product ID")
 	}
-	var productContext map[string]any
+	var productContext struct {
+		Product struct {
+			ID         string             `json:"id"`
+			AgentRoles *domain.AgentRoles `json:"agent_roles"`
+		} `json:"product"`
+	}
 	if err = get("/api/products/"+url.PathEscape(o.ProductID)+"/context", &productContext); err != nil {
 		return binding, err
 	}
-	productIdentity, ok := productContext["product"].(map[string]any)
-	if !ok || productIdentity["id"] != o.ProductID {
+	if productContext.Product.ID != o.ProductID {
 		return binding, errors.New("Product context identity mismatch; provide --product-id")
 	}
-	binding = Binding{URL: endpoint, ProductID: o.ProductID, ServerName: o.Name, TokenEnv: o.TokenEnv, Profile: o.Profile}
+	binding = Binding{URL: endpoint, ProductID: o.ProductID, ServerName: o.Name, TokenEnv: o.TokenEnv, Profile: o.Profile, AgentRoles: productContext.Product.AgentRoles}
 	paths := installPaths()
 	plans := make([]filePlan, 0, len(paths))
 	var outside string
@@ -351,7 +365,16 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return Binding{}, err
 	}
 	instructions := fmt.Sprintf("Control Plane: %s\nProduct ID: %s\nMCP server: %s\nBinding: `.release-control.json`.\n\n%s\n\nUse the installed `rcp-handoff` skill for checkpoints, pause and context transfer, and `rcp-delivery` for Feature delivery within existing policy and authority. Record work checkpoints in the Control Plane through MCP; resume the Product/Feature before changing code.\n", endpoint, o.ProductID, o.Name, agentKit.Instructions)
+	instructions += "\n" + roleCalls(binding) + "\n"
 	plans[2].after = []byte(appendBlock(outside, agentsStart, agentsEnd, instructions))
+	plans[11].after = plans[11].before
+	if o.Harness != "codex" {
+		outside, err = stripBlock(string(plans[11].before), agentsStart, agentsEnd)
+		if err != nil {
+			return Binding{}, err
+		}
+		plans[11].after = []byte(appendBlock(outside, agentsStart, agentsEnd, instructions))
+	}
 	if plans[3].exists {
 		var prior Binding
 		decoder := json.NewDecoder(bytes.NewReader(plans[3].before))

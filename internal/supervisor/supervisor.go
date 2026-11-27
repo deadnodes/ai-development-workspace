@@ -190,8 +190,8 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			continue
 		}
 		if out != "" {
-			if wakeGroup(ev) == "" && !workAvailabilityWake(ev) && !blockerResolutionWake(ev) {
-				data := map[string]any{"event_id": ev.ID, "delivery_id": out, "supervisor_id": s.Config.SupervisorID, "outcome": string(Unsupported), "detail": "missing valid execution group"}
+			if wakeGroup(ev) == "" && !(ev.WakeTarget.Source == "user_orchestrator" && !domain.IsGroupIdleEvent(ev.Type)) {
+				data := map[string]any{"event_id": ev.ID, "delivery_id": out, "supervisor_id": s.Config.SupervisorID, "outcome": string(Unsupported), "detail": "missing valid orchestrator target"}
 				if err := s.request(ctx, http.MethodPost, "/api/commands", token, command("ack_execution_event", productID, s.Config.SupervisorID, data), nil); err != nil {
 					return err
 				}
@@ -214,6 +214,11 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 		result = WakeResult{Outcome: Unsupported, Detail: "missing session_ref and tmux_target"}
 	} else if idle {
 		event := claimed[len(claimed)-1].ev
+		for _, delivery := range claimed {
+			if delivery.ev.Type == domain.EventGroupMemberStale {
+				event = delivery.ev
+			}
+		}
 		now := s.Now()
 		message := groupIdlePrompt(event, now)
 		if message != "" && ValidTmuxTarget(target) {
@@ -250,7 +255,7 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			}
 			message := fmt.Sprintf("[RCP supervisor] Unfinished work in execution group %s (%d events: %s). Call get_execution_group with group_id=%s and continue every member. Work counts as done only when each Integration reaches its desired_state. For every member: follow its next_action from get_execution_group (resume with your fence if lost, claim if unassigned), transition with execution_fence, release_execution(outcome=completed) at the end.", groupID, len(claimed), strings.Join(types, ", "), groupID)
 			if groupID == "" {
-				message = "[RCP supervisor]"
+				message = "[RCP supervisor] Unfinished work. Call next_work and follow the fenced next action for the affected integration."
 			}
 			if resolvedBlocker && groupID == "" {
 				for _, delivery := range claimed {
@@ -266,6 +271,9 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 				if (delivery.ev.Cause == domain.ExecutionCauseQuestionContinuation || len(delivery.ev.QuestionIDs) > 0) && idPattern.MatchString(delivery.ev.ID) {
 					message += " Read question_ids on event " + delivery.ev.ID + " via list_execution_events in this product. Call get_question for each ID to read the triggering answer or withdrawal."
 				}
+			}
+			if reminder := orchestratorSkillReminder(claimed[0].ev); reminder != "" {
+				message += " " + reminder
 			}
 			s.mu.Lock()
 			last := s.wakes[key]
@@ -313,8 +321,16 @@ func groupIdlePrompt(event domain.ExecutionEvent, now time.Time) string {
 		instruction = "Remind the owner about the outstanding questions or blockers. Do not resume work."
 	}
 	var prompt strings.Builder
-	fmt.Fprintf(&prompt, "[RCP supervisor] Group %s: %d unfinished members, no recorded activity for %d min. Call get_execution_group with group_id=%s. %s", payload.GroupID, len(payload.Members), minutes, payload.GroupID, instruction)
+	if event.Type == domain.EventGroupMemberStale {
+		fmt.Fprintf(&prompt, "[RCP supervisor] Group %s: %d unfinished members without recent recorded progress. Call get_execution_group with group_id=%s. %s", payload.GroupID, len(payload.Members), payload.GroupID, instruction)
+	} else {
+		fmt.Fprintf(&prompt, "[RCP supervisor] Group %s: %d unfinished members, no recorded activity for %d min. Call get_execution_group with group_id=%s. %s", payload.GroupID, len(payload.Members), minutes, payload.GroupID, instruction)
+	}
+	reminder := orchestratorSkillReminder(event)
 	lines := 1
+	if reminder != "" {
+		lines++
+	}
 	for _, member := range payload.Members {
 		if lines == 20 {
 			break
@@ -324,7 +340,7 @@ func groupIdlePrompt(event domain.ExecutionEvent, now time.Time) string {
 		}
 		state, action := member.State, member.NextAction
 		switch state {
-		case "unassigned", "claimed", "running", "waiting_external", "blocked", "stalled", "lost", "exited_incomplete":
+		case "unassigned", "claimed", "running", "waiting_external", "blocked", "stalled", "lost", "exited_incomplete", "paused":
 		default:
 			state = "unknown"
 		}
@@ -340,7 +356,22 @@ func groupIdlePrompt(event domain.ExecutionEvent, now time.Time) string {
 		fmt.Fprintf(&prompt, "\n%s %s progress %s next %s", member.IntegrationID, state, age, action)
 		lines++
 	}
+	if reminder != "" {
+		prompt.WriteByte('\n')
+		prompt.WriteString(reminder)
+	}
 	return prompt.String()
+}
+
+func orchestratorSkillReminder(event domain.ExecutionEvent) string {
+	if !domain.ValidAgentSkillName(event.OrchestratorSkill) || !domain.ValidAgentRoleProductID(event.ProductID) {
+		return ""
+	}
+	reminder := fmt.Sprintf("Load get_agent_skill(name=%q, product_id=%q) if not loaded, check your executors and wake stuck ones.", event.OrchestratorSkill, event.ProductID)
+	if event.Type == domain.EventGroupOwnerBlocked {
+		reminder += " Do not wake owner-blocked work."
+	}
+	return reminder
 }
 
 func (s *Supervisor) allowed(k string) bool {
@@ -360,22 +391,8 @@ func workAvailabilityWake(event domain.ExecutionEvent) bool {
 }
 
 func wakeGroup(event domain.ExecutionEvent) string {
-	if domain.IsGroupIdleEvent(event.Type) {
-		if event.WakeTarget.Source == "group_orchestrator" && idleIDPattern.MatchString(event.WakeTarget.GroupID) {
-			return event.WakeTarget.GroupID
-		}
-		return ""
-	}
-	if event.WakeTarget.Source == "group_orchestrator" && idPattern.MatchString(event.WakeTarget.GroupID) {
+	if event.WakeTarget.Source == "group_orchestrator" && idleIDPattern.MatchString(event.WakeTarget.GroupID) {
 		return event.WakeTarget.GroupID
-	}
-	if event.WakeTarget.Source == "executor" && blockerResolutionWake(event) {
-		return ""
-	}
-	for _, groupID := range event.GroupIDs {
-		if idPattern.MatchString(groupID) {
-			return groupID
-		}
 	}
 	return ""
 }

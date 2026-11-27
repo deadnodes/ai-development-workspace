@@ -78,7 +78,7 @@ func (f *fakeRCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func testEvent(id, kind, session, target, group, typ string) domain.ExecutionEvent {
-	return domain.ExecutionEvent{ID: id, ProductID: "product1", IntegrationID: "integration", GroupIDs: []string{group}, Type: typ, Reason: "UNTRUSTED reason must not enter prompt", HarnessKind: kind, SessionRef: session, TmuxTarget: target, WakeTarget: domain.ExecutionWakeTarget{Kind: kind, SessionRef: session, TmuxTarget: target, Source: "executor"}}
+	return domain.ExecutionEvent{ID: id, ProductID: "product1", IntegrationID: "integration", GroupIDs: []string{group}, Type: typ, Reason: "UNTRUSTED reason must not enter prompt", HarnessKind: kind, SessionRef: session, TmuxTarget: target, WakeTarget: domain.ExecutionWakeTarget{Kind: kind, SessionRef: session, TmuxTarget: target, Source: "group_orchestrator", GroupID: group}}
 }
 func testConfig(t *testing.T, base string) Config {
 	t.Helper()
@@ -119,12 +119,50 @@ func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 	}
 }
 
+func TestMemberWakeNeverTargetsAnExecutorAndValidatesSkillReminder(t *testing.T) {
+	for _, test := range []struct {
+		target, skill, product string
+		wake, reminder         bool
+	}{
+		{"executor", "team-orchestrator", "product1", false, false},
+		{"user_orchestrator", "team-orchestrator", "product1", true, true},
+		{"group_orchestrator", "team-orchestrator", "product1", true, true},
+		{"group_orchestrator", "", "product1", true, false},
+		{"group_orchestrator", "unsafe\nskill", "product1", true, false},
+		{"group_orchestrator", "team-orchestrator", "unsafe\nproduct", true, false},
+	} {
+		event := testEvent("member-wake", "codex", "session-12345678", "orch:0.1", "group-id", "execution_stalled")
+		event.WakeTarget.Source = test.target
+		event.OrchestratorSkill = test.skill
+		event.ProductID = test.product
+		if test.target == "user_orchestrator" {
+			event.WakeTarget.GroupID = ""
+		}
+		adapter := &fakeAdapter{}
+		_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
+		if (len(adapter.requests) == 1) != test.wake || len(api.acks) != 1 {
+			t.Fatalf("%+v: wakes=%+v acks=%+v", test, adapter.requests, api.acks)
+		}
+		if test.wake && strings.Contains(adapter.requests[0].Message, "Load get_agent_skill(") != test.reminder {
+			t.Fatalf("%+v: %s", test, adapter.requests[0].Message)
+		}
+		if !test.wake && api.acks[0].Outcome != string(Unsupported) {
+			t.Fatalf("executor target was not rejected: %+v", api.acks[0])
+		}
+	}
+}
+
 func TestStandaloneBlockerWakeRequiresTypedCause(t *testing.T) {
 	for _, cause := range []domain.ExecutionEventCause{"", domain.ExecutionCauseBlockerResolved} {
 		t.Run(string(cause), func(t *testing.T) {
 			adapter := &fakeAdapter{}
 			event := testEvent("event", "codex", "session-12345678", "orch:0.1", "", "execution_continuation_required")
 			event.GroupIDs, event.Reason, event.Cause = nil, "blocker resolved", cause
+			if cause == domain.ExecutionCauseBlockerResolved {
+				event.WakeTarget.Source = "user_orchestrator"
+			} else {
+				event.WakeTarget.Source = "executor"
+			}
 			_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
 			if cause == "" {
 				if len(adapter.requests) != 0 || len(api.acks) != 1 || api.acks[0].Outcome != "unsupported" {
@@ -141,6 +179,7 @@ func TestWorkAvailableUsesRegisteredTargetAndFixedPrompt(t *testing.T) {
 	adapter := &fakeAdapter{}
 	event := testEvent("work-event", "codex", "session-12345678", "orch:0.1", "", "work_available")
 	event.Cause = domain.ExecutionCauseQueueAvailable
+	event.WakeTarget.Source = "user_orchestrator"
 	event.IntegrationID, event.GroupIDs = "", nil
 	_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
 	if len(adapter.requests) != 1 || len(api.acks) != 1 || api.acks[0].Outcome != "delivered" {
@@ -156,6 +195,7 @@ func TestQuestionContinuationPointsToTriggeringAnswers(t *testing.T) {
 	adapter := &fakeAdapter{}
 	event := testEvent("questionEvent", "codex", "session-12345678", "orch:0.1", "", "work_available")
 	event.Cause = domain.ExecutionCauseQuestionContinuation
+	event.WakeTarget.Source = "user_orchestrator"
 	event.IntegrationID, event.GroupIDs = "", nil
 	runCycle(t, []domain.ExecutionEvent{event}, adapter)
 	if len(adapter.requests) != 1 {
@@ -541,12 +581,9 @@ func TestMessageUsesOnlyValidatedFields(t *testing.T) {
 	a := &fakeAdapter{}
 	ev := testEvent("secret-event-id", "codex", "session-12345678", "", "not-valid!", "bad type with secrets")
 	ev.GroupIDs = []string{"aabbccdd"}
-	_, _ = runCycle(t, []domain.ExecutionEvent{ev}, a)
-	msg := a.requests[0].Message
-	for _, bad := range []string{"secret-event-id", "not-valid!", "bad type", "UNTRUSTED", "reason"} {
-		if strings.Contains(msg, bad) {
-			t.Fatalf("message included untrusted value %q: %s", bad, msg)
-		}
+	_, api := runCycle(t, []domain.ExecutionEvent{ev}, a)
+	if len(a.requests) != 0 || len(api.acks) != 1 || api.acks[0].Outcome != "unsupported" {
+		t.Fatalf("invalid orchestrator target admitted: %+v %+v", a.requests, api.acks)
 	}
 }
 
