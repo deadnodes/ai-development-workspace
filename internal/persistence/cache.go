@@ -9,7 +9,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/jackc/pgx/v5"
 	"releasecontrol/internal/domain"
 )
 
@@ -93,18 +92,17 @@ func cloneValue(v reflect.Value) reflect.Value {
 // Callbacks append new events; full history is available through Read outside
 // the write lock. A record reset must preserve the supplied Events slice.
 func (s *Store) Update(ctx context.Context, fn func(*domain.State) error) error {
-	return s.updateCollections(ctx, nil, fn)
+	return s.updatePostgres(ctx, nil, fn)
 }
 
 // UpdateScoped is an internal application contract: only the named
 // collections may be mutated. All other collections are borrowed read-only.
 // Unknown callbacks must use Update, which isolates the complete state.
 func (s *Store) UpdateScoped(ctx context.Context, scope domain.StateMutationScope, fn func(*domain.State) error) error {
-	return s.updateCollections(ctx, &scope, fn)
+	return s.updatePostgres(ctx, &scope, fn)
 }
 
-func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutationScope, fn func(*domain.State) error) error {
-	full := scope == nil || scope.AllCollections
+func (s *Store) updatePostgres(ctx context.Context, scope *domain.StateMutationScope, fn func(*domain.State) error) error {
 	// Always acquire a pool connection before the cache mutex, matching Read.
 	// Holding the mutex while waiting for the pool can deadlock with a reader.
 	tx, err := s.pool.Begin(ctx)
@@ -112,10 +110,16 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 		return err
 	}
 	defer tx.Rollback(context.Background())
+	return s.stateSnapshots.updateCollections(ctx, postgresTransaction{tx}, scope, fn)
+}
+
+func (s *stateSnapshots) updateCollections(ctx context.Context, tx stateTransaction, scope *domain.StateMutationScope, fn func(*domain.State) error) error {
+	full := scope == nil || scope.AllCollections
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var revision int64
-	if err = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1 FOR UPDATE").Scan(&revision); err != nil {
+	var err error
+	if err = tx.QueryRow(ctx, tx.sql("SELECT revision FROM control_revision WHERE id=1 FOR UPDATE", "SELECT revision FROM control_revision WHERE id=1")).Scan(&revision); err != nil {
 		return err
 	}
 	if scope != nil && scope.RequireEmptyJournal {
@@ -191,7 +195,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 
 	if scope != nil && len(scope.RequireAbsentIDs) > 0 {
 		var exists bool
-		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=ANY($1::text[]) AND NOT $2 UNION ALL SELECT 1 FROM events e WHERE id=ANY($1::text[]) AND (NOT $2 OR NOT EXISTS(SELECT 1 FROM records r WHERE r.id=e.id)))", scope.RequireAbsentIDs, scope.AllowExistingRecords).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, tx.sql("SELECT EXISTS(SELECT 1 FROM records WHERE id=ANY($1::text[]) AND NOT $2 UNION ALL SELECT 1 FROM events e WHERE id=ANY($1::text[]) AND (NOT $2 OR NOT EXISTS(SELECT 1 FROM records r WHERE r.id=e.id)))", "SELECT EXISTS(SELECT 1 FROM records WHERE id IN (SELECT value FROM json_each($1)) AND NOT $2 UNION ALL SELECT 1 FROM events e WHERE id IN (SELECT value FROM json_each($1)) AND (NOT $2 OR NOT EXISTS(SELECT 1 FROM records r WHERE r.id=e.id)))"), scope.RequireAbsentIDs, scope.AllowExistingRecords).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {
@@ -208,7 +212,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 	}
 	if len(reserved) > 0 {
 		var collision bool
-		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM events WHERE id=ANY($1::text[]))", reserved).Scan(&collision); err != nil {
+		if err = tx.QueryRow(ctx, tx.sql("SELECT EXISTS(SELECT 1 FROM events WHERE id=ANY($1::text[]))", "SELECT EXISTS(SELECT 1 FROM events WHERE id IN (SELECT value FROM json_each($1)))"), reserved).Scan(&collision); err != nil {
 			return err
 		}
 		if collision {
@@ -275,10 +279,15 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 			positions[id] = s.cached.positions[id]
 		}
 		retentionDelete := !full && (kind == "runtime_observations" || kind == "operations" || kind == "operation_steps") && selected[kind] && !appendOnly[kind]
-		currentIDs := map[string]bool{}
-		if retentionDelete {
+		var currentIDs map[string]bool
+		if full || retentionDelete {
+			currentIDs = make(map[string]bool, cur.Len())
 			for j := 0; j < cur.Len(); j++ {
-				currentIDs[recordString(cur.Index(j), "ID")] = true
+				id := recordString(cur.Index(j), "ID")
+				if currentIDs[id] {
+					return fmt.Errorf("duplicate %s record ID %q", kind, id)
+				}
+				currentIDs[id] = true
 			}
 		}
 		values := map[string]reflect.Value{}
@@ -298,7 +307,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 		}
 		if len(deleted) > 0 {
 			removedIDs = append(removedIDs, deleted...)
-			if _, err = tx.Exec(ctx, "DELETE FROM records WHERE id=ANY($1::text[]) AND kind=$2", deleted, kind); err != nil {
+			if err = tx.Exec(ctx, tx.sql("DELETE FROM records WHERE id=ANY($1::text[]) AND kind=$2", "DELETE FROM records WHERE id IN (SELECT value FROM json_each($1)) AND kind=$2"), deleted, kind); err != nil {
 				return err
 			}
 		}
@@ -371,28 +380,10 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 		}
 	}
 
-	batch := &pgx.Batch{}
-	flush := func() error {
-		if batch.Len() == 0 {
-			return nil
-		}
-		results := tx.SendBatch(ctx, batch)
-		for range batch.Len() {
-			if _, e := results.Exec(); e != nil {
-				_ = results.Close()
-				return e
-			}
-		}
-		e := results.Close()
-		batch = &pgx.Batch{}
-		return e
-	}
+	batch := tx.batch(ctx)
 	for _, c := range changes {
-		batch.Queue("INSERT INTO records(id,kind,product_id,feature_id,document,position) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET document=EXCLUDED.document,product_id=EXCLUDED.product_id,feature_id=EXCLUDED.feature_id,position=EXCLUDED.position", c.id, c.kind, c.product, c.feature, c.raw, c.position)
-		if batch.Len() >= 256 {
-			if err = flush(); err != nil {
-				return err
-			}
+		if err = batch.exec("INSERT INTO records(id,kind,product_id,feature_id,document,position) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET document=EXCLUDED.document,product_id=EXCLUDED.product_id,feature_id=EXCLUDED.feature_id,position=EXCLUDED.position", c.id, c.kind, c.product, c.feature, string(c.raw), c.position); err != nil {
+			return err
 		}
 	}
 	for _, event := range st.Events[oldEvents:] {
@@ -400,14 +391,11 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 		if e != nil {
 			return e
 		}
-		batch.Queue("INSERT INTO events(id,product_id,feature_id,document) VALUES($1,$2,$3,$4)", event.ID, event.ProductID, event.FeatureID, raw)
-		if batch.Len() >= 256 {
-			if err = flush(); err != nil {
-				return err
-			}
+		if err = batch.exec("INSERT INTO events(id,product_id,feature_id,document) VALUES($1,$2,$3,$4)", event.ID, event.ProductID, event.FeatureID, string(raw)); err != nil {
+			return err
 		}
 	}
-	if err = flush(); err != nil {
+	if err = batch.flush(); err != nil {
 		return err
 	}
 
@@ -429,7 +417,7 @@ func (s *Store) updateCollections(ctx context.Context, scope *domain.StateMutati
 		}
 	}
 
-	if _, err = tx.Exec(ctx, "UPDATE control_revision SET revision=revision+1 WHERE id=1"); err != nil {
+	if err = tx.Exec(ctx, "UPDATE control_revision SET revision=revision+1 WHERE id=1"); err != nil {
 		return err
 	}
 	var journalMax int64
@@ -497,27 +485,8 @@ func recordString(v reflect.Value, name string) string {
 	return v.FieldByIndex(path).String()
 }
 
-const writeEventPredicate = `document->>'action' IN ('close_deployment','close_build','restore_backup','delete_product','assemble_environment','reconcile_composition','update_environment_feature','worker_report','pin_artifact','release_artifact_pin') OR document->'data'->>'action'='release_artifact_pin' OR id IN (SELECT id FROM records WHERE kind IN ('artifact_pins','registry_inventories'))`
-
-func readWriteEvents(ctx context.Context, tx pgx.Tx, st *domain.State) error {
-	rows, err := tx.Query(ctx, "SELECT document FROM events WHERE "+writeEventPredicate+" ORDER BY sequence")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw []byte
-		if err = rows.Scan(&raw); err != nil {
-			return err
-		}
-		var e domain.Event
-		if err = json.Unmarshal(raw, &e); err != nil {
-			return err
-		}
-		st.Events = append(st.Events, e)
-	}
-	return rows.Err()
-}
+const writeEventActionPredicate = `document->>'action' IN ('close_deployment','close_build','restore_backup','delete_product','assemble_environment','reconcile_composition','update_environment_feature','worker_report','pin_artifact','release_artifact_pin') OR document->'data'->>'action'='release_artifact_pin'`
+const writeEventPredicate = writeEventActionPredicate + ` OR id IN (SELECT id FROM records WHERE kind IN ('artifact_pins','registry_inventories'))`
 
 // The ordinary scope cannot alter pin/inventory reference collections. Their
 // previously validated invariants therefore change only through reserved ID
@@ -592,7 +561,7 @@ func mutableType(typ reflect.Type) bool {
 // Writer transactions hold control_revision's row lock: all journal and record
 // observations are stable against other Store writers until commit. Keep this
 // narrow projection separate so ordinary opaque history need not be decoded.
-func (s *Store) readCachedWriteEvents(ctx context.Context, tx pgx.Tx, st *domain.State, revision int64) error {
+func (s *stateSnapshots) readCachedWriteEvents(ctx context.Context, tx stateTransaction, st *domain.State, revision int64) error {
 	var max int64
 	if err := tx.QueryRow(ctx, "SELECT COALESCE(max(sequence),0) FROM events").Scan(&max); err != nil {
 		return err
@@ -610,7 +579,13 @@ func (s *Store) readCachedWriteEvents(ctx context.Context, tx pgx.Tx, st *domain
 			cache = &journalCache{}
 		}
 	}
-	rows, err := tx.Query(ctx, "SELECT document FROM events WHERE sequence > $1 AND ("+writeEventPredicate+") ORDER BY sequence", cache.max)
+	query := tx.sql("SELECT document FROM events WHERE sequence > $1 AND ("+writeEventPredicate+") ORDER BY sequence",
+		`SELECT document FROM (
+		 SELECT sequence,document FROM events WHERE sequence>$1 AND (`+writeEventActionPredicate+`)
+		 UNION SELECT e.sequence,e.document FROM records r JOIN events e ON e.id=r.id
+		 WHERE r.kind IN ('artifact_pins','registry_inventories') AND e.sequence>$1
+		) ORDER BY sequence`)
+	rows, err := tx.Query(ctx, query, cache.max)
 	if err != nil {
 		return err
 	}

@@ -255,10 +255,30 @@ func externalGateEvidenceCurrent(st *domain.State, g domain.Gate) bool {
 	for _, check := range st.Checks {
 		if check.GateID == g.ID {
 			r := latest(st, check.ID)
-			if r == nil || r.CreatedAt.Before(scope.CreatedAt) {
+			if r == nil {
+				return false
+			}
+			// Results know the scope they were recorded under; timestamps alone
+			// tie on coarse clocks. Legacy results fall back to time order.
+			if r.ExternalScopeID != nil {
+				if *r.ExternalScopeID != scope.ID {
+					return false
+				}
+			} else if r.CreatedAt.Before(scope.CreatedAt) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// currentGateScopeID is the latest external scope attached to a gate, or "".
+func currentGateScopeID(st *domain.State, gateID string) string {
+	id := ""
+	for i := range st.ExternalScopes {
+		if gateID != "" && st.ExternalScopes[i].GateID == gateID {
+			id = st.ExternalScopes[i].ID
+		}
+	}
+	return id
 }

@@ -10,7 +10,7 @@ func latestRuntimeTargets(rows []domain.RuntimeObservation, operation string) ma
 			continue
 		}
 		old, ok := out[r.Target]
-		if !ok || r.CreatedAt.After(old.CreatedAt) || r.CreatedAt.Equal(old.CreatedAt) && r.ID > old.ID {
+		if !ok || !r.CreatedAt.Before(old.CreatedAt) { // equal time: the later appended row wins
 			out[r.Target] = r
 		}
 	}

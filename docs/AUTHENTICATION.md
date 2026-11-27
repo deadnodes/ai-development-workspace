@@ -23,7 +23,7 @@ into the application.
 | `RCP_AUTH_PRODUCTS` | Comma-separated product grants for admitted humans; default `*` |
 | `RCP_AUTH_ENCRYPTION_KEY` | Base64 encoding of exactly 32 random bytes, supplied from a secret backend |
 | `DATABASE_URL` | PostgreSQL connection; authentication uses its own private table |
-| `RCP_AUTH_FILE` | Separate bbolt authentication file when PostgreSQL is absent; required in that mode |
+| `RCP_AUTH_FILE` | Separate SQLite authentication file when PostgreSQL is absent; required in that mode |
 | `RCP_AUTH_SESSION_TTL` | Human session lifetime, default `8h`, bounded to `1m`–`24h` |
 | `RCP_AUTH_BOOTSTRAP_TOKEN` | Optional independently random service bootstrap secret, at least 32 characters |
 
@@ -101,8 +101,8 @@ or revoke other tokens. Logout does not revoke agents.
 Authentication state is excluded from `domain.State`, public snapshots, MCP
 context, domain backups and configuration exports. PostgreSQL stores one
 transactionally locked AES-256-GCM encrypted payload in `rcp_auth_private`.
-bbolt uses a distinct `RCP_AUTH_FILE`, opened with mode 0600, and transactional
-updates. Use a different file from the domain store. The record contains token
+SQLite uses a distinct `RCP_AUTH_FILE` with transactional updates and creates it
+with mode 0600 on Unix. Use a different file from the domain store. The record contains token
 hashes, pseudonymous ownership, encrypted metadata, encrypted short-lived PKCE
 flows, device grants and sessions. Each write uses a fresh random GCM nonce and
 version-specific authenticated associated data. Authenticated read failures fail

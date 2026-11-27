@@ -14,7 +14,7 @@ USER app
 COPY --from=build /release-control /usr/local/bin/release-control
 COPY --from=build /rcp-runtime-reporter /usr/local/bin/rcp-runtime-reporter
 COPY --from=build /prod-signer /usr/local/bin/prod-signer
-ENV LISTEN_ADDR=:8080 RCP_DATA_PATH=/data/state.db
+ENV LISTEN_ADDR=0.0.0.0:8080 RCP_DATA_PATH=/data/rcp.sqlite
 VOLUME ["/data"]
 EXPOSE 8080
 ENTRYPOINT ["release-control"]

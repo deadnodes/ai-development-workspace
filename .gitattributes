@@ -1,0 +1,5 @@
+*.md text eol=lf
+*.go text eol=lf
+internal/agentguide/skills/** text eol=lf
+internal/agentconnect/rcp-turn-end.sh text eol=lf
+**/testdata/** text=auto eol=lf

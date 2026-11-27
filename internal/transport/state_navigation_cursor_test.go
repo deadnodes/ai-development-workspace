@@ -23,7 +23,7 @@ func TestNavigationMaximumIdentityCursorSDK(t *testing.T) {
 			ctx := context.Background()
 			var store application.Store
 			if backend == "local" {
-				s, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				s, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if e != nil {
 					t.Fatal(e)
 				}

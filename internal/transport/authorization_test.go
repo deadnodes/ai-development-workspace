@@ -23,7 +23,7 @@ import (
 // manager credential validation is tested independently in internal/auth.
 func TestScopedHTTPAndMCPUseSameApplicationPolicy(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestConfiguredAuthIsMandatoryAndLegacyTokenCannotBypass(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "domain.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "domain.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

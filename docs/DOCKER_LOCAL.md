@@ -1,7 +1,20 @@
 # Local Docker startup for agents
 
+For the no-Docker binary and SQLite quickstart, see [Standalone](STANDALONE.md).
+
 Service installation maintenance: [updates, daily checks, backups and rollback](UPDATES.md).
 
+For a single SQLite container, use the [authenticated Docker run example](../README.md#published-docker-image).
+It keeps `rcp.sqlite` and its SQLite sidecar files together in a named volume mounted
+at `/data`. If you use a bind mount instead, it must be writable by container UID
+10001. To scan a host workspace, mount it at `/workspace` read-only and set
+`RCP_WORKSPACE_ROOT=/workspace`. Publishing to host loopback does not remove the
+container's authentication requirement. Enter `RC_TOKEN` in the UI's Settings or
+configure OIDC for individual user accounts.
+
+## Local PostgreSQL stack
+
+For the local browser UI without setting up OIDC, run the PostgreSQL Compose stack.
 Prerequisites: running Docker engine and Docker Compose with `up --wait` support.
 Run from this repository. Go and Node are not required to build/run the server:
 

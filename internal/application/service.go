@@ -28,6 +28,7 @@ type Store interface {
 	Update(context.Context, func(*domain.State) error) error
 }
 type Service struct {
+	standalone               bool
 	prodPublicKey            string
 	prodPromotionNotify      chan struct{}
 	runtimeFreshnessSnapshot map[string]time.Time
@@ -36,6 +37,7 @@ type Service struct {
 	intelligence             IntelligenceProvider
 	// Native deadline seam is private and defaults to wall time; never caller/config controlled.
 	nativeAuthorityNow func() time.Time
+	promotionNow       func() time.Time
 	// Restoration proposal deadline decisions only; read/proof/unlock clocks stay real.
 	restorationAuthorityNow func() time.Time
 	externalWorkers         *workerconfig.Authority
@@ -95,6 +97,11 @@ func decode(data map[string]any, v any) error {
 	return nil
 }
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
+	if workerCommand(c.Action) {
+		if err := s.requireWorkers(c.Action); err != nil {
+			return nil, err
+		}
+	}
 	c.Actor = attributedActor(ctx, c.Actor)
 	request := *s
 	if c.Action == "queue_intelligence_task" {
@@ -190,7 +197,7 @@ func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *
 						executionCondition(st, ex, "running", false, "", now)
 					}
 					if ex.State == "running" {
-						until := now.Add(time.Duration(ex.LeaseTTLSeconds) * time.Second)
+						until := extendLease(now, time.Duration(ex.LeaseTTLSeconds)*time.Second, ex.LeaseUntil)
 						ex.LeaseUntil = &until
 						ex.LastHeartbeat = &now
 						ex.LastProgress = &now
@@ -292,15 +299,16 @@ func refs(st *domain.State, ids []string, f string) error {
 	}
 	return nil
 }
+
+// latest is the last recorded result of a check. Results are stored in
+// append order, which stays correct when the clock is coarse or moves back.
 func latest(st *domain.State, c string) *domain.CheckResult {
-	var r *domain.CheckResult
-	for i := range st.Results {
-		v := &st.Results[i]
-		if v.CheckID == c && (r == nil || !v.CreatedAt.Before(r.CreatedAt)) {
-			r = v
+	for i := len(st.Results) - 1; i >= 0; i-- {
+		if st.Results[i].CheckID == c {
+			return &st.Results[i]
 		}
 	}
-	return r
+	return nil
 }
 func gateResult(st *domain.State, g domain.Gate) string {
 	if !externalGateEvidenceCurrent(st, g) {
@@ -717,6 +725,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("owner and members are server-managed")
 		}
 		v.Owner, _ = auth.PrivateProductViewer(ctx)
+		if v.Visibility == "private" && auth.IsLocalAdmin(ctx) {
+			v.Owner = "local"
+		}
 		if v.Visibility == "private" && v.Owner == "" {
 			return nil, fmt.Errorf("%w: PRIVATE_PRODUCT_REQUIRES_USER", auth.ErrForbidden)
 		}
@@ -1002,6 +1013,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if ch == nil {
 			return nil, missing("check", c.CheckID)
 		}
+		if _, set := c.Data["external_scope_id"]; set {
+			return nil, invalid("external_scope_id is set by the server")
+		}
 		v := domain.CheckResult{}
 		if e := decode(c.Data, &v); e != nil {
 			return nil, e
@@ -1010,6 +1024,8 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		m.FeatureID = ch.FeatureID
 		v.Meta = m
 		v.CheckID = ch.ID
+		scopeID := currentGateScopeID(st, ch.GateID)
+		v.ExternalScopeID = &scopeID
 		if v.Commit == "" && v.Deployment == "" {
 			return nil, invalid("tested commit or deployment required")
 		}

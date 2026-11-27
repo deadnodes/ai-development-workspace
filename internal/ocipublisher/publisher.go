@@ -22,7 +22,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"releasecontrol/internal/domain"
@@ -85,7 +84,7 @@ func decode(b []byte, v any) error {
 	return nil
 }
 func readBounded(path string, max int64) ([]byte, error) {
-	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	f, e := openPublicationInput(path)
 	if e != nil {
 		return nil, invalid
 	}
@@ -101,6 +100,9 @@ func readBounded(path string, max int64) ([]byte, error) {
 	return b, nil
 }
 func Load(path string) (Config, error) {
+	if err := publicationPlatformError(); err != nil {
+		return Config{}, err
+	}
 	var c Config
 	b, e := readBounded(path, 65536)
 	if e != nil {
@@ -170,6 +172,9 @@ func Publish(ctx context.Context, c Config) (*Observation, error) {
 }
 
 func publishWithSync(ctx context.Context, c Config, sync func(*os.File) error) (*Observation, error) {
+	if err := publicationPlatformError(); err != nil {
+		return nil, err
+	}
 	origin, e := c.validate()
 	if e != nil {
 		return nil, e
@@ -431,14 +436,9 @@ func intentWithSync(dir, id, identity string, sync func(*os.File) error) (func()
 	if e != nil || !st.IsDir() || st.Mode().Perm()&0077 != 0 {
 		return nil, invalid
 	}
-	f, e := os.OpenFile(filepath.Join(dir, id+".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	f, release, e := openPublicationLock(filepath.Join(dir, id+".lock"))
 	if e != nil {
-		return nil, invalid
-	}
-	release := func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
-		f.Close()
-		return nil, errors.New("publication already running")
+		return nil, e
 	}
 	fail := func() (func(), error) { release(); return nil, invalid }
 	syncDirectory := func() error {
@@ -454,7 +454,7 @@ func intentWithSync(dir, id, identity string, sync func(*os.File) error) (func()
 		return fail()
 	}
 	path := filepath.Join(dir, id+".intent")
-	j, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	j, e := openPublicationInput(path)
 	if e == nil {
 		b, err := io.ReadAll(io.LimitReader(j, 256))
 		st, se := j.Stat()

@@ -2,9 +2,7 @@ package persistence
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	"strings"
@@ -43,104 +41,4 @@ func (s *Store) RuntimeFreshness(ctx context.Context, ids []string) (map[string]
 		out[domain.RuntimeObservationKey(id, target)] = f
 	}
 	return out, rows.Err()
-}
-
-var runtimeFreshnessBucket = []byte("runtime-observation-freshness")
-
-type localRuntimeFreshness struct {
-	ObservationID string    `json:"observation_id"`
-	ObservedAt    time.Time `json:"observed_at"`
-	Healthy       bool      `json:"healthy"`
-}
-
-func (s *LocalStore) TouchRuntimeFreshness(ctx context.Context, operationID string, target string, observationID string, observedAt time.Time, healthy bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.lifecycle.RLock()
-	defer s.lifecycle.RUnlock()
-	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		b, err := tx.CreateBucketIfNotExists(runtimeFreshnessBucket)
-		if err != nil {
-			return err
-		}
-		var old localRuntimeFreshness
-		if raw := b.Get([]byte(domain.RuntimeObservationKey(operationID, target))); raw != nil {
-			if err = json.Unmarshal(raw, &old); err != nil {
-				return err
-			}
-			if old.ObservedAt.After(observedAt) {
-				return nil
-			}
-		}
-		raw, err := json.Marshal(localRuntimeFreshness{ObservationID: observationID, ObservedAt: observedAt, Healthy: healthy})
-		if err != nil {
-			return err
-		}
-		return b.Put([]byte(domain.RuntimeObservationKey(operationID, target)), raw)
-	})
-}
-func (s *LocalStore) RuntimeFreshness(ctx context.Context, ids []string) (map[string]domain.RuntimeFreshness, error) {
-	out := map[string]domain.RuntimeFreshness{}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s.lifecycle.RLock()
-	defer s.lifecycle.RUnlock()
-	err := s.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(runtimeFreshnessBucket)
-		if b == nil {
-			return nil
-		}
-		for _, id := range ids {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if raw := b.Get([]byte(id)); raw != nil {
-				var value localRuntimeFreshness
-				if err := json.Unmarshal(raw, &value); err != nil {
-					return err
-				}
-				out[id] = domain.RuntimeFreshness{ObservationID: value.ObservationID, ObservedAt: value.ObservedAt, Healthy: value.Healthy}
-			}
-		}
-		if auth.RequiresExistingProduct(ctx) && len(out) > 0 {
-			data := tx.Bucket(localBucket).Get(localStateKey)
-			hidden, err := hiddenLocalProducts(ctx, data)
-			if err != nil {
-				return err
-			}
-			products := map[string]bool{}
-			if err := historyScan(ctx, data, "products", func(raw []byte) error {
-				id := scopeText(raw, "id")
-				products[id] = !hidden[id]
-				return nil
-			}); err != nil {
-				return err
-			}
-			visibleObservations := make(map[string]bool, len(out))
-			for _, freshness := range out {
-				visibleObservations[freshness.ObservationID] = false
-			}
-			if err := historyScan(ctx, data, "runtime_observations", func(raw []byte) error {
-				id := scopeText(raw, "id")
-				if _, wanted := visibleObservations[id]; wanted && products[scopeText(raw, "product_id")] {
-					visibleObservations[id] = true
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-			for key, freshness := range out {
-				if !visibleObservations[freshness.ObservationID] {
-					delete(out, key)
-				}
-			}
-		}
-		return nil
-	})
-	return out, err
 }

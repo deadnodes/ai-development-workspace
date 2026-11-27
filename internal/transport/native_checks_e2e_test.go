@@ -1,3 +1,5 @@
+//go:build !windows
+
 package transport_test
 
 import (
@@ -267,7 +269,7 @@ func TestRealNativeChecksWorkerPublisherPR(t *testing.T) {
 			}
 			var err error
 			if kind == "local" {
-				store, err = persistence.OpenLocal(ctx, filepath.Join(dir, "state.db"))
+				store, err = persistence.OpenSQLite(ctx, filepath.Join(dir, "state.db"))
 			} else {
 				store, err = persistence.Open(ctx, isolatedDatabase(t))
 			}

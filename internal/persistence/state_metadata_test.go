@@ -17,7 +17,7 @@ import (
 
 func TestNavigationMetadataStores(t *testing.T) {
 	ctx := context.Background()
-	local, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	local, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -98,17 +98,4 @@ func TestNavigationMetadataStores(t *testing.T) {
 			t.Fatal("global read unexpectedly worked without events table")
 		}
 	})
-}
-func TestNavigationScannerEscapesAndCancellation(t *testing.T) {
-	value := strings.Repeat("界😀\"\\\n", 2000)
-	raw, _ := json.Marshal(value)
-	s, cut, e := metadataString(raw)
-	if e != nil || !cut || !strings.HasPrefix(value, s) {
-		t.Fatal("unsafe prefix", e)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if e = walkStateCollection(ctx, []byte(`{"products":[]}`), "products", func(domain.StateCard) {}); e == nil {
-		t.Fatal("ignored cancellation")
-	}
 }

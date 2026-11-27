@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,9 +29,15 @@ func TestConnectionSecretOutsideDir(t *testing.T) {
 		}
 	}
 	if err := os.Symlink(filepath.Join(sibling, "key"), filepath.Join(root, "escape")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if err := os.Symlink(root, filepath.Join(base, "alias")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	t.Setenv("RCP_SECRET_DIR", root)

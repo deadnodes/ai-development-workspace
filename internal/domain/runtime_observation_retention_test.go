@@ -171,3 +171,37 @@ func TestRuntimeWitnessRetentionPerTarget(t *testing.T) {
 		})
 	}
 }
+
+// Coarse clocks (Windows) give consecutive observations equal timestamps; the
+// later appended row is the latest, whatever its random ID.
+func TestBindRuntimeFreshnessEqualTimestampsPreferLaterRow(t *testing.T) {
+	at := time.Date(2026, 11, 26, 23, 3, 28, 0, time.UTC)
+	rows := []RuntimeObservation{
+		{Meta: Meta{ID: "ffff", CreatedAt: at}, OperationID: "op", Target: "ns/d/c", Healthy: true},
+		{Meta: Meta{ID: "0000", CreatedAt: at}, OperationID: "op", Target: "ns/d/c", Healthy: true},
+	}
+	key := RuntimeObservationKey("op", "ns/d/c")
+	got := BindRuntimeFreshness(rows, map[string]RuntimeFreshness{key: {ObservationID: "0000", ObservedAt: at, Healthy: true}})
+	if _, ok := got["0000"]; !ok || len(got) != 1 {
+		t.Fatalf("freshness bound to %v, want the later row 0000", got)
+	}
+}
+
+// Pruning must keep the last appended observation as the latest root when
+// timestamps tie, whatever the random IDs.
+func TestPruneKeepsLaterAppendedObservationOnEqualTimestamps(t *testing.T) {
+	at := time.Now().UTC().Add(-48 * time.Hour)
+	st := EmptyState()
+	st.RuntimeObservations = []RuntimeObservation{
+		{Meta: Meta{ID: "aaaa", ProductID: "p", CreatedAt: at}, OperationID: "op", EnvironmentID: "env", Target: "ns/d/c", ArtifactDigest: "d", Healthy: true},
+		{Meta: Meta{ID: "ffff", ProductID: "p", CreatedAt: at}, OperationID: "op", EnvironmentID: "env", Target: "ns/d/c", ArtifactDigest: "d", Healthy: true},
+		{Meta: Meta{ID: "0000", ProductID: "p", CreatedAt: at}, OperationID: "op", EnvironmentID: "env", Target: "ns/d/c", ArtifactDigest: "d", Healthy: false},
+	}
+	pruned := PrunableRuntimeObservations(&st, time.Now().UTC(), 10)
+	if pruned["0000"] {
+		t.Fatalf("pruned the latest (last appended, unhealthy) observation: %v", pruned)
+	}
+	if pruned["aaaa"] || !pruned["ffff"] {
+		t.Fatalf("want only the middle row pruned (earliest digest root aaaa kept): %v", pruned)
+	}
+}

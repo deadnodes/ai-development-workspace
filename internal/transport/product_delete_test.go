@@ -21,7 +21,7 @@ func TestProductDeletionPersists(t *testing.T) {
 			}
 			var err error
 			if mode == "local" {
-				store, err = persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				store, err = persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 			} else {
 				store, err = persistence.Open(ctx, isolatedDatabase(t))
 			}

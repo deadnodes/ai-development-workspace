@@ -24,6 +24,9 @@ type Skill struct {
 	Content string `json:"content"`
 	SHA256  string `json:"sha256"`
 }
+
+const LocalInstructions = `Use get_tool_guide to discover tool and action contracts, and execute to record local project work one action at a time. Find Products and Features with get_state, then use get_project_context and resume before editing. This stdio session has local admin access and does not run workers. For build, deployment, and other worker-backed operations, connect to an RCP server with the required workers configured. A completed integration is ready, not released.`
+
 type Kit struct {
 	Skill          Skill  `json:"skill"`
 	DeliverySkill  Skill  `json:"delivery_skill"`

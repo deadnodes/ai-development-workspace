@@ -16,7 +16,7 @@ import (
 
 func TestBrowserSnapshotUsesBoundedProjectionAndAuth(t *testing.T) {
 	ctx := context.Background()
-	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "ui.db"))
+	store, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "ui.db"))
 	if e != nil {
 		t.Fatal(e)
 	}

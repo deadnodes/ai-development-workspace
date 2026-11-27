@@ -79,7 +79,7 @@ migration **008_runtime_observation_freshness.sql** creates
 Migration **009_runtime_observation_freshness_target.sql** adds `target` with an
 empty default and changes the primary key to `(operation_id, target)`; one upsert
 updates liveness without a control revision, State copy or cache invalidation.
-Local storage uses a separate bbolt bucket. Stores without the optional interface
+SQLite uses dedicated runtime report tables. Stores without the optional interface
 skip freshness. Freshness is operational metadata outside State, so full State
 exports/backups do not carry heartbeats. A restored instance needs a new poll.
 Environment state, operation and feature-graph queries expose `observed_at` alongside

@@ -11,12 +11,13 @@ import (
 )
 
 func TestResumeCombinesLatestHandoffsAndRemainingInPlanOrder(t *testing.T) {
-	s, _ := fixture(t)
+	s, store := fixture(t)
 	exec(t, s, domain.Command{Action: "update_integration", IntegrationID: "i", Data: map[string]any{"position": 2}})
 	exec(t, s, domain.Command{Action: "create_integration", ID: "j", FeatureID: "f", Data: map[string]any{"title": "First", "objective": "First", "position": 1}})
 	exec(t, s, domain.Command{Action: "create_integration", ID: "k", FeatureID: "f", Data: map[string]any{"title": "Third", "objective": "Third", "position": 3, "remaining": []string{"remaining task", "shared"}}})
-	exec(t, s, domain.Command{Action: "handoff", FeatureID: "f", IntegrationID: "i", Data: map[string]any{"current": "old", "next": []string{"obsolete"}}})
-	exec(t, s, domain.Command{Action: "handoff", FeatureID: "f", IntegrationID: "i", Data: map[string]any{"current": "second", "next": []string{"second task", "shared"}}})
+	exec(t, s, domain.Command{Action: "handoff", ID: "z-old", FeatureID: "f", IntegrationID: "i", Data: map[string]any{"current": "old", "next": []string{"obsolete"}}})
+	exec(t, s, domain.Command{Action: "handoff", ID: "a-new", FeatureID: "f", IntegrationID: "i", Data: map[string]any{"current": "second", "next": []string{"second task", "shared"}}})
+	store.state.Memories[1].CreatedAt = store.state.Memories[0].CreatedAt
 	exec(t, s, domain.Command{Action: "handoff", FeatureID: "f", IntegrationID: "j", Data: map[string]any{"current": "first", "next": []string{"first task", "shared"}}})
 	exec(t, s, domain.Command{Action: "handoff", FeatureID: "f", Data: map[string]any{"current": "feature", "next": []string{"feature task"}}})
 	exec(t, s, domain.Command{Action: "create_gate", ID: "late", FeatureID: "f", Data: map[string]any{"title": "Later", "reason": "risk", "position": 2, "integration_ids": []string{"i"}}})

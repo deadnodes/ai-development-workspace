@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package publishrunner is a separate, operator-pinned publication executor.
 package publishrunner
 

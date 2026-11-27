@@ -35,11 +35,11 @@ Service installation maintenance: [updates, daily checks, backups and rollback](
 
 Docker startup, workspace mount and recovery: [DOCKER_LOCAL.md](docs/DOCKER_LOCAL.md).
 
-Local startup needs only the Go binary: with `DATABASE_URL` unset, it uses embedded storage (`RCP_DATA_PATH`). PostgreSQL remains optional. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](docs/LOCAL_WORKSPACE.md).
+Local startup needs only the Go binary and SQLite. See [Standalone quickstart](docs/STANDALONE.md) for Windows, macOS, Linux, Raspberry Pi, and on-demand MCP. Configure `RCP_WORKSPACE_ROOT` for checkout/AGENTS scanning; see [local workspace and portable project context](docs/LOCAL_WORKSPACE.md).
 
 A development metastore and control plane: intent, integrations, commit provenance, verification, agent context and delivery orchestration. It does not edit managed application source code or business data. See [responsibility boundary](docs/RESPONSIBILITY_BOUNDARY.md).
 
-Go modular monolith. One process serves the embedded UI, HTTP API and MCP; embedded bbolt or configured PostgreSQL stores state and audit history.
+Go modular monolith. The binary serves the embedded UI, HTTP API and MCP; SQLite or configured PostgreSQL stores state and audit history.
 
 One-command workspace setup: `./bin/release-control connect --url http://127.0.0.1:8090 --workspace /PATH/TO/PROJECT --product-id PRODUCT_ID`. Installs project MCP configuration, instructions and the handoff skill; see [agent connection](docs/AGENT_CONNECT.md).
 
@@ -136,14 +136,22 @@ The repository and this GHCR package are public. Docker can pull the image witho
 registry credentials. Pin a version tag or immutable digest for deployments.
 
 ```sh
+export RC_TOKEN="$(openssl rand -hex 32)"
 docker run -d --name ai-development-workspace \
+  --env RC_TOKEN \
   -p 127.0.0.1:8090:8080 \
   -v ai-development-workspace-data:/data \
   ghcr.io/deadnodes/ai-development-workspace:latest
+curl --fail http://127.0.0.1:8090/healthz
+curl --fail -H "Authorization: Bearer $RC_TOKEN" http://127.0.0.1:8090/api/state
 ```
 
-This starts embedded persistence. For a workspace mount or PostgreSQL, follow
-[the Docker guide](docs/DOCKER_LOCAL.md). Use a version tag or digest to pin deployments.
+This stores SQLite at `/data/rcp.sqlite` in the named volume. Keep `RC_TOKEN` in
+your secret store. The host port is loopback-only, but the server listens on all
+interfaces **inside** the container, so SQLite startup requires `RC_TOKEN` or OIDC.
+Use the token in the UI's Settings or as a bearer token for API and HTTP MCP
+clients. Use OIDC for individual user accounts. For workspace mounts or PostgreSQL, see
+[the Docker guide](docs/DOCKER_LOCAL.md). Pin a version tag or digest for deployments.
 
 The separate [local OCI publisher](docs/LOCAL_PUBLISHER.md) publishes an explicitly
 approved worker receipt to an exact registry repository and verifies the remote

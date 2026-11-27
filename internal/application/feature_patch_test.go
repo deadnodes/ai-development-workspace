@@ -192,7 +192,7 @@ func TestFeaturePatchLocalConcurrentCASReplayReopenRestore(t *testing.T) {
 	ctx := context.Background()
 	_, m, _ := featurePatchFixture(t)
 	path := filepath.Join(t.TempDir(), "rcp.db")
-	store, err := persistence.OpenLocal(ctx, path)
+	store, err := persistence.OpenSQLite(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestFeaturePatchLocalConcurrentCASReplayReopenRestore(t *testing.T) {
 	featurePatchState(t, st, "a2", "b2")
 	before := featurePatchFingerprint(st)
 	store.Close()
-	store, err = persistence.OpenLocal(ctx, path)
+	store, err = persistence.OpenSQLite(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestFeaturePatchLocalConcurrentCASReplayReopenRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "restore.db"))
+	restored, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "restore.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

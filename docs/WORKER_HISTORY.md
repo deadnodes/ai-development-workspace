@@ -29,11 +29,8 @@ provenance and no asserted Feature links, while remaining in Product history.
 No current branch, selection or newest revision repairs attribution. Recorded
 `SUCCEEDED` is not verified success, runtime health or deployment acceptance.
 
-PostgreSQL scopes, filters, counts and projects bounded fields before transfer,
-without global State reads. bbolt scans its existing JSON blob, skipping unrelated
-fields and report/recipe/credential payloads, retaining a bounded page; time cost
-may include repeated blob scans for relationships. Unsupported bounded readers
-fail closed. No storage migration or additional ledger is introduced.
+PostgreSQL and SQLite scope, filter, count and project bounded fields before
+transfer, without global State reads. Unsupported bounded readers fail closed.
 
 Existing `get_worker_job` execution/detail protocol is unchanged and remains
 an unbounded detail query, not a substitute for this history navigation.

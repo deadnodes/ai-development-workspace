@@ -3,10 +3,8 @@ package persistence
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/jackc/pgx/v5"
-	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 )
@@ -69,119 +67,13 @@ func (s *Store) ReadReferences(ctx context.Context, ids []string) (domain.State,
 	return st, tx.Commit(ctx)
 }
 
-func (s *LocalStore) ReadReferences(ctx context.Context, ids []string) (domain.State, error) {
-	s.lifecycle.RLock()
-	defer s.lifecycle.RUnlock()
-	if s.closed {
-		return domain.State{}, errors.New("local database is closed")
-	}
-	groups := map[string][]json.RawMessage{}
-	err := s.db.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(localBucket).Get(localStateKey)
-		return readLocalReferences(ctx, data, ids, groups, objectFields)
-	})
-	if err != nil {
-		return domain.State{}, err
-	}
-	return decodeStoredDocuments(groups)
-}
-
-func readLocalReferences(ctx context.Context, data []byte, ids []string, groups map[string][]json.RawMessage, scan func([]byte, func(string, []byte) error) error) error {
-	if len(data) == 0 {
-		return nil
-	}
-	collections := map[string][]byte{}
-	kinds, err := codecStateSchema()
-	if err != nil {
-		return err
-	}
-	if err := scan(data, func(kind string, raw []byte) error {
-		if _, ok := kinds[kind]; ok {
-			collections[kind] = raw
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	restricted := auth.RequiresExistingProduct(ctx)
-	visible := map[string]bool{}
-	if restricted {
-		err := historyArray(ctx, collections["products"], func(raw []byte) error {
-			var product domain.Product
-			if err := json.Unmarshal(raw, &product); err != nil {
-				return err
-			}
-			visible[product.ID] = productVisible(ctx, product)
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	}
-	needed := map[string]bool{}
-	seen := map[string]map[string]bool{}
-	for _, id := range ids {
-		needed[id] = true
-	}
-	for more := true; more; {
-		more = false
-		for kind, collection := range collections {
-			if seen[kind] == nil {
-				seen[kind] = map[string]bool{}
-			}
-			if err := historyArray(ctx, collection, func(raw []byte) error {
-				id := scopeText(raw, "id")
-				if !needed[id] && kind != "environment_bindings" {
-					return nil
-				}
-				product := scopeText(raw, "product_id")
-				if kind == "products" {
-					product = id
-				}
-				unscopedEvidence := false
-				if restricted && product == "" && kind == "events" {
-					switch scopeText(raw, "action") {
-					case "create_product", "restore_backup_evidence":
-						unscopedEvidence = true
-					case "restore_backup":
-						for _, key := range domain.RestoreEvidenceCollections() {
-							unscopedEvidence = unscopedEvidence || len(historyPath(raw, "data", "data", key)) > 0
-						}
-					}
-				}
-				if restricted && (product != "" && !visible[product] || unscopedEvidence) {
-					if needed[id] {
-						return domain.ErrReadScopeNotFound
-					}
-					return nil
-				}
-				if !seen[kind][id] {
-					groups[kind] = append(groups[kind], append(json.RawMessage(nil), raw...))
-					seen[kind][id] = true
-				}
-				if needed[id] && kind != "events" {
-					for _, edge := range []string{"environment_id", "composition_id", "candidate_operation_id", "operation_id", "parent_id"} {
-						if target := scopeText(raw, edge); target != "" && !needed[target] {
-							needed[target] = true
-							more = true
-						}
-					}
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-func referenceEvents(ctx context.Context, tx pgx.Tx, ids []string, known []domain.Event) ([]domain.Event, error) {
+func referenceEvents(ctx context.Context, tx stateTransaction, ids []string, known []domain.Event) ([]domain.Event, error) {
 	events := append([]domain.Event(nil), known...)
 	seen := map[string]bool{}
 	for _, e := range known {
 		seen[e.ID] = true
 	}
-	rows, err := tx.Query(ctx, referenceClosure+`SELECT document FROM events WHERE id IN(SELECT id FROM refs) ORDER BY sequence`, ids)
+	rows, err := tx.Query(ctx, tx.sql(referenceClosure, sqliteReferenceClosure)+`SELECT document FROM events WHERE id IN(SELECT id FROM refs) ORDER BY sequence`, ids)
 	if err != nil {
 		return nil, err
 	}

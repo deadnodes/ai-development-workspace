@@ -22,7 +22,7 @@ func TestRuntimeReportsStores(t *testing.T) {
 				reports = s
 				read = s.Read
 			} else {
-				s, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				s, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -93,7 +93,7 @@ func TestRuntimeReportsStorePagination(t *testing.T) {
 			if backend == "postgres" {
 				store = retrievalPostgres(t)
 			} else {
-				local, err := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				local, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if err != nil {
 					t.Fatal(err)
 				}

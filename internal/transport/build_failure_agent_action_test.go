@@ -81,7 +81,7 @@ func TestBuildFailureAgentHTTPMCPAndPersistentReopen(t *testing.T) {
 					}
 					return s
 				}
-				s, err := persistence.OpenLocal(ctx, path)
+				s, err := persistence.OpenSQLite(ctx, path)
 				if err != nil {
 					t.Fatal(err)
 				}

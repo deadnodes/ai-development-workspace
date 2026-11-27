@@ -1,5 +1,7 @@
 # Connect a project to the Control Plane
 
+For direct SQLite stdio without a running server or credentials, see [Standalone MCP setup](STANDALONE.md#on-demand-mcp-for-codex-and-claude).
+
 ## Agent setup in one pass
 
 Check Go 1.24+, Node.js, Git, tmux, Codex CLI and Claude Code. Build with

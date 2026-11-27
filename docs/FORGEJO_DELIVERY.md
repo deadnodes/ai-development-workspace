@@ -65,7 +65,7 @@ No API can modify this configuration. Restart is required for changes.
 Creation requires Product write permission; reads require Product read permission.
 List defaults to 25, maximum 100; cursors bind Product/environment/profile filters.
 The authenticated principal supplies attribution. Records and request receipts
-persist in bbolt and PostgreSQL through the shared State document codec.
+persist in SQLite and PostgreSQL through the shared State document codec.
 
 Dev `ci_gate.dev_mode` defaults to `observe`; `block` retains the former
 `PENDING_CHECKS` behavior. Observe makes one best-effort source CI request,

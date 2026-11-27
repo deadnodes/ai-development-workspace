@@ -34,7 +34,7 @@ func (d deploymentHandlerTransport) RoundTrip(r *http.Request) (*http.Response, 
 }
 func TestDeploymentHTTPMCPWithoutSockets(t *testing.T) {
 	ctx := context.Background()
-	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}

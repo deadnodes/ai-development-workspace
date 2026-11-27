@@ -182,8 +182,11 @@ func (s *Service) pollAutoBuilds(ctx context.Context, now time.Time) {
 	wg.Wait()
 }
 
-func newerAutoBuild(b, old domain.Build) bool {
-	return old.ID == "" || b.QueuedAt.After(old.QueuedAt) || b.QueuedAt.Equal(old.QueuedAt) && (b.CreatedAt.After(old.CreatedAt) || b.CreatedAt.Equal(old.CreatedAt) && b.ID > old.ID)
+func compareBuildAge(build, other domain.Build) int {
+	if order := build.QueuedAt.Compare(other.QueuedAt); order != 0 {
+		return order
+	}
+	return build.CreatedAt.Compare(other.CreatedAt)
 }
 func (s *Service) autoDeployBuilds(ctx context.Context) {
 	a := s.builds
@@ -217,7 +220,7 @@ func (s *Service) autoDeployBuilds(ctx context.Context) {
 		}
 		var newest domain.Build
 		for _, b := range st.Builds {
-			if b.ProductID == p.ProductID && b.ProfileID == p.ID && b.Branch == p.DefaultBranch && b.SourceSHA == h.seen && b.Status == "SUCCEEDED" && !b.RestoreQuarantined && newerAutoBuild(b, newest) {
+			if b.ProductID == p.ProductID && b.ProfileID == p.ID && b.Branch == p.DefaultBranch && b.SourceSHA == h.seen && b.Status == "SUCCEEDED" && !b.RestoreQuarantined && (newest.ID == "" || compareBuildAge(b, newest) >= 0) {
 				newest = b
 			}
 		}

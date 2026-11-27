@@ -52,7 +52,7 @@ func TestProdPromoterJWTRestrictionAndPublicRead(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	store, e := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	store, e := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -114,7 +114,7 @@ func TestProdPromoterClaimOutlivesHTTPWriteTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestProdPromoterClaimOutlivesHTTPWriteTimeout(t *testing.T) {
 }
 
 func TestPublicProdSignatureEndpointReturnsOnlyVerifiedData(t *testing.T) {
-	store, e := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	store, e := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "state.db"))
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -1,3 +1,5 @@
+//go:build !windows
+
 package workerrunner
 
 import (
@@ -75,7 +77,7 @@ func TestBoundaries(t *testing.T){if os.Getenv("RCP_FIXTURE_WORKER_TOKEN")!=""{t
 	if b, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("worker build %v %s", err, b)
 	}
-	store, err := persistence.OpenLocal(ctx, filepath.Join(root, "test.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(root, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

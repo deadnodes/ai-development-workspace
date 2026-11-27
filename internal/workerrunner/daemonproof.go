@@ -1,3 +1,5 @@
+//go:build !windows
+
 package workerrunner
 
 // This helper deliberately does not use net/http.Transport: a transport may

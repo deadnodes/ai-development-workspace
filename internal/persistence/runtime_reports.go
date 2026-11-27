@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/jackc/pgx/v5"
-	bolt "go.etcd.io/bbolt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
 	rr "releasecontrol/internal/runtimereport"
@@ -12,110 +11,6 @@ import (
 	"time"
 )
 
-var runtimeReportsBucket = []byte("runtime-reports")
-
-func (s *LocalStore) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Time) (changes rr.JournalResult, err error) {
-	s.lifecycle.RLock()
-	defer s.lifecycle.RUnlock()
-	err = s.db.Update(func(tx *bolt.Tx) error {
-		if e := ctx.Err(); e != nil {
-			return e
-		}
-		if auth.RequiresExistingProduct(ctx) {
-			visible, err := localProductAccess(ctx, tx, r.ProductID)
-			if err != nil {
-				return err
-			}
-			if !visible {
-				return domain.ErrReadScopeNotFound
-			}
-		}
-		b, e := tx.CreateBucketIfNotExists(runtimeReportsBucket)
-		if e != nil {
-			return e
-		}
-		key := []byte(rr.Scope(r.ProductID, r.EnvironmentID, r.Cluster))
-		var old rr.Snapshot
-		if raw := b.Get(key); raw != nil {
-			if e = json.Unmarshal(raw, &old); e != nil {
-				return e
-			}
-		}
-		prefix := []byte(rr.Scope(r.ProductID, r.EnvironmentID, ""))
-		cur := b.Cursor()
-		for k, v := cur.Seek(prefix); k != nil && strings.HasPrefix(string(k), string(prefix)); k, v = cur.Next() {
-			var snap rr.Snapshot
-			if e = json.Unmarshal(v, &snap); e != nil {
-				return e
-			}
-			if now.Sub(snap.AcceptedAt) < 20*time.Second {
-				return rr.ErrRateLimit
-			}
-		}
-		next, c, e := rr.Apply(old, r, now)
-		if e != nil {
-			return e
-		}
-		next.Journal, changes = rr.ReserveJournal(old.Journal, c, now)
-		raw, e := json.Marshal(next)
-		if e != nil {
-			return e
-		}
-		return b.Put(key, raw)
-	})
-	return
-}
-func (s *LocalStore) ReadRuntimeReports(ctx context.Context, p, e, c string, windows ...rr.ReadWindow) (out []rr.Cluster, err error) {
-	out = []rr.Cluster{}
-	s.lifecycle.RLock()
-	defer s.lifecycle.RUnlock()
-	err = s.db.View(func(tx *bolt.Tx) error {
-		if auth.RequiresExistingProduct(ctx) {
-			data := tx.Bucket(localBucket).Get(localStateKey)
-			hidden, err := hiddenLocalProducts(ctx, data)
-			if err != nil {
-				return err
-			}
-			if hidden[p] || historyRecord(ctx, data, "products", p, "") == nil {
-				return domain.ErrReadScopeNotFound
-			}
-		}
-		b := tx.Bucket(runtimeReportsBucket)
-		if b == nil {
-			return nil
-		}
-		prefix := rr.Scope(p, e, "")
-		cur := b.Cursor()
-		for k, v := cur.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, v = cur.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			var snap rr.Snapshot
-			if err := json.Unmarshal(v, &snap); err != nil {
-				return err
-			}
-			if c == "" || snap.Cluster.Cluster == c {
-				out = append(out, snap.Cluster)
-				if len(windows) > 0 {
-					out = rr.WindowClusters(out, windows...)
-					n := 0
-					for _, v := range out {
-						if len(v.Records) == 0 {
-							n++
-						} else {
-							n += len(v.Records)
-						}
-					}
-					if n >= windows[0].Limit {
-						break
-					}
-				}
-			}
-		}
-		return nil
-	})
-	return
-}
 func (s *Store) SaveRuntimeReport(ctx context.Context, r rr.Report, now time.Time) (rr.JournalResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

@@ -163,7 +163,7 @@ func privateMatrixEntries(t *testing.T) map[string]bool {
 
 func TestPrivateProductReadSurface(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

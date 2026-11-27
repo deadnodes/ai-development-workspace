@@ -3,6 +3,7 @@ package agentconnect
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -11,13 +12,18 @@ import (
 	"os"
 	"path/filepath"
 	"releasecontrol/internal/agentguide"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-func kitServer(t *testing.T, products int, token string) *httptest.Server {
+func kitServer(t *testing.T, products int, token string, kits ...agentguide.Kit) *httptest.Server {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
+	kit := agentguide.Get()
+	if len(kits) != 0 {
+		kit = kits[0]
+	}
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "fixture", Version: "1"}, nil)
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: "get_state"}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Limit int `json:"limit"`
@@ -43,7 +49,7 @@ func kitServer(t *testing.T, products int, token string) *httptest.Server {
 		}
 		switch r.URL.Path {
 		case "/api/agent-kit":
-			json.NewEncoder(w).Encode(agentguide.Get())
+			json.NewEncoder(w).Encode(kit)
 		case "/mcp":
 			if r.Method == http.MethodGet {
 				t.Error("discovery opened standalone SSE")
@@ -60,6 +66,35 @@ func kitServer(t *testing.T, products int, token string) *httptest.Server {
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func TestConnectAndDoctorAcceptCRLFSkills(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	kit := agentguide.Get()
+	kit.Skill.Content = strings.ReplaceAll(kit.Skill.Content, "\n", "\r\n")
+	kit.Skill.SHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(kit.Skill.Content)))
+	server := kitServer(t, 1, "", kit)
+	const path = ".agents/skills/rcp-handoff/SKILL.md"
+	writeFile(t, root, path, kit.Skill.Content)
+	options := Options{URL: server.URL, Workspace: root, Harness: "both"}
+	if _, err := Install(ctx, options); err != nil {
+		t.Fatal(err)
+	}
+	managed := string(readFile(t, root, path))
+	crlf := strings.ReplaceAll(managed, "\n", "\r\n")
+	writeFile(t, root, path, crlf)
+	if _, err := Install(ctx, options); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readFile(t, root, path)); got != crlf {
+		t.Fatal("reconnect rewrote line endings in an unchanged managed skill")
+	}
+	var out bytes.Buffer
+	_ = RunDoctor(ctx, []string{"--url", server.URL, "--workspace", root, "--product-id", "p0"}, &out)
+	if !strings.Contains(out.String(), "OK codex installed skill checksums") {
+		t.Fatalf("doctor did not accept a CRLF skill:\n%s", out.String())
+	}
 }
 func writeFile(t *testing.T, root, relative, content string) {
 	t.Helper()
@@ -121,7 +156,7 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 		}
 	}
 	info, _ := os.Stat(filepath.Join(root, "AGENTS.md"))
-	if info.Mode().Perm() != 0640 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0640 {
 		t.Fatal("existing file mode changed")
 	}
 	var mcpConfig, claudeSettings map[string]any
@@ -134,7 +169,7 @@ func TestConnectPreservesUnrelatedContentAndIsIdempotent(t *testing.T) {
 }
 
 func TestCodexNotifyOptionMergesProjectConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	server := kitServer(t, 1, "")
 	root := t.TempDir()
 	writeFile(t, root, ".codex/config.toml", "model = \"keep\"\n")
@@ -187,6 +222,9 @@ func TestConnectRejectsSymlinkEscapes(t *testing.T) {
 				os.WriteFile(target, []byte("untouched"), 0600)
 			}
 			if err := os.Symlink(target, filepath.Join(root, relative)); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
 				t.Fatal(err)
 			}
 			if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root}); err == nil {

@@ -15,7 +15,7 @@ import (
 )
 
 func TestDeploymentPersistenceBothStores(t *testing.T) {
-	for _, kind := range []string{"bbolt", "postgres"} {
+	for _, kind := range []string{"sqlite", "postgres"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			var open func() (interface {
@@ -23,14 +23,14 @@ func TestDeploymentPersistenceBothStores(t *testing.T) {
 				Update(context.Context, func(*domain.State) error) error
 				Close()
 			}, error)
-			if kind == "bbolt" {
+			if kind == "sqlite" {
 				path := filepath.Join(t.TempDir(), "state.db")
 				open = func() (interface {
 					Read(context.Context) (domain.State, error)
 					Update(context.Context, func(*domain.State) error) error
 					Close()
 				}, error) {
-					return OpenLocal(ctx, path)
+					return OpenSQLite(ctx, path)
 				}
 			} else {
 				dsn := os.Getenv("TEST_DATABASE_URL")

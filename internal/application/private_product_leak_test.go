@@ -197,7 +197,7 @@ type privateBoundedFixture interface {
 }
 
 // The application memory fake has no bounded reader implementation. The immutable
-// fixture is mirrored to a bbolt adapter only for those interfaces, not for State
+// fixture is mirrored to a SQLite adapter only for those interfaces, not for State
 // or reference authorization (which retain their real in-memory code paths).
 type privateMemoryFixture struct {
 	*memoryStore
@@ -243,9 +243,9 @@ func privatePostgresFixture(t *testing.T) *persistence.Store {
 	return store
 }
 
-func privateLocalFixture(t *testing.T) *persistence.LocalStore {
+func privateLocalFixture(t *testing.T) *persistence.SQLiteStore {
 	t.Helper()
-	store, err := persistence.OpenLocal(context.Background(), filepath.Join(t.TempDir(), "privacy.db"))
+	store, err := persistence.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "privacy.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestPrivateProductReadMatrix(t *testing.T) {
 		runGit("", "-C", path, "update-ref", "refs/heads/main", head)
 		runGit("", "-C", path, "remote", "add", "origin", "https://example.invalid/fixture/"+product)
 	}
-	for _, backend := range []string{"memory", "bbolt", "postgres"} {
+	for _, backend := range []string{"memory", "sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			var store privateFixtureStore
 			if backend == "postgres" {
@@ -546,7 +546,24 @@ func checkPrivateAggregateReads(t *testing.T, service *Service, ctx context.Cont
 }
 
 func TestPrivateProductWriteMatrix(t *testing.T) {
-	store := &memoryStore{state: domain.EmptyState()}
+	for _, backend := range []string{"memory", "sqlite", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			var store Store
+			switch backend {
+			case "memory":
+				store = &memoryStore{state: domain.EmptyState()}
+			case "sqlite":
+				store = privateLocalFixture(t)
+			case "postgres":
+				store = privatePostgresFixture(t)
+			}
+			runPrivateWriteMatrix(t, store)
+		})
+	}
+}
+
+func runPrivateWriteMatrix(t *testing.T, store Store) {
+	t.Helper()
 	service := New(store)
 	owner := userCtx("A", "human", "", "member")
 	for _, c := range []domain.Command{{Action: "create_product", ID: "P", Data: map[string]any{"name": "Private", "visibility": "private"}}, {Action: "create_feature", ID: "PF", ProductID: "P", Data: map[string]any{"title": "Secret", "goal": "secret"}}, {Action: "create_integration", ID: "PI", FeatureID: "PF", Data: map[string]any{"title": "Secret", "objective": "secret"}}} {

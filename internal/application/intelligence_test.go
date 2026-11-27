@@ -422,7 +422,7 @@ func TestIntelligenceFailureStatusesPersistBackupAndRestore(t *testing.T) {
 			_, seed, f := intelligenceFixture(t, map[string]int{"budget": 1, "stale": 10, "uncertain": 10}[reason])
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "state.db")
-			store, e := persistence.OpenLocal(ctx, path)
+			store, e := persistence.OpenSQLite(ctx, path)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -468,7 +468,7 @@ func TestIntelligenceFailureStatusesPersistBackupAndRestore(t *testing.T) {
 				t.Fatal(e)
 			}
 			store.Close()
-			store, e = persistence.OpenLocal(ctx, path)
+			store, e = persistence.OpenSQLite(ctx, path)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -477,7 +477,7 @@ func TestIntelligenceFailureStatusesPersistBackupAndRestore(t *testing.T) {
 			if e != nil || domain.ValidateStateStatuses(state) != nil {
 				t.Fatal("persisted failure state cannot reopen", e)
 			}
-			destination, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "restored.db"))
+			destination, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "restored.db"))
 			if e != nil {
 				t.Fatal(e)
 			}

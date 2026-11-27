@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestBothSkillsAdoptIdenticalRawAndRejectUnmanagedDifferences(t *testing.T) 
 						t.Fatal("canonical adoption lacks managed marker")
 					}
 					info, _ := os.Stat(filepath.Join(root, path))
-					if info.Mode().Perm() != 0640 {
+					if runtime.GOOS != "windows" && info.Mode().Perm() != 0640 {
 						t.Fatal("adoption changed mode")
 					}
 					if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root, ProductID: "p0"}); err != nil {
@@ -69,7 +70,7 @@ func TestBothSkillsAdoptIdenticalRawAndRejectUnmanagedDifferences(t *testing.T) 
 }
 
 func TestProjectHarnessConfigsAndGlobalHookAreInstalled(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	server := kitServer(t, 1, "")
 	workspace := t.TempDir()
 	home, _ := os.UserHomeDir()
@@ -110,7 +111,7 @@ func TestProjectHarnessConfigsAndGlobalHookAreInstalled(t *testing.T) {
 		t.Fatal("invalid hook config")
 	}
 	info, _ := os.Stat(configPath)
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("hook config is not private")
 	}
 	if _, err = os.Stat(filepath.Join(home, ".local/share/release-control/hooks/rcp-turn-end.sh")); err != nil {
@@ -122,7 +123,7 @@ func TestProjectHarnessConfigsAndGlobalHookAreInstalled(t *testing.T) {
 }
 
 func TestBothSkillIdentitiesAndChecksumsValidatedBeforeWrites(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	cases := []struct {
 		name      string
 		change    func(*agentguide.Kit)
@@ -200,7 +201,7 @@ func TestAllProjectPathsRollbackAtEveryReplacement(t *testing.T) {
 					t.Fatal("partial project install survived", path)
 				}
 				info, _ := os.Stat(filepath.Join(directory, path))
-				if info.Mode().Perm() != 0640 {
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0640 {
 					t.Fatal("rollback changed mode")
 				}
 			}
@@ -249,6 +250,9 @@ func TestSkillTargetSymlinkRefusesAllWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(outside, filepath.Join(root, path)); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
 			t.Fatal(err)
 		}
 		if _, err := Install(context.Background(), Options{URL: server.URL, Workspace: root, ProductID: "p0"}); err == nil {

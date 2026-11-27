@@ -22,7 +22,7 @@ func TestRuntimeFreshnessStores(t *testing.T) {
 			if backend == "postgres" {
 				store = retrievalPostgres(t)
 			} else {
-				s, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				s, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -105,7 +105,7 @@ func TestRuntimeObservationScopedDeletionStores(t *testing.T) {
 			if backend == "postgres" {
 				store = retrievalPostgres(t)
 			} else {
-				s, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				s, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if e != nil {
 					t.Fatal(e)
 				}

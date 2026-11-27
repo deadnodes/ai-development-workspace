@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package registryobserver performs bounded, GET-only observations. Its output
 // is a scoped worker attestation, never a complete registry inventory.
 package registryobserver

@@ -186,7 +186,7 @@ builds or arbitrary Dockerfile support is implied.
 ## Verification
 
 Normal checks include synthetic corruption/bounds/provenance/replay/reopen tests
-on bbolt/PostgreSQL. Real runtime tests are explicit opt-in on an approved native
+on SQLite/PostgreSQL. Real runtime tests are explicit opt-in on an approved native
 Linux Docker engine with the two pinned images cached:
 
 ```sh
@@ -230,7 +230,7 @@ cleanup. Uncertain cleanup retains that temporary journal for inspection.
 The separate `native-docker` upstream CI job runs worker isolation/lifecycle,
 late CREATE/START and cleanup recovery, source fetching, composition, historical
 main candidate, grouped Dev GitOps, protected API/checks/publication and registry
-observation fixtures on `ubuntu-24.04` with isolated bbolt/PostgreSQL stores.
+observation fixtures on `ubuntu-24.04` with isolated SQLite/PostgreSQL stores.
 It runs only trusted upstream push/manual events, with read-only repository
 permissions and without provider/registry credentials or QEMU. Image publication
 waits for both ordinary checks and this native acceptance job. Registries are

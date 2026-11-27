@@ -23,7 +23,7 @@ func TestWorkerHistoryStrictInput(t *testing.T) {
 }
 func TestWorkerHistoryHTTPAndMCPProjection(t *testing.T) {
 	ctx := context.Background()
-	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "db"))
+	store, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "db"))
 	if e != nil {
 		t.Fatal(e)
 	}

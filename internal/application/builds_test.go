@@ -433,7 +433,7 @@ func (f emptyBuildListing) ListRuns(context.Context, buildconfig.Connection, str
 func TestBuildPoolAdmissionIndependentOfWorkflowOccupancy(t *testing.T) {
 	for _, capacity := range []int{1, 2} {
 		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
-			s, _, f, r := buildFixture(t)
+			s, store, f, r := buildFixture(t)
 			c := buildConfig()
 			c.Pools[0].MaxInFlight = capacity
 			p := c.Profiles[0]
@@ -449,6 +449,9 @@ func TestBuildPoolAdmissionIndependentOfWorkflowOccupancy(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
+			store.state.Builds[1].QueuedAt = store.state.Builds[0].QueuedAt
+			b.ID = strings.Repeat("0", 32)
+			store.state.Builds[1].ID = b.ID
 			tick(t, s)
 			if f.dispatches != capacity {
 				t.Fatalf("capacity=%d dispatched=%d", capacity, f.dispatches)

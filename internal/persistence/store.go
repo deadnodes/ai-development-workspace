@@ -20,7 +20,11 @@ import (
 var migrations embed.FS
 
 type Store struct {
-	pool          *pgxpool.Pool
+	pool *pgxpool.Pool
+	stateSnapshots
+}
+
+type stateSnapshots struct {
 	mu            sync.Mutex
 	cached        *stateCache
 	journal       *journalCache
@@ -120,22 +124,26 @@ func (s *Store) View(ctx context.Context, fn func(*domain.State) error) error {
 		return err
 	}
 	defer tx.Rollback(context.Background())
+	return s.stateSnapshots.view(ctx, postgresTransaction{tx}, fn)
+}
+
+func (s *stateSnapshots) view(ctx context.Context, tx stateTransaction, fn func(*domain.State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var revision int64
-	if err = tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1").Scan(&revision); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT revision FROM control_revision WHERE id=1").Scan(&revision); err != nil {
 		return err
 	}
 	if s.journal != nil && revision < s.journal.revision {
 		s.journal = nil
 		s.viewState = nil
 	}
-	_, err = s.refreshJournal(ctx, tx, revision)
-	if err != nil {
+	if _, err := s.refreshJournal(ctx, tx, revision); err != nil {
 		return err
 	}
 	if s.viewState == nil || s.viewRevision != revision || len(s.viewState.Events) != len(s.journal.events) {
 		var st domain.State
+		var err error
 		if s.cached != nil && s.cached.revision == revision {
 			st = s.cached.state
 		} else {
@@ -169,7 +177,7 @@ func (s *Store) View(ctx context.Context, fn func(*domain.State) error) error {
 		s.viewState = &st
 		s.viewRevision = revision
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	borrowed := *s.viewState
@@ -192,7 +200,7 @@ type journalCache struct {
 	events        []domain.Event
 }
 
-func (s *Store) refreshJournal(ctx context.Context, tx pgx.Tx, revision int64) (int64, error) {
+func (s *stateSnapshots) refreshJournal(ctx context.Context, tx stateTransaction, revision int64) (int64, error) {
 	var max int64
 	if err := tx.QueryRow(ctx, "SELECT COALESCE(max(sequence),0) FROM events").Scan(&max); err != nil {
 		return 0, err
@@ -246,10 +254,7 @@ func (s *Store) refreshJournal(ctx context.Context, tx pgx.Tx, revision int64) (
 	s.journal = &journalCache{revision: revision, max: max, events: append(old.events, added...)}
 	return max, nil
 }
-func readRecords(ctx context.Context, tx pgx.Tx) (domain.State, error) {
-	return loadRecords(ctx, tx, nil)
-}
-func loadRecords(ctx context.Context, tx pgx.Tx, positions map[string]int) (domain.State, error) {
+func loadRecords(ctx context.Context, tx stateTransaction, positions map[string]int) (domain.State, error) {
 	st := domain.EmptyState()
 	groups := map[string][]json.RawMessage{}
 	rows, e := tx.Query(ctx, "SELECT kind, document, id, position FROM records ORDER BY kind,position,id")
@@ -280,44 +285,6 @@ func loadRecords(ctx context.Context, tx pgx.Tx, positions map[string]int) (doma
 		return st, e
 	}
 	return st, nil
-}
-func read(ctx context.Context, tx pgx.Tx) (domain.State, error) {
-	st, e := readRecords(ctx, tx)
-	if e != nil {
-		return st, e
-	}
-	if e = readJournal(ctx, tx, &st); e != nil {
-		return st, e
-	}
-	return st, nil
-}
-func readJournal(ctx context.Context, tx pgx.Tx, st *domain.State) error {
-	rows, e := tx.Query(ctx, "SELECT document FROM events ORDER BY sequence")
-	if e != nil {
-		return e
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var b []byte
-		if e = rows.Scan(&b); e != nil {
-			return e
-		}
-		var event domain.Event
-		if e = json.Unmarshal(b, &event); e != nil {
-			return e
-		}
-		st.Events = append(st.Events, event)
-	}
-	if e = rows.Err(); e != nil {
-		return e
-	}
-	if e = domain.ValidateRegistryInventories(*st); e != nil {
-		return e
-	}
-	if e = domain.ValidateArtifactPins(*st); e != nil {
-		return e
-	}
-	return nil
 }
 func documents(st domain.State) (map[string][]json.RawMessage, error) { return codecDocuments(st) }
 

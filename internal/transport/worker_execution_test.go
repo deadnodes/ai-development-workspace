@@ -23,7 +23,7 @@ const testWorkerCredential = "fixture-worker-token-000000000000000000001"
 func workerTransportFixture(t *testing.T, productVisibility ...string) (*application.Service, *workerconfig.Authority, *httptest.Server) {
 	t.Helper()
 	ctx := context.Background()
-	store, e := persistence.OpenLocal(ctx, filepath.Join(t.TempDir(), "worker.db"))
+	store, e := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "worker.db"))
 	if e != nil {
 		t.Fatal(e)
 	}

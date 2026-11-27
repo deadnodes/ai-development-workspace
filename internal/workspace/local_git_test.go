@@ -18,7 +18,7 @@ func localFixture(t *testing.T) (string, string, func(...string) string) {
 	run := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", path}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
 		b, e := cmd.CombinedOutput()
 		if e != nil {
 			t.Fatalf("git %v: %s: %v", args, b, e)

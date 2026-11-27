@@ -22,7 +22,7 @@ func TestOperationRetentionStores(t *testing.T) {
 				pg = retrievalPostgres(t)
 				store = pg
 			} else {
-				local, err := OpenLocal(ctx, filepath.Join(t.TempDir(), "state.db"))
+				local, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "state.db"))
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -32,9 +32,9 @@ const agentsEnd = "<!-- END release-control managed agent instructions -->"
 const skillMarker = "<!-- release-control managed skill -->\n"
 
 type Options struct {
-	URL, Workspace, ProductID, TokenEnv, Name, Profile, Executable, Harness string
-	CodexNotify                                                             bool
-	CodexAutoApprove                                                        bool
+	URL, Workspace, ProductID, TokenEnv, Name, Profile, Executable, Harness, DataPath string
+	CodexNotify                                                                       bool
+	CodexAutoApprove                                                                  bool
 }
 type Binding struct {
 	URL        string `json:"url"`
@@ -53,6 +53,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	var o Options
 	flags := flag.NewFlagSet("release-control connect", flag.ContinueOnError)
 	flags.SetOutput(out)
+	flags.StringVar(&o.DataPath, "data", "", "local SQLite file (instead of --url)")
 	flags.StringVar(&o.URL, "url", "", "Control Plane base URL")
 	flags.StringVar(&o.Workspace, "workspace", "", "project directory")
 	flags.StringVar(&o.ProductID, "product-id", "", "Product ID (optional only when server has one Product)")
@@ -79,6 +80,10 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if o.DataPath != "" {
+		_, err = fmt.Fprintf(out, "Installed local SQLite MCP configuration for %s. No server or token is needed.\n", o.Harness)
+		return err
+	}
 	_, err = fmt.Fprintf(out, "Connected project to Product %s at %s.\nInstalled MCP configuration and all three skills for %s, plus turn-end hook wiring and AGENTS.md instructions.\n", binding.ProductID, binding.URL, o.Harness)
 	if err == nil && (o.Harness == "codex" || o.Harness == "both") {
 		_, err = fmt.Fprintf(out, "Codex turn-end hook line: %s\n", codexNotifyLine(o))
@@ -88,6 +93,9 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 
 func Install(ctx context.Context, o Options) (Binding, error) {
 	var binding Binding
+	if o.DataPath != "" {
+		return installLocal(ctx, o)
+	}
 	endpoint, err := secureEndpoint(o.URL)
 	if err != nil {
 		return binding, err
@@ -143,7 +151,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		return binding, errors.New("MCP executable must be an absolute path")
 	}
 	info, statErr := os.Stat(o.Executable)
-	if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+	if statErr != nil || !executableFile(info) {
 		return binding, errors.New("MCP executable must be an existing executable file")
 	}
 	absolute, err := filepath.Abs(o.Workspace)
@@ -215,7 +223,7 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		if expected.skill.Name != expected.name || expected.skill.Content == "" || expected.skill.SHA256 != hex.EncodeToString(digest[:]) {
 			return binding, errors.New("agent kit identity or checksum is invalid")
 		}
-		front, ok := strings.CutPrefix(expected.skill.Content, "---\n")
+		front, ok := strings.CutPrefix(skillLF(expected.skill.Content), "---\n")
 		front, _, closed := strings.Cut(front, "\n---\n")
 		var identity struct {
 			Name string `yaml:"name"`
@@ -311,10 +319,14 @@ func Install(ctx context.Context, o Options) (Binding, error) {
 		skill agentguide.Skill
 	}{{1, agentKit.Skill}, {4, agentKit.DeliverySkill}, {5, agentKit.Skill}, {6, agentKit.DeliverySkill}, {7, agentKit.ExecutionSkill}, {8, agentKit.ExecutionSkill}} {
 		plan := &plans[target.index]
-		if plan.exists && !bytes.HasSuffix(plan.before, []byte(skillMarker)) && !bytes.Equal(plan.before, []byte(target.skill.Content)) {
+		existing := skillLF(string(plan.before))
+		if plan.exists && !strings.HasSuffix(existing, skillMarker) && existing != skillLF(target.skill.Content) {
 			return Binding{}, fmt.Errorf("unmanaged %s skill exists; no files changed", target.skill.Name)
 		}
 		plan.after = installedSkill(target.skill.Content)
+		if plan.exists && existing == string(plan.after) {
+			plan.after = plan.before
+		}
 	}
 	// Claude Code reads project MCP servers from .mcp.json. Decode and merge the
 	// JSON object so unrelated servers and settings survive reconnects.
@@ -412,8 +424,8 @@ func appendBlock(content, start, end, body string) string {
 	return content + start + "\n" + strings.TrimRight(body, "\n") + "\n" + end + "\n"
 }
 
-// installedSkill is the exact file content connect writes for a managed skill;
-// doctor compares installed files against the same bytes.
+func skillLF(content string) string { return strings.ReplaceAll(content, "\r\n", "\n") }
+
 func installedSkill(content string) []byte {
-	return []byte(strings.TrimRight(content, "\n") + "\n\n" + skillMarker)
+	return []byte(strings.TrimRight(skillLF(content), "\n") + "\n\n" + skillMarker)
 }

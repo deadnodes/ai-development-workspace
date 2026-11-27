@@ -70,7 +70,7 @@ func TestContextRetrievalStores(t *testing.T) {
 			if backend == "postgres" {
 				store = retrievalPostgres(t)
 			} else {
-				s, e := OpenLocal(ctx, filepath.Join(t.TempDir(), "memory.db"))
+				s, e := OpenSQLite(ctx, filepath.Join(t.TempDir(), "memory.db"))
 				if e != nil {
 					t.Fatal(e)
 				}

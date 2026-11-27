@@ -72,10 +72,7 @@ O(journal) output/decode cost and are not sub-second endpoints.
 Migration 005 adds a partial write-provenance sequence index and a
 product/feature/sequence history index. There is one current schema.
 
-The bbolt backend is unchanged: its isolated, transactional JSON blob remains
-correct, including product deletion and rollback, but reads and writes retain
-O(blob) serialization costs. It does not receive the PostgreSQL cache or scoped
-mutation implementation.
+These measurements concern PostgreSQL. SQLite now shares the scoped mutation and record-cache implementation; it was not measured in these benchmarks.
 
 ## Reproduction
 
@@ -183,7 +180,7 @@ setup/verification context instead of 90 seconds under race instrumentation.
 Two recovery tests hit wall-clock budgets under concurrent race load. The
 25-second production worker-call deadline test passed when rerun serially, with
 that deadline unchanged. The long retained-root settlement test spent more than
-five seconds in bbolt fixture setup even in isolation. Only that test opts into a
+five seconds in the former local fixture setup even in isolation. Only that test opts into a
 30-second native-worker fixture lease; other expiry/fence tests keep five seconds.
 All eight local/PostgreSQL settlement modes passed across the original execution
 and race-enabled targeted reruns. No production timeout or lease policy changed.

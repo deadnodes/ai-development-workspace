@@ -33,7 +33,7 @@ func (f *transportModelFixture) Complete(_ context.Context, _ string, _ any) (js
 func TestIntelligenceActualHTTPMCPAndLocalRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "intelligence.db")
-	store, e := persistence.OpenLocal(ctx, path)
+	store, e := persistence.OpenSQLite(ctx, path)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -89,7 +89,7 @@ func TestIntelligenceActualHTTPMCPAndLocalRestart(t *testing.T) {
 	server.Close()
 	store.Close()
 	// Actual persisted queue survives closing and reopening the local database.
-	store, e = persistence.OpenLocal(ctx, path)
+	store, e = persistence.OpenSQLite(ctx, path)
 	if e != nil {
 		t.Fatal(e)
 	}

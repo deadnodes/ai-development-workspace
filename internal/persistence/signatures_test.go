@@ -12,7 +12,7 @@ import (
 func TestSignaturePersistenceLocal(t *testing.T) {
 	ctx := context.Background()
 	file := filepath.Join(t.TempDir(), "state.db")
-	s, e := OpenLocal(ctx, file)
+	s, e := OpenSQLite(ctx, file)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -23,7 +23,7 @@ func TestSignaturePersistenceLocal(t *testing.T) {
 		t.Fatal(e)
 	}
 	s.Close()
-	s, e = OpenLocal(ctx, file)
+	s, e = OpenSQLite(ctx, file)
 	if e != nil {
 		t.Fatal(e)
 	}

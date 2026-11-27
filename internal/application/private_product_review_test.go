@@ -23,7 +23,7 @@ import (
 func privateReviewStores(t *testing.T, run func(*testing.T, Store)) {
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { run(t, &memoryStore{domain.EmptyState()}) })
-	t.Run("bbolt", func(t *testing.T) { run(t, privateLocalFixture(t)) })
+	t.Run("sqlite", func(t *testing.T) { run(t, privateLocalFixture(t)) })
 	t.Run("postgres", func(t *testing.T) { run(t, privatePostgresFixture(t)) })
 }
 

@@ -66,7 +66,7 @@ func TestUIBudgetIncludesAppendedHistory(t *testing.T) {
 
 func TestLocalUIStatePinsSelectedFeatureOutsideNavigationWindow(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenLocal(ctx, filepath.Join(t.TempDir(), "ui.db"))
+	store, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "ui.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

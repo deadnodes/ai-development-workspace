@@ -1,3 +1,5 @@
+//go:build !windows
+
 package workerrunner
 
 import (
@@ -173,7 +175,7 @@ func openSourceFixtureStore(t *testing.T, pg bool) func() sourceFixtureStore {
 	if !pg {
 		path := filepath.Join(t.TempDir(), "state.db")
 		return func() sourceFixtureStore {
-			s, e := persistence.OpenLocal(ctx, path)
+			s, e := persistence.OpenSQLite(ctx, path)
 			if e != nil {
 				t.Fatal(e)
 			}
