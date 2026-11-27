@@ -3,6 +3,9 @@ package workspace
 import (
 	"net/url"
 	"strings"
+	"unicode"
+
+	"releasecontrol/internal/domain"
 )
 
 // RemoteIdentity equates SSH/HTTPS clone spellings, not merely directory names.
@@ -26,7 +29,7 @@ func RemoteIdentity(raw string) string {
 		host += ":" + port
 	}
 	path := strings.TrimSuffix(strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git"), "/")
-	if path == "" || strings.Contains(path, "//") {
+	if path == "" || strings.Contains(path, "//") || strings.ContainsAny(path, "@?#\\") || strings.ContainsFunc(path, unicode.IsControl) || domain.CodeHasSecret(host+"/"+path) {
 		return ""
 	}
 	for _, p := range strings.Split(path, "/") {
@@ -38,4 +41,30 @@ func RemoteIdentity(raw string) string {
 		path = strings.ToLower(path)
 	}
 	return host + "/" + path
+}
+
+func CloneURLHasCredentials(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if strings.ContainsAny(raw, "?#") {
+		return true
+	}
+	if strings.HasPrefix(raw, "ssh://git@") || strings.HasPrefix(raw, "git@") && !strings.Contains(raw, "://") {
+		_, tail, _ := strings.Cut(raw, "@")
+		return strings.Contains(tail, "@") || domain.CodeHasSecret(tail)
+	}
+	if domain.CodeHasSecret(raw) {
+		return true
+	}
+	if _, tail, ok := strings.Cut(raw, "://"); ok {
+		authority, _, _ := strings.Cut(tail, "/")
+		return strings.Contains(authority, "@")
+	}
+	return strings.Contains(raw, "@")
+}
+
+func CodeRepositoryIdentity(raw string) string {
+	if len(raw) > domain.CodeRepositoryURLBytes {
+		return ""
+	}
+	return RemoteIdentity(raw)
 }

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -111,6 +112,14 @@ func instructions(root, path string) (*Document, error) {
 // repositories when the workspace itself is a checkout. Traversal is bounded.
 // Hashes identify the exact returned instruction bytes, including truncation.
 func Scan(ctx context.Context, root string) (Result, error) {
+	return scanWorkspace(ctx, root, true, MaxEntries)
+}
+
+func ScanIndexCheckouts(ctx context.Context, root string) (Result, error) {
+	return scanWorkspace(ctx, root, false, MaxEntries)
+}
+
+func scanWorkspace(ctx context.Context, root string, withDocuments bool, budget int) (Result, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return Result{}, err
@@ -126,49 +135,21 @@ func Scan(ctx context.Context, root string) (Result, error) {
 		return Result{}, fmt.Errorf("workspace root must be an existing directory")
 	}
 	result := Result{Root: real, Repositories: []Repository{}}
-	result.Agents, err = instructions(real, filepath.Join(real, "AGENTS.md"))
-	if err != nil {
-		result.Warnings = append(result.Warnings, "workspace AGENTS.md unavailable or unsafe")
+	if withDocuments {
+		result.Agents, err = instructions(real, filepath.Join(real, "AGENTS.md"))
+		if err != nil {
+			result.Warnings = append(result.Warnings, "workspace AGENTS.md unavailable or unsafe")
+		}
 	}
 	skip := map[string]bool{"node_modules": true, "vendor": true, ".venv": true, "venv": true, ".cache": true, ".local": true, ".git": true, "__pycache__": true}
-	visited := 0
-	observed := map[string]bool{}
-	visit := func(path string, entry fs.DirEntry, walkErr error) error {
+	type directory struct {
+		path  string
+		depth int
+	}
+	observe := func(path string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if walkErr != nil {
-			rel, _ := filepath.Rel(real, path)
-			result.Warnings = append(result.Warnings, filepath.ToSlash(rel)+": unreadable path")
-			return nil
-		}
-		visited++
-		if visited > MaxEntries {
-			result.Truncated = true
-			result.Warnings = append(result.Warnings, "workspace entry limit reached")
-			return filepath.SkipAll
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		if !entry.IsDir() {
-			return nil
-		}
-		if path != real && skip[entry.Name()] {
-			return filepath.SkipDir
-		}
-		relative, _ := filepath.Rel(real, path)
-		if relative != "." && len(strings.Split(relative, string(filepath.Separator))) > MaxDepth {
-			if !result.Truncated {
-				result.Warnings = append(result.Warnings, "workspace depth limit reached")
-			}
-			result.Truncated = true
-			return filepath.SkipDir
-		}
-		if observed[path] {
-			return nil
-		}
-		observed[path] = true
 		marker := filepath.Join(path, ".git")
 		if _, err := os.Lstat(marker); os.IsNotExist(err) {
 			return nil
@@ -182,7 +163,7 @@ func Scan(ctx context.Context, root string) (Result, error) {
 		}
 		rel, _ := filepath.Rel(real, path)
 		repo := Repository{RelativePath: filepath.ToSlash(rel), Name: filepath.Base(path)}
-		if err := safeGitDirectory(real, marker); err != nil {
+		if err := safeGitDirectory(ctx, real, marker); err != nil {
 			repo.Errors = append(repo.Errors, "Git metadata is outside workspace or unsafe")
 			result.Repositories = append(result.Repositories, repo)
 			return nil
@@ -190,49 +171,113 @@ func Scan(ctx context.Context, root string) (Result, error) {
 		if value, e := git(ctx, path, "symbolic-ref", "--quiet", "--short", "HEAD"); e == nil {
 			repo.Branch = value
 		}
-		if value, e := git(ctx, path, "rev-parse", "--verify", "HEAD"); e == nil && commitPattern.MatchString(value) {
-			repo.Commit = value
-		} else {
-			repo.Errors = append(repo.Errors, "HEAD commit unavailable (repository may be empty)")
-		}
 		if value, e := git(ctx, path, "config", "--local", "--no-includes", "--get", "remote.origin.url"); e == nil {
-			if clean, ok := sanitizeRemote(value); ok {
+			if clean, ok := sanitizeRemote(value); ok && RemoteIdentity(clean) != "" {
 				repo.RemoteURL = clean
 			} else {
 				repo.Errors = append(repo.Errors, "origin remote URL is unsupported or unsafe")
 			}
 		}
-		repo.Agents, err = instructions(real, filepath.Join(path, "AGENTS.md"))
-		if err != nil {
-			repo.Errors = append(repo.Errors, "repository AGENTS.md unavailable or unsafe")
+		if withDocuments {
+			if value, e := git(ctx, path, "rev-parse", "--verify", "HEAD"); e == nil && commitPattern.MatchString(value) {
+				repo.Commit = value
+			} else {
+				repo.Errors = append(repo.Errors, "HEAD commit unavailable (repository may be empty)")
+			}
+			repo.Agents, err = instructions(real, filepath.Join(path, "AGENTS.md"))
+			if err != nil {
+				repo.Errors = append(repo.Errors, "repository AGENTS.md unavailable or unsafe")
+			}
 		}
 		result.Repositories = append(result.Repositories, repo)
 		return nil
 	}
-	// Observe the root and its direct repositories before descending into large
-	// temporary worktrees/vendor trees, which can exhaust the bounded traversal.
-	if err = visit(real, fs.FileInfoToDirEntry(info), nil); err != nil {
+	if err := observe(real); err != nil {
 		return result, err
 	}
-	children, e := os.ReadDir(real)
-	if e != nil {
-		return result, e
-	}
-	for _, child := range children {
-		if !child.IsDir() || skip[child.Name()] {
-			continue
+	budget--
+	pending := []directory{{real, 0}}
+	for len(pending) != 0 {
+		current := pending[0]
+		pending[0] = directory{}
+		pending = pending[1:]
+		err := readWorkspaceDir(ctx, current.path, &budget, func(child fs.DirEntry) error {
+			if !child.IsDir() || skip[child.Name()] {
+				return nil
+			}
+			if current.depth == MaxDepth {
+				if !result.Truncated {
+					result.Warnings = append(result.Warnings, "workspace depth limit reached")
+				}
+				result.Truncated = true
+				return nil
+			}
+			path := filepath.Join(current.path, child.Name())
+			if err := observe(path); err != nil {
+				return err
+			}
+			pending = append(pending, directory{path, current.depth + 1})
+			return nil
+		})
+		if err == filepath.SkipAll {
+			if !result.Truncated {
+				result.Warnings = append(result.Warnings, "workspace entry limit reached")
+			}
+			result.Truncated = true
+			break
 		}
-		if e = visit(filepath.Join(real, child.Name()), child, nil); e != nil && e != filepath.SkipDir {
-			return result, e
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if err != nil {
+			if current.depth == 0 {
+				return result, err
+			}
+			rel, _ := filepath.Rel(real, current.path)
+			result.Warnings = append(result.Warnings, filepath.ToSlash(rel)+": unreadable path")
 		}
 	}
-	err = filepath.WalkDir(real, visit)
-	return result, err
+	slices.SortFunc(result.Repositories, func(left, right Repository) int {
+		if leftDepth, rightDepth := strings.Count(left.RelativePath, "/"), strings.Count(right.RelativePath, "/"); leftDepth != rightDepth {
+			return leftDepth - rightDepth
+		}
+		return strings.Compare(left.RelativePath, right.RelativePath)
+	})
+	return result, ctx.Err()
+}
+
+func readWorkspaceDir(ctx context.Context, path string, budget *int, visit func(fs.DirEntry) error) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entries, err := dir.ReadDir(min(256, max(1, *budget+1)))
+		for _, entry := range entries {
+			if *budget <= 0 {
+				return filepath.SkipAll
+			}
+			*budget -= 1
+			if err := visit(entry); err != nil {
+				return err
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 var commitPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
-func safeGitDirectory(root, marker string) error {
+func safeGitDirectory(ctx context.Context, root, marker string) error {
 	if !noLinkPath(root, marker) {
 		return fmt.Errorf("unsafe marker")
 	}
@@ -272,7 +317,7 @@ func safeGitDirectory(root, marker string) error {
 			return fmt.Errorf("unsafe metadata")
 		}
 		if name == "refs" {
-			if err := safeRefs(p); err != nil {
+			if err := safeRefs(ctx, p); err != nil {
 				return err
 			}
 		}
@@ -300,7 +345,7 @@ func safeGitDirectory(root, marker string) error {
 					return fmt.Errorf("unsafe common metadata")
 				}
 				if shared == "refs" {
-					if err := safeRefs(sharedPath); err != nil {
+					if err := safeRefs(ctx, sharedPath); err != nil {
 						return err
 					}
 				}
@@ -312,18 +357,25 @@ func safeGitDirectory(root, marker string) error {
 }
 
 // Reference symlinks must not make local observation read files outside the root.
-func safeRefs(path string) error {
-	count := 0
-	return filepath.WalkDir(path, func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil {
+func safeRefs(ctx context.Context, path string) error {
+	budget := 9999
+	pending := []string{path}
+	for len(pending) != 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if err := readWorkspaceDir(ctx, current, &budget, func(entry fs.DirEntry) error {
+			if entry.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("unsafe reference tree")
+			}
+			if entry.IsDir() {
+				pending = append(pending, filepath.Join(current, entry.Name()))
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
-		count++
-		if count > 10000 || entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("unsafe or oversized reference tree")
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 type cappedOutput struct {

@@ -476,6 +476,9 @@ type WorkspaceConfiguration struct {
 }
 
 func portableURL(raw string) bool {
+	if workspace.CloneURLHasCredentials(raw) {
+		return false
+	}
 	if strings.HasPrefix(raw, "workspace:") {
 		return true
 	}

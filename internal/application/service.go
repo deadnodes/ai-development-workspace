@@ -14,6 +14,7 @@ import (
 	"releasecontrol/internal/delivery"
 	"releasecontrol/internal/domain"
 	"releasecontrol/internal/workerconfig"
+	"releasecontrol/internal/workspace"
 	"slices"
 	"strings"
 	"time"
@@ -1182,6 +1183,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if v.Name == "" || v.URL == "" {
 			return nil, invalid("name and url required")
+		}
+		if workspace.CloneURLHasCredentials(v.URL) {
+			return nil, invalid("repository clone URL must not contain credentials, query parameters or a fragment")
 		}
 		st.Repositories = append(st.Repositories, v)
 		out = v

@@ -16,6 +16,14 @@ import (
 var errPathBudget = errors.New("git output too large")
 
 func CodeIndexPaths(ctx context.Context, checkout string, includeUntracked bool) (string, string, []string, bool, error) {
+	checkout, err := filepath.EvalSymlinks(checkout)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	checkout, err = filepath.Abs(checkout)
+	if err != nil {
+		return "", "", nil, false, err
+	}
 	_, gitErr := exec.LookPath("git")
 	_, markerErr := os.Lstat(filepath.Join(checkout, ".git"))
 	if markerErr != nil && !os.IsNotExist(markerErr) {
@@ -33,26 +41,71 @@ func CodeIndexPaths(ctx context.Context, checkout string, includeUntracked bool)
 		if err != nil {
 			branch = "@{detached}"
 		}
-		args := []string{"ls-files", "-z", "--cached"}
-		if includeUntracked {
+		output, err := gitOutput(ctx, checkout, 32<<20, "ls-files", "-z", "--stage")
+		if err != nil && !errors.Is(err, errPathBudget) {
+			return "", "", nil, false, fmt.Errorf("list tracked files: %w", err)
+		}
+		partial := err != nil
+		paths := []string{}
+		excluded := map[string]bool{}
+		for record := range gitPathRecords(output) {
+			meta, name, ok := strings.Cut(record, "\t")
+			mode, _, _ := strings.Cut(meta, " ")
+			if !ok || name == "" {
+				return "", "", nil, false, fmt.Errorf("invalid Git index record")
+			}
+			switch mode {
+			case "100644", "100755":
+				paths = append(paths, name)
+			default:
+				excluded[name] = true
+			}
+		}
+		if includeUntracked && !partial {
 			exclude, err := codeIndexGitExclude(ctx, checkout)
 			if err != nil {
 				return "", "", nil, false, err
 			}
-			args = append([]string{"-c", "core.excludesFile=" + exclude}, args...)
-			args = append(args, "--others", "--exclude-standard")
+			output, err = gitOutput(ctx, checkout, 32<<20, "-c", "core.excludesFile="+exclude, "ls-files", "-z", "--others", "--exclude-standard")
+			if err != nil && !errors.Is(err, errPathBudget) {
+				return "", "", nil, false, fmt.Errorf("list untracked files: %w", err)
+			}
+			partial = err != nil
+			for name := range gitPathRecords(output) {
+				paths = append(paths, name)
+			}
 		}
-		output, err := gitOutput(ctx, checkout, 32<<20, args...)
-		if err != nil && !errors.Is(err, errPathBudget) {
-			return "", "", nil, false, fmt.Errorf("list checkout files: %w", err)
-		}
-		paths := strings.Split(output, "\x00")
-		paths = paths[:len(paths)-1]
+		paths = slices.DeleteFunc(paths, func(name string) bool { return excluded[name] })
 		slices.Sort(paths)
-		return commit, branch, slices.Compact(paths), err != nil, ctx.Err()
+		return commit, branch, slices.Compact(paths), partial, ctx.Err()
+	}
+	if !includeUntracked {
+		for ancestor := checkout; filepath.Dir(ancestor) != ancestor; {
+			ancestor = filepath.Dir(ancestor)
+			if err := ctx.Err(); err != nil {
+				return "", "", nil, false, err
+			}
+			if _, err := os.Lstat(filepath.Join(ancestor, ".git")); err == nil {
+				return "", "", nil, false, fmt.Errorf("selected path is inside a Git worktree; use its checkout root or --include-untracked")
+			} else if !os.IsNotExist(err) {
+				return "", "", nil, false, err
+			}
+		}
 	}
 	paths, truncated, err := walkCodeIndexPaths(ctx, checkout, MaxEntries)
 	return "", "@{unversioned}", paths, truncated, err
+}
+
+func gitPathRecords(output string) func(func(string) bool) {
+	return func(yield func(string) bool) {
+		for {
+			record, rest, ok := strings.Cut(output, "\x00")
+			if !ok || !yield(record) {
+				return
+			}
+			output = rest
+		}
+	}
 }
 
 func CodeIndexTrackedSize(ctx context.Context, checkout, name string) (int, bool) {

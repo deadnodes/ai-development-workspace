@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"releasecontrol/internal/domain"
 )
@@ -118,6 +121,7 @@ func TestDoctorProductCheckDoesNotFollowRedirect(t *testing.T) {
 
 func TestCodeIndexRemoteWorkspaceUsesPagedRepositoryProjection(t *testing.T) {
 	t.Setenv("RC_TOKEN", "index-fixture-token")
+	requests := make(chan string, 4)
 	serv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/code/repositories" || r.URL.Query().Get("product_id") != "fixture" {
 			t.Errorf("unexpected workspace-index request: %s", r.URL)
@@ -125,12 +129,13 @@ func TestCodeIndexRemoteWorkspaceUsesPagedRepositoryProjection(t *testing.T) {
 			return
 		}
 		page := domain.CodeRepositoryPage{ProductID: "fixture"}
+		requests <- r.URL.Query().Get("cursor")
 		switch r.URL.Query().Get("cursor") {
 		case "":
-			page.Items = []domain.CodeRepository{{ID: "first", URL: "https://example.invalid/first"}}
+			page.Items = []domain.CodeRepository{{ID: "first", Identity: "example.invalid/first"}}
 			page.NextCursor = "page-two"
 		case "page-two":
-			page.Items = []domain.CodeRepository{{ID: "second", URL: "https://example.invalid/second"}}
+			page.Items = []domain.CodeRepository{{ID: "second", Identity: "example.invalid/second"}}
 		default:
 			t.Errorf("unexpected cursor: %s", r.URL)
 			http.Error(w, "invalid cursor", http.StatusBadRequest)
@@ -144,9 +149,40 @@ func TestCodeIndexRemoteWorkspaceUsesPagedRepositoryProjection(t *testing.T) {
 	if err := RunIndex(context.Background(), args, &out); err != nil || !strings.Contains(out.String(), "No checkouts matched") {
 		t.Fatalf("workspace dry run: %q, %v", out.String(), err)
 	}
-	repos, err := indexRepositories(context.Background(), remoteIndex{endpoint: serv.URL}, "fixture")
-	if err != nil || len(repos) != 2 || repos[1].ID != "second" {
-		t.Fatalf("repositories = %+v, %v", repos, err)
+	if len(requests) != 0 {
+		t.Fatal("empty workspace fetched remote repository pages")
+	}
+	identities := map[string]string{"example.invalid/second": ""}
+	if err := matchIndexRepositories(context.Background(), remoteIndex{endpoint: serv.URL}, "fixture", identities, 2); err != nil || !reflect.DeepEqual(identities, map[string]string{"example.invalid/second": "second"}) || len(requests) != 2 {
+		t.Fatalf("repository matches = %+v, %v", identities, err)
+	}
+	if err := matchIndexRepositories(context.Background(), remoteIndex{endpoint: serv.URL}, "fixture", map[string]string{"example.invalid/second": ""}, 1); err == nil || !strings.Contains(err.Error(), "page limit") || len(requests) != 3 {
+		t.Fatalf("expected page budget failure, got %v", err)
+	}
+}
+
+type repoPagerFunc func(context.Context, string, string) (domain.CodeRepositoryPage, error)
+
+func (pager repoPagerFunc) ListCodeRepositories(ctx context.Context, product, cursor string) (domain.CodeRepositoryPage, error) {
+	return pager(ctx, product, cursor)
+}
+
+func TestCodeIndexRepositoryPagesShareDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	pager := repoPagerFunc(func(pageCtx context.Context, product, cursor string) (domain.CodeRepositoryPage, error) {
+		if got, ok := pageCtx.Deadline(); !ok || !got.Equal(deadline) {
+			t.Fatalf("page received a fresh or missing deadline: %v", got)
+		}
+		if cursor == "" {
+			return domain.CodeRepositoryPage{ProductID: product, Items: []domain.CodeRepository{{ID: "first", Identity: "other/remote"}}, NextCursor: "next"}, nil
+		}
+		<-pageCtx.Done()
+		return domain.CodeRepositoryPage{}, pageCtx.Err()
+	})
+	if err := matchIndexRepositories(ctx, pager, "fixture", map[string]string{"example.invalid/repo": ""}, 3); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected overall deadline, got %v", err)
 	}
 }
 

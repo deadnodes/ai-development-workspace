@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"releasecontrol/internal/auth"
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workspace"
 	"slices"
 	"sort"
 	"strings"
@@ -297,6 +298,9 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			v.LastTestedAt = &now
 			v.LastError = ""
 			for _, info := range repos {
+				if workspace.CloneURLHasCredentials(info.URL) {
+					return invalid("discovered repository clone URL contains credentials, query parameters or a fragment")
+				}
 				registered := registeredRepositoryIdentity(current, id, info.FullName, info.ID)
 				if registered == nil {
 					current.RegisteredRepositories = append(current.RegisteredRepositories, domain.RegisteredRepository{Meta: domain.Meta{ID: generateRegistryID(), Actor: attributedActor(ctx, "discovery"), CreatedAt: now, UpdatedAt: now}, ConnectionID: id})

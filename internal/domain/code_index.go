@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -109,8 +110,8 @@ type CodeIndexWriteResult struct {
 }
 
 type CodeRepository struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID       string `json:"id"`
+	Identity string `json:"identity"`
 }
 
 type CodeRepositoryPage struct {
@@ -159,13 +160,48 @@ type CodeSearchResult struct {
 }
 
 var codeCommit = regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`)
-var codeSecrets = regexp.MustCompile(`(?im)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\b(?:gh[pousr]_[a-z0-9]{25,}|github_pat_[a-z0-9_]{35,}|glpat-[a-z0-9_-]{18,}|xox[baprs]-[a-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-(?:proj-|live-|test-)?[a-z0-9_-]{20,}|sk_(?:live|test)_[a-z0-9]{12,}|AIza[a-z0-9_-]{35}|eyJ[a-z0-9_-]{6,}\.eyJ[a-z0-9_-]{6,}\.[a-z0-9_-]{8,}|bearer[ \t]+[a-z0-9_.=-]{20,})\b|\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|\b(?:[a-z0-9_-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|token))['"\x60]?[ \t]*[:=][ \t]*['"\x60]?[a-z0-9_./+=-]{8,}(?:['"\x60]|[ \t]*\r?$)`)
+
+const codeCredentialKey = `[a-z0-9_-]*(?:token|secret(?:[_-]?key)?|password|passwd|api[_-]?key|access[_-]?key(?:[_-]?id)?|private[_-]?key|credentials?|auth|authorization|bearer)`
+
+var codePrivateKey = regexp.MustCompile(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+var codeToken = regexp.MustCompile(`(?i)\b(?:gh[pousr]_[a-z0-9]{25,}|github_pat_[a-z0-9_]{35,}|glpat-[a-z0-9_-]{18,}|xox[a-z]*-[a-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|sk-(?:proj-|live-|test-)?[a-z0-9_-]{20,}|sk_(?:live|test)_[a-z0-9]{12,}|AIza[a-z0-9_-]{35}|eyJ[a-z0-9_-]{6,}\.[a-z0-9_-]{2,}\.[a-z0-9_-]{8,}|bearer[ \t]+[a-z0-9_.=-]{20,})`)
+var codeAssignment = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_-])` + codeCredentialKey + `(?:\\?['"\x60‘’“”])?[ \t]*[:=]`)
+var codeURL = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s<>"'\x60]+`)
+var codeURLUserinfo = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s<>"\x60/?#]+@`)
+var codeQueryKey = regexp.MustCompile(`(?i)^(?:` + codeCredentialKey + `|sig|signature|x-amz-signature|x-goog-signature|x-amz-credential|x-goog-credential)$`)
 
 var codeDockerExecutable = regexp.MustCompile(`^[a-zA-Z0-9_./:\\+@-]+$`)
 
 func CodeDockerExecutableValid(name string) bool { return codeDockerExecutable.MatchString(name) }
 
-func CodeHasSecret(text string) bool { return codeSecrets.MatchString(text) }
+func CodeHasPrivateKey(text string) bool { return codePrivateKey.MatchString(text) }
+
+func CodeHasSecret(text string) bool {
+	if CodeHasPrivateKey(text) || codeToken.MatchString(text) || codeAssignment.MatchString(text) {
+		return true
+	}
+	if !strings.Contains(text, "://") {
+		return false
+	}
+	if codeURLUserinfo.MatchString(text) {
+		return true
+	}
+	for _, span := range codeURL.FindAllStringIndex(text, -1) {
+		candidate := text[span[0]:span[1]]
+		_, query, ok := strings.Cut(candidate, "?")
+		if !ok {
+			continue
+		}
+		query, _, _ = strings.Cut(query, "#")
+		for _, param := range strings.FieldsFunc(query, func(value rune) bool { return value == '&' || value == ';' }) {
+			key, _, _ := strings.Cut(param, "=")
+			if decoded, err := url.QueryUnescape(key); err == nil && codeQueryKey.MatchString(decoded) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func CodeSecretPath(name string) bool {
 	for _, part := range strings.Split(strings.ToLower(name), "/") {

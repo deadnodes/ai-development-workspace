@@ -1167,7 +1167,7 @@ Accept a filtered index snapshot up to the dedicated upload limit.
 
 ### `GET /api/code/repositories` — http_route
 
-List attached repository IDs and remote URLs without loading Product context.
+List attached repository IDs and credential-free remote identities without loading Product context.
 
 **When:** Match local workspace checkouts to already attached repositories.
 
@@ -1176,12 +1176,12 @@ List attached repository IDs and remote URLs without loading Product context.
 - `product_id` (string, required): Exact Product ID
 - `cursor` (string, optional): Continuation from the same Product
 
-**Output:** Up to 32 attachments in ID order and a next_cursor when more remain.
+**Output:** Up to 32 attachments in ID order with canonical identity strings (not clone URLs) and a next_cursor when more remain.
 
 **Errors:**
 
 - `NOT_FOUND`: Product is unavailable to the caller.
-- `VALIDATION`: Invalid scope or cursor, or oversized repository metadata.
+- `VALIDATION`: Invalid scope or cursor, or invalid repository ID.
 
 **Example:** `GET /api/code/repositories?product_id=p`
 

@@ -163,18 +163,29 @@ func (m *memoryCodeIndexes) FindCode(ctx context.Context, in domain.CodeSearchRe
 		defer m.mutex.RUnlock()
 		latest := map[string]codeMemoryRecord{}
 		for key, record := range m.records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if key.product == in.ProductID && (in.RepositoryID == "" || key.repository == in.RepositoryID) && attachedCodeRepo(st, key.product, key.repository) && codeIndexNewer(record.status, latest[key.repository].status) {
 				latest[key.repository] = record
 			}
 		}
+		visited := 0
 		for _, record := range latest {
 			var doc domain.CodeIndex
 			if err := json.Unmarshal(record.document, &doc); err != nil {
 				return err
 			}
 			doc.SearchEntries(func(entry domain.CodeSearchEntry) bool {
+				if ctx.Err() != nil {
+					return false
+				}
 				if in.Kind != "" && entry.Card.Kind != in.Kind {
 					return true
+				}
+				visited++
+				if visited > domain.CodeSearchScanBudget {
+					return false
 				}
 				score := entry.Score(in.Query)
 				if score == 0 {
@@ -190,6 +201,12 @@ func (m *memoryCodeIndexes) FindCode(ctx context.Context, in domain.CodeSearchRe
 				}
 				return true
 			})
+			if visited > domain.CodeSearchScanBudget {
+				return domain.ErrCodeSearchBudget
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

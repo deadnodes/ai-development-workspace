@@ -2,11 +2,18 @@ package domain
 
 import (
 	"cmp"
+	"errors"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
+
+const CodeSearchTimeout = 2 * time.Second
+const CodeSearchScanBudget = 32768
+
+var ErrCodeSearchBudget = errors.New("code search scan limit exceeded; narrow the search by repository or kind")
 
 type CodeSearchEntry struct {
 	Card    CodeCard

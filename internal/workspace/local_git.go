@@ -44,7 +44,7 @@ func ObserveGit(ctx context.Context, root, relative string) (GitState, error) {
 	if !noLinkPath(root, path) {
 		return GitState{}, fmt.Errorf("checkout outside configured workspace or unavailable")
 	}
-	if err := safeGitDirectory(root, filepath.Join(path, ".git")); err != nil {
+	if err := safeGitDirectory(ctx, root, filepath.Join(path, ".git")); err != nil {
 		return GitState{}, err
 	}
 	// A status refresh can invoke clean filters configured by the checkout.

@@ -91,7 +91,12 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, opti
 				return doc, err
 			}
 			content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
-			if len(content) > domain.CodeFileBytes || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 || generated.Match(content[:min(len(content), 4096)]) || strings.ContainsFunc(string(content), binaryControl) || domain.CodeHasSecret(string(content)) || minified(file.Language, content) {
+			if len(content) > domain.CodeFileBytes || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 || generated.Match(content[:min(len(content), 4096)]) || strings.ContainsFunc(string(content), binaryControl) || minified(file.Language, content) {
+				continue
+			}
+			isDoc := domain.CodeDocPath(name)
+			sensitive := domain.CodeHasSecret(string(content))
+			if sensitive && (!isDoc || domain.CodeHasPrivateKey(string(content))) {
 				continue
 			}
 			file.Size = len(content)
@@ -99,8 +104,16 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, opti
 			if len(content) > 0 && content[len(content)-1] != '\n' {
 				file.Lines++
 			}
-			collect(&file, content)
-			if domain.CodeDocPath(name) {
+			if isDoc {
+				if sensitive {
+					lines := bytes.Split(content, []byte{'\n'})
+					for index, line := range lines {
+						if domain.CodeHasSecret(string(line)) {
+							lines[index] = []byte("[...]")
+						}
+					}
+					content = bytes.Join(lines, []byte{'\n'})
+				}
 				if len(content) > domain.CodeDocBytes {
 					flags["doc_bytes"] = true
 				}
@@ -112,6 +125,7 @@ func Build(ctx context.Context, repository, checkout string, now time.Time, opti
 					continue
 				}
 			}
+			collect(&file, content)
 		}
 		if len(doc.Files) == domain.CodeMaxFiles {
 			flags["files"] = true

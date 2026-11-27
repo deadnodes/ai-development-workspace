@@ -16,7 +16,7 @@ import (
 )
 
 func TestCodeIndexGolden(t *testing.T) {
-	doc, err := Build(context.Background(), "fixture", "testdata/checkout", time.Unix(100, 0), Options{})
+	doc, err := Build(context.Background(), "fixture", "testdata/checkout", time.Unix(100, 0), Options{IncludeUntracked: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestCodeIndexGolden(t *testing.T) {
 	if err != nil || string(want) != output.String() {
 		t.Fatalf("golden mismatch (%v):\n%s", err, output.String())
 	}
-	second, err := Build(context.Background(), "fixture", "testdata/checkout", time.Unix(200, 0), Options{})
+	second, err := Build(context.Background(), "fixture", "testdata/checkout", time.Unix(200, 0), Options{IncludeUntracked: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,12 +96,22 @@ func TestCodeIndexFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.Branch != "main" || len(doc.Commit) != 40 || len(doc.Files) != 3 || doc.Files[0].Path != ".gitignore" || doc.Files[1].Path != "keep.py" || doc.Files[2].Path != "yarn.lock" || doc.Files[2].Lines != 0 {
+	if doc.Branch != "main" || len(doc.Commit) != 40 || len(doc.Files) != 6 || doc.Files[0].Path != ".gitignore" || doc.Files[4].Path != "keep.py" || doc.Files[5].Path != "yarn.lock" || doc.Files[5].Lines != 0 {
 		t.Fatalf("unexpected filtered index: %+v", doc)
 	}
 	wire, _ := json.Marshal(doc)
 	if strings.Contains(string(wire), token) {
 		t.Fatal("token escaped filter")
+	}
+}
+
+func TestCodeIndexRedactsWholeCredentialLines(t *testing.T) {
+	root := t.TempDir()
+	indexFixtureFile(t, root, "README.md", "Keep before\r\nTOKEN=hidden-fixture # shell comment\r\n\"password\": \"hidden!\",\r\n[download](https://example.invalid/repo?%61ccess_token=hidden&next=1)\r\nUse https://hidden-user@example.invalid/repo\r\nKeep after\r\n")
+	indexFixtureFile(t, root, "package.json", `{"dependencies":{"private":"https://example.invalid/repo?access_token=hidden&next=1"}}`)
+	doc, err := Build(context.Background(), "fixture", root, time.Now(), Options{})
+	if err != nil || len(doc.Files) != 1 || doc.Files[0].Doc != "Keep before\n[...]\n[...]\n[...]\n[...]\nKeep after\n" {
+		t.Fatalf("filtered index: %+v, %v", doc.Files, err)
 	}
 }
 
@@ -134,7 +144,10 @@ func TestCodeIndexLineEndingParity(t *testing.T) {
 	indexFixtureFile(t, root, "another.txt", strings.Repeat("x\n", domain.CodeFileBytes/2))
 	indexFixtureFile(t, root, "cmd/main.go", "package main\n\n// Serve launches the service.\nfunc Serve() {}\n")
 	indexFixtureFile(t, root, "yarn.lock", "lock metadata only\n")
-	git("add", ".")
+	if err := os.Symlink("README.md", filepath.Join(root, "README.link.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	git("-c", "core.symlinks=true", "add", ".")
 	git("commit", "-m", "fixture")
 	build := func() domain.CodeIndex {
 		t.Helper()
@@ -151,7 +164,13 @@ func TestCodeIndexLineEndingParity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	git("checkout-index", "--all", "--force")
+	if err := os.Remove(filepath.Join(root, "README.link.md")); err != nil {
+		t.Fatal(err)
+	}
+	git("-c", "core.symlinks=false", "checkout-index", "--all", "--force")
+	if info, err := os.Lstat(filepath.Join(root, "README.link.md")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("expected a regular file for the emulated symlink: %v, %v", info, err)
+	}
 	raw, err := os.ReadFile(filepath.Join(root, "README.md"))
 	if err != nil || !strings.Contains(string(raw), "\r\n") {
 		t.Fatalf("checkout did not convert to CRLF: %q, %v", raw, err)
@@ -160,7 +179,7 @@ func TestCodeIndexLineEndingParity(t *testing.T) {
 	first, errLF := lf.Digest()
 	second, errCRLF := crlf.Digest()
 	if errLF != nil || errCRLF != nil || first != second {
-		t.Fatalf("LF/CRLF digests: %s (%v) vs %s (%v)", first, errLF, second, errCRLF)
+		t.Fatalf("checkout-setting digests: %s (%v) vs %s (%v)", first, errLF, second, errCRLF)
 	}
 }
 

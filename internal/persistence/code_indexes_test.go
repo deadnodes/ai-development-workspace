@@ -37,12 +37,21 @@ func TestCodeIndexRetentionAndSnippetParity(t *testing.T) {
 			}
 			if err := store.Update(ctx, func(st *domain.State) error {
 				*st = retrievalFixture()
-				st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: "second", ProductID: "p"}, Name: "Second", Role: "APPLICATION", URL: "https://example.invalid/second"})
+				st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: "second", ProductID: "p"}, Name: "Second", Role: "APPLICATION", URL: "https://hidden-user:hidden-password@EXAMPLE.invalid:443/second.git?sig=hidden-signature"})
 				return nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			service := application.New(store)
+			page, err := service.ListCodeRepositories(ctx, "p", "")
+			if err != nil || len(page.Items) != 2 || page.Items[1] != (domain.CodeRepository{ID: "second", Identity: "example.invalid/second"}) {
+				t.Fatalf("credential-free repository projection: %+v, %v", page, err)
+			}
+			for _, cloneURL := range []string{"https://user@example.invalid/repo", "https://example.invalid/repo?sig=hidden", "ssh://git:fixture@example.invalid/repo"} {
+				if _, err := service.Execute(ctx, domain.Command{Action: "create_repository", ProductID: "p", Actor: "fixture", Data: map[string]any{"name": "unsafe", "url": cloneURL}}); !errors.Is(err, application.ErrValidation) || !strings.Contains(err.Error(), "clone URL") {
+					t.Fatalf("credential-bearing clone URL accepted: %v", err)
+				}
+			}
 			commit := strings.Repeat("a", 40)
 			put := func(repo, branch string, files []domain.CodeFile) {
 				t.Helper()
@@ -174,6 +183,14 @@ func TestCodeIndexStores(t *testing.T) {
 				if err != nil || len(result.Items) != 1 || result.Items[0].Path != search.path || result.Items[0].Commit != doc.Commit || result.Truncated != (search.kind == "symbol") {
 					t.Fatalf("search %q: %+v %v", search.query, result, err)
 				}
+			}
+			query := domain.CodeSearchRequest{ProductID: "p", Query: "no-such-match", Limit: 1}
+			if cards, err := findCodeWithinBudget(ctx, store, query, 2); !errors.Is(err, domain.ErrCodeSearchBudget) || len(cards) != 0 {
+				t.Fatalf("no-match query exceeded its candidate budget: %+v, %v", cards, err)
+			}
+			query.Kind = "route"
+			if cards, err := findCodeWithinBudget(ctx, store, query, 1); err != nil || len(cards) != 0 {
+				t.Fatalf("no-match query exactly at its candidate budget: %+v, %v", cards, err)
 			}
 			status, err := service.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: "p"})
 			if err != nil || len(status.Items) != 1 || status.Items[0].Commit != doc.Commit {

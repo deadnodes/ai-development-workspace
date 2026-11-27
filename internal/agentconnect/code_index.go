@@ -94,29 +94,43 @@ type codeRepositoryPager interface {
 	ListCodeRepositories(context.Context, string, string) (domain.CodeRepositoryPage, error)
 }
 
-func indexRepositories(ctx context.Context, pager codeRepositoryPager, product string) ([]domain.CodeRepository, error) {
-	var repos []domain.CodeRepository
+const indexRepositoryPages = 128
+const indexWorkspaceTimeout = 10 * time.Minute
+
+func matchIndexRepositories(ctx context.Context, pager codeRepositoryPager, product string, identities map[string]string, maxPages int) error {
+	if len(identities) == 0 {
+		return nil
+	}
 	cursor, last := "", ""
-	for {
+	for range maxPages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		page, err := pager.ListCodeRepositories(ctx, product, cursor)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if page.ProductID != product || len(page.Items) > domain.CodeRepositoryPageSize || page.NextCursor != "" && (page.NextCursor == cursor || len(page.Items) == 0) {
-			return nil, errors.New("invalid RCP repository page")
+		if page.ProductID != product || len(page.Items) > domain.CodeRepositoryPageSize || len(page.NextCursor) > 2048 || page.NextCursor != "" && (page.NextCursor == cursor || len(page.Items) == 0) {
+			return errors.New("invalid RCP repository page")
 		}
 		for _, repo := range page.Items {
-			if !validProductID(repo.ID) || repo.ID <= last || len(repo.URL) > domain.CodeRepositoryURLBytes {
-				return nil, errors.New("invalid RCP repository identity, order or URL")
+			if !validProductID(repo.ID) || repo.ID <= last || len(repo.Identity) > domain.CodeRepositoryURLBytes {
+				return errors.New("invalid RCP repository identity or order")
 			}
 			last = repo.ID
+			if prior, wanted := identities[repo.Identity]; wanted {
+				if prior != "" {
+					return errors.New("a checkout matches multiple attached repositories; use --repo-id and --path")
+				}
+				identities[repo.Identity] = repo.ID
+			}
 		}
-		repos = append(repos, page.Items...)
 		cursor = page.NextCursor
 		if cursor == "" {
-			return repos, nil
+			return ctx.Err()
 		}
 	}
+	return errors.New("RCP repository page limit exceeded; use --repo-id and --path")
 }
 
 func readIndexBinding(dir string) Binding {
@@ -138,38 +152,39 @@ func readIndexBinding(dir string) Binding {
 
 type indexCheckout struct{ repository, path string }
 
-func matchingIndexCheckouts(ctx context.Context, dir string, repos []domain.CodeRepository, out io.Writer) ([]indexCheckout, error) {
-	scan, err := workspace.Scan(ctx, dir)
+func matchingIndexCheckouts(ctx context.Context, dir string, pager codeRepositoryPager, product string, out io.Writer) ([]indexCheckout, error) {
+	scan, err := workspace.ScanIndexCheckouts(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
 	if scan.Truncated {
 		fmt.Fprintln(out, "Warning: workspace discovery was truncated; use smaller workspace roots")
 	}
-	byRemote := map[string][]string{}
-	for _, repo := range repos {
-		if remote := workspace.RemoteIdentity(repo.URL); remote != "" {
-			byRemote[remote] = append(byRemote[remote], repo.ID)
+	byRemote := map[string]string{}
+	remotes := make([]string, len(scan.Repositories))
+	for index, checkout := range scan.Repositories {
+		if remote := workspace.CodeRepositoryIdentity(checkout.RemoteURL); remote != "" {
+			remotes[index] = remote
+			byRemote[remote] = ""
 		}
+	}
+	if err := matchIndexRepositories(ctx, pager, product, byRemote, indexRepositoryPages); err != nil {
+		return nil, err
 	}
 	var targets []indexCheckout
 	seen := map[[2]string]string{}
-	for _, checkout := range scan.Repositories {
-		ids := byRemote[workspace.RemoteIdentity(checkout.RemoteURL)]
-		if len(ids) > 1 {
-			return nil, fmt.Errorf("checkout %q matches multiple attached repositories; use --repo-id and --path", checkout.RelativePath)
-		}
-		if len(ids) == 1 {
+	for index, checkout := range scan.Repositories {
+		if id := byRemote[remotes[index]]; id != "" {
 			branch := checkout.Branch
 			if branch == "" {
 				branch = "@{detached}"
 			}
-			key := [2]string{ids[0], branch}
+			key := [2]string{id, branch}
 			if prior, exists := seen[key]; exists {
-				return nil, fmt.Errorf("checkouts %q and %q would overwrite repository %s branch %q; use --repo-id and --path", prior, checkout.RelativePath, ids[0], branch)
+				return nil, fmt.Errorf("checkouts %q and %q would overwrite repository %s branch %q; use --repo-id and --path", prior, checkout.RelativePath, id, branch)
 			}
 			seen[key] = checkout.RelativePath
-			targets = append(targets, indexCheckout{ids[0], filepath.Join(scan.Root, filepath.FromSlash(checkout.RelativePath))})
+			targets = append(targets, indexCheckout{id, filepath.Join(scan.Root, filepath.FromSlash(checkout.RelativePath))})
 		}
 	}
 	return targets, nil
@@ -205,6 +220,11 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if export != "" && workspaceRoot != "" {
 		return errors.New("--out is supported for a single checkout")
+	}
+	if workspaceRoot != "" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, indexWorkspaceTimeout)
+		defer cancel()
 	}
 	if export != "" {
 		if _, err := os.Lstat(export); !errors.Is(err, os.ErrNotExist) {
@@ -290,11 +310,7 @@ func RunIndex(ctx context.Context, args []string, out io.Writer) error {
 			return errors.New("no Product found for repository; specify --product-id")
 		}
 		if workspaceRoot != "" {
-			repos, err := indexRepositories(ctx, pager, product)
-			if err != nil {
-				return err
-			}
-			targets, err = matchingIndexCheckouts(ctx, workspaceRoot, repos, out)
+			targets, err = matchingIndexCheckouts(ctx, workspaceRoot, pager, product, out)
 			if err != nil {
 				return err
 			}

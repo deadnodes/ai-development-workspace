@@ -33,3 +33,27 @@ func TestCodeIndexValidation(t *testing.T) {
 		t.Fatalf("expected file count validation, got %v", err)
 	}
 }
+
+func TestCodeIndexRejectsCredentialShapedUploadFields(t *testing.T) {
+	for _, text := range []string{
+		"export TOKEN=short # comment", `"password": "fixture!",`, "`api_key` = ''", "'access_key_id' = hi;",
+		`\"private_key\":\"data!\"`, "auth: yes", "bearer = no", "credential: x", "passwd='a b'", "“token” = fixture",
+		"https://name:pass'word@example.invalid/repo", "https://example.invalid/repo?access_token=x&next=1",
+		"https://example.invalid/repo?x=1&%73ignature=x", "https://example.invalid/?X-Amz-Credential=x",
+		"ghp_" + strings.Repeat("a", 36), "gho_" + strings.Repeat("a", 36), "github_pat_" + strings.Repeat("a", 36),
+		"glpat-" + strings.Repeat("a", 20), "xoxb-" + strings.Repeat("a", 20), "sk-" + strings.Repeat("a", 25),
+		"AKIA" + strings.Repeat("1", 16), "eyJhbGciOiJub25lIn0.e30.abcdefghij",
+	} {
+		doc := CodeIndex{RepositoryID: "repo", Branch: "@{unversioned}", Version: CodeIndexVersion, IndexedAt: time.Now(), Files: []CodeFile{{Path: "README.md", Language: "Markdown", Size: len(text), Lines: 1, Doc: text}}}
+		if err := doc.Validate("repo"); err == nil || strings.Contains(err.Error(), text) {
+			t.Errorf("credential case %q returned %v", text, err)
+		}
+		doc.Files = []CodeFile{{Path: "package.json", Language: "JSON", Dependencies: []CodeDependency{{Name: "fixture", Kind: "npm", Version: text}}}}
+		if err := doc.Validate("repo"); err == nil {
+			t.Errorf("credential case %q accepted in a dependency", text)
+		}
+	}
+	if CodeHasSecret("Use https://example.invalid/repo?view=all&mode=brief for details.") {
+		t.Fatal("ordinary URL was rejected")
+	}
+}

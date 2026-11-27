@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"releasecontrol/internal/domain"
+	"releasecontrol/internal/workspace"
 )
 
 type codeIndexStore interface {
@@ -83,7 +84,7 @@ func (s *Service) ListCodeRepositories(ctx context.Context, product, cursor stri
 			}
 			position := sort.Search(len(out.Items), func(index int) bool { return out.Items[index].ID >= repo.ID })
 			if position < limit {
-				out.Items = slices.Insert(out.Items, position, domain.CodeRepository{ID: repo.ID, URL: repo.URL})
+				out.Items = slices.Insert(out.Items, position, domain.CodeRepository{ID: repo.ID, Identity: workspace.CodeRepositoryIdentity(repo.URL)})
 				out.Items = out.Items[:min(limit, len(out.Items))]
 			}
 		}
@@ -96,8 +97,8 @@ func (s *Service) ListCodeRepositories(ctx context.Context, product, cursor stri
 		out.NextCursor = encodeCursorID(product) + "." + encodeCursorID(out.Items[len(out.Items)-1].ID)
 	}
 	for _, item := range out.Items {
-		if !stateID(item.ID) || len(item.URL) > domain.CodeRepositoryURLBytes {
-			return domain.CodeRepositoryPage{}, invalid("invalid or oversized repository identity or URL")
+		if !stateID(item.ID) {
+			return domain.CodeRepositoryPage{}, invalid("invalid repository ID")
 		}
 	}
 	return out, nil
@@ -331,6 +332,8 @@ func (s *Service) GetCodeFileOutline(ctx context.Context, in domain.CodeOutlineR
 }
 
 func (s *Service) SearchCode(ctx context.Context, in domain.CodeSearchRequest) (domain.CodeSearchResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, domain.CodeSearchTimeout)
+	defer cancel()
 	out := domain.CodeSearchResult{Items: []domain.CodeCard{}}
 	if err := s.codeScope(ctx, "read", in.ProductID, in.RepositoryID); err != nil {
 		return out, err
@@ -348,6 +351,9 @@ func (s *Service) SearchCode(ctx context.Context, in domain.CodeSearchRequest) (
 		return out, invalid("invalid code search kind")
 	}
 	items, err := s.codeStore().FindCode(ctx, in)
+	if errors.Is(err, domain.ErrCodeSearchBudget) {
+		return out, invalid("%s", err)
+	}
 	if err != nil {
 		return out, codeScopeError(err)
 	}

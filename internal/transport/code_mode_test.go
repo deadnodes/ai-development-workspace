@@ -106,6 +106,9 @@ func TestCodeIndexAcrossToolAndHTTP(t *testing.T) {
 	for _, file := range []domain.CodeFile{
 		{Path: "README.md", Language: "Markdown", Doc: "Use `API_TOKEN=OpaqueFixture987` or omit it."},
 		{Path: "README.md", Language: "Markdown", Doc: "API_TOKEN=OpaqueFixture987\r\nMore text\r\n"},
+		{Path: "README.md", Language: "Markdown", Doc: "export TOKEN=OpaqueFixture987 # local"},
+		{Path: "README.md", Language: "Markdown", Doc: `"password": "OpaqueFixture987!",`},
+		{Path: "package.json", Language: "JSON", Dependencies: []domain.CodeDependency{{Name: "fixture", Kind: "npm", Version: "https://example.invalid/repo?access_token=OpaqueFixture987&next=1"}}},
 		{Path: "Dockerfile", Language: "Dockerfile", Entrypoints: []domain.CodeEntry{{Kind: "docker_cmd", Name: `["serve","--password","OpaqueFixture987"]`}}},
 	} {
 		file.Size, file.Lines = 100, 2
@@ -137,7 +140,7 @@ func TestCodeRepositoryProjectionIsScopedAndPaged(t *testing.T) {
 		st.Repositories = []domain.Repository{{Meta: domain.Meta{ID: "foreign-repo", ProductID: "foreign"}, Role: "APPLICATION", URL: "https://example.invalid/foreign"}}
 		for index := domain.CodeRepositoryPageSize; index >= 0; index-- {
 			id := fmt.Sprintf("repo-%03d", index)
-			st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: id, ProductID: "product"}, Name: "not-projected", Role: "APPLICATION", URL: "https://example.invalid/" + id})
+			st.Repositories = append(st.Repositories, domain.Repository{Meta: domain.Meta{ID: id, ProductID: "product"}, Name: "not-projected", Role: "APPLICATION", URL: "https://hidden-user:hidden-password@example.invalid/" + id + "?sig=hidden-signature"})
 		}
 		return nil
 	}); err != nil {
@@ -148,13 +151,13 @@ func TestCodeRepositoryProjectionIsScopedAndPaged(t *testing.T) {
 	route := "/api/code/repositories?product_id=product"
 	status, raw := codeRequest(t, server, "GET", route, "", "secret")
 	var first domain.CodeRepositoryPage
-	if status != 200 || len(raw) > 4096 || bytes.Contains(raw, []byte("not-projected")) || json.Unmarshal(raw, &first) != nil || len(first.Items) != domain.CodeRepositoryPageSize || first.Items[0].ID != "repo-000" || first.NextCursor == "" {
+	if status != 200 || len(raw) > 4096 || bytes.Contains(raw, []byte("not-projected")) || bytes.Contains(raw, []byte("hidden-")) || json.Unmarshal(raw, &first) != nil || len(first.Items) != domain.CodeRepositoryPageSize || first.Items[0].ID != "repo-000" || first.NextCursor == "" {
 		t.Fatalf("first page: %d, %d bytes, %+v", status, len(raw), first)
 	}
 	status, raw = codeRequest(t, server, "GET", route+"&cursor="+first.NextCursor, "", "secret")
 	var second domain.CodeRepositoryPage
 	last := fmt.Sprintf("repo-%03d", domain.CodeRepositoryPageSize)
-	if status != 200 || json.Unmarshal(raw, &second) != nil || len(second.Items) != 1 || second.Items[0] != (domain.CodeRepository{ID: last, URL: "https://example.invalid/" + last}) || second.NextCursor != "" {
+	if status != 200 || json.Unmarshal(raw, &second) != nil || len(second.Items) != 1 || second.Items[0] != (domain.CodeRepository{ID: last, Identity: "example.invalid/" + last}) || second.NextCursor != "" {
 		t.Fatalf("second page: %d %s", status, raw)
 	}
 	if status, _ := codeRequest(t, server, "GET", "/api/code/repositories?product_id=foreign&cursor="+first.NextCursor, "", "secret"); status != 422 {
