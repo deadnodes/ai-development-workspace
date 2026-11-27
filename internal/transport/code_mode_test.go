@@ -13,10 +13,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"releasecontrol/internal/application"
 	"releasecontrol/internal/auth"
+	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/transport"
 )
@@ -79,6 +81,32 @@ func TestCodeModeCalls(t *testing.T) {
 	status, _ = codeRequest(t, server, "POST", "/api/tools/get_status_schema", strings.Repeat(" ", 12<<20)+"{}", "")
 	if status != 413 {
 		t.Fatalf("oversized: %d", status)
+	}
+}
+
+func TestCodeIndexAcrossToolAndHTTP(t *testing.T) {
+	server := codeServer(t, "secret")
+	for _, cmd := range []string{
+		`{"action":"create_product","id":"product","data":{"name":"Product"}}`,
+		`{"action":"create_repository","id":"repo","product_id":"product","data":{"name":"Repo","url":"https://example.invalid/repo"}}`,
+	} {
+		if status, raw := codeRequest(t, server, "POST", "/api/commands", cmd, "secret"); status != 200 {
+			t.Fatalf("setup: %d %s", status, raw)
+		}
+	}
+	doc := domain.CodeIndex{RepositoryID: "repo", Branch: "main", Commit: strings.Repeat("a", 40), IndexedAt: time.Now(), Version: domain.CodeIndexVersion, Files: []domain.CodeFile{{Path: "README.md", Language: "Markdown", Size: 20, Lines: 1, Doc: "Checkout-free plans"}}}
+	wire, _ := json.Marshal(domain.CodeIndexWrite{ProductID: "product", RepositoryID: "repo", Document: doc})
+	if status, raw := codeRequest(t, server, "POST", "/api/code/index", string(wire), "secret"); status != 200 || !bytes.Contains(raw, []byte(`"changed":true`)) {
+		t.Fatalf("upload: %d %s", status, raw)
+	}
+	if status, raw := codeRequest(t, server, "POST", "/api/tools/upsert_code_index", string(wire), "secret"); status != 200 || !bytes.Contains(raw, []byte(`"changed":false`)) {
+		t.Fatalf("tool replay: %d %s", status, raw)
+	}
+	if status, raw := codeRequest(t, server, "POST", "/api/tools/search_code", `{"product_id":"product","query":"checkout-free","kind":"doc"}`, "secret"); status != 200 || !bytes.Contains(raw, []byte(`"path":"README.md"`)) {
+		t.Fatalf("search: %d %s", status, raw)
+	}
+	if status, raw := codeRequest(t, server, "GET", "/api/code-sdk/rcp.ts", "", "secret"); status != 200 || !bytes.Contains(raw, []byte("upsert_code_index")) || !bytes.Contains(raw, []byte("get_code_map")) {
+		t.Fatalf("SDK missing code index declarations: %d", status)
 	}
 }
 func TestCodeModeToken(t *testing.T) {

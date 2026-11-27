@@ -1,5 +1,7 @@
 # Bounded browser and agent context
 
+For checkout-free file, symbol, route and dependency lookup, see [Code Knowledge](CODE_KNOWLEDGE.md).
+
 The full operator snapshot `/api/state` and backup remain historical exports.
 They are not polling or agent discovery interfaces. All original records and
 append-only events remain stored; projections/indexes do not delete history.

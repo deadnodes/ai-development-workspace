@@ -183,6 +183,7 @@ func configureMCP(mux routeRegistrar, service Service, options Options, instruct
 	registerRuntimeReports(mux, server, service, options)
 	registerStateNavigationTool(server, service)
 	registerRetrieval(mux, server, service)
+	registerCodeIndex(mux, server, service)
 	registerBuildTools(server, service)
 	registerPipelineTool(server, service)
 	registerSignatureTools(server, service)

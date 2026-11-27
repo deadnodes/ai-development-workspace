@@ -162,6 +162,11 @@ func (s *Service) ProjectContextSummary(ctx context.Context, product string) (an
 		productCard["membership_truncated"] = true
 	}
 	out := map[string]any{"projection": "bounded_project_summary", "product": productCard, "knowledge": map[string]any{"overview": contextExcerpt(k.Overview, 1600), "instructions": contextExcerpt(k.Instructions, 2000), "parameters": contextParameters(k.Parameters)}, "repositories": repos, "components": apps, "environments": envs, "knowledge_nodes": nodes, "text_excerpted": true, "documents_omitted": true, "guidance": "Navigation and excerpts only (32KiB maximum); use graph/text search to locate relevant facts, source documents, and exact evidence. Full operator context remains at HTTP /api/products/{id}/context."}
+	code, err := s.projectCodeStatus(ctx, st, product)
+	if err != nil {
+		return nil, err
+	}
+	out["code_index"] = code
 	for {
 		b, e := json.Marshal(out)
 		if e != nil {
@@ -173,6 +178,12 @@ func (s *Service) ProjectContextSummary(ctx context.Context, product string) (an
 		if len(nodes) > 0 {
 			nodes = nodes[:len(nodes)-1]
 			out["knowledge_nodes"] = nodes
+			continue
+		}
+		if len(code.Items) > 0 {
+			code.Items = code.Items[:len(code.Items)-1]
+			code.Truncated = true
+			out["code_index"] = code
 			continue
 		}
 		if len(repos) > 0 {

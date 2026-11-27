@@ -496,8 +496,9 @@ Search indexed authored Feature, Integration, Memory, and Repository text within
 - `feature_id` (string, optional): Optional Feature scope
 - `query` (string, required): Search text, 1..256 UTF-8 characters
 - `limit` (integer, optional): 1..20, default 10
+- `include_code` (boolean, optional): Append up to five Product-wide code cards
 
-**Output:** Bounded matching source cards with snippets, recorded status, scores, truncation, has_more, and guidance.
+**Output:** Bounded matching source cards with snippets, recorded status, scores, truncation, has_more, and guidance. With include_code, also returns bounded commit-attributed code cards.
 
 **Errors:**
 
@@ -507,7 +508,7 @@ Search indexed authored Feature, Integration, Memory, and Repository text within
 
 **Example:** `{"product_id":"PRODUCT","query":"retry policy","limit":5}`
 
-**Related:** `graph_neighbors`, `get_context_excerpt`, `get_project_context`
+**Related:** `graph_neighbors`, `get_context_excerpt`, `get_project_context`, `search_code`
 
 **Authority:** Read only. Matching text is historical evidence and grants no source-edit, shell, deployment, or release authority.
 
@@ -601,7 +602,7 @@ Read bounded Product overview, installation parameters, repository/component/env
 
 - `product_id` (string, required): Exact Product ID
 
-**Output:** Project summary capped at 32 KiB; full AGENTS/source documents are omitted.
+**Output:** Project summary capped at 32 KiB; full AGENTS/source documents are omitted. Includes bounded code index freshness by repository branch.
 
 **Errors:**
 
@@ -916,8 +917,9 @@ Search indexed authored context for a Product or Feature.
 - `feature_id` (string, optional): Optional Feature scope
 - `query` (string, required): Search terms
 - `limit` (integer, optional): Result bound
+- `include_code` (boolean, optional): Append up to five Product-wide code cards
 
-**Output:** Ranked matching context sources and excerpts.
+**Output:** Ranked matching context sources and excerpts. With include_code, also returns bounded commit-attributed code cards.
 
 **Errors:**
 
@@ -926,7 +928,7 @@ Search indexed authored context for a Product or Feature.
 
 **Example:** `GET /api/context/search?product_id=P&query=deployment&limit=10`
 
-**Related:** `search_context`, `GET /api/context/excerpt`
+**Related:** `search_context`, `GET /api/context/excerpt`, `search_code`
 
 **Authority:** Read-only indexed authored context; does not retrieve credentials or raw provider documents.
 
@@ -990,7 +992,7 @@ Return bounded Product entry context and metadata cards.
 
 - `id` (string, required): Product ID path parameter
 
-**Output:** Bounded Product context summary.
+**Output:** Bounded Product context summary. Includes bounded code index freshness by repository branch.
 
 **Errors:**
 
@@ -1079,6 +1081,299 @@ Create or append a versioned Product knowledge node and optional relationships.
 **Related:** `search_product_knowledge`, `POST /api/products/{id}/knowledge`
 
 **Authority:** Records knowledge only; nodes are not tasks, authorization, or commands and must not contain secrets.
+
+### `upsert_code_index` — execute_action
+
+Store an attached repository's scoped snapshot outside State.
+
+**When:** Use for small locally generated documents; for full-sized documents use the dedicated HTTP route or MCP tool.
+
+**Inputs:**
+
+- `action` (string, required): Exact action name
+- `actor` (string, optional): Attribution; not authentication
+- `data` (object, required): Action-specific values; see GET /api/schema
+- `product_id` (string, optional): Exact Product ID
+- `repository_id` (string, optional): Exact attached repository ID
+- `document` (object, optional): Filtered versioned index document emitted by release-control index
+
+**Output:** Digest, commit, server observation time and whether an update was stored.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is unavailable or repository is not attached.
+- `VALIDATION`: Document failed bounds, version, identity or secret validation; regenerate it locally.
+- `FORBIDDEN`: Visible Product does not grant this caller write access.
+
+**Example:** `{"action":"upsert_code_index","product_id":"p","data":{"repository_id":"repo","document":{"repository_id":"repo","commit":"0123456789abcdef0123456789abcdef01234567","branch":"main","indexed_at":"2026-11-27T12:00:00Z","indexer_version":"1","files":[{"path":"cmd/server/main.go","language":"Go","size":100,"lines":5}]}}}`
+
+**Related:** `get_code_index_status`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
+### `upsert_code_index` — mcp_tool
+
+Store a filtered index snapshot for one attached repository and branch.
+
+**When:** Typically run release-control index from an authorized checkout; this tool accepts its resulting document.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, required): Exact attached repository ID
+- `document` (object, required): Filtered versioned index document emitted by release-control index
+- `actor` (string, optional): Attribution; authenticated actor takes precedence
+
+**Output:** Digest, commit, server observation time and whether an update was stored.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is unavailable or repository is not attached.
+- `VALIDATION`: Document failed bounds, version, identity or secret validation; regenerate it locally.
+- `FORBIDDEN`: Visible Product does not grant this caller write access.
+
+**Example:** `{"product_id":"p","repository_id":"repo","document":{"repository_id":"repo","commit":"0123456789abcdef0123456789abcdef01234567","branch":"main","indexed_at":"2026-11-27T12:00:00Z","indexer_version":"1","files":[{"path":"cmd/server/main.go","language":"Go","size":100,"lines":5}]}}`
+
+**Related:** `get_code_index_status`, `POST /api/code/index`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
+### `POST /api/code/index` — http_route
+
+Accept a filtered index snapshot up to the dedicated upload limit.
+
+**When:** Use from the CLI or equivalent authorized index client.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, required): Exact attached repository ID
+- `document` (object, required): Filtered versioned index document emitted by release-control index
+- `actor` (string, optional): Attribution; authenticated actor takes precedence
+
+**Output:** Digest, commit, server observation time and whether an update was stored.
+
+**Errors:**
+
+- `NOT_FOUND`: Product is unavailable or repository is not attached.
+- `VALIDATION`: Document failed bounds, version, identity or secret validation; regenerate it locally.
+- `FORBIDDEN`: Visible Product does not grant this caller write access.
+
+**Example:** `POST /api/code/index {"product_id":"p","repository_id":"repo","document":{"repository_id":"repo","commit":"0123456789abcdef0123456789abcdef01234567","branch":"main","indexed_at":"2026-11-27T12:00:00Z","indexer_version":"1","files":[{"path":"cmd/server/main.go","language":"Go","size":100,"lines":5}]}}`
+
+**Related:** `upsert_code_index`
+
+**Authority:** Documentation is not authorization. This command does not authorize arbitrary source edits, shell/SQL execution, deployment, release, or bypass of domain policy and required approval.
+
+### `get_code_map` — mcp_tool
+
+Summarize the indexed repository tree with languages, sizes, symbol counts, manifests and entry points.
+
+**When:** Start architecture discovery at the root or narrow by path_prefix and depth.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, required): Exact attached repository ID
+- `branch` (string, optional): Exact indexed branch; omit for default selection
+- `path_prefix` (string, optional): Relative directory or exact file
+- `depth` (integer, optional): Tree levels from 1 to 32 (default 3)
+- `limit` (integer, optional): Maximum rows per list, 1 to 500 (default 100)
+
+**Output:** Repository/branch/commit and tree or summary rows (64 KiB maximum).
+
+**Errors:**
+
+- `NOT_FOUND`: No indexed snapshot for this Product, repository or branch.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `{"product_id":"p","repository_id":"repo","depth":2,"limit":50}`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `GET /api/code/map` — http_route
+
+Summarize the indexed repository tree with languages, sizes, symbol counts, manifests and entry points.
+
+**When:** Start architecture discovery at the root or narrow by path_prefix and depth.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, required): Exact attached repository ID
+- `branch` (string, optional): Exact indexed branch; omit for default selection
+- `path_prefix` (string, optional): Relative directory or exact file
+- `depth` (integer, optional): Tree levels from 1 to 32 (default 3)
+- `limit` (integer, optional): Maximum rows per list, 1 to 500 (default 100)
+
+**Output:** Repository/branch/commit and tree or summary rows (64 KiB maximum).
+
+**Errors:**
+
+- `NOT_FOUND`: No indexed snapshot for this Product, repository or branch.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `GET /api/code/map?product_id=p&repository_id=repo&depth=2&limit=50`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `search_code` — mcp_tool
+
+Find indexed paths, symbol names and doc lines, routes, dependencies and documentation.
+
+**When:** Use a short phrase to locate code and docs without a local checkout.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, optional): Limit to one attached repository
+- `query` (string, required): Text query, 1 to 256 characters
+- `kind` (string, optional): file, symbol, route, dependency or doc
+- `limit` (integer, optional): Maximum cards, 1 to 50 (default 10)
+
+**Output:** Ranked commit-attributed cards and an explicit truncation flag (64 KiB maximum).
+
+**Errors:**
+
+- `NOT_FOUND`: Product or repository scope is unavailable.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `{"product_id":"p","query":"ServeHTTP","kind":"symbol","limit":10}`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `GET /api/code/search` — http_route
+
+Find indexed paths, symbol names and doc lines, routes, dependencies and documentation.
+
+**When:** Use a short phrase to locate code and docs without a local checkout.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, optional): Limit to one attached repository
+- `query` (string, required): Text query, 1 to 256 characters
+- `kind` (string, optional): file, symbol, route, dependency or doc
+- `limit` (integer, optional): Maximum cards, 1 to 50 (default 10)
+
+**Output:** Ranked commit-attributed cards and an explicit truncation flag (64 KiB maximum).
+
+**Errors:**
+
+- `NOT_FOUND`: Product or repository scope is unavailable.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `GET /api/code/search?product_id=p&query=ServeHTTP&kind=symbol&limit=10`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `get_code_file_outline` — mcp_tool
+
+Read the bounded outline of an exact relative path from the latest snapshot.
+
+**When:** Follow a search card or tree file and consult its commit before citing it.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, required): Exact attached repository ID
+- `path` (string, required): Exact slash-separated file path
+
+**Output:** Indexed symbols, routes and up to 4 KiB of allowed documentation (64 KiB maximum total).
+
+**Errors:**
+
+- `NOT_FOUND`: Product, repository, latest snapshot or path unavailable.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `{"product_id":"p","repository_id":"repo","path":"cmd/server/main.go"}`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `GET /api/code/outline` — http_route
+
+Read the bounded outline of an exact relative path from the latest snapshot.
+
+**When:** Follow a search card or tree file and consult its commit before citing it.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, required): Exact attached repository ID
+- `path` (string, required): Exact slash-separated file path
+
+**Output:** Indexed symbols, routes and up to 4 KiB of allowed documentation (64 KiB maximum total).
+
+**Errors:**
+
+- `NOT_FOUND`: Product, repository, latest snapshot or path unavailable.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `GET /api/code/outline?product_id=p&repository_id=repo&path=cmd%2Fserver%2Fmain.go`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `get_code_index_status` — mcp_tool
+
+Report upload freshness and truncation for indexed repository branches.
+
+**When:** Check before relying on an index or compare the digest before uploading.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, optional): Limit to one attached repository
+- `branch` (string, optional): Exact indexed branch; omit for default selection
+
+**Output:** Up to 200 branch cards (64 KiB maximum), with SHA, age and truncation flags.
+
+**Errors:**
+
+- `NOT_FOUND`: Product or explicitly selected repository scope is unavailable.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `{"product_id":"p","repository_id":"repo","branch":"main"}`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
+
+### `GET /api/code/status` — http_route
+
+Report upload freshness and truncation for indexed repository branches.
+
+**When:** Check before relying on an index or compare the digest before uploading.
+
+**Inputs:**
+
+- `product_id` (string, required): Exact Product ID
+- `repository_id` (string, optional): Limit to one attached repository
+- `branch` (string, optional): Exact indexed branch; omit for default selection
+
+**Output:** Up to 200 branch cards (64 KiB maximum), with SHA, age and truncation flags.
+
+**Errors:**
+
+- `NOT_FOUND`: Product or explicitly selected repository scope is unavailable.
+- `VALIDATION`: Correct invalid IDs or out-of-range query fields.
+
+**Example:** `GET /api/code/status?product_id=p&repository_id=repo&branch=main`
+
+**Related:** `get_project_context`, `search_product_knowledge`
+
+**Authority:** Read-only observation of uploaded code knowledge; not a current Git or release attestation.
 
 ## delivery
 

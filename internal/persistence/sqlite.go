@@ -35,6 +35,14 @@ func OpenSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
 
 func (s *SQLiteStore) Close() { _ = s.db.Close() }
 
+func OpenSQLiteReadOnly(ctx context.Context, path string) (*SQLiteStore, error) {
+	db, err := sqlitefile.OpenReadOnly(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return &SQLiteStore{db: db}, nil
+}
+
 func (s *SQLiteStore) begin(ctx context.Context, readOnly bool) (sqliteTransaction, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	return sqliteTransaction{tx}, err

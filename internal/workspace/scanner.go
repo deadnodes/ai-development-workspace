@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -325,28 +326,44 @@ func safeRefs(path string) error {
 	})
 }
 
-type cappedOutput struct{ data []byte }
+type cappedOutput struct {
+	data     []byte
+	limit    int
+	overflow bool
+}
 
 func (w *cappedOutput) Write(p []byte) (int, error) {
-	if len(w.data)+len(p) > maxGitOutput {
-		return 0, fmt.Errorf("git output too large")
+	if len(w.data)+len(p) > w.limit {
+		remaining := w.limit - len(w.data)
+		w.data = append(w.data, p[:remaining]...)
+		w.overflow = true
+		return remaining, errPathBudget
 	}
 	w.data = append(w.data, p...)
 	return len(p), nil
 }
 func git(ctx context.Context, path string, args ...string) (string, error) {
+	value, err := gitOutput(ctx, path, maxGitOutput, args...)
+	return strings.TrimSpace(value), err
+}
+
+func gitOutput(ctx context.Context, path string, limit int, args ...string) (string, error) {
 	fixed := []string{"--no-pager", "-c", "safe.directory=" + filepath.ToSlash(path), "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-C", path}
 	cmd := exec.CommandContext(ctx, "git", append(fixed, args...)...)
 	// Do not inherit injected GIT_DIR/GIT_CONFIG_COUNT/credential helpers or user
 	// configuration. These are plumbing reads and cannot start network operations.
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_CEILING_DIRECTORIES=" + filepath.Dir(path), "LC_ALL=C"}
-	output := &cappedOutput{}
+	if runtime.GOOS == "windows" {
+		cmd.Env = append(cmd.Env, "SystemRoot="+os.Getenv("SystemRoot"))
+	}
+	output := &cappedOutput{limit: limit}
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return "", err
+	err := cmd.Run()
+	if output.overflow {
+		return string(output.data), errPathBudget
 	}
-	return strings.TrimSpace(string(output.data)), nil
+	return string(output.data), err
 }
 func sanitizeRemote(value string) (string, bool) {
 	if value == "" || strings.ContainsAny(value, "\r\n\t ") {

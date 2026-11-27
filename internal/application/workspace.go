@@ -266,12 +266,21 @@ func (s *Service) ProjectContext(ctx context.Context, product string) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	return s.projectContextFromState(st, product)
+	result, err := s.projectContextFromState(st, product)
+	if err != nil {
+		return nil, err
+	}
+	code, err := s.projectCodeStatus(ctx, st, product)
+	if err != nil {
+		return nil, err
+	}
+	result["code_index"] = code
+	return result, nil
 }
 
 // projectContextFromState assembles the Product context from an already loaded,
 // already scoped State (used when no bounded context reader exists).
-func (s *Service) projectContextFromState(st domain.State, product string) (any, error) {
+func (s *Service) projectContextFromState(st domain.State, product string) (map[string]any, error) {
 	if !productExists(&st, product) {
 		return nil, missing("product", product)
 	}

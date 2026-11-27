@@ -4,7 +4,8 @@
     "repository": "https://github.com/deadnodes/ai-tools",
     "commit": "4a25d7edcdda49aa550d73967f156a9e572cd284",
     "path": ".workspace/skills/rcp-handoff/SKILL.md",
-    "sha256": "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179"
+    "sha256": "ae1d437e8b2e49c6b5ba83f85867ee5e70856abb35c65bf1c82a6ea38d5d2179",
+    "local_amendments": "Checkout-free code and architecture planning guidance maintained in this repository."
   },
   {
     "name": "rcp-delivery",

@@ -17,6 +17,9 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"releasecontrol/internal/agentguide"
+	"releasecontrol/internal/application"
+	"releasecontrol/internal/domain"
+	"releasecontrol/internal/persistence"
 )
 
 type doctorCheck struct {
@@ -46,15 +49,47 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	explicitEndpoint := raw != ""
+	if data == "" && tokenEnv != "" && !explicitEndpoint {
+		return errors.New("--token-env requires an explicit --url")
+	}
+	if root, err := filepath.Abs(workspace); err == nil {
+		binding := readIndexBinding(root)
+		if raw == "" && data == "" {
+			raw = binding.URL
+		}
+		if product == "" && (data != "" && binding.URL == "" || raw != "" && strings.TrimRight(raw, "/") == strings.TrimRight(binding.URL, "/")) {
+			product = binding.ProductID
+		}
+		var profileExplicit bool
+		f.Visit(func(field *flag.Flag) { profileExplicit = profileExplicit || field.Name == "profile" })
+		if data == "" && !profileExplicit && tokenEnv == "" {
+			if raw != "" && strings.TrimRight(raw, "/") == strings.TrimRight(binding.URL, "/") && binding.Profile != "" {
+				profile = binding.Profile
+			} else if explicitEndpoint && os.Getenv("RC_TOKEN") != "" {
+				tokenEnv = "RC_TOKEN"
+			}
+		}
+	}
 	if data != "" {
 		var conflicts bool
 		f.Visit(func(flag *flag.Flag) {
-			conflicts = conflicts || flag.Name == "url" || flag.Name == "profile" || flag.Name == "token-env" || flag.Name == "product-id"
+			conflicts = conflicts || flag.Name == "url" || flag.Name == "profile" || flag.Name == "token-env"
 		})
 		if conflicts {
 			return errors.New("--data cannot be combined with remote connection options")
 		}
-		return doctorLocal(data, workspace, name, out)
+		err := doctorLocal(data, workspace, name, out)
+		if product != "" {
+			store, openErr := persistence.OpenSQLiteReadOnly(ctx, data)
+			if openErr == nil {
+				defer store.Close()
+				reportCodeFreshness(ctx, application.New(store), product, out)
+			} else {
+				fmt.Fprintln(out, "WARN Code index freshness unavailable in this SQLite file")
+			}
+		}
+		return err
 	}
 	endpoint, endpointErr := secureEndpoint(raw)
 	root, rootErr := filepath.Abs(workspace)
@@ -128,6 +163,9 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 		if product != "" {
 			_, pe := productContextCheck(ctx, endpoint, token, product)
 			add("Product exists", "./bin/release-control doctor --url "+endpoint+" --product-id "+product, pe)
+			if token != "" {
+				reportCodeFreshness(ctx, remoteIndex{endpoint, token}, product, out)
+			}
 		} else {
 			add("Product exists", "./bin/release-control doctor --url "+endpoint+" --product-id PRODUCT_ID", errors.New("--product-id is required"))
 		}
@@ -221,6 +259,34 @@ func RunDoctor(ctx context.Context, args []string, out io.Writer) error {
 		return errors.New("doctor found failing checks")
 	}
 	return nil
+}
+
+func reportCodeFreshness(ctx context.Context, backend indexBackend, product string, out io.Writer) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	status, err := backend.GetCodeIndexStatus(ctx, domain.CodeStatusRequest{ProductID: product})
+	if err != nil {
+		fmt.Fprintf(out, "WARN Code index freshness unavailable: %v\n", err)
+		return
+	}
+	if len(status.Items) == 0 {
+		fmt.Fprintln(out, "WARN No code indexes uploaded; run release-control index")
+	}
+	for _, item := range status.Items {
+		age := time.Duration(min(item.AgeSeconds, int64((1<<63-1)/time.Second))) * time.Second
+		label := "OK"
+		if age >= time.Hour || len(item.Truncated) != 0 {
+			label = "WARN"
+		}
+		fmt.Fprintf(out, "%s Code index %s %s %s: age %s", label, item.RepositoryID, item.Branch, item.Commit, age.Truncate(time.Second))
+		if len(item.Truncated) != 0 {
+			fmt.Fprintf(out, "; truncated: %s", strings.Join(item.Truncated, ", "))
+		}
+		fmt.Fprintln(out)
+	}
+	if status.Truncated {
+		fmt.Fprintln(out, "WARN Code index freshness listing was truncated")
+	}
 }
 
 func versionSuffix(v string) string {
