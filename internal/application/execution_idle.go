@@ -119,7 +119,8 @@ func evaluateGroupIdle(st *domain.State, group domain.ExecutionGroup, now time.T
 	ended := group.TurnEndAt != nil && (group.TurnStartAt == nil || group.TurnEndAt.After(*group.TurnStartAt))
 	for _, integrationID := range group.MemberIntegrationIDs {
 		child := integration(st, integrationID)
-		if !groupOwnsIntegration(group, child) || firstGroupWake(st, child).GroupID != group.ID {
+		selectedGroup := memberGroup(st, child, now)
+		if !groupOwnsIntegration(group, child) || selectedGroup == nil || selectedGroup.ID != group.ID {
 			continue
 		}
 		execution := executionFor(st, integrationID)

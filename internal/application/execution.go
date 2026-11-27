@@ -95,9 +95,41 @@ func firstGroupWake(st *domain.State, child *domain.Integration) domain.Executio
 	return domain.ExecutionWakeTarget{}
 }
 
+func liveExecutionClaim(execution *domain.IntegrationExecution, now time.Time) bool {
+	return execution != nil && execution.State == "running" && execution.LeaseUntil != nil && now.Before(*execution.LeaseUntil)
+}
+
+// memberGroup selects the group responsible for a member's orchestrator work.
+// A live execution claim pins that responsibility to its orchestrator; without
+// one, preserve the historical first registered group behavior.
+func memberGroup(st *domain.State, child *domain.Integration, now time.Time) *domain.ExecutionGroup {
+	if child == nil {
+		return nil
+	}
+	if execution := executionFor(st, child.ID); liveExecutionClaim(execution, now) {
+		for index := range st.ExecutionGroups {
+			group := &st.ExecutionGroups[index]
+			if groupOwnsIntegration(*group, child) && group.OrchestratorID == execution.OrchestratorID {
+				return group
+			}
+		}
+		return nil
+	}
+	for index := range st.ExecutionGroups {
+		group := &st.ExecutionGroups[index]
+		if groupOwnsIntegration(*group, child) && group.OrchestratorHarness.Kind != "" && (group.OrchestratorHarness.SessionRef != "" || group.OrchestratorHarness.TmuxTarget != "") {
+			return group
+		}
+	}
+	return nil
+}
+
 func memberWakeTarget(st *domain.State, child *domain.Integration) (domain.ExecutionWakeTarget, string) {
-	if wake := firstGroupWake(st, child); wake.Kind != "" {
-		return wake, ""
+	if group := memberGroup(st, child, time.Now().UTC()); group != nil {
+		if group.OrchestratorHarness.Kind != "" && (group.OrchestratorHarness.SessionRef != "" || group.OrchestratorHarness.TmuxTarget != "") {
+			return groupWakeTarget(*group), ""
+		}
+		return domain.ExecutionWakeTarget{}, ""
 	}
 	if child != nil && child.Assignee != "" {
 		for _, scope := range []string{child.ProductID, ""} {

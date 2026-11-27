@@ -187,8 +187,7 @@ tmux new -s orch-backend
 ```
 
 Have the orchestrator register the group's `orchestrator_harness` with
-`tmux_target` set to `orch-backend` (or a precise pane such as
-`orch-backend:0.1`) through `create_execution_group` or
+`tmux_target` set to the exact pane `orch-backend:0.1` through `create_execution_group` or
 `set_execution_group_harness`. It claims each member separately with
 `claim_execution`. Install the provided plist, replacing `OWNER` with the
 mini's short account name:
@@ -237,6 +236,15 @@ launchctl bootout gui/$(id -u)/com.deadnodes.rcp-supervisor
 | `claude_desktop` | tmux only | No supported out-of-process Desktop API; without tmux this is acknowledged unsupported. |
 | `ccr` | tmux only | No generic router resume protocol is assumed. |
 | `other` | tmux only | Adapter-specific wake protocol is not assumed. |
+
+### Limits
+
+Register an orchestrator harness with an exact pane target, either
+`session:window.pane` (for example `orch-backend:0.1`) or `%pane_id`. A bare
+session target resolves to that session's active pane when delivery occurs, so
+pane focus changes can redirect a wake. Run one orchestrator per tmux session;
+cooldowns are tracked per session. Headless resume is not used for orchestrator
+wakes: every orchestrator must have a tmux target.
 
 The supervisor never scrapes agent session stores. Session refs must be
 registered by their owning orchestrator. tmux detection is pane-content based;

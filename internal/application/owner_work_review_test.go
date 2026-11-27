@@ -311,6 +311,33 @@ func TestMemberWakeRoutesEveryConditionToAnOrchestrator(t *testing.T) {
 	}
 }
 
+func TestOverlappingGroupsFollowLiveClaimOrchestrator(t *testing.T) {
+	work := ownerWorkReviewFixture(t)
+	work.run(work.owner, "assign_integration", "p", "", "i", "", map[string]any{"assignee": "alice"})
+	now := time.Now().UTC()
+	leaseUntil := now.Add(time.Hour)
+	harness := func(target string) domain.ExecutionHarness {
+		return domain.ExecutionHarness{Kind: "codex", TmuxTarget: target}
+	}
+	work.store.state.ExecutionGroups = []domain.ExecutionGroup{
+		{ID: "group-a", ProductID: "p", Owner: "alice", OrchestratorID: "orch-a", MemberIntegrationIDs: []string{"i"}, OrchestratorHarness: harness("harness-a")},
+		{ID: "group-b", ProductID: "p", Owner: "alice", OrchestratorID: "orch-b", MemberIntegrationIDs: []string{"i"}, OrchestratorHarness: harness("harness-b")},
+	}
+	work.store.state.IntegrationExecutions = []domain.IntegrationExecution{{
+		ID: "execution", IntegrationID: "i", ProductID: "p", State: "running", OrchestratorID: "orch-b", LeaseUntil: &leaseUntil,
+	}}
+
+	wake, _ := memberWakeTarget(&work.store.state, integration(&work.store.state, "i"))
+	if wake.GroupID != "group-b" || wake.TmuxTarget != "harness-b" {
+		t.Fatalf("wake target = %+v; want group B harness", wake)
+	}
+	_, membersA := evaluateGroupIdle(&work.store.state, work.store.state.ExecutionGroups[0], now)
+	_, membersB := evaluateGroupIdle(&work.store.state, work.store.state.ExecutionGroups[1], now)
+	if len(membersA) != 0 || len(membersB) != 1 || membersB[0].IntegrationID != "i" {
+		t.Fatalf("idle membership: group A=%+v, group B=%+v", membersA, membersB)
+	}
+}
+
 func TestReviewTransferInvalidatesExecutorAndGroupWakeTargets(t *testing.T) {
 	work := ownerWorkReviewFixture(t)
 	work.register(work.bob, "bob-orchestrator")
