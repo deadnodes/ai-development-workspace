@@ -182,6 +182,11 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 		result = WakeResult{Outcome: Unsupported, Detail: "missing session_ref and tmux_target"}
 	} else {
 		groupID := ""
+		workAvailable, resolvedBlocker := false, false
+		for _, delivery := range claimed {
+			workAvailable = workAvailable || delivery.ev.Type == "work_available"
+			resolvedBlocker = resolvedBlocker || (delivery.ev.Type == "execution_continuation_required" && delivery.ev.Reason == "blocker resolved" && idPattern.MatchString(delivery.ev.IntegrationID))
+		}
 		for _, c := range claimed {
 			for _, gid := range c.ev.GroupIDs {
 				if idPattern.MatchString(gid) {
@@ -193,7 +198,7 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 				break
 			}
 		}
-		if groupID == "" || !idPattern.MatchString(groupID) {
+		if groupID == "" && !workAvailable && !resolvedBlocker {
 			result = WakeResult{Outcome: Unsupported, Detail: "missing valid execution group"}
 		} else if !ValidSessionRef(session) && target == "" {
 			result = WakeResult{Outcome: Unsupported, Detail: "invalid session_ref"}
@@ -203,6 +208,19 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 				types = append(types, safeEventType(c.ev.Type))
 			}
 			message := fmt.Sprintf("[RCP supervisor] Unfinished work in execution group %s (%d events: %s). Call get_execution_group with group_id=%s and continue every member. Work counts as done only when each Integration reaches its desired_state. For every member: follow its next_action from get_execution_group (resume with your fence if lost, claim if unassigned), transition with execution_fence, release_execution(outcome=completed) at the end.", groupID, len(claimed), strings.Join(types, ", "), groupID)
+			if groupID == "" {
+				message = "[RCP supervisor]"
+			}
+			if resolvedBlocker && groupID == "" {
+				for _, delivery := range claimed {
+					if delivery.ev.Type == "execution_continuation_required" && delivery.ev.Reason == "blocker resolved" && idPattern.MatchString(delivery.ev.IntegrationID) {
+						message += " A blocker was resolved. Call get_integration_context with integration_id=" + delivery.ev.IntegrationID + " and verify its current state and fence before continuing."
+					}
+				}
+			}
+			if workAvailable {
+				message += " Work is available for your user. Call next_work and list_questions as your current principal. Claim eligible integrations before starting them; plan ready features that have no integrations."
+			}
 			s.mu.Lock()
 			last := s.wakes[key]
 			now := s.Now()
@@ -246,7 +264,7 @@ func (s *Supervisor) allowed(k string) bool {
 }
 func safeEventType(t string) string {
 	switch t {
-	case "execution_lost", "execution_stalled", "execution_unassigned", "execution_continuation_required":
+	case "execution_lost", "execution_stalled", "execution_unassigned", "execution_continuation_required", "work_available":
 		return t
 	}
 	return "unknown"

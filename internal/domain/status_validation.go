@@ -100,12 +100,20 @@ func ValidateStateStatuses(st State) error {
 		}
 	}
 	for _, v := range st.Memories {
-		if v.Kind == "blocker" {
-			if err := check("blocker", v.ID, v.Status, false); err != nil {
+		if v.Kind == "blocker" || v.Kind == "question" {
+			if err := check(v.Kind, v.ID, v.Status, false); err != nil {
 				return err
 			}
 		} else if v.Status != "" {
-			return fmt.Errorf("non-blocker memory entity %q cannot carry status %q", v.ID, v.Status)
+			return fmt.Errorf("memory entity %q cannot carry status %q", v.ID, v.Status)
+		}
+		if v.Kind == "question" && (v.Question == nil || v.Question.AddressedTo == "" || v.Question.AskedBy == "" || (v.Status == "answered") != (v.Question.Answer != nil)) || v.Kind != "question" && v.Question != nil {
+			return fmt.Errorf("invalid question details on memory %q", v.ID)
+		}
+	}
+	for _, v := range st.FeatureDependencies {
+		if err := check("feature_dependency", v.ID, v.Status, false); err != nil {
+			return err
 		}
 	}
 	for _, v := range st.Findings {

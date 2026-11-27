@@ -35,6 +35,7 @@ func (s *Service) resumeFromState(ctx context.Context, st domain.State, featureI
 	ins := []domain.Integration{}
 	other := []domain.Integration{}
 	mem := []domain.Memory{}
+	questions := []map[string]any{}
 	gates := []domain.Gate{}
 	checks := []domain.Check{}
 	results := []domain.CheckResult{}
@@ -71,6 +72,9 @@ func (s *Service) resumeFromState(ctx context.Context, st domain.State, featureI
 	for _, v := range st.Memories {
 		if v.FeatureID == featureID {
 			mem = append(mem, v)
+			if len(questions) < 20 && v.Kind == "question" && v.Status == "open" && v.Question != nil {
+				questions = append(questions, map[string]any{"id": v.ID, "title": contextExcerpt(v.Title, 160), "integration_id": v.IntegrationID, "kind": v.Question.Kind, "addressed_to": v.Question.AddressedTo, "blocking": v.Question.Blocking})
+			}
 			if v.Kind == "handoff" {
 				previous, found := latestHandoffs[v.IntegrationID]
 				if !found || !v.CreatedAt.Before(previous.CreatedAt) {
@@ -203,6 +207,7 @@ func (s *Service) resumeFromState(ctx context.Context, st domain.State, featureI
 	}
 	response["project_context"] = projectContext
 	addExternalContext(response, st, featureID)
+	response["open_questions"] = questions
 	addDeliveryContext(response, st, featureID, "")
 	return response, nil
 }

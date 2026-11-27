@@ -119,6 +119,20 @@ func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 	}
 }
 
+func TestWorkAvailableUsesRegisteredTargetAndFixedPrompt(t *testing.T) {
+	adapter := &fakeAdapter{}
+	event := testEvent("work-event", "codex", "session-12345678", "orch:0.1", "", "work_available")
+	event.IntegrationID, event.GroupIDs = "", nil
+	_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
+	if len(adapter.requests) != 1 || len(api.acks) != 1 || api.acks[0].Outcome != "delivered" {
+		t.Fatalf("wake=%+v, ack=%+v", adapter.requests, api.acks)
+	}
+	request := adapter.requests[0]
+	if !strings.Contains(request.Message, "next_work") || !strings.Contains(request.Message, "list_questions") || strings.Contains(request.Message, "UNTRUSTED") {
+		t.Fatalf("unexpected wake message: %s", request.Message)
+	}
+}
+
 func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	ctx := context.Background()
 	store, err := persistence.OpenSQLite(ctx, filepath.Join(t.TempDir(), "app.db"))

@@ -37,8 +37,9 @@ paths. Defaults are resolved using the launchd `PATH`.
 
 Run each supervisor with an agent token owned by the human whose orchestrators
 it should wake. Event polling and delivery are filtered by that human's
-Integration assignments. A service principal can see and deliver events for
-every human, so use one only for an intentionally instance-wide supervisor.
+Integration assignments. `work_available` events are visible and deliverable
+only to the registered user or an agent owned by that user. A service principal
+can still see and deliver existing Integration events across assignments.
 `headless_kinds` defaults to empty, so only registered tmux sessions are woken.
 Opt in per kind (currently `codex` and `claude_code`) only when headless resume is
 intended; the process-list guard cannot see an interactive TUI whose session ID
@@ -57,6 +58,12 @@ registration contains `kind` and `tmux_target` (and `session_ref` when available
 Re-register it after every restart that creates a new harness session. Member
 executor harnesses belong on execution claims. Keep the orchestrator in that pane
 and attach to the same session from another Mac:
+
+For work without a current executor target, also use `register_user_orchestrator`
+with the same harness. Use a Product-specific registration or omit the Product
+for a single registration across the caller's visible Products. `work_available`
+wakes the session with a fixed prompt to read `next_work` and the question inbox.
+No question text is sent to the terminal by the supervisor.
 
 ```sh
 ssh -t <host> tmux attach -t orch-backend

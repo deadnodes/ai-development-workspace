@@ -69,6 +69,9 @@ func createExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ,
 			}
 		}
 	}
+	if wake.Kind == "" && reason == "blocker resolved" && e.Harness.Kind != "" && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") {
+		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
+	}
 	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
@@ -346,7 +349,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
 				if x.SupervisorID == "" || ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) {
@@ -401,7 +404,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
 				if ev.Delivery.Attempts == 0 || ev.Delivery.DeliveryID != x.DeliveryID || x.SupervisorID == "" || (x.Outcome != "delivered" && x.Outcome != "failed" && x.Outcome != "unsupported") || ev.Delivery.AcknowledgedAt != nil {
@@ -412,6 +415,10 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				ev.Delivery.AcknowledgedAt = &t
 				ev.Delivery.AcknowledgedBy = x.SupervisorID
 				ev.Acknowledgements = append(ev.Acknowledgements, domain.ExecutionEventAck{DeliveryID: x.DeliveryID, SupervisorID: x.SupervisorID, Outcome: x.Outcome, Detail: x.Detail, At: now})
+				if ev.Type == "work_available" && x.Outcome == "delivered" && ev.Resolution.ResolvedAt == nil {
+					ev.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: x.SupervisorID, Evidence: "wake delivered"}
+					appendExecutionEventAudit(st, *ev, "execution_event_resolved", x.SupervisorID, now, nil)
+				}
 				if x.Outcome == "delivered" && ev.Resolution.ResolvedAt == nil {
 					ex := executionFor(st, ev.IntegrationID)
 					if ex != nil && ex.Reconciliation.ActionRequired && ex.Reconciliation.Generation == ev.ConditionGeneration {
@@ -459,7 +466,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if ev.ProductID != c.ProductID {
 					return invalid("SCOPE_MISMATCH")
 				}
-				if err := requireIntegrationUser(ctx, integration(st, ev.IntegrationID), false); err != nil {
+				if err := requireExecutionEventUser(ctx, st, ev); err != nil {
 					return err
 				}
 				if ev.Resolution.ResolvedAt != nil || x.SupervisorID == "" || x.Evidence == "" {
@@ -492,6 +499,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				if err := requireIntegrationUser(ctx, in, true); err != nil {
 					return err
 				}
+			}
+			if err := guardFeatureStart(ctx, st, in); err != nil {
+				return err
 			}
 			e := executionFor(st, c.IntegrationID)
 			var x struct {
@@ -574,6 +584,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				e.DesiredState = x.DesiredState
 				e.OrchestratorID = x.OrchestratorID
 				e.AgentID = x.AgentID
+				e.LeasePrincipal = c.Actor
 				e.Harness = x.Harness
 				e.StalledTimeoutSeconds = x.StalledTimeoutSeconds
 				executionCondition(st, e, "running", false, "", now)
@@ -613,6 +624,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				e = &domain.IntegrationExecution{ID: id(), IntegrationID: in.ID, ProductID: in.ProductID, DesiredState: x.DesiredState, State: "running", OrchestratorID: x.OrchestratorID, AgentID: x.AgentID, Harness: x.Harness, Fence: 1, LeaseTTLSeconds: ttl, LeaseUntil: &until, ClaimedAt: &now, LastHeartbeat: &now, LastProgress: &now, Reconciliation: domain.ExecutionReconciliation{Enabled: true}}
 				e.StalledTimeoutSeconds = x.StalledTimeoutSeconds
 				e.Reconciliation.ActionRequired = false
+				e.LeasePrincipal = c.Actor
 				st.IntegrationExecutions = append(st.IntegrationExecutions, *e)
 			}
 			out = *e
@@ -678,6 +690,13 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if state != "running" && state != "waiting_external" && state != "blocked" && state != "paused" && state != "cancelled" && state != "exited_incomplete" && state != "completed" {
 				return invalid("INVALID_STATE")
 			}
+			if state == "running" && e.State != "running" {
+				if child := integration(st, c.IntegrationID); child != nil {
+					if err := guardFeatureStart(ctx, st, child); err != nil {
+						return err
+					}
+				}
+			}
 			if state == "completed" {
 				in := integration(st, c.IntegrationID)
 				if in == nil || !statusReachedIntegration(in.Status, e.DesiredState) {
@@ -716,7 +735,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if state == "blocked" {
 				found := false
 				for _, m := range st.Memories {
-					if m.ID == blockerRef && m.Kind == "blocker" {
+					if m.ID == blockerRef && (m.Kind == "blocker" || questionBlocked(m) && m.ProductID == e.ProductID && (m.IntegrationID == e.IntegrationID || m.IntegrationID == "" && integration(st, e.IntegrationID) != nil && m.FeatureID == integration(st, e.IntegrationID).FeatureID)) {
 						productID := m.ProductID
 						if productID == "" {
 							if f := feature(st, m.FeatureID); f != nil {
@@ -1000,7 +1019,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 			case "blocked":
 				required = false
 				for _, m := range st.Memories {
-					if m.ID == e.BlockerRef && m.Kind == "blocker" && m.Status == "resolved" {
+					if m.ID == e.BlockerRef && resolvedExecutionBlocker(m) {
 						required, reason = true, "blocker resolved"
 					}
 				}
@@ -1062,8 +1081,9 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	changed := false
 	if err := s.view(ctx, func(st *domain.State) error {
 		// Borrow read-only state and copy only the collection the plan mutates.
-		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups}
+		snapshot := domain.State{IntegrationExecutions: slices.Clone(st.IntegrationExecutions), Integrations: st.Integrations, Products: st.Products, Operations: st.Operations, Builds: st.Builds, Deployments: st.Deployments, Memories: st.Memories, ExecutionGroups: st.ExecutionGroups, Features: st.Features, FeatureDependencies: st.FeatureDependencies, UserOrchestrators: slices.Clone(st.UserOrchestrators)}
 		changed = reconcileExecutions(&snapshot, now, globalTimeout, debounce)
+		changed = reconcileUserWork(&snapshot, now) || changed
 		return nil
 	}); err != nil {
 		return err
@@ -1077,8 +1097,53 @@ func (s *Service) ReconcileExecutionsOnce(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("execution reconciler requires UpdateScoped")
 	}
-	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
+	return scoped.UpdateScoped(ctx, domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events", "user_orchestrators"}, AppendCollections: []string{"events"}}, func(st *domain.State) error {
 		reconcileExecutions(st, now, globalTimeout, debounce)
+		reconcileUserWork(st, now)
 		return nil
 	})
+}
+
+func leasePrincipal(execution *domain.IntegrationExecution) string {
+	if execution.LeasePrincipal != "" {
+		return execution.LeasePrincipal
+	}
+	return execution.AgentID
+}
+
+func resolvedExecutionBlocker(memory domain.Memory) bool {
+	return memory.Kind == "blocker" && memory.Status == "resolved" || memory.Kind == "question" && (memory.Status == "answered" || memory.Status == "withdrawn")
+}
+
+func wakeResolvedQuestion(st *domain.State, question domain.Memory, now time.Time) bool {
+	found := false
+	for index := range st.IntegrationExecutions {
+		execution := &st.IntegrationExecutions[index]
+		if execution.ProductID != question.ProductID || execution.State != "blocked" || execution.BlockerRef != question.ID || !execution.Reconciliation.Enabled {
+			continue
+		}
+		first := len(st.ExecutionEvents)
+		executionCondition(st, execution, "blocked", true, "blocker resolved", now)
+		for _, event := range st.ExecutionEvents[first:] {
+			found = found || event.WakeTarget.Kind != ""
+		}
+	}
+	return found
+}
+
+func executionEventVisibleTo(ctx context.Context, st *domain.State, event domain.ExecutionEvent) bool {
+	if event.Type == "work_available" {
+		return event.Owner != "" && event.Owner == workUser(ctx)
+	}
+	return executionVisibleTo(ctx, integration(st, event.IntegrationID))
+}
+
+func requireExecutionEventUser(ctx context.Context, st *domain.State, event *domain.ExecutionEvent) error {
+	if event.Type == "work_available" {
+		if !executionEventVisibleTo(ctx, st, *event) {
+			return missing("execution_event", event.ID)
+		}
+		return nil
+	}
+	return requireIntegrationUser(ctx, integration(st, event.IntegrationID), false)
 }

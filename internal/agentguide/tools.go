@@ -318,6 +318,7 @@ func completedRoutes() []ToolEntry {
 func Registry() []ToolEntry {
 	out := append([]ToolEntry(nil), documented...)
 	out = append(out, completedRoutes()...)
+	out = append(out, workTools()...)
 	// Flow routes are alternate transports for these execute actions. Keep the
 	// route spelling on the action record so exact lookup returns one operation
 	// guide with a shared contract.
@@ -377,7 +378,7 @@ func Registry() []ToolEntry {
 		}
 		for j := range e.Inputs {
 			f := &e.Inputs[j]
-			f.Required = requiredScope[e.Name][f.Name] || requiredData[e.Name][f.Name] || f.Name == "action" || f.Name == "data"
+			f.Required = e.Area == "owner_work" && f.Required || requiredScope[e.Name][f.Name] || requiredData[e.Name][f.Name] || f.Name == "action" || f.Name == "data"
 			if t := fieldTypes[f.Name]; t != "" {
 				f.Type = t
 			}

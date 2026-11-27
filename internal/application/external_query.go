@@ -72,6 +72,10 @@ func remainingExecutionSteps(current, desired string) []string {
 }
 
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
+	switch name {
+	case "list_questions", "get_question", "get_dependency_graph", "next_work", "status_overview":
+		return s.queryWork(ctx, name, id)
+	}
 	if name == "list_branches" {
 		return s.listBranches(ctx, id)
 	}
@@ -184,7 +188,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			if ev.ProductID != productID {
 				continue
 			}
-			if !executionVisibleTo(ctx, integration(&st, ev.IntegrationID)) {
+			if !executionEventVisibleTo(ctx, &st, ev) {
 				continue
 			}
 			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
@@ -478,6 +482,11 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			return nil, missing("product", id)
 		}
 		items := retentionAttentionReport(s.evaluateRetention(st, id, time.Now().UTC(), freshness))
+		for _, question := range st.Memories {
+			if question.ProductID == id && question.Kind == "question" && question.Status == "open" && question.Question != nil && question.Question.AddressedTo == workUser(ctx) {
+				items = append(items, map[string]any{"id": "question:" + question.ID, "question_id": question.ID, "feature_id": question.FeatureID, "code": "OPEN_QUESTION", "text": question.Title})
+			}
+		}
 		for i := range st.Integrations {
 			in := &st.Integrations[i]
 			if in.ProductID == id && in.Assignee != "" && !executionVisibleTo(ctx, in) {
@@ -506,7 +515,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		}
 		_, _, escalationThreshold := executionNotifyConfig(s)
 		for _, ev := range st.ExecutionEvents {
-			if ev.ProductID == id && ev.Resolution.ResolvedAt == nil && executionVisibleTo(ctx, integration(&st, ev.IntegrationID)) && (ev.EscalationRequired || ev.Delivery.Attempts >= escalationThreshold) {
+			if ev.ProductID == id && ev.Resolution.ResolvedAt == nil && executionEventVisibleTo(ctx, &st, ev) && (ev.EscalationRequired || ev.Delivery.Attempts >= escalationThreshold) {
 				items = append(items, map[string]any{"id": "execution-event:" + ev.ID, "execution_event_id": ev.ID, "integration_id": ev.IntegrationID, "reason": "EXECUTION_EVENT_ESCALATION_REQUIRED", "type": ev.Type, "attempts": ev.Delivery.Attempts})
 			}
 		}

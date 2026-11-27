@@ -76,6 +76,10 @@ func scopedFixture() domain.State {
 		if f.Kind() != reflect.Slice {
 			continue
 		}
+		if typ.Field(i).Name == "FeatureDependencies" || typ.Field(i).Name == "UserOrchestrators" {
+			f.Set(reflect.MakeSlice(f.Type(), 0, 0))
+			continue
+		}
 		elem := f.Type().Elem()
 		xs := reflect.MakeSlice(f.Type(), 0, 3)
 		for _, p := range []string{"p", "q", ""} {

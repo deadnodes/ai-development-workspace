@@ -2,6 +2,8 @@ package application
 
 import (
 	"encoding/json"
+	"slices"
+
 	"releasecontrol/internal/domain"
 )
 
@@ -56,6 +58,15 @@ func deleteProduct(st *domain.State, c domain.Command) error {
 			return invalid("product has unfinished operations; finish or cancel them before deletion")
 		}
 	}
+	deletedFeatures := map[string]bool{}
+	for _, feature := range st.Features {
+		if feature.ProductID == c.ProductID {
+			deletedFeatures[feature.ID] = true
+		}
+	}
+	st.FeatureDependencies = slices.DeleteFunc(st.FeatureDependencies, func(edge domain.FeatureDependency) bool {
+		return deletedFeatures[edge.FromFeatureID] || deletedFeatures[edge.ToFeatureID]
+	})
 	// State collections share product_id ownership. Instance registries and audit
 	// events deliberately survive deletion; no external provider is invoked.
 	b, err := json.Marshal(st)

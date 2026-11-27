@@ -120,6 +120,9 @@ func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	return request.executeCommand(ctx, c, nil)
 }
 func (s *Service) executeCommand(ctx context.Context, c domain.Command, origin *composeRefreshOrigin) (any, error) {
+	if slices.Contains(domain.WorkActions, c.Action) {
+		return s.executeWorkCommand(ctx, c)
+	}
 	if c.Action == "set_product_visibility" || c.Action == "add_product_member" || c.Action == "remove_product_member" {
 		return s.executeProductMembership(ctx, c)
 	}
@@ -724,6 +727,10 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		if v.Owner != "" || len(v.Members) != 0 {
 			return nil, invalid("owner and members are server-managed")
 		}
+		if v.IdeaPromotion != "" && v.IdeaPromotion != "ask_owner" {
+			return nil, invalid("only the product owner may enable agent idea promotion after creation")
+		}
+		v.IdeaPromotion = "ask_owner"
 		v.Owner, _ = auth.PrivateProductViewer(ctx)
 		if v.Visibility == "private" && auth.IsLocalAdmin(ctx) {
 			v.Owner = "local"
@@ -752,21 +759,47 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				return nil, missing("product", c.ProductID)
 			}
 		}
-		if e := decode(c.Data, &v); e != nil {
+		featureData := c.Data
+		approvalID := ""
+		if approval, present := c.Data["approval_question_id"]; present && old != nil {
+			var ok bool
+			if approvalID, ok = approval.(string); !ok || approvalID == "" {
+				return nil, invalid("approval_question_id must be a nonempty question ID")
+			}
+			featureData = make(map[string]any, len(c.Data)-1)
+			for key, value := range c.Data {
+				if key != "approval_question_id" {
+					featureData[key] = value
+				}
+			}
+		}
+		if e := decode(featureData, &v); e != nil {
 			return nil, e
 		}
 		v.Meta = m
 		v.FeatureID = ""
+		if _, present := featureData["completed_at"]; present {
+			return nil, invalid("completed_at is server managed")
+		}
 		if !domain.ValidStatus("feature", v.Status) {
 			return nil, invalid("invalid feature status %q", v.Status)
 		}
-		if old == nil && v.Status != "planned" && v.Status != "active" {
-			return nil, invalid("new feature must be planned or active")
+		if old == nil && v.Status != "planned" && v.Status != "active" && v.Status != "idea" {
+			return nil, invalid("new feature must be planned, active or idea")
 		}
 		if old != nil && !domain.CanTransition("feature", old.Status, v.Status) {
 			return nil, invalid("feature transition %s -> %s is not allowed", old.Status, v.Status)
 		}
+		if old != nil && old.Status != v.Status && v.Status == "ready_for_execution" {
+			product := productByID(*st, v.ProductID)
+			if err := canApproveWork(ctx, st, product, v.ID, approvalID, "idea_promotion"); err != nil {
+				return nil, err
+			}
+		}
 		if v.Status == "completed" {
+			if old.Status != "completed" {
+				v.CompletedAt = &m.UpdatedAt
+			}
 			count := 0
 			for _, in := range st.Integrations {
 				if in.FeatureID == v.ID {
@@ -784,6 +817,8 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			if count == 0 {
 				return nil, invalid("feature completion requires integrations")
 			}
+		} else if old != nil && old.Status == "completed" {
+			v.CompletedAt = nil
 		}
 		if strings.TrimSpace(v.Title) == "" || strings.TrimSpace(v.Goal) == "" {
 			return nil, invalid("title and goal required")
@@ -845,6 +880,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			v.Status = "working"
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"
+				parent.CompletedAt = nil
 				parent.UpdatedAt = m.UpdatedAt
 			}
 		}
@@ -854,6 +890,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			st.Integrations = append(st.Integrations, v)
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"
+				parent.CompletedAt = nil
 				parent.UpdatedAt = m.UpdatedAt
 			}
 		}
@@ -881,10 +918,16 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				return nil, e
 			}
 		}
+		if status == "working" && v.Status != "working" {
+			if err := guardFeatureStart(ctx, st, v); err != nil {
+				return nil, err
+			}
+		}
 		v.Status = status
 		if status != "ready" {
 			if parent := feature(st, v.FeatureID); parent != nil && parent.Status == "completed" {
 				parent.Status = "active"
+				parent.CompletedAt = nil
 				parent.UpdatedAt = time.Now().UTC()
 			}
 		}
@@ -915,6 +958,9 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		v.Meta = m
 		v.IntegrationID = c.IntegrationID
 		v.Kind = map[string]string{"record_progress": "progress", "record_decision": "decision", "record_discovery": "discovery", "add_blocker": "blocker", "handoff": "handoff"}[c.Action]
+		if v.Question != nil {
+			return nil, invalid("question details are server-managed")
+		}
 		v.Status = ""
 		v.Resolution = ""
 		if v.Kind == "blocker" {

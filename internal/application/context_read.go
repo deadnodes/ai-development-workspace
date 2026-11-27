@@ -42,6 +42,8 @@ func (s *Service) ResumeSummary(ctx context.Context, featureID string) (any, err
 	}
 	integrations := []map[string]any{}
 	memories := []map[string]any{}
+	questions := []map[string]any{}
+	questionsTruncated := false
 	for _, i := range st.Integrations {
 		if i.FeatureID != featureID {
 			continue
@@ -56,6 +58,13 @@ func (s *Service) ResumeSummary(ctx context.Context, featureID string) (any, err
 		if m.FeatureID != featureID {
 			continue
 		}
+		if m.Kind == "question" && m.Status == "open" && m.Question != nil {
+			questions = append(questions, map[string]any{"id": m.ID, "title": contextExcerpt(m.Title, 160), "integration_id": m.IntegrationID, "kind": m.Question.Kind, "addressed_to": m.Question.AddressedTo, "blocking": m.Question.Blocking})
+			if len(questions) > 20 {
+				questions = questions[1:]
+				questionsTruncated = true
+			}
+		}
 		memories = append(memories, map[string]any{"id": m.ID, "integration_id": m.IntegrationID, "kind": m.Kind, "title": contextExcerpt(m.Title, 256), "body": contextExcerpt(m.Body, 800), "current": contextExcerpt(m.Current, 400), "updated_at": m.UpdatedAt, "status": m.Status, "reason": contextExcerpt(m.Reason, 400), "completed": contextItems(m.Completed), "remaining": contextItems(m.Remaining), "next": contextItems(m.Next), "warnings": contextItems(m.Warnings)})
 	}
 	memoriesTruncated := len(memories) > 20
@@ -63,6 +72,7 @@ func (s *Service) ResumeSummary(ctx context.Context, featureID string) (any, err
 		memories = memories[len(memories)-20:]
 	}
 	out := map[string]any{"projection": "bounded_feature_summary", "feature": map[string]any{"id": f.ID, "product_id": f.ProductID, "title": contextExcerpt(f.Title, 256), "status": f.Status, "goal": contextExcerpt(f.Goal, 1200)}, "integrations": integrations, "memories": memories, "integrations_truncated": integrationsTruncated, "memories_truncated": memoriesTruncated, "text_excerpted": true, "guidance": "Bounded navigation and latest memory excerpts only; not full history or acceptance evidence. Search graph/text for relevant context; HTTP /api/features/{id}/context retains the full operator context."}
+	out["open_questions"], out["open_questions_truncated"] = questions, questionsTruncated
 	// UTF-8 can consume four bytes per character. Enforce a hard response budget
 	// after excerpts and report every omitted group explicitly.
 	for {
@@ -83,6 +93,12 @@ func (s *Service) ResumeSummary(ctx context.Context, featureID string) (any, err
 			integrations = integrations[:len(integrations)-1]
 			out["integrations"] = integrations
 			out["integrations_truncated"] = true
+			continue
+		}
+		if len(questions) > 0 {
+			questions = questions[1:]
+			out["open_questions"] = questions
+			out["open_questions_truncated"] = true
 			continue
 		}
 		return nil, invalid("feature summary exceeds byte budget")

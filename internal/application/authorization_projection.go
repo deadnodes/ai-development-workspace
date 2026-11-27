@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -120,6 +121,9 @@ type referenceReader interface {
 }
 
 func (s commandAuthorizationStore) authorizePreflight(ctx context.Context) error {
+	if slices.Contains(domain.WorkActions, s.command.Action) {
+		return nil
+	}
 	var st domain.State
 	var err error
 	reader, projected := s.Store.(referenceReader)
