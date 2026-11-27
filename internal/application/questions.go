@@ -308,7 +308,7 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 				return nil, missing("question", question.ID)
 			}
 		}
-		details.Answer = &domain.QuestionAnswer{Text: answer.Text, OptionID: answer.OptionID, AnsweredBy: c.Actor, AnsweredAt: now, Validation: answer.Validation, Override: answer.Override}
+		details.Answer = &domain.QuestionAnswer{Text: answer.Text, OptionID: answer.OptionID, AnsweredBy: c.Actor, AnsweredByUser: workUser(ctx), AnsweredAt: now, Validation: answer.Validation, Override: answer.Override}
 		question.Question, question.Status, question.UpdatedAt = &details, "answered", now
 		snapshot := *question
 		optionText := ""
