@@ -132,14 +132,16 @@ func registerProviderTools(server *mcp.Server, service Service) {
 	for _, action := range []string{"claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "report_turn_end", "report_turn_start", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event"} {
 		registerExecutionCommandTool(server, service, action)
 	}
-	mcp.AddTool(server, &mcp.Tool{Name: "set_product_idle_policy", Description: "Set all three group idle thresholds in seconds (0 disables, maximum 604800). Product owner or instance admin only."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	mcp.AddTool(server, &mcp.Tool{Name: "set_product_idle_policy", Description: "Set group idle and member staleness thresholds in seconds (0 disables, maximum 604800). Product owner or instance admin only."}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		ProductID                   string `json:"product_id"`
 		IdleAfterSeconds            int    `json:"idle_after_seconds"`
 		WaitTimeoutSeconds          int    `json:"wait_timeout_seconds"`
 		OwnerBlockedIntervalSeconds int    `json:"owner_blocked_interval_seconds"`
+		MemberStaleAfterSeconds      int    `json:"member_stale_after_seconds"`
 	}) (*mcp.CallToolResult, any, error) {
 		v, e := service.Execute(ctx, domain.Command{Action: "set_product_idle_policy", Actor: "agent", ProductID: in.ProductID, Data: map[string]any{
 			"idle_after_seconds": in.IdleAfterSeconds, "wait_timeout_seconds": in.WaitTimeoutSeconds, "owner_blocked_interval_seconds": in.OwnerBlockedIntervalSeconds,
+			"member_stale_after_seconds": in.MemberStaleAfterSeconds,
 		}})
 		return nil, v, e
 	})

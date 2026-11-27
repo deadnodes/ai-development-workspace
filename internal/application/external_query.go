@@ -208,7 +208,7 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 			if options.UnresolvedOnly && ev.Resolution.ResolvedAt != nil {
 				continue
 			}
-			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || (domain.IsGroupIdleEvent(ev.Type) && !groupIdleEventCurrent(&st, ev, now))) {
+			if options.DueOnly && (ev.Resolution.ResolvedAt != nil || now.Before(ev.Delivery.NextAttemptAt) || !groupWakeCurrent(&st, ev) || (domain.IsGroupIdleEvent(ev.Type) && !groupIdleEventCurrent(&st, ev, now))) {
 				continue
 			}
 			if options.Cursor != "" {

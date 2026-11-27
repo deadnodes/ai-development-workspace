@@ -61,19 +61,8 @@ func routeExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ, 
 			groups = append(groups, g.ID)
 		}
 	}
-	wake := domain.ExecutionWakeTarget{}
-	wakeGroupID := ""
-	if (e.State == "running" || e.State == "stalled") && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") && e.Harness.Kind != "" {
-		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
-	} else {
-		for _, g := range st.ExecutionGroups {
-			if groupOwnsIntegration(g, child) && (g.OrchestratorHarness.SessionRef != "" || g.OrchestratorHarness.TmuxTarget != "") && g.OrchestratorHarness.Kind != "" {
-				wake = groupWakeTarget(g)
-				wakeGroupID = g.ID
-				break
-			}
-		}
-	}
+	wake, registrationID := memberWakeTarget(st, child)
+	wakeGroupID := wake.GroupID
 	if wakeGroupID != "" {
 		for i, groupID := range groups {
 			if groupID == wakeGroupID && i > 0 {
@@ -82,22 +71,44 @@ func routeExecutionEvent(st *domain.State, e *domain.IntegrationExecution, typ, 
 			}
 		}
 	}
-	if wake.Kind == "" && e.Reconciliation.Cause == domain.ExecutionCauseBlockerResolved && e.Harness.Kind != "" && (e.Harness.SessionRef != "" || e.Harness.TmuxTarget != "") {
-		wake = domain.ExecutionWakeTarget{Kind: e.Harness.Kind, SessionRef: e.Harness.SessionRef, TmuxTarget: e.Harness.TmuxTarget, Source: "executor"}
-	}
 	owner, featureID := "", ""
 	if child != nil {
 		owner, featureID = child.Assignee, child.FeatureID
 	}
-	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, FeatureID: featureID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Cause: e.Reconciliation.Cause, Owner: owner, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+	event := domain.ExecutionEvent{ID: id(), ProductID: e.ProductID, FeatureID: featureID, IntegrationID: e.IntegrationID, GroupIDs: groups, Type: typ, Cause: e.Reconciliation.Cause, Owner: owner, RegistrationID: registrationID, Fence: e.Fence, ConditionGeneration: e.Reconciliation.Generation, Reason: reason, DedupeKey: key, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}, EscalationRequired: wake.Kind == ""}
 	if event.Cause == domain.ExecutionCauseBlockerResolved && questionByID(st, e.BlockerRef) != nil {
 		event.QuestionIDs = []string{e.BlockerRef}
 	}
 	st.ExecutionEvents = append(st.ExecutionEvents, event)
 	appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": typ, "generation": event.ConditionGeneration})
-	if event.Cause == domain.ExecutionCauseBlockerResolved && wake.Kind == "" {
-		wakeUserContinuation(st, owner, event, now)
+	if event.EscalationRequired {
+		appendExecutionEventAudit(st, event, "execution_event_escalated", "system/execution-reconciler", now, map[string]any{"reason": "no registered orchestrator harness"})
 	}
+}
+
+func firstGroupWake(st *domain.State, child *domain.Integration) domain.ExecutionWakeTarget {
+	for _, group := range st.ExecutionGroups {
+		if groupOwnsIntegration(group, child) && group.OrchestratorHarness.Kind != "" && (group.OrchestratorHarness.SessionRef != "" || group.OrchestratorHarness.TmuxTarget != "") {
+			return groupWakeTarget(group)
+		}
+	}
+	return domain.ExecutionWakeTarget{}
+}
+
+func memberWakeTarget(st *domain.State, child *domain.Integration) (domain.ExecutionWakeTarget, string) {
+	if wake := firstGroupWake(st, child); wake.Kind != "" {
+		return wake, ""
+	}
+	if child != nil && child.Assignee != "" {
+		for _, scope := range []string{child.ProductID, ""} {
+			for _, registration := range st.UserOrchestrators {
+				if registration.UnregisteredAt == nil && registration.UserID == child.Assignee && registration.ProductID == scope && registrationVisible(st, registration, child.ProductID) {
+					return userWakeTarget(registration), registration.ID
+				}
+			}
+		}
+	}
+	return domain.ExecutionWakeTarget{}, ""
 }
 
 func groupWakeTarget(group domain.ExecutionGroup) domain.ExecutionWakeTarget {
@@ -128,15 +139,15 @@ func requireExecutionGroupOwner(ctx context.Context, group domain.ExecutionGroup
 }
 
 func groupWakeCurrent(st *domain.State, event domain.ExecutionEvent) bool {
-	if event.WakeTarget.Source != "group_orchestrator" {
-		return true
-	}
-	child := integration(st, event.IntegrationID)
-	return slices.ContainsFunc(st.ExecutionGroups, func(group domain.ExecutionGroup) bool {
-		if domain.IsGroupIdleEvent(event.Type) {
-			return group.ClosedAt == nil && group.Owner == event.Owner && group.ProductID == event.ProductID && event.WakeTarget == groupWakeTarget(group)
+	if !domain.IsGroupIdleEvent(event.Type) {
+		if event.IntegrationID == "" {
+			return event.WakeTarget.Source != "executor"
 		}
-		return groupOwnsIntegration(group, child) && group.Owner == event.Owner && group.ProductID == event.ProductID && event.WakeTarget == groupWakeTarget(group)
+		wake, registrationID := memberWakeTarget(st, integration(st, event.IntegrationID))
+		return event.WakeTarget == wake && event.RegistrationID == registrationID
+	}
+	return slices.ContainsFunc(st.ExecutionGroups, func(group domain.ExecutionGroup) bool {
+		return group.ClosedAt == nil && group.Owner == event.Owner && group.ProductID == event.ProductID && event.WakeTarget == groupWakeTarget(group)
 	})
 }
 
@@ -152,20 +163,27 @@ func executionEventAssignmentCurrent(st *domain.State, event domain.ExecutionEve
 	return child != nil && child.Assignee == event.Owner && fence == event.Fence
 }
 
-func rerouteGroupWakes(st *domain.State, groupID string, now time.Time) {
+func rerouteExecutionWakes(st *domain.State, now time.Time) bool {
+	changed := false
 	for index := range st.ExecutionEvents {
 		event := &st.ExecutionEvents[index]
-		if event.Resolution.ResolvedAt != nil || event.WakeTarget.Source != "group_orchestrator" || event.WakeTarget.GroupID != groupID && !(event.WakeTarget.GroupID == "" && len(event.GroupIDs) > 0 && event.GroupIDs[0] == groupID) || groupWakeCurrent(st, *event) {
+		if event.IntegrationID == "" || event.Resolution.ResolvedAt != nil || groupWakeCurrent(st, *event) {
 			continue
 		}
-		retireExecutionEvent(st, event, now, "group wake target changed")
+		retireExecutionEvent(st, event, now, "orchestrator wake target changed")
+		changed = true
 		execution := executionFor(st, event.IntegrationID)
 		child := integration(st, event.IntegrationID)
+		if event.Cause == domain.ExecutionCauseQuestionContinuation && executionEventAssignmentCurrent(st, *event) {
+			wakeUserContinuation(st, event.Owner, *event, now)
+			continue
+		}
 		if execution == nil || child == nil || child.Assignee != event.Owner || !execution.Reconciliation.ActionRequired || execution.Fence != event.Fence || execution.Reconciliation.Generation != event.ConditionGeneration || event.Cause == domain.ExecutionCauseBlockerResolved && !blockedExecutionPending(st, child, execution) {
 			continue
 		}
 		routeExecutionEvent(st, execution, event.Type, event.Reason, "reroute|"+event.ID, now)
 	}
+	return changed
 }
 
 func appendExecutionEventAudit(st *domain.State, ev domain.ExecutionEvent, action, actor string, now time.Time, data map[string]any) {
@@ -983,8 +1001,9 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				g.HarnessRevision = 1
 			}
 			st.ExecutionGroups = append(st.ExecutionGroups, g)
+			rerouteExecutionWakes(st, now)
 			for _, iid := range x.IntegrationIDs {
-				if e := executionFor(st, iid); e != nil && e.Reconciliation.ActionRequired {
+				if e := executionFor(st, iid); e != nil && e.State == "unassigned" && e.Reconciliation.ActionRequired {
 					typ := "execution_unassigned"
 					createExecutionEvent(st, e, typ, e.Reconciliation.Reason, now)
 				}
@@ -1025,7 +1044,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 				g.HarnessChangedAt = &now
 				g.TurnEndAt, g.TurnStartAt = nil, nil
 				g.TurnEndID, g.TurnStartID = "", ""
-				rerouteGroupWakes(st, g.ID, now)
+				rerouteExecutionWakes(st, now)
 			}
 			out = *g
 		case "add_execution_group_member", "remove_execution_group_member":
@@ -1082,9 +1101,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			g.MemberIntegrationIDs = next
 			rev := uint64(len(g.Revisions) + 1)
 			g.Revisions = append(g.Revisions, domain.ExecutionGroupRevision{Revision: rev, MemberIntegrationIDs: next, CreatedAt: now})
-			if c.Action == "remove_execution_group_member" {
-				rerouteGroupWakes(st, g.ID, now)
-			}
+			rerouteExecutionWakes(st, now)
 			out = *g
 		case "set_product_stalled_timeout", "set_product_idle_policy":
 			var p *domain.Product
@@ -1243,6 +1260,7 @@ func reconcileExecutions(st *domain.State, now time.Time, globalTimeout int, deb
 			}
 		}
 	}
+	changed = rerouteExecutionWakes(st, now) || changed
 	return reconcileGroupIdle(st, now) || changed
 }
 

@@ -20,6 +20,7 @@ type Product struct {
 	IdeaPromotion         string               `json:"idea_promotion,omitempty"`
 	StalledTimeoutSeconds *int                 `json:"stalled_timeout_seconds,omitempty"`
 	IdlePolicy            *ExecutionIdlePolicy `json:"idle_policy,omitempty"`
+	AgentRoles            *AgentRoles          `json:"agent_roles,omitempty"`
 }
 type Feature struct {
 	Meta
@@ -129,6 +130,7 @@ type ExecutionEvent struct {
 	HarnessKind         string                     `json:"harness_kind"`
 	TmuxTarget          string                     `json:"tmux_target,omitempty"`
 	WakeTarget          ExecutionWakeTarget        `json:"wake_target"`
+	OrchestratorSkill   string                     `json:"orchestrator_skill,omitempty"`
 	GroupIdle           *ExecutionGroupIdlePayload `json:"group_idle,omitempty"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	Delivery            ExecutionEventDelivery     `json:"delivery"`
@@ -166,6 +168,7 @@ type IntegrationExecution struct {
 	LeaseUntil            *time.Time              `json:"lease_until,omitempty"`
 	LastHeartbeat         *time.Time              `json:"last_heartbeat,omitempty"`
 	LastProgress          *time.Time              `json:"last_progress,omitempty"`
+	LastRecordedProgress  *time.Time              `json:"last_recorded_progress,omitempty"`
 	ClaimedAt             *time.Time              `json:"claimed_at,omitempty"`
 	ExitReason            string                  `json:"exit_reason,omitempty"`
 	WaitingRef            string                  `json:"waiting_ref,omitempty"`
@@ -361,6 +364,7 @@ type Event struct {
 type State struct {
 	FeatureDependencies    []FeatureDependency    `json:"feature_dependencies"`
 	UserOrchestrators      []UserOrchestrator     `json:"user_orchestrators"`
+	ProductAgentSkills    []ProductAgentSkill    `json:"product_agent_skills"`
 	ProdPromotions         []ProdPromotion        `json:"prod_promotions"`
 	IntegrationExecutions  []IntegrationExecution `json:"integration_executions"`
 	ExecutionEvents        []ExecutionEvent       `json:"execution_events"`

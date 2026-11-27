@@ -1039,9 +1039,12 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				in.Remaining = v.Remaining
 			}
 			in.UpdatedAt = m.UpdatedAt
-			if ex := executionFor(st, c.IntegrationID); ex != nil && ex.State == "running" && c.Data["execution_unfenced"] != true {
+			if ex := executionFor(st, c.IntegrationID); ex != nil {
 				now := m.UpdatedAt
-				ex.LastProgress = &now
+				ex.LastRecordedProgress = &now
+				if ex.State == "running" && c.Data["execution_unfenced"] != true {
+					ex.LastProgress = &now
+				}
 			}
 		}
 		st.Memories = append(st.Memories, v)

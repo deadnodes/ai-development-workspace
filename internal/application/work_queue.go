@@ -144,6 +144,7 @@ func changeUserOrchestrator(ctx context.Context, st *domain.State, c domain.Comm
 		st.UserOrchestrators[index].UnregisteredAt = &now
 		st.UserOrchestrators[index].UpdatedAt = now
 		st.UserOrchestrators[index].Available = false
+		rerouteExecutionWakes(st, now)
 		workAudit(st, registration.Meta, c.Action, c.Actor, now)
 		return map[string]bool{"removed": true}, nil
 	}
@@ -179,10 +180,12 @@ func changeUserOrchestrator(ctx context.Context, st *domain.State, c domain.Comm
 		registration.UnregisteredAt, registration.Available = nil, false
 		registration.UpdatedAt, registration.Actor = now, c.Actor
 		workAudit(st, registration.Meta, c.Action, c.Actor, now)
+		rerouteExecutionWakes(st, now)
 		reconcileUserWork(st, now)
 		return *registration, nil
 	}
 	st.UserOrchestrators = append(st.UserOrchestrators, domain.UserOrchestrator{Meta: workMeta(c, c.ProductID, "", now), UserID: user, Harness: harness, Products: products})
+	rerouteExecutionWakes(st, now)
 	workAudit(st, st.UserOrchestrators[len(st.UserOrchestrators)-1].Meta, c.Action, c.Actor, now)
 	reconcileUserWork(st, now)
 	return st.UserOrchestrators[len(st.UserOrchestrators)-1], nil
@@ -191,16 +194,20 @@ func changeUserOrchestrator(ctx context.Context, st *domain.State, c domain.Comm
 func retireRegistrationEvents(st *domain.State, registrationID string, now time.Time) {
 	for index := range st.ExecutionEvents {
 		event := &st.ExecutionEvents[index]
-		if event.RegistrationID == registrationID && event.Resolution.ResolvedAt == nil {
+		if event.RegistrationID == registrationID && event.IntegrationID == "" && event.Resolution.ResolvedAt == nil {
 			event.Resolution = domain.ExecutionEventResolution{ResolvedAt: &now, ResolvedBy: "system", Evidence: "registration changed"}
 			appendExecutionEventAudit(st, *event, "execution_event_resolved", "system/execution-reconciler", now, nil)
 		}
 	}
 }
 
+func userWakeTarget(registration domain.UserOrchestrator) domain.ExecutionWakeTarget {
+	return domain.ExecutionWakeTarget{Kind: registration.Harness.Kind, SessionRef: registration.Harness.SessionRef, TmuxTarget: registration.Harness.TmuxTarget, Source: "user_orchestrator"}
+}
+
 func raiseWorkEvent(st *domain.State, registration *domain.UserOrchestrator, event domain.ExecutionEvent, now time.Time) {
 	registration.Generation++
-	wake := domain.ExecutionWakeTarget{Kind: registration.Harness.Kind, SessionRef: registration.Harness.SessionRef, TmuxTarget: registration.Harness.TmuxTarget, Source: "user_orchestrator"}
+	wake := userWakeTarget(*registration)
 	event.ID, event.Owner, event.RegistrationID, event.Type = id(), registration.UserID, registration.ID, "work_available"
 	event.ConditionGeneration, event.DedupeKey = registration.Generation, fmt.Sprintf("%s|work_available|%d", registration.ID, registration.Generation)
 	event.WakeTarget, event.HarnessKind, event.SessionRef, event.TmuxTarget = wake, wake.Kind, wake.SessionRef, wake.TmuxTarget
@@ -215,7 +222,7 @@ func registeredQueue(st *domain.State, registration domain.UserOrchestrator, pro
 }
 
 func registrationEventEligible(st *domain.State, event domain.ExecutionEvent) bool {
-	if event.Type != "work_available" {
+	if event.Type != "work_available" || event.IntegrationID != "" && event.Cause == domain.ExecutionCauseQuestionContinuation {
 		return true
 	}
 	for _, registration := range st.UserOrchestrators {
@@ -284,6 +291,27 @@ func wakeUserContinuation(st *domain.State, owner string, trigger domain.Executi
 	if owner == "" {
 		return
 	}
+	if trigger.IntegrationID != "" {
+		wake, registrationID := memberWakeTarget(st, integration(st, trigger.IntegrationID))
+		for index := range st.ExecutionEvents {
+			event := &st.ExecutionEvents[index]
+			if event.Cause == domain.ExecutionCauseQuestionContinuation && event.ProductID == trigger.ProductID && event.IntegrationID == trigger.IntegrationID && event.Owner == owner && event.Fence == trigger.Fence && event.Resolution.ResolvedAt == nil && event.WakeTarget == wake && event.RegistrationID == registrationID {
+				mergeWakeQuestions(st, event, trigger.QuestionIDs, now)
+				return
+			}
+		}
+		event := domain.ExecutionEvent{ID: id(), ProductID: trigger.ProductID, FeatureID: trigger.FeatureID, IntegrationID: trigger.IntegrationID, Fence: trigger.Fence, Reason: trigger.Reason, QuestionIDs: trigger.QuestionIDs, Cause: domain.ExecutionCauseQuestionContinuation, Type: "work_available", Owner: owner, RegistrationID: registrationID, WakeTarget: wake, SessionRef: wake.SessionRef, HarnessKind: wake.Kind, TmuxTarget: wake.TmuxTarget, EscalationRequired: wake.Kind == "", CreatedAt: now, Delivery: domain.ExecutionEventDelivery{NextAttemptAt: now}}
+		event.DedupeKey = event.ID + "|question_continuation"
+		if wake.GroupID != "" {
+			event.GroupIDs = []string{wake.GroupID}
+		}
+		st.ExecutionEvents = append(st.ExecutionEvents, event)
+		appendExecutionEventAudit(st, event, "execution_event_created", "system/execution-reconciler", now, map[string]any{"type": event.Type})
+		if event.EscalationRequired {
+			appendExecutionEventAudit(st, event, "execution_event_escalated", "system/execution-reconciler", now, map[string]any{"reason": "no registered orchestrator harness"})
+		}
+		return
+	}
 	for _, scope := range []string{trigger.ProductID, ""} {
 		for index := range st.UserOrchestrators {
 			registration := &st.UserOrchestrators[index]
@@ -291,17 +319,7 @@ func wakeUserContinuation(st *domain.State, owner string, trigger domain.Executi
 				for eventIndex := range st.ExecutionEvents {
 					event := &st.ExecutionEvents[eventIndex]
 					if event.IntegrationID == trigger.IntegrationID && event.FeatureID == trigger.FeatureID && event.Fence == trigger.Fence && event.Cause == domain.ExecutionCauseQuestionContinuation && event.RegistrationID == registration.ID && event.ProductID == trigger.ProductID && event.Resolution.ResolvedAt == nil {
-						var added []string
-						for _, questionID := range trigger.QuestionIDs {
-							if !slices.Contains(event.QuestionIDs, questionID) {
-								added = append(added, questionID)
-							}
-						}
-						if len(added) != 0 {
-							event.QuestionIDs = append(slices.Clone(event.QuestionIDs), added...)
-							event.Delivery.DeliveryID = ""
-							appendExecutionEventAudit(st, *event, "execution_event_questions_added", "system/execution-reconciler", now, map[string]any{"question_ids": added})
-						}
+						mergeWakeQuestions(st, event, trigger.QuestionIDs, now)
 						return
 					}
 				}
@@ -309,5 +327,19 @@ func wakeUserContinuation(st *domain.State, owner string, trigger domain.Executi
 				return
 			}
 		}
+	}
+}
+
+func mergeWakeQuestions(st *domain.State, event *domain.ExecutionEvent, questionIDs []string, now time.Time) {
+	var added []string
+	for _, questionID := range questionIDs {
+		if !slices.Contains(event.QuestionIDs, questionID) {
+			added = append(added, questionID)
+		}
+	}
+	if len(added) != 0 {
+		event.QuestionIDs = append(slices.Clone(event.QuestionIDs), added...)
+		event.Delivery.DeliveryID = ""
+		appendExecutionEventAudit(st, *event, "execution_event_questions_added", "system/execution-reconciler", now, map[string]any{"question_ids": added})
 	}
 }
