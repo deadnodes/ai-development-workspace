@@ -47,6 +47,12 @@ var privateProductReadMatrix = map[string]privateRead{
 	"ProjectContext": func(ctx context.Context, service *Service, product string) (any, error) {
 		return service.ProjectContext(ctx, product)
 	},
+	"AgentKit": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.AgentKit(ctx, product)
+	},
+	"AgentSkill": func(ctx context.Context, service *Service, product string) (any, error) {
+		return service.AgentSkill(ctx, product, product+"-role")
+	},
 	"ProjectContextSummary": func(ctx context.Context, service *Service, product string) (any, error) {
 		result, err := service.ProjectContextSummary(ctx, product)
 		if err == nil && product == privateFixture {
@@ -323,7 +329,7 @@ func seedPrivateReadMatrix(t *testing.T, store privateFixtureStore, workspace st
 				Digest: privateDigest(product), Result: "SIGNED", ProdImageRef: "fixture/" + product, ProdSignature: &domain.ProdSignature{SignatureTag: product + "-tag"},
 			}}})
 			members := []string{product + "-integration"}
-			state.ExecutionGroups = append(state.ExecutionGroups, domain.ExecutionGroup{ID: product + "-group", ProductID: product, Name: product + " group", MemberIntegrationIDs: members, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: members}}})
+			state.ExecutionGroups = append(state.ExecutionGroups, domain.ExecutionGroup{ID: product + "-group", ProductID: product, Name: product + " group", Owner: "A", MemberIntegrationIDs: members, Revisions: []domain.ExecutionGroupRevision{{Revision: 1, MemberIntegrationIDs: members}}})
 			state.IntegrationExecutions = append(state.IntegrationExecutions, domain.IntegrationExecution{ID: product + "-execution", ProductID: product, IntegrationID: product + "-integration", State: "unassigned", DesiredState: "ready"})
 			state.ExecutionEvents = append(state.ExecutionEvents, domain.ExecutionEvent{ID: product + "-event", ProductID: product, IntegrationID: product + "-integration", CreatedAt: now, EscalationRequired: true})
 			state.Events = append(state.Events, domain.Event{ID: product + "-audit", ProductID: product, At: now})
@@ -410,6 +416,9 @@ func TestPrivateProductReadMatrix(t *testing.T) {
 			seedPrivateReadMatrix(t, store, workspace)
 			service := New(store)
 			for _, product := range []string{privateFixture, sharedFixture} {
+				if _, err := service.Execute(context.Background(), domain.Command{Action: "upsert_agent_skill", Actor: "fixture", ProductID: product, Data: map[string]any{"name": product + "-role", "description": "Fixture role", "body": "Fixture instructions"}}); err != nil {
+					t.Fatal("seed agent skill:", err)
+				}
 				repository := product + "-repository"
 				doc := domain.CodeIndex{RepositoryID: repository, Branch: "main", Commit: strings.Repeat("a", 40), Version: domain.CodeIndexVersion, IndexedAt: time.Now(), Files: []domain.CodeFile{{Path: "README.md", Language: "Markdown", Size: 128, Lines: 1, Doc: product + " fixturekeyword"}}}
 				if _, err := service.UpsertCodeIndex(context.Background(), domain.CodeIndexWrite{ProductID: product, RepositoryID: repository, Document: doc}); err != nil {
@@ -460,6 +469,12 @@ func runPrivateReadMatrix(t *testing.T, service *Service) {
 					for _, product := range []string{sharedFixture, privateFixture} {
 						result, err := read(tc.ctx, service, product)
 						visible := product != privateFixture || tc.visible
+						if visible && name == "get_execution_group" && tc.name != "local" && workUser(tc.ctx) != "A" {
+							if result != nil || !errors.Is(err, auth.ErrForbidden) || !strings.Contains(err.Error(), "NOT_ASSIGNEE") {
+								t.Errorf("%s (%s): expected owned-group denial, got %v, %v", name, product, result, err)
+							}
+							continue
+						}
 						privateResult(t, name, product, result, err, visible)
 						if !visible {
 							denied = err

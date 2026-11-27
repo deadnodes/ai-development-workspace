@@ -32,7 +32,7 @@ Run once in the project that agents will edit:
   --harness both
 ```
 
-The `connect` command does not start a server or open a database. The server must already be running. Without `--product-id`, automatic selection uses only the existing bounded MCP `get_state {"limit":2}` query. It requires exactly one valid Product, Product scope with no foreign parents, a present `has_more:false` and consistent count/cursor metadata. Unavailable, ambiguous or malformed discovery requires an explicit Product ID; there is no `/api/state` fallback. The installer checks `/api/agent-kit`, validates both fixed skill names, frontmatter and content checksums, then checks the selected Product's scoped context identity before any file writes. Explicit Product selection skips listing and retains the 2-MiB scoped context response limit. Duplicate JSON fields and invalid encoding in discovery or context are refused before installation.
+The `connect` command does not start a server or open a database. The server must already be running. Without `--product-id`, automatic selection uses only the existing bounded MCP `get_state {"limit":2}` query. It requires exactly one valid Product, Product scope with no foreign parents, a present `has_more:false` and consistent count/cursor metadata. Unavailable, ambiguous or malformed discovery requires an explicit Product ID; there is no `/api/state` fallback. The installer checks `/api/agent-kit`, validates the three built-in skill names, frontmatter and content checksums, then checks the selected Product's scoped context identity before any file writes. Explicit Product selection skips listing and retains the 2-MiB scoped context response limit. Duplicate JSON fields and invalid encoding in discovery or context are refused before installation.
 
 ## Sign in an independent agent
 
@@ -107,6 +107,7 @@ when present and otherwise connects to a local server without a credential.
 | `.mcp.json` | Project-scoped Claude Code stdio MCP server entry. |
 | `.claude/settings.json` | Merged Claude Code `Stop` hook configuration. |
 | `AGENTS.md` | Managed block binding this project to the Product and instructing agents to resume, record progress, and hand off. |
+| `CLAUDE.md` | The same managed binding and role instructions when Claude is selected. |
 | `.release-control.json` | Binding: base URL, Product ID, MCP server name and optional credential profile or token environment reference. |
 
 `--harness` accepts `codex`, `claude`, or `both` (default). Skills are installed for both harnesses. The installer also writes `~/.config/release-control/turn-end-PRODUCT_ID.json` with mode 0600 and installs the shared hook under `~/.local/share/release-control/hooks/`. The hook config stores a profile, environment-variable name, or token-file reference, never the credential value. Codex always prints the exact `notify = [...]` line; pass `--codex-notify` to merge it into the project's `.codex/config.toml`. Existing unrelated TOML/JSON keys, hooks and AGENTS.md content are preserved. An unmanaged raw skill may be adopted only when its bytes exactly match the incoming canonical snapshot; differing user content refuses the entire installation. Conflicting unmanaged MCP entries, malformed configuration and symlinked installation paths are refused. Project and hook writes roll back on ordinary failures; this is not a multi-file crash transaction.
@@ -124,7 +125,7 @@ environment variables, so use a saved profile for its turn-end hook;
 
 Trust the project through Codex's normal trust flow, then **start a new chat or reload MCP configuration**. This command does not retroactively attach tools to an already-running chat.
 
-Each independent Git repository is a project scope. If a workspace contains nested independent repositories, run `connect` for each repository where Codex should load the MCP entry and both workflow skills; a connection at the parent directory may not be inherited across repository boundaries.
+Each independent Git repository is a project scope. If a workspace contains nested independent repositories, run `connect` for each repository where Codex should load the MCP entry and workflow skills; a connection at the parent directory may not be inherited across repository boundaries.
 
 Once connected, agents should discover the Product, resume the relevant Feature/Integration before editing, record decisions and verification as they work, use `rcp-handoff` for checkpoints/pause/transfer, and use `rcp-delivery` to inspect or deliver a Feature within its existing repository adoption, human approval and execution boundaries. The metastore remains authoritative; the installed files are connection instructions, not a replacement state file.
 
@@ -136,6 +137,24 @@ including errors and unknown/chunked lengths; an individual SSE event has the
 same cap. Oversize is an error, not silent truncation. Raw SSE message JSON is
 validated before SDK decoding can overwrite duplicate fields; supported framing
 includes multiline data, LF/CRLF/bare CR, an initial BOM, comments and EOF.
-The service exposes both fixed skills via `get_agent_skill` and fixed MCP
+The service exposes bundled skills via `get_agent_skill` and fixed MCP
 resources with SHA-256 metadata. Public snapshot repository/commit/path/checksum
 provenance is tracked in `internal/agentguide/skills/provenance.json`.
+
+### Publish and load product role skills
+
+Run `release-control skill push --product P --dir DIR --url URL` (or set `RCP_URL`).
+The directory contains `SKILL.md` with `name` and `description` in YAML frontmatter;
+other regular UTF-8 files are uploaded as attachments by relative path. Add
+`--dry-run` to validate locally without contacting RCP. Use an owner or admin
+credential (`--profile` or `--token-env`); the default profile is tried otherwise.
+RCP does not seed any product skills.
+
+The Product owner sets `orchestrator_skill` and `worker_skill` through
+`set_product_agent_roles`. `connect` prints each exact role's
+`get_agent_skill(name="SKILL", product_id="P")` call and puts it in the managed
+instructions. Run `connect` again to update the snippets after role changes, or
+look up the current assignment in `get_project_context` or `get_agent_kit`.
+Agents load only their role skill and write its included files to the paths
+specified by its Markdown, within the authorized workspace. `connect` does not
+install or execute product skill attachments.

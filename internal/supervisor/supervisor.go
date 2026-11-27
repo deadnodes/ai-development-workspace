@@ -28,9 +28,10 @@ import (
 type Outcome string
 
 const (
-	Delivered   Outcome = "delivered"
-	Failed      Outcome = "failed"
-	Unsupported Outcome = "unsupported"
+	Delivered     Outcome = "delivered"
+	Failed        Outcome = "failed"
+	Unsupported   Outcome = "unsupported"
+	SkippedActive Outcome = "skipped_active"
 )
 
 type WakeResult struct {
@@ -40,13 +41,19 @@ type WakeResult struct {
 type WakeRequest struct {
 	Kind, SessionRef, TmuxTarget, GroupID, Message string
 	Events                                         []domain.ExecutionEvent
+	IdleCheck                                      bool
+	bound                                          bool
+	tmux                                           tmuxBinding
 }
 type Adapter interface {
 	Wake(context.Context, WakeRequest) WakeResult
 }
+type tmuxBinding struct{ pane, session string }
+
 type sessionBatch struct {
-	key, kind, session, target string
-	events                     []domain.ExecutionEvent
+	key     string
+	request WakeRequest
+	events  []domain.ExecutionEvent
 }
 
 type Supervisor struct {
@@ -100,42 +107,80 @@ func (s *Supervisor) Run(ctx context.Context) error {
 }
 
 func (s *Supervisor) Cycle(ctx context.Context, productID, token string) error {
-	var events []domain.ExecutionEvent
 	cursor := ""
+	limit := 100
+	seenCursors := map[string]bool{}
+	activePanes := map[string]bool{}
 	for {
 		var result struct {
 			Items      []domain.ExecutionEvent `json:"items"`
 			NextCursor string                  `json:"next_cursor"`
 		}
-		query := "?due_only=true&unresolved_only=true&limit=100"
+		query := fmt.Sprintf("?due_only=true&unresolved_only=true&limit=%d", limit)
 		if cursor != "" {
 			query += "&cursor=" + url.QueryEscape(cursor)
 		}
 		path := "/api/products/" + url.PathEscape(productID) + "/execution-events" + query
 		if err := s.request(ctx, http.MethodGet, path, token, nil, &result); err != nil {
+			if errors.Is(err, errResponseTooLarge) && limit > 1 {
+				limit = max(1, limit/2)
+				continue
+			}
 			return err
 		}
-		events = append(events, result.Items...)
-		if result.NextCursor == "" {
-			break
-		}
-		if result.NextCursor == cursor {
+		if result.NextCursor != "" && seenCursors[result.NextCursor] {
 			return errors.New("RCP cursor did not advance")
 		}
+		if err := s.dispatchPage(ctx, productID, token, result.Items, activePanes); err != nil {
+			return err
+		}
+		if result.NextCursor == "" {
+			return nil
+		}
 		cursor = result.NextCursor
+		seenCursors[cursor] = true
 	}
+}
+
+func (s *Supervisor) dispatchPage(ctx context.Context, productID, token string, events []domain.ExecutionEvent, activePanes map[string]bool) error {
 	batches := map[string]*sessionBatch{}
+	bindings := map[string]tmuxBinding{}
+	resolver, hasResolver := s.Adapter.(interface {
+		bind(context.Context, string) tmuxBinding
+	})
 	for _, ev := range events {
 		wake := ev.WakeTarget
-		sessionKey := wake.SessionRef
-		if wake.TmuxTarget != "" {
-			sessionKey = "tmux:" + wake.TmuxTarget
+		request := WakeRequest{Kind: wake.Kind, SessionRef: wake.SessionRef, TmuxTarget: wake.TmuxTarget, IdleCheck: domain.IsGuardedExecutionWake(ev.Type)}
+		sessionKey, paneKey := wake.Kind+"|"+wake.SessionRef, wake.TmuxTarget
+		if hasResolver && wake.TmuxTarget != "" && s.allowed(wake.Kind) && validOrchestratorWake(ev) {
+			binding, resolved := bindings[wake.TmuxTarget]
+			if !resolved {
+				binding = resolver.bind(ctx, wake.TmuxTarget)
+				bindings[wake.TmuxTarget] = binding
+			}
+			request.bound, request.tmux = true, binding
+			if binding.pane != "" {
+				sessionKey, paneKey = "tmux:"+binding.session, binding.pane
+			}
 		}
-		key := wake.Kind + "|" + sessionKey
-		b := batches[key]
+		category := "0|"
+		if ev.Type == domain.EventGroupOwnerBlocked {
+			category = "2|owner-blocked|"
+		} else if request.IdleCheck {
+			category = "1|idle|"
+		}
+		key := category + sessionKey
+		batchKey := key + "|" + paneKey
+		if request.IdleCheck {
+			batchKey += "|" + wake.GroupID
+		}
+		if !validOrchestratorWake(ev) {
+			batchKey += "|unsupported"
+		}
+		b := batches[batchKey]
 		if b == nil {
-			b = &sessionBatch{key: key, kind: wake.Kind, session: wake.SessionRef, target: wake.TmuxTarget}
-			batches[key] = b
+			b = &sessionBatch{key: key, request: request}
+			batches[batchKey] = b
 		}
 		b.events = append(b.events, ev)
 	}
@@ -146,7 +191,7 @@ func (s *Supervisor) Cycle(ctx context.Context, productID, token string) error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		b := batches[key]
-		if err := s.deliverBatch(ctx, productID, token, b.kind, b.session, b.target, b.key, b.events); err != nil {
+		if err := s.deliverBatch(ctx, productID, token, b, activePanes); err != nil {
 			return err
 		}
 	}
@@ -154,7 +199,20 @@ func (s *Supervisor) Cycle(ctx context.Context, productID, token string) error {
 }
 
 // deliverBatch claims every event before waking once, then records the same durable outcome for each claim.
-func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, kind, session, target, key string, events []domain.ExecutionEvent) error {
+func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, batch *sessionBatch, activePanes map[string]bool) error {
+	request, key, events := batch.request, batch.key, batch.events
+	if request.IdleCheck {
+		limit := s.Config.IdleRateFor
+		if events[0].Type == domain.EventGroupOwnerBlocked {
+			limit = s.Config.OwnerRateFor
+		}
+		s.mu.Lock()
+		last := s.wakes[key]
+		s.mu.Unlock()
+		if !last.IsZero() && s.Now().Sub(last) < limit {
+			return nil
+		}
+	}
 	claimed := make([]struct {
 		ev domain.ExecutionEvent
 		id string
@@ -166,8 +224,8 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			continue
 		}
 		if out != "" {
-			if wakeGroup(ev) == "" && !workAvailabilityWake(ev) && !blockerResolutionWake(ev) {
-				data := map[string]any{"event_id": ev.ID, "delivery_id": out, "supervisor_id": s.Config.SupervisorID, "outcome": string(Unsupported), "detail": "missing valid execution group"}
+			if !validOrchestratorWake(ev) {
+				data := map[string]any{"event_id": ev.ID, "delivery_id": out, "supervisor_id": s.Config.SupervisorID, "outcome": string(Unsupported), "detail": "missing valid orchestrator target"}
 				if err := s.request(ctx, http.MethodPost, "/api/commands", token, command("ack_execution_event", productID, s.Config.SupervisorID, data), nil); err != nil {
 					return err
 				}
@@ -183,10 +241,58 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 		return nil
 	}
 	result := WakeResult{Outcome: Unsupported, Detail: "unsupported"}
-	if !s.allowed(kind) {
+	var stateErr error
+	if !s.allowed(request.Kind) {
 		result = WakeResult{Outcome: Unsupported, Detail: "harness kind not allowed"}
-	} else if target == "" && session == "" {
+	} else if request.TmuxTarget == "" && request.SessionRef == "" {
 		result = WakeResult{Outcome: Unsupported, Detail: "missing session_ref and tmux_target"}
+	} else if request.IdleCheck {
+		var idleEvent domain.ExecutionEvent
+		for _, delivery := range claimed {
+			if domain.IsGroupIdleEvent(delivery.ev.Type) && (idleEvent.ID == "" || delivery.ev.Type == domain.EventGroupMemberStale) {
+				idleEvent = delivery.ev
+			}
+		}
+		now := s.Now()
+		if idleEvent.ID != "" {
+			request.GroupID = idleEvent.WakeTarget.GroupID
+			request.Message = groupIdlePrompt(idleEvent, now)
+		} else {
+			event := claimed[0].ev
+			request.GroupID = wakeGroup(event)
+			request.Message = "[RCP supervisor] Execution stalled. Call next_work and follow the fenced next action."
+			if request.GroupID != "" {
+				request.Message = "[RCP supervisor] Execution stalled. Call get_execution_group with group_id=" + request.GroupID + " and follow each member's next_action."
+			}
+			if reminder := orchestratorSkillReminder(event); reminder != "" {
+				request.Message += " " + reminder
+			}
+		}
+		if request.Message != "" && ValidTmuxTarget(request.TmuxTarget) {
+			for _, delivery := range claimed {
+				request.Events = append(request.Events, delivery.ev)
+			}
+			paneKey := request.tmux.pane
+			if paneKey == "" {
+				paneKey = request.TmuxTarget
+			}
+			if activePanes[paneKey] {
+				result = WakeResult{Outcome: SkippedActive, Detail: "active pane"}
+			} else {
+				result = s.Adapter.Wake(ctx, request)
+				if result.Outcome == SkippedActive {
+					activePanes[paneKey] = true
+				}
+			}
+			if result.Outcome == Delivered || result.Outcome == Failed {
+				s.mu.Lock()
+				s.wakes[key] = now
+				s.mu.Unlock()
+				stateErr = s.saveState()
+			}
+		} else {
+			result.Detail = "idle wake requires valid group payload and tmux target"
+		}
 	} else {
 		groupID := ""
 		workAvailable, resolvedBlocker := false, false
@@ -197,7 +303,7 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 				groupID = wakeGroup(delivery.ev)
 			}
 		}
-		if !ValidSessionRef(session) && target == "" {
+		if !ValidSessionRef(request.SessionRef) && request.TmuxTarget == "" {
 			result = WakeResult{Outcome: Unsupported, Detail: "invalid session_ref"}
 		} else {
 			types := make([]string, 0, len(claimed))
@@ -206,7 +312,7 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			}
 			message := fmt.Sprintf("[RCP supervisor] Unfinished work in execution group %s (%d events: %s). Call get_execution_group with group_id=%s and continue every member. Work counts as done only when each Integration reaches its desired_state. For every member: follow its next_action from get_execution_group (resume with your fence if lost, claim if unassigned), transition with execution_fence, release_execution(outcome=completed) at the end.", groupID, len(claimed), strings.Join(types, ", "), groupID)
 			if groupID == "" {
-				message = "[RCP supervisor]"
+				message = "[RCP supervisor] Unfinished work. Call next_work and follow the fenced next action for the affected integration."
 			}
 			if resolvedBlocker && groupID == "" {
 				for _, delivery := range claimed {
@@ -223,6 +329,9 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 					message += " Read question_ids on event " + delivery.ev.ID + " via list_execution_events in this product. Call get_question for each ID to read the triggering answer or withdrawal."
 				}
 			}
+			if reminder := orchestratorSkillReminder(claimed[0].ev); reminder != "" {
+				message += " " + reminder
+			}
 			s.mu.Lock()
 			last := s.wakes[key]
 			now := s.Now()
@@ -231,11 +340,11 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			if limited {
 				result = WakeResult{Outcome: Failed, Detail: "rate limited"}
 			} else {
-				claimedEvents := make([]domain.ExecutionEvent, 0, len(claimed))
 				for _, c := range claimed {
-					claimedEvents = append(claimedEvents, c.ev)
+					request.Events = append(request.Events, c.ev)
 				}
-				result = s.Adapter.Wake(ctx, WakeRequest{Kind: kind, SessionRef: session, TmuxTarget: target, GroupID: groupID, Message: message, Events: claimedEvents})
+				request.GroupID, request.Message = groupID, message
+				result = s.Adapter.Wake(ctx, request)
 				if result.Detail != "busy" {
 					s.mu.Lock()
 					s.wakes[key] = now
@@ -253,7 +362,65 @@ func (s *Supervisor) deliverBatch(ctx context.Context, productID, token string, 
 			return err
 		}
 	}
-	return nil
+	return stateErr
+}
+
+var idleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+func groupIdlePrompt(event domain.ExecutionEvent, now time.Time) string {
+	payload := event.GroupIdle
+	if payload == nil || event.WakeTarget.Source != "group_orchestrator" || payload.GroupID != event.WakeTarget.GroupID || !idleIDPattern.MatchString(payload.GroupID) || len(payload.Members) == 0 {
+		return ""
+	}
+	minutes := max(0, now.Sub(payload.GroupActivityAt)/time.Minute)
+	instruction := "Check each member's state and next_action, continue eligible work or report blockers."
+	if event.Type == domain.EventGroupOwnerBlocked {
+		instruction = "Remind the owner about the outstanding questions or blockers. Do not resume work."
+	}
+	var prompt strings.Builder
+	if event.Type == domain.EventGroupMemberStale {
+		fmt.Fprintf(&prompt, "[RCP supervisor] Group %s: %d unfinished members without recent recorded progress. Call get_execution_group with group_id=%s. %s", payload.GroupID, payload.MemberTotal, payload.GroupID, instruction)
+	} else {
+		fmt.Fprintf(&prompt, "[RCP supervisor] Group %s: %d unfinished members, no recorded activity for %d min. Call get_execution_group with group_id=%s. %s", payload.GroupID, payload.MemberTotal, minutes, payload.GroupID, instruction)
+	}
+	reminder := orchestratorSkillReminder(event)
+	for _, member := range payload.Members[:min(len(payload.Members), domain.MaxExecutionIdlePreview)] {
+		if !idleIDPattern.MatchString(member.IntegrationID) {
+			continue
+		}
+		state, action := member.State, member.NextAction
+		switch state {
+		case "unassigned", "claimed", "running", "waiting_external", "blocked", "stalled", "lost", "exited_incomplete", "paused":
+		default:
+			state = "unknown"
+		}
+		switch action {
+		case "none", "claim", "wait", "resume", "takeover", "advance", "continue":
+		default:
+			action = "unknown"
+		}
+		age := "unknown"
+		if member.SecondsSinceLastProgress != nil && *member.SecondsSinceLastProgress >= 0 {
+			age = fmt.Sprintf("%ds", *member.SecondsSinceLastProgress)
+		}
+		fmt.Fprintf(&prompt, "\n%s %s progress %s next %s", member.IntegrationID, state, age, action)
+	}
+	if reminder != "" {
+		prompt.WriteByte('\n')
+		prompt.WriteString(reminder)
+	}
+	return prompt.String()
+}
+
+func orchestratorSkillReminder(event domain.ExecutionEvent) string {
+	if !domain.ValidAgentSkillName(event.OrchestratorSkill) || !domain.ValidAgentRoleProductID(event.ProductID) {
+		return ""
+	}
+	reminder := fmt.Sprintf("Load get_agent_skill(name=%q, product_id=%q) if not loaded, check your executors and wake stuck ones.", event.OrchestratorSkill, event.ProductID)
+	if event.Type == domain.EventGroupOwnerBlocked {
+		reminder += " Do not wake owner-blocked work."
+	}
+	return reminder
 }
 
 func (s *Supervisor) allowed(k string) bool {
@@ -273,18 +440,14 @@ func workAvailabilityWake(event domain.ExecutionEvent) bool {
 }
 
 func wakeGroup(event domain.ExecutionEvent) string {
-	if event.WakeTarget.Source == "group_orchestrator" && idPattern.MatchString(event.WakeTarget.GroupID) {
+	if event.WakeTarget.Source == "group_orchestrator" && idleIDPattern.MatchString(event.WakeTarget.GroupID) {
 		return event.WakeTarget.GroupID
 	}
-	if event.WakeTarget.Source == "executor" && blockerResolutionWake(event) {
-		return ""
-	}
-	for _, groupID := range event.GroupIDs {
-		if idPattern.MatchString(groupID) {
-			return groupID
-		}
-	}
 	return ""
+}
+
+func validOrchestratorWake(event domain.ExecutionEvent) bool {
+	return wakeGroup(event) != "" || event.WakeTarget.Source == "user_orchestrator" && !domain.IsGroupIdleEvent(event.Type)
 }
 
 func safeEventType(t string) string {
@@ -298,6 +461,8 @@ func safeEventType(t string) string {
 func command(action, product, supervisor string, data map[string]any) domain.Command {
 	return domain.Command{Action: action, Actor: "supervisor/" + supervisor, ProductID: product, Data: data}
 }
+
+var errResponseTooLarge = errors.New("RCP response exceeds byte limit")
 
 func (s *Supervisor) request(ctx context.Context, method, path, token string, in, out any) error {
 	u, err := url.Parse(s.Config.RCPURL)
@@ -328,18 +493,19 @@ func (s *Supervisor) request(ctx context.Context, method, path, token string, in
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("RCP request rejected (%d)", res.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20+1))
-	if err != nil || len(raw) > 1<<20 {
+	if out == nil {
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, domain.MaxExecutionEventPageBytes+1))
+	if err != nil {
 		return errors.New("invalid RCP response")
 	}
-	if out != nil {
-		d := json.NewDecoder(bytes.NewReader(raw))
-		if err = d.Decode(out); err != nil {
-			return errors.New("invalid RCP response")
-		}
-		if d.Decode(new(any)) != io.EOF {
-			return errors.New("invalid RCP response")
-		}
+	if len(raw) > domain.MaxExecutionEventPageBytes {
+		return errResponseTooLarge
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	if err = d.Decode(out); err != nil || d.Decode(new(any)) != io.EOF {
+		return errors.New("invalid RCP response")
 	}
 	return nil
 }

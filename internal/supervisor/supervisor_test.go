@@ -78,7 +78,7 @@ func (f *fakeRCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func testEvent(id, kind, session, target, group, typ string) domain.ExecutionEvent {
-	return domain.ExecutionEvent{ID: id, ProductID: "product1", IntegrationID: "integration", GroupIDs: []string{group}, Type: typ, Reason: "UNTRUSTED reason must not enter prompt", HarnessKind: kind, SessionRef: session, TmuxTarget: target, WakeTarget: domain.ExecutionWakeTarget{Kind: kind, SessionRef: session, TmuxTarget: target, Source: "executor"}}
+	return domain.ExecutionEvent{ID: id, ProductID: "product1", IntegrationID: "integration", GroupIDs: []string{group}, Type: typ, Reason: "UNTRUSTED reason must not enter prompt", HarnessKind: kind, SessionRef: session, TmuxTarget: target, WakeTarget: domain.ExecutionWakeTarget{Kind: kind, SessionRef: session, TmuxTarget: target, Source: "group_orchestrator", GroupID: group}}
 }
 func testConfig(t *testing.T, base string) Config {
 	t.Helper()
@@ -88,16 +88,24 @@ func testConfig(t *testing.T, base string) Config {
 	}
 	return c
 }
+
+type handlerTransport struct{ handler http.Handler }
+
+func (transport handlerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	recorder := httptest.NewRecorder()
+	transport.handler.ServeHTTP(recorder, request)
+	return recorder.Result(), nil
+}
+
 func runCycle(t *testing.T, events []domain.ExecutionEvent, a *fakeAdapter) (*Supervisor, *fakeRCP) {
 	t.Helper()
 	api := &fakeRCP{events: events}
-	server := httptest.NewServer(api)
-	t.Cleanup(server.Close)
-	c := testConfig(t, server.URL)
+	c := testConfig(t, "http://localhost:8000")
 	s, err := New(c, a)
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.Client.Transport = handlerTransport{api}
 	if err = s.Cycle(context.Background(), "product1", "test-token"); err != nil {
 		t.Fatal(err)
 	}
@@ -106,16 +114,49 @@ func runCycle(t *testing.T, events []domain.ExecutionEvent, a *fakeAdapter) (*Su
 
 func TestCycleIdleTmuxDeliveryAndOneWakeForSession(t *testing.T) {
 	a := &fakeAdapter{}
-	events := []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "orch:0.1", "aabbccdd", "execution_stalled"), testEvent("e2", "codex", "session-12345678", "orch:0.1", "aabbccdd", "execution_lost")}
+	events := []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "orch:0.1", "aabbccdd", "execution_unassigned"), testEvent("e2", "codex", "session-12345678", "orch:0.1", "aabbccdd", "execution_lost")}
 	s, api := runCycle(t, events, a)
 	if len(a.requests) != 1 || len(api.acks) != 2 || api.acks[0].Outcome != "delivered" || api.acks[1].Outcome != "delivered" {
 		t.Fatalf("wake=%d ack=%+v", len(a.requests), api.acks)
 	}
-	if !strings.Contains(a.requests[0].Message, "2 events: execution_stalled, execution_lost") || strings.Contains(a.requests[0].Message, "UNTRUSTED") {
+	if !strings.Contains(a.requests[0].Message, "2 events: execution_unassigned, execution_lost") || strings.Contains(a.requests[0].Message, "UNTRUSTED") {
 		t.Fatalf("unsafe or incomplete message: %s", a.requests[0].Message)
 	}
 	if _, err := os.Stat(s.Config.StateFile); err != nil {
 		t.Fatal("wake state not persisted", err)
+	}
+}
+
+func TestMemberWakeNeverTargetsAnExecutorAndValidatesSkillReminder(t *testing.T) {
+	for _, test := range []struct {
+		target, skill, product string
+		wake, reminder         bool
+	}{
+		{"executor", "team-orchestrator", "product1", false, false},
+		{"user_orchestrator", "team-orchestrator", "product1", true, true},
+		{"group_orchestrator", "team-orchestrator", "product1", true, true},
+		{"group_orchestrator", "", "product1", true, false},
+		{"group_orchestrator", "unsafe\nskill", "product1", true, false},
+		{"group_orchestrator", "team-orchestrator", "unsafe\nproduct", true, false},
+	} {
+		event := testEvent("member-wake", "codex", "session-12345678", "orch:0.1", "group-id", "execution_stalled")
+		event.WakeTarget.Source = test.target
+		event.OrchestratorSkill = test.skill
+		event.ProductID = test.product
+		if test.target == "user_orchestrator" {
+			event.WakeTarget.GroupID = ""
+		}
+		adapter := &fakeAdapter{}
+		_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
+		if (len(adapter.requests) == 1) != test.wake || len(api.acks) != 1 {
+			t.Fatalf("%+v: wakes=%+v acks=%+v", test, adapter.requests, api.acks)
+		}
+		if test.wake && strings.Contains(adapter.requests[0].Message, "Load get_agent_skill(") != test.reminder {
+			t.Fatalf("%+v: %s", test, adapter.requests[0].Message)
+		}
+		if !test.wake && api.acks[0].Outcome != string(Unsupported) {
+			t.Fatalf("executor target was not rejected: %+v", api.acks[0])
+		}
 	}
 }
 
@@ -125,6 +166,11 @@ func TestStandaloneBlockerWakeRequiresTypedCause(t *testing.T) {
 			adapter := &fakeAdapter{}
 			event := testEvent("event", "codex", "session-12345678", "orch:0.1", "", "execution_continuation_required")
 			event.GroupIDs, event.Reason, event.Cause = nil, "blocker resolved", cause
+			if cause == domain.ExecutionCauseBlockerResolved {
+				event.WakeTarget.Source = "user_orchestrator"
+			} else {
+				event.WakeTarget.Source = "executor"
+			}
 			_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
 			if cause == "" {
 				if len(adapter.requests) != 0 || len(api.acks) != 1 || api.acks[0].Outcome != "unsupported" {
@@ -141,6 +187,7 @@ func TestWorkAvailableUsesRegisteredTargetAndFixedPrompt(t *testing.T) {
 	adapter := &fakeAdapter{}
 	event := testEvent("work-event", "codex", "session-12345678", "orch:0.1", "", "work_available")
 	event.Cause = domain.ExecutionCauseQueueAvailable
+	event.WakeTarget.Source = "user_orchestrator"
 	event.IntegrationID, event.GroupIDs = "", nil
 	_, api := runCycle(t, []domain.ExecutionEvent{event}, adapter)
 	if len(adapter.requests) != 1 || len(api.acks) != 1 || api.acks[0].Outcome != "delivered" {
@@ -156,6 +203,7 @@ func TestQuestionContinuationPointsToTriggeringAnswers(t *testing.T) {
 	adapter := &fakeAdapter{}
 	event := testEvent("questionEvent", "codex", "session-12345678", "orch:0.1", "", "work_available")
 	event.Cause = domain.ExecutionCauseQuestionContinuation
+	event.WakeTarget.Source = "user_orchestrator"
 	event.IntegrationID, event.GroupIDs = "", nil
 	runCycle(t, []domain.ExecutionEvent{event}, adapter)
 	if len(adapter.requests) != 1 {
@@ -175,12 +223,12 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	}
 	defer store.Close()
 	svc := application.New(store)
-	httpServer := httptest.NewServer(transport.New(svc, transport.Options{}))
-	defer httpServer.Close()
+	base := "http://localhost:8000"
+	client := &http.Client{Transport: handlerTransport{transport.New(svc, transport.Options{})}}
 	post := func(c domain.Command, out any) {
 		t.Helper()
 		raw, _ := json.Marshal(c)
-		res, e := http.Post(httpServer.URL+"/api/commands", "application/json", strings.NewReader(string(raw)))
+		res, e := client.Post(base+"/api/commands", "application/json", strings.NewReader(string(raw)))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -211,8 +259,8 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	if group.ID == "" {
 		t.Fatal("group not created")
 	}
-	eventURL := httpServer.URL + "/api/products/" + product.ID + "/execution-events?due_only=true&unresolved_only=true"
-	response, e := http.Get(eventURL)
+	eventURL := base + "/api/products/" + product.ID + "/execution-events?due_only=true&unresolved_only=true"
+	response, e := client.Get(eventURL)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -228,7 +276,7 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 		t.Fatalf("due events: %+v", due.Items)
 	}
 	a := &fakeAdapter{}
-	c := testConfig(t, httpServer.URL)
+	c := testConfig(t, base)
 	c.ProductIDs = []string{product.ID}
 	c.HeadlessKinds = nil
 	if err = c.Normalize(); err != nil {
@@ -238,13 +286,14 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sup.Client.Transport = client.Transport
 	if err = sup.Cycle(ctx, product.ID, "test-token"); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.requests) != 1 || a.requests[0].GroupID != group.ID || a.requests[0].TmuxTarget != "orch-e2e" || len(a.requests[0].Events) != 1 || a.requests[0].Events[0].WakeTarget.Source != "group_orchestrator" {
 		t.Fatalf("wakes: %+v", a.requests)
 	}
-	response, e = http.Get(strings.Replace(eventURL, "?due_only=true&", "?", 1))
+	response, e = client.Get(strings.Replace(eventURL, "?due_only=true&", "?", 1))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -259,7 +308,7 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	if len(remaining.Items) != 1 || len(remaining.Items[0].Acknowledgements) != 1 || remaining.Items[0].Acknowledgements[0].Outcome != "delivered" {
 		t.Fatalf("server ack: %+v", remaining.Items)
 	}
-	response, e = http.Get(httpServer.URL + "/api/execution-groups/" + group.ID)
+	response, e = client.Get(base + "/api/execution-groups/" + group.ID)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -285,7 +334,7 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 	if len(a.requests) != 1 {
 		t.Fatalf("empty target unexpectedly woke: %+v", a.requests)
 	}
-	response, e = http.Get(httpServer.URL + "/api/products/" + product.ID + "/execution-events?unresolved_only=true")
+	response, e = client.Get(base + "/api/products/" + product.ID + "/execution-events?unresolved_only=true")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -315,15 +364,15 @@ func TestCycleAgainstRealTransportAndLocalApplicationStore(t *testing.T) {
 }
 
 func TestRCPResponseAllowsAdditiveFields(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"items":[],"next_cursor":"","new_server_field":true}`))
-	}))
-	defer server.Close()
-	c := testConfig(t, server.URL)
+	})
+	c := testConfig(t, "http://localhost:8000")
 	s, err := New(c, &fakeAdapter{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.Client.Transport = handlerTransport{api}
 	var response struct {
 		Items      []domain.ExecutionEvent `json:"items"`
 		NextCursor string                  `json:"next_cursor"`
@@ -335,7 +384,7 @@ func TestRCPResponseAllowsAdditiveFields(t *testing.T) {
 
 func TestBusyTmuxFailedThenDelivered(t *testing.T) {
 	a := &fakeAdapter{results: []WakeResult{{Outcome: Failed, Detail: "busy"}, {Outcome: Delivered, Detail: "ok"}}}
-	ev := []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "orch", "aabbccdd", "execution_stalled")}
+	ev := []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "orch", "aabbccdd", "execution_continuation_required")}
 	s, api := runCycle(t, ev, a)
 	if api.acks[0].Outcome != "failed" || api.acks[0].Detail != "busy" {
 		t.Fatalf("busy ack: %+v", api.acks[0])
@@ -369,15 +418,14 @@ func TestUnsupportedAndInvalidSessionAreAcknowledged(t *testing.T) {
 
 func TestRateLimitSurvivesRestart(t *testing.T) {
 	a := &fakeAdapter{}
-	api := &fakeRCP{events: []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "", "aabbccdd", "execution_stalled")}}
-	server := httptest.NewServer(api)
-	defer server.Close()
-	c := testConfig(t, server.URL)
+	api := &fakeRCP{events: []domain.ExecutionEvent{testEvent("e1", "codex", "session-12345678", "", "aabbccdd", "execution_continuation_required")}}
+	c := testConfig(t, "http://localhost:8000")
 	s, err := New(c, a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
+	s.Client.Transport = handlerTransport{api}
 	s.Now = func() time.Time { return now }
 	if err = s.Cycle(context.Background(), "product1", "test-token"); err != nil {
 		t.Fatal(err)
@@ -387,6 +435,7 @@ func TestRateLimitSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted.Now = func() time.Time { return now.Add(time.Second) }
+	restarted.Client.Transport = s.Client.Transport
 	if err = restarted.loadState(); err != nil {
 		t.Fatal(err)
 	}
@@ -403,6 +452,16 @@ func writeFake(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0700); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeFakeTmux(t *testing.T, path, body string) {
+	t.Helper()
+	writeFake(t, path, `if [ "$1" = display ]; then
+  if [ -n "$TMUX_LOG" ]; then printf 'display\n' >> "$TMUX_LOG"; fi
+  printf '%%1 $2 %s\n' "${4%%:*}"
+  exit 0
+fi
+`+body)
 }
 func TestHeadlessFallbackAndLiveProcessGuard(t *testing.T) {
 	dir := t.TempDir()
@@ -449,7 +508,7 @@ func TestTmuxAdapterRequiresIdleAndVerifiesPaneChange(t *testing.T) {
 	if err := os.WriteFile(state, []byte("idle prompt"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	writeFake(t, filepath.Join(dir, "tmux"), "printf '%s\\n' \"$*\" >> \"$TMUX_LOG\"\ncase \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'working\\n' > \"$PANE\";; *Enter*) printf 'Codex: esc to interrupt\\n' > \"$PANE\";; esac;; esac\n")
+	writeFakeTmux(t, filepath.Join(dir, "tmux"), "printf '%s\\n' \"$*\" >> \"$TMUX_LOG\"\ncase \"$1\" in capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'working\\n' > \"$PANE\";; *Enter*) printf 'Codex: esc to interrupt\\n' > \"$PANE\";; esac;; esac\n")
 	t.Setenv("TMUX_LOG", log)
 	t.Setenv("PANE", state)
 	a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: 2 * time.Second}}
@@ -481,7 +540,7 @@ func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) 
 			_ = os.WriteFile(pane, []byte("idle prompt"), 0600)
 			// The send operation changes the pane to include the typed line; only the
 			// post-Enter scripted output determines whether that line was consumed.
-			writeFake(t, filepath.Join(dir, "tmux"), "case \"$1\" in has-session) exit 0;; capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'idle prompt\\nliteral safe\\n' > \"$PANE\";; *Enter*) printf '"+strings.ReplaceAll(tc.final, "\\n", "\\n")+"\\n' > \"$PANE\";; esac;; esac\n")
+			writeFakeTmux(t, filepath.Join(dir, "tmux"), "case \"$1\" in capture-pane) cat \"$PANE\";; send-keys) case \"$*\" in *' -l '*) printf 'idle prompt\\nliteral safe\\n' > \"$PANE\";; *Enter*) printf '"+strings.ReplaceAll(tc.final, "\\n", "\\n")+"\\n' > \"$PANE\";; esac;; esac\n")
 			t.Setenv("PANE", pane)
 			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: 5 * time.Second, VerifyFor: 200 * time.Millisecond}}
 			got := a.Wake(context.Background(), WakeRequest{Kind: "codex", TmuxTarget: "orch", Message: "literal safe"})
@@ -499,8 +558,7 @@ func TestTmuxWakeRetriesSwallowedEnter(t *testing.T) {
 	dir := t.TempDir()
 	pane, calls := filepath.Join(dir, "pane"), filepath.Join(dir, "enters")
 	_ = os.WriteFile(pane, []byte("idle prompt"), 0600)
-	writeFake(t, filepath.Join(dir, "tmux"), `case "$1" in
-has-session) exit 0;;
+	writeFakeTmux(t, filepath.Join(dir, "tmux"), `case "$1" in
 capture-pane) cat "$PANE";;
 send-keys) case "$*" in *" -l "*) printf 'typed wrapped\nmessage\n' > "$PANE";; *Enter*) n=0; test -f "$ENTERS" && n=$(cat "$ENTERS"); n=$((n+1)); printf '%s' "$n" > "$ENTERS"; if [ "$n" -ge 2 ]; then printf 'Codex: Esc to Interrupt\n' > "$PANE"; fi;; esac;;
 esac
@@ -521,8 +579,8 @@ func TestTmuxWakeSubmitsLeftoverWithoutTypingDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	pane, log := filepath.Join(dir, "pane"), filepath.Join(dir, "argv")
 	_ = os.WriteFile(pane, []byte("idle\n[RCP supervisor] previous pending message"), 0600)
-	writeFake(t, filepath.Join(dir, "tmux"), `printf '%s\n' "$*" >> "$TMUX_LOG"
-case "$1" in has-session) exit 0;; capture-pane) cat "$PANE";; send-keys) case "$*" in *Enter*) printf 'Codex: esc to interrupt\n' > "$PANE";; esac;; esac
+	writeFakeTmux(t, filepath.Join(dir, "tmux"), `printf '%s\n' "$*" >> "$TMUX_LOG"
+case "$1" in capture-pane) cat "$PANE";; send-keys) case "$*" in *Enter*) printf 'Codex: esc to interrupt\n' > "$PANE";; esac;; esac
 `)
 	t.Setenv("PANE", pane)
 	t.Setenv("TMUX_LOG", log)
@@ -541,12 +599,9 @@ func TestMessageUsesOnlyValidatedFields(t *testing.T) {
 	a := &fakeAdapter{}
 	ev := testEvent("secret-event-id", "codex", "session-12345678", "", "not-valid!", "bad type with secrets")
 	ev.GroupIDs = []string{"aabbccdd"}
-	_, _ = runCycle(t, []domain.ExecutionEvent{ev}, a)
-	msg := a.requests[0].Message
-	for _, bad := range []string{"secret-event-id", "not-valid!", "bad type", "UNTRUSTED", "reason"} {
-		if strings.Contains(msg, bad) {
-			t.Fatalf("message included untrusted value %q: %s", bad, msg)
-		}
+	_, api := runCycle(t, []domain.ExecutionEvent{ev}, a)
+	if len(a.requests) != 0 || len(api.acks) != 1 || api.acks[0].Outcome != "unsupported" {
+		t.Fatalf("invalid orchestrator target admitted: %+v %+v", a.requests, api.acks)
 	}
 }
 

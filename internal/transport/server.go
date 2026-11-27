@@ -87,7 +87,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 			write(w, 415, map[string]string{"error": "Use Content-Type: application/json"})
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		var c domain.Command
@@ -224,7 +224,7 @@ func configureMCP(mux routeRegistrar, service Service, options Options, instruct
 	registerFlowTools(server, service)
 	registerWorkspaceTools(server, service)
 	registerLocalGitTools(server, service)
-	registerAgentGuideTools(server, instructions)
+	registerAgentGuideTools(server, service, instructions)
 	return server
 }
 

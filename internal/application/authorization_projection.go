@@ -19,6 +19,9 @@ func commandReferenceIDs(c domain.Command) ([]string, error) {
 }
 
 func commandAuthorizationInputs(c domain.Command) ([]string, bool, error) {
+	if c.Action == "upsert_agent_skill" {
+		c.Data = nil
+	}
 	if c.Action == "update_feature" {
 		c.Data = maps.Clone(c.Data)
 		delete(c.Data, "approval_question_id")

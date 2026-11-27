@@ -174,6 +174,9 @@ func (s *Service) ProjectContextSummary(ctx context.Context, product string) (an
 		visibility = "shared"
 	}
 	productCard := map[string]any{"id": p.ID, "name": contextExcerpt(p.Name, 256), "description": contextExcerpt(p.Description, 600), "visibility": visibility, "owner": owner, "members": members}
+	if p.AgentRoles != nil {
+		productCard["agent_roles"] = *p.AgentRoles
+	}
 	if limited {
 		productCard["membership_truncated"] = true
 	}

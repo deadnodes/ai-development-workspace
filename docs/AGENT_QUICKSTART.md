@@ -35,7 +35,7 @@ docker compose --profile app down
 
 Данные находятся в PostgreSQL named volume. Не используй `down -v`: это удалит состояние.
 
-## Подключить MCP и два workflow-скилла одной командой
+## Подключить MCP и workflow-скиллы одной командой
 
 После запуска сервера:
 
@@ -46,6 +46,26 @@ docker compose --profile app down
 Команда по умолчанию подключает Codex и Claude Code (`--harness codex|claude|both`), устанавливает все три скилла `rcp-handoff`, `rcp-delivery` и `rcp-execution` в `.agents/skills/` и `.claude/skills/`, добавляет Claude MCP/Stop hook, hook config и скрипт, binding `.release-control.json` и managed-блок в `AGENTS.md`. Конфиги существующих серверов и hooks сохраняются. Hook config имеет mode 600 и ссылается на профиль без значения токена. Codex всегда печатает готовую строку `notify = [...]`; `--codex-notify` дополнительно добавляет её в `.codex/config.toml`. Для защищённого сервера сначала выполни `release-control login --url https://CONTROL_HOST --profile default`, открой выданную ссылку и явно одобри код агента через человеческий вход. Затем выполни `connect` с тем же URL и `--profile default`. Независимый токен агента хранится зашифрованным вне проекта; MCP и turn-end hook загружают его при запуске. `--token-env RC_TOKEN` остаётся явной альтернативой для окружения с готовым токеном. Скиллы доступны через MCP `get_agent_skill`; provenance snapshots закреплён в `internal/agentguide/skills/provenance.json`. Подробности: [AGENT_CONNECT.md](AGENT_CONNECT.md).
 
 В защищённом режиме автор действия определяется проверенной сервером identity: переданный клиентом `actor` не позволяет выдать себя за другого пользователя. В локальном режиме без OIDC UI использует `human/local`, API/MCP — `agent`; там actor остаётся только атрибуцией. UI входит через браузерную сессию; токен агента в форму браузера вводить не нужно.
+
+### Ролевые скиллы продукта
+
+`connect` показывает, какой скилл загружает оркестратор, а какой — исполнитель.
+Если роли не настроены, их названия можно проверить в `get_project_context` или
+`get_agent_kit(product_id="PRODUCT")`. Для своей роли вызови
+`get_agent_skill(name="SKILL", product_id="PRODUCT")`, прочитай Markdown и запиши
+включённые файлы по путям, указанным в тексте скилла. Оркестратор управляет
+claims и будит исполнителей; исполнитель записывает только `record_progress`.
+
+Скиллы не публикуются автоматически. Владелец может загрузить их из исходного репозитория:
+
+```sh
+release-control skill push --product PRODUCT --dir .workspace/skills/deadnodes-orchestrator-role --url https://CONTROL_HOST
+release-control skill push --product PRODUCT --dir .workspace/skills/deadnodes-worker-role --url https://CONTROL_HOST
+```
+
+Добавь `--dry-run` для локальной проверки и используй профиль или токен с правами
+владельца/администратора для публикации. Затем владелец задаёт обе роли через
+`set_product_agent_roles`.
 
 ## 2. Подключение агента
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"releasecontrol/internal/agentguide"
+	"releasecontrol/internal/domain"
 	"runtime"
 	"strings"
 	"testing"
@@ -24,6 +25,8 @@ func kitServer(t *testing.T, products int, token string, kits ...agentguide.Kit)
 	if len(kits) != 0 {
 		kit = kits[0]
 	}
+	roles := kit.AgentRoles
+	kit.AgentRoles = nil
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "fixture", Version: "1"}, nil)
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: "get_state"}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Limit int `json:"limit"`
@@ -59,13 +62,31 @@ func kitServer(t *testing.T, products int, token string, kits ...agentguide.Kit)
 			t.Error("connect fetched full State")
 			w.WriteHeader(500)
 		case "/api/products/p0/context":
-			json.NewEncoder(w).Encode(map[string]any{"product": map[string]string{"id": "p0"}})
+			json.NewEncoder(w).Encode(map[string]any{"product": map[string]any{"id": "p0", "agent_roles": roles}})
 		default:
 			w.WriteHeader(404)
 		}
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func TestConnectPrintsAndInstallsProductRoleInstructions(t *testing.T) {
+	kit := agentguide.Get()
+	kit.AgentRoles = &domain.AgentRoles{OrchestratorSkill: "team-orchestrator", WorkerSkill: "team-worker"}
+	server := kitServer(t, 1, "", kit)
+	root := t.TempDir()
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"--url", server.URL, "--workspace", root, "--product-id", "p0", "--harness", "both"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"stdout": out.String(), "AGENTS.md": string(readFile(t, root, "AGENTS.md")), "CLAUDE.md": string(readFile(t, root, "CLAUDE.md"))} {
+		for _, call := range []string{`get_agent_skill(name="team-orchestrator", product_id="p0")`, `get_agent_skill(name="team-worker", product_id="p0")`} {
+			if !strings.Contains(text, call) {
+				t.Errorf("%s missing %s", name, call)
+			}
+		}
+	}
 }
 
 func TestConnectAndDoctorAcceptCRLFSkills(t *testing.T) {

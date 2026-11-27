@@ -3,18 +3,22 @@ package transport_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"releasecontrol/internal/agentconnect"
 	"releasecontrol/internal/agentguide"
 	"releasecontrol/internal/application"
+	"releasecontrol/internal/domain"
 	"releasecontrol/internal/persistence"
 	"releasecontrol/internal/transport"
-	"strings"
-	"testing"
 )
 
 func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
@@ -36,7 +40,7 @@ func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
 	if e = json.NewDecoder(response.Body).Decode(&kit); e != nil {
 		t.Fatal(e)
 	}
-	if kit != agentguide.Get() {
+	if !reflect.DeepEqual(kit, agentguide.Get()) {
 		t.Fatal("HTTP skill differs")
 	}
 	session, e := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp"}, nil)
@@ -119,6 +123,8 @@ func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
 	}
 	for _, command := range []map[string]any{
 		{"action": "create_product", "id": "p", "data": map[string]any{"name": "Product"}},
+		{"action": "upsert_agent_skill", "product_id": "p", "data": map[string]any{"name": "team-orchestrator", "description": "Coordinate workers", "body": "Read check.sh", "files": map[string]string{"check.sh": "echo ready"}}},
+		{"action": "set_product_agent_roles", "product_id": "p", "data": map[string]any{"orchestrator_skill": "team-orchestrator", "worker_skill": "rcp-execution"}},
 		{"action": "create_feature", "id": "f", "product_id": "p", "data": map[string]any{"title": "Feature", "problem": "Context is lost", "goal": "Handoff"}},
 		{"action": "create_integration", "id": "i", "feature_id": "f", "data": map[string]any{"title": "Work", "objective": "Continue"}},
 		{"action": "handoff", "feature_id": "f", "integration_id": "i", "data": map[string]any{"completed": []string{"Implemented API"}, "current": "Tests pending", "remaining": []string{"Acceptance check"}, "next": []string{"Run acceptance"}, "body": "Suggested skills: rcp-handoff; References: docs/CONTRACT.md"}},
@@ -128,6 +134,29 @@ func TestAgentKitHTTPMCPAndResourceAgree(t *testing.T) {
 		if err != nil || result.IsError {
 			data, _ := json.Marshal(result)
 			t.Fatalf("handoff workflow %v failed: %v %s", command["action"], err, data)
+		}
+	}
+	for _, query := range []struct {
+		name  string
+		args  map[string]any
+		check func([]byte) bool
+	}{
+		{"get_agent_skill", map[string]any{"name": "team-orchestrator", "product_id": "p"}, func(raw []byte) bool {
+			var skill domain.ProductAgentSkill
+			return json.Unmarshal(raw, &skill) == nil && skill.Body == "Read check.sh" && skill.Files["check.sh"] == "echo ready" && len(skill.FilesSHA256["check.sh"]) == 64
+		}},
+		{"get_agent_kit", map[string]any{"product_id": "p"}, func(raw []byte) bool {
+			var scoped agentguide.Kit
+			return json.Unmarshal(raw, &scoped) == nil && scoped.AgentRoles != nil && scoped.AgentRoles.OrchestratorSkill == "team-orchestrator" && len(scoped.Skills) == 4 && scoped.Skills[3].Description == "Coordinate workers"
+		}},
+	} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: query.name, Arguments: query.args})
+		if err != nil || result.IsError {
+			t.Fatalf("%s failed: %v %+v", query.name, err, result)
+		}
+		raw, err := json.Marshal(result.StructuredContent)
+		if err != nil || !query.check(raw) {
+			t.Fatalf("%s returned unexpected content: %v %s", query.name, err, raw)
 		}
 	}
 	resumed, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "resume", Arguments: map[string]any{"feature_id": "f"}})

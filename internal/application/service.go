@@ -73,11 +73,15 @@ func NewWithProvider(store Store, provider delivery.Provider) *Service {
 	s.provider = provider
 	return s
 }
-func (s *Service) State(ctx context.Context) (domain.State, error) {
+func (s *Service) readDerivedState(ctx context.Context) (domain.State, error) {
 	st, err := s.store.Read(ctx)
 	if err == nil {
 		derive(&st)
 	}
+	return st, err
+}
+func (s *Service) State(ctx context.Context) (domain.State, error) {
+	st, err := s.readDerivedState(ctx)
 	if err != nil {
 		return st, err
 	}
@@ -617,6 +621,16 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 	}
 
 	switch c.Action {
+	case "upsert_agent_skill", "delete_agent_skill", "set_product_agent_roles":
+		var err error
+		out, err = changeProductAgentSkills(ctx, st, c, m)
+		if err != nil {
+			return nil, err
+		}
+		if skill, ok := out.(domain.ProductAgentSkill); ok {
+			m.ID = skill.ID
+			c.Data = map[string]any{"name": skill.Name, "version": skill.Version, "sha256": skill.SHA256}
+		}
 	case "pin_artifact", "release_artifact_pin":
 		var changed bool
 		var err error
@@ -1005,7 +1019,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				}
 			}
 		}
-		if e := decodeWritable(memoryData, &v, "title", "body", "reason", "completed", "current", "remaining", "next", "warnings", "commit", "deployment", "session"); e != nil {
+		fields := []string{"title", "body", "reason", "completed", "current", "remaining", "next", "warnings", "commit", "deployment", "session"}
+		if c.Action == "add_blocker" {
+			fields = append(fields, "owner")
+		}
+		if e := decodeWritable(memoryData, &v, fields...); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1035,9 +1053,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				in.Remaining = v.Remaining
 			}
 			in.UpdatedAt = m.UpdatedAt
-			if ex := executionFor(st, c.IntegrationID); ex != nil && ex.State == "running" && c.Data["execution_unfenced"] != true {
-				now := m.UpdatedAt
-				ex.LastProgress = &now
+			in.LastRecordedProgress = &m.UpdatedAt
+			if ex := executionFor(st, c.IntegrationID); ex != nil {
+				if ex.State == "running" && c.Data["execution_unfenced"] != true {
+					ex.LastProgress = &m.UpdatedAt
+				}
 			}
 		}
 		st.Memories = append(st.Memories, v)

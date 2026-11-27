@@ -2360,6 +2360,83 @@ Read the generated tool index or one exact tool/action/route entry.
 
 ## execution
 
+### `set_product_idle_policy` — mcp_tool
+
+Override group idle, long-wait, owner reminder and member staleness thresholds for a Product.
+
+**When:** Set all four thresholds together; zero disables its corresponding check.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `idle_after_seconds` (integer, required): 0 to 604800
+- `wait_timeout_seconds` (integer, required): 0 to 604800
+- `owner_blocked_interval_seconds` (integer, required): 0 to 604800
+- `member_stale_after_seconds` (integer, required): 0 to 604800; default 900
+
+**Output:** Product with its persisted idle policy.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the Product owner or instance admin can change policy.
+- `VALIDATION`: Provide all four whole-second thresholds within range.
+
+**Example:** `{"product_id":"PRODUCT","idle_after_seconds":600,"wait_timeout_seconds":1800,"owner_blocked_interval_seconds":14400,"member_stale_after_seconds":900}`
+
+**Related:** `get_execution_group`
+
+**Authority:** Sets notification policy only; grants no execution authority.
+
+### `set_product_idle_policy` — execute_action
+
+Override Product group idle notification thresholds.
+
+**When:** Use via the shared command envelope.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `data.idle_after_seconds` (integer, optional): 0 to 604800
+- `data.wait_timeout_seconds` (integer, optional): 0 to 604800
+- `data.owner_blocked_interval_seconds` (integer, optional): 0 to 604800
+- `data.member_stale_after_seconds` (integer, optional): 0 to 604800; default 900
+
+**Output:** Product with its persisted idle policy.
+
+**Errors:**
+
+- `FORBIDDEN`: Only the Product owner or instance admin can change policy.
+- `VALIDATION`: Provide all four whole-second thresholds within range.
+
+**Example:** `{"action":"set_product_idle_policy","product_id":"PRODUCT","data":{"idle_after_seconds":600,"wait_timeout_seconds":1800,"owner_blocked_interval_seconds":14400,"member_stale_after_seconds":900}}`
+
+**Related:** `get_execution_group`
+
+**Authority:** Sets notification policy only; grants no execution authority.
+
+### `report_turn_start` — mcp_tool
+
+Report optional activity when a registered orchestrator starts a turn.
+
+**When:** Call on actual turn start, using the registered harness identity and a stable turn ID.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `data` (object, required): harness_kind plus session_ref or tmux_target; turn_id recommended
+
+**Output:** Recorded turn identity; no work is started.
+
+**Errors:**
+
+- `VALIDATION`: Use a valid harness kind and matching session or pane target.
+
+**Example:** `{"product_id":"PRODUCT","data":{"harness_kind":"codex","tmux_target":"orch:0.0","turn_id":"TURN"}}`
+
+**Related:** `report_turn_end`, `get_execution_group`
+
+**Authority:** Records activity only; grants no execution authority.
+
 ### `get_execution_group` — mcp_tool
 
 Restore all members of an execution group with current Integration and execution state.
@@ -6938,47 +7015,132 @@ Export portable Product setup and agent docs without feature history, machine pa
 
 **Same operation:** `http_route:GET /api/agent-kit`
 
-Read the bundled workspace instructions and handoff/delivery skills with checksums.
+Read workspace instructions and discover canonical and Product role skills.
 
-**When:** Use to inspect or install canonical guidance; release-control connect handles workspace setup.
+**When:** Use at connection or when choosing what to load for your role.
 
 **Inputs:**
 
-- `(none)` (none, optional): This operation accepts no caller-supplied inputs.
+- `product_id` (string, optional): Visible Product to include; unscoped calls list built-ins only
 
-**Output:** Instructions and named skill content/checksums.
+**Output:** Built-in content and checksums, skill summaries with when-to-load instructions, and configured Product roles.
 
 **Errors:**
 
-- `INTERNAL`: Embedded skill/provenance integrity failure; inspect packaged assets.
+- `NOT_FOUND`: Product does not exist or is not visible.
 
-**Example:** `{"name":"get_agent_kit","arguments":{}}`
+**Example:** `{"name":"get_agent_kit","arguments":{"product_id":"PRODUCT"}}`
 
-**Related:** `get_agent_skill`, `get_tool_guide`
+**Related:** `get_agent_skill`, `get_project_context`
 
 **Authority:** Guidance only; does not authorize external mutation, adoption, merge, deployment or release.
 
 ### `get_agent_skill` — mcp_tool
 
-Fetch one fixed bundled agent workflow skill by exact name.
+Fetch a built-in or Product agent skill by exact name.
 
-**When:** Use rcp-handoff for checkpoints or rcp-delivery for delivery workflows.
+**When:** Load the configured skill for your role; write included files to the paths specified in the skill body.
 
 **Inputs:**
 
-- `name` (string, required): Exact rcp-handoff or rcp-delivery name
+- `name` (string, required): Exact skill name
+- `product_id` (string, optional): Visible Product; required for Product skills
 
-**Output:** Skill name, Markdown content and SHA-256.
+**Output:** Markdown and checksum; Product skills also include version, attribution and optional text files with per-file SHA-256 digests.
 
 **Errors:**
 
-- `NOT_FOUND`: 'unknown skill'; use one of the two exact supported names.
+- `NOT_FOUND`: Skill or Product does not exist or is not visible.
 
-**Example:** `{"name":"get_agent_skill","arguments":{"name":"rcp-delivery"}}`
+**Example:** `{"name":"get_agent_skill","arguments":{"name":"team-worker","product_id":"PRODUCT"}}`
 
-**Related:** `get_agent_kit`, `get_tool_guide`
+**Related:** `get_agent_kit`, `set_product_agent_roles`
 
 **Authority:** Workflow guidance only; grants no execution permission.
+
+### `upsert_agent_skill` — mcp_tool
+
+**Same operation:** `execute_action:upsert_agent_skill`
+
+Publish a named Product role skill with optional text files.
+
+**When:** Use release-control skill push to publish a local skill directory.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `name` (string, required): Unreserved lowercase skill name
+- `description` (string, required): One-line description
+- `body` (string, required): Markdown up to 64 KiB
+- `files` (object, optional): Relative paths mapped to UTF-8 text, up to 256 KiB total
+
+**Output:** Stored skill with digests, version and attribution.
+
+**Errors:**
+
+- `NOT_FOUND`: Product does not exist or is not visible.
+- `FORBIDDEN`: Caller is not a Product owner or instance admin.
+- `VALIDATION`: Invalid name, reserved name, path, format or size.
+
+**Example:** `{"name":"upsert_agent_skill","arguments":{"product_id":"PRODUCT","name":"team-worker","description":"Worker instructions","body":"Record progress using the member fence."}}`
+
+**Related:** `get_agent_skill`, `set_product_agent_roles`
+
+**Authority:** Changes product guidance only; does not execute the skill.
+
+### `delete_agent_skill` — mcp_tool
+
+**Same operation:** `execute_action:delete_agent_skill`
+
+Remove an unassigned Product skill.
+
+**When:** Change any role that points to the skill before deleting it.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `name` (string, required): Exact Product skill name
+
+**Output:** Deleted skill name.
+
+**Errors:**
+
+- `NOT_FOUND`: Product or skill does not exist or is not visible.
+- `FORBIDDEN`: Caller is not a Product owner or instance admin.
+- `VALIDATION`: Skill is still assigned to a role, or name is invalid or built-in.
+
+**Example:** `{"name":"delete_agent_skill","arguments":{"product_id":"PRODUCT","name":"team-worker"}}`
+
+**Related:** `upsert_agent_skill`, `set_product_agent_roles`
+
+**Authority:** Removes stored guidance only; does not remove files from connected workspaces.
+
+### `set_product_agent_roles` — mcp_tool
+
+**Same operation:** `execute_action:set_product_agent_roles`
+
+Set the Product's orchestrator and worker skill assignments.
+
+**When:** The Product owner has published the desired skills or chosen built-ins.
+
+**Inputs:**
+
+- `product_id` (string, required): Product ID
+- `orchestrator_skill` (string, required): Existing Product or built-in skill name
+- `worker_skill` (string, required): Existing Product or built-in skill name
+
+**Output:** Saved role assignments; also shown in project context and the scoped kit.
+
+**Errors:**
+
+- `NOT_FOUND`: Product or skill does not exist or is not visible.
+- `FORBIDDEN`: Caller is not the Product owner.
+
+**Example:** `{"name":"set_product_agent_roles","arguments":{"product_id":"PRODUCT","orchestrator_skill":"team-orchestrator","worker_skill":"team-worker"}}`
+
+**Related:** `get_agent_kit`, `get_agent_skill`
+
+**Authority:** Sets role guidance without granting execution authority.
 
 ### `get_code_api` — mcp_tool
 

@@ -289,9 +289,9 @@ func (s *stateSnapshots) updateCollections(ctx context.Context, tx stateTransact
 			oldByID[id] = old.Index(j)
 			positions[id] = s.cached.positions[id]
 		}
-		retentionDelete := !full && (kind == "runtime_observations" || kind == "operations" || kind == "operation_steps") && selected[kind] && !appendOnly[kind]
+		deleteMissing := kind == "product_agent_skills" || !full && (kind == "runtime_observations" || kind == "operations" || kind == "operation_steps") && selected[kind] && !appendOnly[kind]
 		var currentIDs map[string]bool
-		if full || retentionDelete {
+		if full || deleteMissing {
 			currentIDs = make(map[string]bool, cur.Len())
 			for j := 0; j < cur.Len(); j++ {
 				id := recordString(cur.Index(j), "ID")
@@ -310,7 +310,7 @@ func (s *stateSnapshots) updateCollections(ctx context.Context, tx stateTransact
 			if kind == "products" {
 				owner = id
 			}
-			if retentionDelete && !currentIDs[id] || deleting && owner != "" && productsBefore[owner] && !productsAfter[owner] && !afterOwners[owner] && !afterIDs[kind][id] {
+			if deleteMissing && !currentIDs[id] || deleting && owner != "" && productsBefore[owner] && !productsAfter[owner] && !afterOwners[owner] && !afterIDs[kind][id] {
 				deleted = append(deleted, id)
 			} else {
 				values[id] = v

@@ -12,13 +12,15 @@ type Meta struct {
 }
 type Product struct {
 	Meta
-	Name                  string   `json:"name"`
-	Description           string   `json:"description"`
-	Visibility            string   `json:"visibility,omitempty"`
-	Owner                 string   `json:"owner,omitempty"`
-	Members               []string `json:"members,omitempty"`
-	IdeaPromotion         string   `json:"idea_promotion,omitempty"`
-	StalledTimeoutSeconds *int     `json:"stalled_timeout_seconds,omitempty"`
+	Name                  string               `json:"name"`
+	Description           string               `json:"description"`
+	Visibility            string               `json:"visibility,omitempty"`
+	Owner                 string               `json:"owner,omitempty"`
+	Members               []string             `json:"members,omitempty"`
+	IdeaPromotion         string               `json:"idea_promotion,omitempty"`
+	StalledTimeoutSeconds *int                 `json:"stalled_timeout_seconds,omitempty"`
+	IdlePolicy            *ExecutionIdlePolicy `json:"idle_policy,omitempty"`
+	AgentRoles            *AgentRoles          `json:"agent_roles,omitempty"`
 }
 type Feature struct {
 	Meta
@@ -71,6 +73,8 @@ type Integration struct {
 	Remaining          []string      `json:"remaining"`
 	WorkingAreas       []string      `json:"working_areas"`
 	Position           int           `json:"position"`
+
+	LastRecordedProgress *time.Time `json:"last_recorded_progress,omitempty"`
 }
 
 type ExecutionHarness struct {
@@ -110,29 +114,32 @@ const (
 )
 
 type ExecutionEvent struct {
-	Owner               string                   `json:"owner,omitempty"`
-	RegistrationID      string                   `json:"registration_id,omitempty"`
-	ID                  string                   `json:"id"`
-	ProductID           string                   `json:"product_id"`
-	FeatureID           string                   `json:"feature_id,omitempty"`
-	QuestionIDs         []string                 `json:"question_ids,omitempty"`
-	IntegrationID       string                   `json:"integration_id"`
-	GroupIDs            []string                 `json:"group_ids"`
-	Type                string                   `json:"type"`
-	Cause               ExecutionEventCause      `json:"cause,omitempty"`
-	Fence               uint64                   `json:"fence"`
-	ConditionGeneration uint64                   `json:"condition_generation"`
-	Reason              string                   `json:"reason"`
-	DedupeKey           string                   `json:"dedupe_key"`
-	SessionRef          string                   `json:"session_ref"`
-	HarnessKind         string                   `json:"harness_kind"`
-	TmuxTarget          string                   `json:"tmux_target,omitempty"`
-	WakeTarget          ExecutionWakeTarget      `json:"wake_target"`
-	CreatedAt           time.Time                `json:"created_at"`
-	Delivery            ExecutionEventDelivery   `json:"delivery"`
-	Resolution          ExecutionEventResolution `json:"resolution"`
-	EscalationRequired  bool                     `json:"escalation_required,omitempty"`
-	Acknowledgements    []ExecutionEventAck      `json:"acknowledgements,omitempty"`
+	Owner               string                     `json:"owner,omitempty"`
+	RegistrationID      string                     `json:"registration_id,omitempty"`
+	ID                  string                     `json:"id"`
+	ProductID           string                     `json:"product_id"`
+	FeatureID           string                     `json:"feature_id,omitempty"`
+	QuestionIDs         []string                   `json:"question_ids,omitempty"`
+	IntegrationID       string                     `json:"integration_id"`
+	GroupIDs            []string                   `json:"group_ids"`
+	Type                string                     `json:"type"`
+	Cause               ExecutionEventCause        `json:"cause,omitempty"`
+	Fence               uint64                     `json:"fence"`
+	ConditionGeneration uint64                     `json:"condition_generation"`
+	Reason              string                     `json:"reason"`
+	DedupeKey           string                     `json:"dedupe_key"`
+	SessionRef          string                     `json:"session_ref"`
+	HarnessKind         string                     `json:"harness_kind"`
+	TmuxTarget          string                     `json:"tmux_target,omitempty"`
+	WakeTarget          ExecutionWakeTarget        `json:"wake_target"`
+	OrchestratorSkill   string                     `json:"orchestrator_skill,omitempty"`
+	GroupIdle           *ExecutionGroupIdlePayload `json:"group_idle,omitempty"`
+	GroupIdleEpisode    string                     `json:"group_idle_episode,omitempty"`
+	CreatedAt           time.Time                  `json:"created_at"`
+	Delivery            ExecutionEventDelivery     `json:"delivery"`
+	Resolution          ExecutionEventResolution   `json:"resolution"`
+	EscalationRequired  bool                       `json:"escalation_required,omitempty"`
+	Acknowledgements    []ExecutionEventAck        `json:"acknowledgements,omitempty"`
 }
 type ExecutionWakeTarget struct {
 	GroupID         string `json:"group_id,omitempty"`
@@ -187,6 +194,11 @@ type ExecutionGroup struct {
 	OrchestratorID       string                   `json:"orchestrator_id"`
 	OrchestratorHarness  ExecutionHarness         `json:"orchestrator_harness,omitempty"`
 	HarnessRevision      uint64                   `json:"harness_revision,omitempty"`
+	HarnessChangedAt     *time.Time               `json:"harness_changed_at,omitempty"`
+	TurnEndAt            *time.Time               `json:"turn_end_at,omitempty"`
+	TurnEndID            string                   `json:"turn_end_id,omitempty"`
+	TurnStartAt          *time.Time               `json:"turn_start_at,omitempty"`
+	TurnStartID          string                   `json:"turn_start_id,omitempty"`
 	MemberIntegrationIDs []string                 `json:"member_integration_ids"`
 	Revisions            []ExecutionGroupRevision `json:"revisions"`
 	CreatedAt            time.Time                `json:"created_at"`
@@ -194,6 +206,7 @@ type ExecutionGroup struct {
 }
 type Memory struct {
 	Meta
+	Owner         string           `json:"owner,omitempty"`
 	Question      *QuestionDetails `json:"question,omitempty"`
 	IntegrationID string           `json:"integration_id,omitempty"`
 	Kind          string           `json:"kind"`
@@ -353,6 +366,7 @@ type Event struct {
 type State struct {
 	FeatureDependencies    []FeatureDependency    `json:"feature_dependencies"`
 	UserOrchestrators      []UserOrchestrator     `json:"user_orchestrators"`
+	ProductAgentSkills     []ProductAgentSkill    `json:"product_agent_skills"`
 	ProdPromotions         []ProdPromotion        `json:"prod_promotions"`
 	IntegrationExecutions  []IntegrationExecution `json:"integration_executions"`
 	ExecutionEvents        []ExecutionEvent       `json:"execution_events"`
@@ -426,6 +440,8 @@ type Command struct {
 	Data          map[string]any `json:"data"`
 }
 
-func init() { Actions = append(Actions, "upsert_code_index") }
+func init() {
+	Actions = append(Actions, "upsert_code_index", "set_product_idle_policy", "upsert_agent_skill", "delete_agent_skill", "set_product_agent_roles")
+}
 
 var Actions = append([]string{"adopt_product_ownership", "set_product_visibility", "add_product_member", "remove_product_member", "assign_integration", "unassign_integration", "claim_execution", "heartbeat_execution", "report_execution", "release_execution", "takeover_execution", "set_desired_state", "create_execution_group", "add_execution_group_member", "remove_execution_group_member", "set_execution_group_harness", "set_product_stalled_timeout", "queue_intelligence_task", "cancel_intelligence_task", "request_candidate_dev_restoration", "confirm_candidate_dev_restoration", "verify_candidate_dev_restoration", "release_candidate_dev_after_restoration", "capture_candidate_dev_baseline", "verify_candidate_dev_runtime", "reserve_candidate_dev", "release_candidate_dev", "refresh_registry_inventory", "pin_artifact", "release_artifact_pin", "cancel_native_delivery", "queue_worker_publication", "reconcile_worker_publication", "queue_worker_job", "cancel_worker_job", "reconcile_worker_job", "refresh_environment_runtime", "create_integration_branch", "protect_integration_revision", "claim_composition_conflict", "record_conflict_resolution", "verify_conflict_resolution", "configure_artifact_retention", "delete_product", "classify_repository", "configure_publication", "record_package_artifact", "update_environment_feature", "assemble_environment", "reconcile_composition", "prepare_release_candidate", "promote_release_candidate", "create_hotfix", "record_runtime_observation", "create_test_scenario", "revise_test_scenario", "record_scenario_run", "create_external_system", "update_external_system", "create_system_relationship", "set_external_scope", "grant_connection", "create_github_connection", "import_repository", "configure_component", "configure_environment", "refresh_integration_git", "refresh_repository_git", "deploy_integration", "deploy_existing_artifact", "create_application", "record_integration_revision", "plan_composition", "select_composition", "create_product", "create_feature", "update_feature", "create_integration", "update_integration", "start_integration", "transition_integration", "complete_integration", "record_progress", "record_decision", "record_discovery", "add_blocker", "resolve_blocker", "handoff", "create_gate", "add_check", "record_check_result", "record_finding", "resolve_finding", "create_environment", "update_environment", "create_repository", "plan_release", "record_release"}, WorkActions...)

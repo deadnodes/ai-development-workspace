@@ -21,6 +21,9 @@ Create `~/.config/release-control/supervisor.json` with mode `0600`:
   "wake_timeout": "120s",
   "verify_for": "5s",
   "submit_delay": "800ms",
+  "idle_rate_limit": "15m",
+  "owner_blocked_rate_limit": "4h",
+  "active_markers": ["esc to interrupt", "background task", "bashes running", "agents running", "shells running", "Working ("],
   "headless_kinds": [],
   "allowed_kinds": ["codex", "claude_code", "claude_desktop", "ccr", "other"]
 }
@@ -58,14 +61,15 @@ Use one named tmux session for each orchestrator, for example `orch-backend` or
 creation (`orchestrator_harness`) or with `set_execution_group_harness`. The
 registration contains `kind` and `tmux_target` (and `session_ref` when available).
 Re-register it after every restart that creates a new harness session. Member
-executor harnesses belong on execution claims. Keep the orchestrator in that pane
+executor harnesses on execution claims are for display and turn-end observation,
+never wake targets. Keep the orchestrator in that pane
 and attach to the same session from another Mac:
 
 Adding unassigned work to a group assigns it to the group's human owner in the
 same transaction. Work assigned to another user cannot be added; group turn-end
 and wake routing skip members whose current assignee is not the group owner.
 
-For work without a current executor target, also use `register_user_orchestrator`
+For work without a group orchestrator harness, also use `register_user_orchestrator`
 with the same harness. Use a Product-specific registration or omit the Product
 for a single registration across the caller's visible Products. `work_available`
 wakes the session with a fixed prompt to read `next_work` and the question inbox.
@@ -78,16 +82,52 @@ and reroutes them to the current eligible target.
 ssh -t <host> tmux attach -t orch-backend
 ```
 
+The supervisor resolves the registered target to a local tmux session and pane
+ID before delivery. Captures, paste, and Enter all use that pane ID even if the
+active pane changes. Rate limits use the tmux session ID, not the target alias.
 The supervisor waits for stable pane contents and checks the last 15 lines for
 the interactive busy marker before sending a literal message and Enter. It
 waits `submit_delay` (default `800ms`) after literal input and before sending
 Enter. A delivery is accepted only after observing the case insensitive
-`esc to interrupt` marker within `verify_for`. If the marker does not appear
-within three seconds, it sends Enter once more and continues verification. If
+`esc to interrupt` marker within `verify_for`. For ordinary continuation wakes,
+if the marker does not appear within three seconds, it sends Enter once more and
+continues verification. If
 the last eight pane lines already contain `[RCP supervisor]`, it sends Enter
 without typing another copy, to submit a previous pending wake. Otherwise it
 records `wake not observed`. A busy pane is acknowledged `failed` with detail
 `busy`.
+
+### Idle and stuck orchestrator wakes
+
+The five `group_*` idle events and legacy `execution_stalled` use the same
+active-pane guard, separate from explicit turn-end continuation. When stall
+and member staleness overlap, the supervisor uses one guarded wake. Before
+typing, the supervisor checks the last 15 lines of two pane captures for the
+case-insensitive busy marker and configured `active_markers`. Changing output,
+active background tasks, and panes displaying a marker are left alone. The
+supervisor ACKs `skipped_active`; RCP records the skip without escalation and
+retries after the product's `idle_after` (10 minutes if that check is disabled),
+provided the condition still holds. Heartbeats defer group inactivity checks,
+but not per-member staleness. Accepted progress refreshes both checks even
+for waiting or unclaimed members. `group_member_stale` detects unfinished members
+with no `record_progress` for 15 minutes by default; the Product policy can
+override that interval or set `member_stale_after_seconds` to zero to disable it.
+
+Idle, wait-timeout, actionable-member, stalled and stale-member wakes share a per-session limit of
+one attempt per 15 minutes (`idle_rate_limit`). Owner reminders use their own
+per-session limit of one per four hours (`owner_blocked_rate_limit`). Both
+timestamps survive a supervisor restart in `state_file`; an active skip does
+not use the local rate limit. Locally rate-limited events are left unclaimed.
+
+These wakes require a registered tmux pane with bracketed paste enabled; there
+is no headless fallback. The fixed prompt is at most 12 lines and includes only
+validated IDs, states, progress ages and next-action codes, never titles or
+agent text. It tells the orchestrator to reload the group; an owner reminder
+explicitly tells it not to resume work. The supervisor does not retry Enter for
+these multiline prompts. Legacy continuation still follows its existing rules.
+If RCP supplies a configured orchestrator skill, the prompt includes the exact
+`get_agent_skill` call and asks the orchestrator to check and wake its stuck
+executors. An owner reminder still forbids waking owner-blocked work.
 
 On the orchestrator host, install the connection with
 `release-control connect --harness both --codex-notify --codex-auto-approve --profile default`.
@@ -104,7 +144,13 @@ registered `harness_kind`, exact `session_ref`, and turn ID when available.
 Claude Code's `Stop` hook and Codex's `agent-turn-complete` notify event are the
 expected sources. The server applies its debounce and emits
 `execution_continuation_required`; the supervisor only handles the resulting
-durable event. Each event has a server-computed `wake_target`. The supervisor batches by that target: running/stalled work uses its executor harness; unassigned, lost, exited-incomplete, continuation-required, and newly actionable waiting/blocked work uses the first open containing group’s registered orchestrator harness. Without one, the supervisor ACKs unsupported and RCP marks escalation. `verify_for` limits post-send verification (default: `wake_timeout`); process spawning and the complete wake remain bounded by `wake_timeout`.
+durable event. The supervisor batches by the server-computed `wake_target`.
+Every member event, including stalled and turn-end continuation, targets the
+first open containing group with a registered orchestrator harness. Without one,
+RCP uses the assignee's Product-specific or global user orchestrator; if neither
+exists, the event escalates with no target and the supervisor ACKs unsupported.
+The supervisor never wakes an executor. `verify_for` limits post-send verification
+(default: `wake_timeout`); the whole wake is bounded by `wake_timeout`.
 
 ## Mac mini installation runbook
 
@@ -140,8 +186,9 @@ Start the orchestrator in its persistent tmux pane, for example:
 tmux new -s orch-backend
 ```
 
-Have the orchestrator register its harness with `tmux_target` set to
-`orch-backend` (or the precise pane such as `orch-backend:0.1`) on
+Have the orchestrator register the group's `orchestrator_harness` with
+`tmux_target` set to the exact pane `orch-backend:0.1` through `create_execution_group` or
+`set_execution_group_harness`. It claims each member separately with
 `claim_execution`. Install the provided plist, replacing `OWNER` with the
 mini's short account name:
 
@@ -189,6 +236,15 @@ launchctl bootout gui/$(id -u)/com.deadnodes.rcp-supervisor
 | `claude_desktop` | tmux only | No supported out-of-process Desktop API; without tmux this is acknowledged unsupported. |
 | `ccr` | tmux only | No generic router resume protocol is assumed. |
 | `other` | tmux only | Adapter-specific wake protocol is not assumed. |
+
+### Limits
+
+Register an orchestrator harness with an exact pane target, either
+`session:window.pane` (for example `orch-backend:0.1`) or `%pane_id`. A bare
+session target resolves to that session's active pane when delivery occurs, so
+pane focus changes can redirect a wake. Run one orchestrator per tmux session;
+cooldowns are tracked per session. Headless resume is not used for orchestrator
+wakes: every orchestrator must have a tmux target.
 
 The supervisor never scrapes agent session stores. Session refs must be
 registered by their owning orchestrator. tmux detection is pane-content based;
@@ -245,6 +301,7 @@ Codex notify reports are ignored unless their `type` is `agent-turn-complete`.
 
 
 Execution completion means each Integration reaches its `desired_state` and then
-`release_execution(outcome=completed)` is recorded. After idle expiry, the same
-executor resumes with its current fence; a different executor uses takeover.
+`release_execution(outcome=completed)` is recorded by the orchestrator. After
+idle expiry, the orchestrator checks its workers and handles any lease renewal
+or takeover before dispatching more work.
 Every fenced progress write and transition must include `execution_fence`.

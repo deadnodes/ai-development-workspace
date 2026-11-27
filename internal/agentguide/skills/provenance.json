@@ -20,7 +20,7 @@
     "repository": "https://github.com/deadnodes/ai-tools",
     "commit": "local-amendment",
     "path": "internal/agentguide/skills/rcp-execution/SKILL.md",
-    "sha256": "1151b4a378237694be3d41ecd10cdd2c96f5b4855a3e456027b1489d3a871e85",
+    "sha256": "937d201d2adf45b7cf82bea0243eb9123c0eeca19b5f24b47005ed2f0c220f12",
     "local_amendments": "New execution protocol maintained in this repository."
   }
 ]

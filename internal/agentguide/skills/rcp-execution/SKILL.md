@@ -9,11 +9,11 @@ Work only on Integrations assigned to your human or unassigned. `NOT_ASSIGNEE`
 means pick other work; never retry or take over that Integration.
 
 1. At the start of multi-Feature work, create one execution group with `create_execution_group`. Set `orchestrator_harness` and `tmux_target` when available; add each Integration as a member with its own desired state.
-2. Claim each Integration you work on with `claim_execution`. Keep its returned fence. Send `heartbeat_execution` while working and before the lease expires.
-3. Include `execution_fence` in every `record_progress` and `transition_integration` write. A `STALE_FENCE` means stop writes and restore current state; never retry using an old fence.
+2. The orchestrator calls `claim_execution` for each member, keeps its fence, and sends `heartbeat_execution` before the lease expires. Give the executing worker its member ID and fence. The worker's only RCP write is `record_progress` with `execution_fence`.
+3. The orchestrator includes `execution_fence` in `transition_integration` writes. A `STALE_FENCE` means stop writes and reread current state; never retry using an old fence.
 4. After idling between turns your lease may expire (`lost`). Resume your own execution with any write that carries your current fence, normally `heartbeat_execution(fence)`; the fence stays the same. Use `claim_execution` only for `unassigned`, `exited_incomplete` or `paused` members. Use `takeover_execution` only for another executor's `lost`/`stalled` work, after a delivered event identifies it and you have checked current state.
 5. When an Integration reaches its `desired_state`, release it with `release_execution(outcome="completed")`. If blocked or interrupted, report the truthful outcome and reference the blocker or operation. `ready` does not mean released.
-6. On a `[RCP supervisor]` wake message, call `get_execution_group`, inspect every member's `next_action`, and follow it. Never restart a completed member.
+6. Only the orchestrator receives `[RCP supervisor]` wakes. Load the configured orchestrator role skill from RCP if needed, then call `get_execution_group`, inspect every member's `next_action`, and wake stuck executors yourself. A heartbeat does not reset a member's stale clock; only its `record_progress` does. Never restart a completed member or wake work blocked on the owner.
 7. At turn end, report the turn with `report_turn_end` when configured. The supervisor hook expects a genuine completed-turn notification; it does not grant permission or prove work finished.
 
 ## Owner questions and work selection

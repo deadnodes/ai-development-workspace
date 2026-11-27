@@ -220,7 +220,7 @@ func TestBlockingQuestionReconcilesExecution(t *testing.T) {
 		t.Fatalf("execution not actionable: %+v", execution)
 	}
 	if !slices.ContainsFunc(store.state.ExecutionEvents, func(event domain.ExecutionEvent) bool {
-		return event.IntegrationID == "i" && event.Cause == domain.ExecutionCauseBlockerResolved && event.WakeTarget.TmuxTarget == "executor:0.0"
+		return event.IntegrationID == "i" && event.Cause == domain.ExecutionCauseBlockerResolved && event.WakeTarget == (domain.ExecutionWakeTarget{}) && event.EscalationRequired
 	}) {
 		t.Fatalf("missing targeted blocker wake: %+v", store.state.ExecutionEvents)
 	}

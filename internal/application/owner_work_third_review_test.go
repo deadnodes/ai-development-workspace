@@ -77,7 +77,7 @@ func TestThirdReviewGroupAssignmentFencesFanoutAndWakeRouting(t *testing.T) {
 		question := work.run(work.bobAgent, "ask_question", "p", "f", "foreign", "", reviewQuestion(true)).(domain.Memory)
 		work.run(work.bob, "answer_questions", "p", "", "", "", reviewAnswer(question.ID, ""))
 		wake := reviewPendingWake(t, thirdReviewState(t, store), domain.ExecutionCauseBlockerResolved)
-		if wake.WakeTarget.Source != "executor" || wake.WakeTarget.TmuxTarget != "bob-executor" {
+		if wake.WakeTarget != (domain.ExecutionWakeTarget{}) || !wake.EscalationRequired {
 			t.Fatal(wake.WakeTarget)
 		}
 	})
@@ -169,8 +169,12 @@ func TestThirdReviewBlockerTransitionPreservesOrdinaryAnswerContinuation(t *test
 	blocker := work.run(work.agent, "ask_question", "p", "f", "i", "", reviewQuestion(true)).(domain.Memory)
 	work.run(work.owner, "answer_questions", "p", "", "", "", reviewAnswer(blocker.ID, ""))
 	current := reviewPendingWake(t, work.store.state, domain.ExecutionCauseQuestionContinuation)
-	if current.ID != initial.ID || !slices.Equal(current.QuestionIDs, []string{ordinary.ID, blocker.ID}) {
+	if current.ID != initial.ID || !slices.Equal(current.QuestionIDs, []string{ordinary.ID}) {
 		t.Fatal(current)
+	}
+	resolved := reviewPendingWake(t, work.store.state, domain.ExecutionCauseBlockerResolved)
+	if !slices.Equal(resolved.QuestionIDs, []string{blocker.ID}) || resolved.WakeTarget != current.WakeTarget || resolved.Fence != current.Fence {
+		t.Fatal(resolved)
 	}
 	work.run(work.agent, "claim_execution_event_delivery", "p", "", "", "", reviewDelivery(current.ID))
 	fence := executionFor(&work.store.state, "i").Fence

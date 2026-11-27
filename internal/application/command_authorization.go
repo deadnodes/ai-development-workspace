@@ -41,18 +41,20 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_events"}, AppendCollections: []string{"events"}}
 	case "assign_integration", "unassign_integration":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "integration_executions", "execution_events", "execution_groups", "memories"}, AppendCollections: []string{"events"}}
-	case "report_turn_end":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions"}, AppendCollections: []string{"events"}}
+	case "report_turn_end", "report_turn_start":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integration_executions", "execution_groups"}, AppendCollections: []string{"events"}}
 	case "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_events"}, AppendCollections: []string{"events"}}
 	case "create_execution_group":
-		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations"}, AppendCollections: []string{"integration_executions", "execution_groups", "events", "execution_events"}}
+		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "execution_events"}, AppendCollections: []string{"integration_executions", "execution_groups", "events"}}
 	case "add_execution_group_member", "remove_execution_group_member":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"integrations", "execution_groups", "execution_events", "user_orchestrators"}, AppendCollections: []string{"events"}}
 	case "set_execution_group_harness":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"execution_groups", "execution_events", "user_orchestrators"}, AppendCollections: []string{"events"}}
-	case "set_product_stalled_timeout":
+	case "set_product_stalled_timeout", "set_product_idle_policy", "set_product_agent_roles":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"products"}, AppendCollections: []string{"events"}}
+	case "upsert_agent_skill", "delete_agent_skill":
+		scope = &domain.StateMutationScope{MutableCollections: []string{"product_agent_skills"}, AppendCollections: []string{"events"}}
 	case "record_runtime_observation":
 		scope = &domain.StateMutationScope{MutableCollections: []string{"gates"}, AppendCollections: []string{"runtime_observations", "events"}}
 	case "record_progress":
@@ -103,7 +105,7 @@ func (s commandAuthorizationStore) Update(ctx context.Context, change func(*doma
 	}
 	reconcileWork := true
 	switch s.command.Action {
-	case "delete_product", "record_runtime_observation", "record_progress", "record_decision", "record_discovery", "add_blocker", "handoff", "resolve_blocker", "set_product_stalled_timeout", "set_execution_group_harness", "remove_execution_group_member", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
+	case "delete_product", "record_runtime_observation", "record_progress", "record_decision", "record_discovery", "add_blocker", "handoff", "resolve_blocker", "set_product_stalled_timeout", "set_product_idle_policy", "set_product_agent_roles", "upsert_agent_skill", "delete_agent_skill", "report_turn_start", "set_execution_group_harness", "remove_execution_group_member", "claim_execution_event_delivery", "ack_execution_event", "resolve_execution_event":
 		reconcileWork = false
 	}
 	if reconcileWork && scope != nil && !scope.AllCollections {

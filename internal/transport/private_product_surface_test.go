@@ -18,6 +18,7 @@ import (
 )
 
 var privateMCPReads = map[string]string{
+	"get_agent_kit": "AgentKit", "get_agent_skill": "AgentSkill",
 	"get_question": "get_question", "list_questions": "list_questions", "get_dependency_graph": "get_dependency_graph", "next_work": "next_work", "status_overview": "status_overview",
 	"create_backup": "CreateBackup", "export_workspace_configuration": "ExportWorkspace",
 	"get_state": "StatePage StatePageProduct StatePageFeature", "resume": "ResumeSummary",
@@ -64,16 +65,16 @@ var nonProductHTTPReads = map[string]string{
 
 var nonProductMCPReads = map[string]string{
 	"get_status_schema": "static lifecycle schema", "get_code_api": "generated tool declarations",
-	"get_tool_guide": "static tool catalog", "get_agent_kit": "static repository setup guidance",
-	"get_agent_skill": "fixed skill text", "get_backup_capabilities": "static archive protocol",
+	"get_tool_guide": "static tool catalog", "get_backup_capabilities": "static archive protocol",
 }
 
 const privateMCPCommands = `
 execute
+upsert_agent_skill delete_agent_skill set_product_agent_roles
 refresh_environment_runtime deploy_integration deploy_existing_artifact create_integration_branch protect_integration_revision
 claim_execution heartbeat_execution report_execution release_execution takeover_execution set_desired_state
 create_execution_group add_execution_group_member remove_execution_group_member set_execution_group_harness
-set_product_stalled_timeout report_turn_end claim_execution_event_delivery ack_execution_event resolve_execution_event
+set_product_stalled_timeout set_product_idle_policy report_turn_end report_turn_start claim_execution_event_delivery ack_execution_event resolve_execution_event
 request_candidate_dev_restoration confirm_candidate_dev_restoration verify_candidate_dev_restoration release_candidate_dev_after_restoration
 capture_candidate_dev_baseline verify_candidate_dev_runtime deploy_candidate_dev reserve_candidate_dev release_candidate_dev
 update_environment_feature assemble_environment claim_composition_conflict record_conflict_resolution verify_conflict_resolution
