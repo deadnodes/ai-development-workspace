@@ -131,6 +131,30 @@ func executionAssignmentUser(ctx context.Context) string {
 	return ""
 }
 
+// adoptLegacyGroupOwner records the human owner of an execution group created
+// before group ownership was stored. The owner is the caller's human (or, for a
+// trusted service caller, the assignee of the integration being added) and is
+// adopted only when every current member is unassigned or assigned to that
+// human, so a legacy group never captures another user's work.
+func adoptLegacyGroupOwner(ctx context.Context, st *domain.State, g *domain.ExecutionGroup, candidate string, now time.Time) {
+	if g.Owner != "" {
+		return
+	}
+	if user, enforced := principalUser(ctx); enforced {
+		candidate = user
+	}
+	if candidate == "" {
+		return
+	}
+	for _, id := range g.MemberIntegrationIDs {
+		if in := integration(st, id); in != nil && in.Assignee != "" && in.Assignee != candidate {
+			return
+		}
+	}
+	g.Owner = candidate
+	st.Events = append(st.Events, domain.Event{ID: id(), Action: "adopt_execution_group_owner", Actor: candidate, At: now, EntityID: g.ID, ProductID: g.ProductID, Data: domain.Command{Action: "adopt_execution_group_owner", Actor: candidate, ProductID: g.ProductID, ID: g.ID, Data: map[string]any{"owner": candidate}}})
+}
+
 func requireExecutionGroupOwner(ctx context.Context, group domain.ExecutionGroup) error {
 	if user, enforced := principalUser(ctx); enforced && (user == "" || user != group.Owner) {
 		return notAssignee(group.Owner)
@@ -1035,6 +1059,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if c.ProductID != g.ProductID {
 				return invalid("SCOPE_MISMATCH")
 			}
+			adoptLegacyGroupOwner(ctx, st, g, "", now)
 			if err := requireExecutionGroupOwner(ctx, *g); err != nil {
 				return err
 			}
@@ -1069,6 +1094,7 @@ func (s *Service) executeExecutionCommand(ctx context.Context, c domain.Command)
 			if in.ProductID != g.ProductID {
 				return invalid("SCOPE_MISMATCH")
 			}
+			adoptLegacyGroupOwner(ctx, st, g, in.Assignee, now)
 			if err := requireExecutionGroupOwner(ctx, *g); err != nil {
 				return err
 			}
