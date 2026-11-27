@@ -111,7 +111,11 @@ func CommandSchema() map[string]any {
 	data["components"] = map[string]any{"anyOf": []any{compositionComponents, map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": scenarioComponent, "additionalProperties": false, "required": []string{"application_id", "operation_id", "source_sha", "artifact_digest"}}}}}
 	data["observations"] = map[string]any{"anyOf": []any{str(), map[string]any{"type": "array", "items": str()}}}
 	data["role"] = map[string]any{"type": "string", "enum": domain.RepositoryRoles()}
-	data["kind"] = enum(append(domain.ComponentKinds(), "question", "conflict", "decision")...)
+	data["kind"] = enum(append(domain.ComponentKinds(), "question", "conflict", "decision", "owner_action")...)
+	data["script"] = map[string]any{"type": "string", "maxLength": 16384}
+	for _, field := range []string{"why", "blocks", "verify", "url", "look_for"} {
+		data[field] = map[string]any{"type": "string", "maxLength": 2048}
+	}
 	data["harness"] = object(map[string]any{"kind": str(), "tmux_target": str(), "session_ref": str()}, "kind")
 	for _, key := range []string{"idle_after_seconds", "wait_timeout_seconds", "owner_blocked_interval_seconds", "member_stale_after_seconds"} {
 		data[key] = map[string]any{"type": "integer", "minimum": 0, "maximum": domain.MaxExecutionIdleSeconds}
@@ -271,13 +275,17 @@ func CommandSchema() map[string]any {
 			}
 			if slices.Contains(domain.WorkActions, name) {
 				fields := map[string]any{}
-				optional := map[string]string{"ask_question": "options recommendation context_refs blocking", "propose_dependency": "accept", "decide_dependency": "approval_question_id", "request_dependency_decision": "decision"}
+				optional := map[string]string{"ask_question": "options recommendation context_refs blocking script why blocks verify url look_for", "propose_dependency": "accept", "decide_dependency": "approval_question_id", "request_dependency_decision": "decision"}
 				for _, field := range strings.Fields(a.required + " " + optional[name]) {
 					fields[field] = data[field]
 				}
 				switch name {
 				case "ask_question":
-					fields["kind"] = enum("question", "conflict", "decision")
+					fields["kind"] = enum("question", "conflict", "decision", "owner_action")
+					for _, field := range []string{"why", "blocks", "verify", "url", "look_for"} {
+						fields[field] = map[string]any{"type": "string", "maxLength": 2048}
+					}
+					fields["script"] = map[string]any{"type": "string", "maxLength": 16384}
 				case "set_idea_promotion":
 					fields["idea_promotion"] = enum("ask_owner", "agent_allowed")
 				case "propose_dependency":

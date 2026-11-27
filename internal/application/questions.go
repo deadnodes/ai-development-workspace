@@ -142,14 +142,31 @@ func askQuestion(ctx context.Context, st *domain.State, c domain.Command, now ti
 		Kind           string                  `json:"kind"`
 		Options        []domain.QuestionOption `json:"options"`
 		Recommendation string                  `json:"recommendation"`
+		Script         string                  `json:"script"`
+		Why            string                  `json:"why"`
+		Blocks         string                  `json:"blocks"`
+		Verify         string                  `json:"verify"`
+		URL            string                  `json:"url"`
+		LookFor        string                  `json:"look_for"`
 		ContextRefs    []string                `json:"context_refs"`
 		Blocking       bool                    `json:"blocking"`
 	}
 	if err := decode(c.Data, &input); err != nil {
 		return domain.Memory{}, err
 	}
-	if strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.Body) == "" || !slices.Contains([]string{"question", "conflict", "decision"}, input.Kind) || input.Kind != "question" && strings.TrimSpace(input.Recommendation) == "" {
+	validKind := slices.Contains([]string{"question", "conflict", "decision", "owner_action"}, input.Kind)
+	if strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.Body) == "" || !validKind || input.Kind != "question" && input.Kind != "owner_action" && strings.TrimSpace(input.Recommendation) == "" {
 		return domain.Memory{}, invalid("question title, body, kind and (for conflicts or decisions) recommendation required")
+	}
+	if input.Kind == "owner_action" {
+		hasScript := strings.TrimSpace(input.Script) != ""
+		hasURL := strings.TrimSpace(input.URL) != ""
+		if strings.TrimSpace(input.Why) == "" || strings.TrimSpace(input.Verify) == "" || hasScript == hasURL || hasURL && strings.TrimSpace(input.LookFor) == "" {
+			return domain.Memory{}, invalid("OWNER_ACTION_REQUIRES_SCRIPT")
+		}
+		if len(input.Script) > 16*1024 || len(input.Why) > 2*1024 || len(input.Blocks) > 2*1024 || len(input.Verify) > 2*1024 || len(input.URL) > 2*1024 || len(input.LookFor) > 2*1024 {
+			return domain.Memory{}, invalid("question exceeds size limits")
+		}
 	}
 	if len(input.Options) > 50 || len(input.ContextRefs) > 50 || len(input.Title) > 512 || len(input.Body) > 16384 || len(input.Recommendation) > 4096 {
 		return domain.Memory{}, invalid("question exceeds size limits")
@@ -197,7 +214,7 @@ func askQuestion(ctx context.Context, st *domain.State, c domain.Command, now ti
 		}
 	}
 	question := domain.Memory{Meta: workMeta(c, product.ID, parent.ID, now), IntegrationID: c.IntegrationID, Kind: "question", Title: input.Title, Body: input.Body, Status: "open", Question: &domain.QuestionDetails{
-		AddressedTo: addressee, AskedBy: c.Actor, AskedByUser: workUser(ctx), Kind: input.Kind, Options: input.Options, Recommendation: input.Recommendation, ContextRefs: input.ContextRefs, Blocking: input.Blocking,
+		AddressedTo: addressee, AskedBy: c.Actor, AskedByUser: workUser(ctx), Kind: input.Kind, Options: input.Options, Recommendation: input.Recommendation, Script: input.Script, Why: input.Why, Blocks: input.Blocks, Verify: input.Verify, URL: input.URL, LookFor: input.LookFor, ContextRefs: input.ContextRefs, Blocking: input.Blocking,
 	}}
 	if err := storeQuestion(st, question, now); err != nil {
 		return domain.Memory{}, err
@@ -262,6 +279,11 @@ func answerQuestions(ctx context.Context, st *domain.State, c domain.Command, no
 		details := *question.Question
 		if workUser(ctx) != details.AddressedTo {
 			return nil, auth.ErrForbidden
+		}
+		if details.Kind == "owner_action" {
+			if principal, ok := auth.FromContext(ctx); ok && principal.Kind == "agent" && (answer.Validation.Verdict != "consistent" || strings.TrimSpace(answer.Validation.Note) == "") {
+				return nil, invalid("owner action agent closure requires a consistent verification result")
+			}
 		}
 		if details.DecisionFor != "" && !isWorkDecisionOwner(ctx, productByID(*st, question.ProductID)) && !isDecisionRelay(ctx, productByID(*st, question.ProductID), &details) {
 			return nil, auth.ErrForbidden

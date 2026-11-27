@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -21,10 +22,11 @@ type questionView struct {
 	Context            []questionReference `json:"context_refs"`
 	AgeSeconds         int64               `json:"age_seconds"`
 	BlockedExecutionID string              `json:"blocked_execution_id,omitempty"`
+	OwnerAction        bool                `json:"owner_action"`
 }
 
 func presentQuestion(st *domain.State, memory domain.Memory, now time.Time, ctx context.Context) questionView {
-	view := questionView{Meta: memory.Meta, Title: memory.Title, Body: memory.Body, Status: memory.Status, IntegrationID: memory.IntegrationID, QuestionDetails: *memory.Question, Context: []questionReference{}, AgeSeconds: max(0, int64(now.Sub(memory.CreatedAt)/time.Second))}
+	view := questionView{Meta: memory.Meta, Title: memory.Title, Body: memory.Body, Status: memory.Status, IntegrationID: memory.IntegrationID, QuestionDetails: *memory.Question, Context: []questionReference{}, AgeSeconds: max(0, int64(now.Sub(memory.CreatedAt)/time.Second)), OwnerAction: memory.Question.Kind == "owner_action"}
 	for _, ref := range memory.Question.ContextRefs {
 		if item, found := resolveQuestionReference(st, memory.ProductID, ref); found {
 			view.Context = append(view.Context, item)
@@ -44,6 +46,7 @@ type workQueryInput struct {
 	FeatureID       string `json:"feature_id,omitempty"`
 	Status          string `json:"status,omitempty"`
 	AddressedTo     string `json:"addressed_to,omitempty"`
+	Kind            string `json:"kind,omitempty"`
 	Cursor          string `json:"cursor,omitempty"`
 	Limit           int    `json:"limit,omitempty"`
 	IncludeProposed bool   `json:"include_proposed,omitempty"`
@@ -92,6 +95,9 @@ func (s *Service) queryWork(ctx context.Context, name, input string) (any, error
 			}
 			output = presentQuestion(&st, *question, now, ctx)
 		case "list_questions":
+			if options.Kind != "" && !slices.Contains([]string{"question", "conflict", "decision", "owner_action"}, options.Kind) {
+				return invalid("invalid question kind")
+			}
 			if options.Status == "" {
 				options.Status = "open"
 			}
@@ -107,7 +113,7 @@ func (s *Service) queryWork(ctx context.Context, name, input string) (any, error
 			}
 			rows := []domain.Memory{}
 			for _, memory := range st.Memories {
-				if memory.Kind == "question" && memory.Question != nil && memory.Status == options.Status && memory.Question.AddressedTo == options.AddressedTo && (options.ProductID == "" || memory.ProductID == options.ProductID) && (options.FeatureID == "" || memory.FeatureID == options.FeatureID) && (memory.CreatedAt.After(cursorTime) || memory.CreatedAt.Equal(cursorTime) && memory.ID > cursorID) {
+				if memory.Kind == "question" && memory.Question != nil && memory.Status == options.Status && memory.Question.AddressedTo == options.AddressedTo && (options.Kind == "" || memory.Question.Kind == options.Kind) && (options.ProductID == "" || memory.ProductID == options.ProductID) && (options.FeatureID == "" || memory.FeatureID == options.FeatureID) && (memory.CreatedAt.After(cursorTime) || memory.CreatedAt.Equal(cursorTime) && memory.ID > cursorID) {
 					if memory.Status == "open" && memory.Question.DecisionFor == "idea_promotion" && !decisionMatches(&memory, feature(&st, memory.FeatureID), nil) {
 						continue
 					}
@@ -180,7 +186,7 @@ func statusOverview(st *domain.State, user, productID string, now time.Time) any
 			continue
 		}
 		questions, ideas, ready, completed := []map[string]any{}, []map[string]any{}, []map[string]any{}, []map[string]any{}
-		counts := map[string]int{"open_questions": 0, "ideas": 0, "ready_for_execution": 0, "recently_completed": 0, "running": 0, "stalled": 0, "lost": 0, "blocked": 0}
+		counts := map[string]int{"open_questions": 0, "open_owner_actions": 0, "ideas": 0, "ready_for_execution": 0, "recently_completed": 0, "running": 0, "stalled": 0, "lost": 0, "blocked": 0}
 		add := func(key string, list *[]map[string]any, row map[string]any) {
 			counts[key]++
 			if len(*list) < 10 {
@@ -190,6 +196,9 @@ func statusOverview(st *domain.State, user, productID string, now time.Time) any
 		for _, memory := range st.Memories {
 			if memory.ProductID == product.ID && memory.Kind == "question" && memory.Status == "open" && memory.Question != nil && memory.Question.AddressedTo == user {
 				add("open_questions", &questions, map[string]any{"id": memory.ID, "title": contextExcerpt(memory.Title, 120), "blocking": memory.Question.Blocking})
+				if memory.Question.Kind == "owner_action" {
+					counts["open_owner_actions"]++
+				}
 			}
 		}
 		for _, parent := range st.Features {

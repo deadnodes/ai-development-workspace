@@ -9,6 +9,12 @@ type QuestionDetails struct {
 	Kind             string           `json:"kind"`
 	Options          []QuestionOption `json:"options,omitempty"`
 	Recommendation   string           `json:"recommendation,omitempty"`
+	Script           string           `json:"script,omitempty"`
+	Why              string           `json:"why,omitempty"`
+	Blocks           string           `json:"blocks,omitempty"`
+	Verify           string           `json:"verify,omitempty"`
+	URL              string           `json:"url,omitempty"`
+	LookFor          string           `json:"look_for,omitempty"`
 	ContextRefs      []string         `json:"context_refs,omitempty"`
 	Blocking         bool             `json:"blocking"`
 	Answer           *QuestionAnswer  `json:"answer,omitempty"`
