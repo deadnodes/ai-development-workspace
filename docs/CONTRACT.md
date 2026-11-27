@@ -25,7 +25,7 @@ Actions and data:
 - create_product: name, description
 - create_feature: product_id top-level; title, problem, goal, requirements[], constraints[], context, repositories[], owner, status
 - update_feature: feature_id; same fields, sparse update
-- create_integration / update_integration: feature_id / integration_id; title, objective, rationale, dependencies[], acceptance_criteria[], repositories[], branches[] (objects repository_id,name), commits[] (objects repository_id,sha), owner, working_areas[], position, remaining[], status (create only defaults planned; update status use transition)
+- create_integration / update_integration: feature_id / integration_id; title, objective, rationale, dependencies[], acceptance_criteria[], repositories[], branches[] (objects repository_id,name), commits[] (objects repository_id,sha), owner, working_areas[], position, remaining[]. New integrations start as planned; use transition_integration for status and assign_integration for assignment.
 - start_integration / complete_integration / transition_integration: integration_id; transition data.status
 - record_progress / record_decision / record_discovery / add_blocker / handoff: feature_id and optional integration_id; title, body, reason, completed[], current, remaining[], next[], warnings[], commit, deployment, session. Memory kind is progress/decision/discovery/blocker/handoff. progress updates integration completed/remaining. Handoff is historical structured memory. add_blocker defaults open.
 - resolve_blocker: id (memory ID); body resolution
@@ -34,7 +34,7 @@ Actions and data:
 - record_check_result: check_id; result (passed/failed/blocked/skipped), commit, environment_id, deployment, steps[], observations, logs, artifacts[] ({kind,url,label})
 - record_finding: result_id (failed/blocked result); title, severity, body, integration_ids[], gate_ids[], blocks_release (default true)
 - resolve_finding: id; body resolution, commit fix
-- create_environment / update_environment: product_id / id; name, desired, reconciled, runtime (objects), composition (object)
+- create_environment / update_environment: product_id / id; name, cluster, namespace, parameters, desired, reconciled, runtime, composition. Caller-supplied maps are not delivery evidence and cannot set managed selection or reservation fields.
 - create_repository: product_id; name,url,provider
 - plan_release: product_id; name,integration_ids[],excluded_integration_ids[],notes (immutable intent record; does not deploy or mark released)
 

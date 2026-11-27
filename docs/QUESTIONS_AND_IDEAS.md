@@ -19,6 +19,7 @@ RCP stores owner questions as `Memory` records. They appear in search and featur
 ## Ideas and dependencies
 
 - Use `create_feature` with `status: "idea"`. The default remains `active`. The Product owner can promote an idea with `update_feature`. Agents ask by default; `request_idea_promotion` opens a decision for the Product owner, regardless of the Feature's editable owner. Approval promotes the exact requested revision in the same transaction. Edits supersede the stale request and remove it from the actionable inbox without deleting it. The Product owner can use `set_idea_promotion` to choose `agent_allowed` instead.
+- Moving a Feature to `blocked`, `idea`, or `archived` requires the Product owner (or their agent) or the assignee of every assigned Integration that is not `ready` or `released`. Otherwise the transition returns `NOT_ASSIGNEE`.
 - Restore an archived Feature to its pre-archive status. For legacy records, event history includes implicit reopens caused by Integration changes. If the status cannot be recovered or no longer satisfies completion requirements, the Product owner restores it to `planned`; the service records an audit warning.
 - `propose_dependency` records `requires` (the source waits for the target to be completed) or `relates` (non-blocking). The source Product owner can propose and accept at once with `accept: true`, or use `decide_dependency` later. An agent needs Product policy or an approval for the exact edge, action, and current request. Use `request_dependency_decision` with `decision: "accept"` (default) or `"reject"`, then pass the applicable answer's question ID to `decide_dependency`. Accepted `requires` edges cannot create a cycle. Cross-Product edges require write access to both endpoints and are omitted wherever either endpoint is hidden.
 - `get_dependency_graph {"product_id":"product-1","include_proposed":true}` returns visible edges and each node's `unblocked` and `waiting_on` state. A hidden, unfinished prerequisite still makes `unblocked` false, but its identifier and edge details are omitted. Proposals don't block execution.
@@ -28,6 +29,8 @@ RCP stores owner questions as `Memory` records. They appear in search and featur
 ## Queue and wake delivery
 
 `next_work` uses the caller's human identity (the agent's owner for agent tokens). It returns eligible Integrations and `plan_feature` for ready Features that need Integrations. Lower Feature priority sorts first (default 100), then Feature creation time and Integration position. Skips explain unsatisfied prerequisites and blocking questions. Claim an unassigned Integration before starting; it becomes yours on claim. For an existing `lost` execution, use the execution recovery protocol rather than a fresh claim. `status_overview` gives visible per-Product counts and short lists, including recent completions and the caller's executions.
+
+Each human runs their own supervisor with their own token on a host and tmux server they own. Wake targets are trusted only within that supervisor's own tmux server. Do not share a tmux server between humans.
 
 ```json
 {"action":"register_user_orchestrator","product_id":"product-1","data":{"harness":{"kind":"codex","tmux_target":"orch:0.0","session_ref":"session-id"}}}

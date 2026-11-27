@@ -35,8 +35,10 @@ With `profile`, the supervisor resolves the same encrypted credential managed by
 `tmux_path`, `codex_path`, `claude_path`, and `pgrep_path` fields can pin command
 paths. Defaults are resolved using the launchd `PATH`.
 
-Run each supervisor with an agent token owned by the human whose orchestrators
-it should wake. Event polling and delivery are filtered by that human's
+Each human runs their own supervisor with their own agent token on a host and
+tmux server they own. A registered wake target is trusted only within that
+supervisor's own tmux server. Do not share a tmux server between humans.
+Event polling and delivery are filtered by that human's
 Integration assignments. `work_available` events are visible and deliverable
 only to the registered user or an agent owned by that user. A service principal
 can still see and deliver existing Integration events across assignments.

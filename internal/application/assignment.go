@@ -46,6 +46,19 @@ func rejectForeignWork(ctx context.Context, in *domain.Integration) error {
 	return notAssignee(in.Assignee)
 }
 
+func requireFeatureIneligibilityAuthority(ctx context.Context, st *domain.State, parent *domain.Feature) error {
+	user := workUser(ctx)
+	if product := productByID(*st, parent.ProductID); product != nil && user != "" && product.Owner == user {
+		return nil
+	}
+	for _, child := range st.Integrations {
+		if child.FeatureID == parent.ID && child.ProductID == parent.ProductID && child.Status != "ready" && child.Status != "released" && child.Assignee != "" && child.Assignee != user {
+			return notAssignee(child.Assignee)
+		}
+	}
+	return nil
+}
+
 func executionVisibleTo(ctx context.Context, in *domain.Integration) bool {
 	user, enforced := principalUser(ctx)
 	if !enforced {

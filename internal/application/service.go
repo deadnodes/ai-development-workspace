@@ -96,6 +96,14 @@ func decode(data map[string]any, v any) error {
 	}
 	return nil
 }
+func decodeWritable(data map[string]any, v any, fields ...string) error {
+	for key := range data {
+		if !slices.Contains(fields, key) {
+			return invalid("field %s cannot be supplied in data", key)
+		}
+	}
+	return decode(data, v)
+}
 func (s *Service) Execute(ctx context.Context, c domain.Command) (any, error) {
 	if workerCommand(c.Action) {
 		if err := s.requireWorkers(c.Action); err != nil {
@@ -711,7 +719,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("product ID is no longer available")
 		}
 		v := domain.Product{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "description", "visibility"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -723,12 +731,6 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if v.Visibility != "shared" && v.Visibility != "private" {
 			return nil, invalid("visibility must be shared or private")
-		}
-		if v.Owner != "" || len(v.Members) != 0 {
-			return nil, invalid("owner and members are server-managed")
-		}
-		if v.IdeaPromotion != "" && v.IdeaPromotion != "ask_owner" {
-			return nil, invalid("only the product owner may enable agent idea promotion after creation")
 		}
 		v.IdeaPromotion = "ask_owner"
 		v.Owner, _ = auth.PrivateProductViewer(ctx)
@@ -773,17 +775,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				}
 			}
 		}
-		if e := decode(featureData, &v); e != nil {
+		if e := decodeWritable(featureData, &v, "title", "problem", "goal", "requirements", "constraints", "context", "repositories", "owner", "status", "priority"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
 		v.FeatureID = ""
-		if _, present := featureData["completed_at"]; present {
-			return nil, invalid("completed_at is server managed")
-		}
-		if _, present := featureData["archived_from"]; present {
-			return nil, invalid("archived_from is server managed")
-		}
 		if !domain.ValidStatus("feature", v.Status) {
 			return nil, invalid("invalid feature status %q", v.Status)
 		}
@@ -792,6 +788,11 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		}
 		if old != nil && !domain.CanTransition("feature", old.Status, v.Status) {
 			return nil, invalid("feature transition %s -> %s is not allowed", old.Status, v.Status)
+		}
+		if old != nil && old.Status != v.Status && slices.Contains([]string{"blocked", "idea", "archived"}, v.Status) {
+			if err := requireFeatureIneligibilityAuthority(ctx, st, old); err != nil {
+				return nil, err
+			}
 		}
 		if old != nil && old.Status != v.Status && old.Status == "archived" {
 			restore := featureRestoreStatus(st, old)
@@ -872,9 +873,6 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			m = old.Meta
 			m.Actor = c.Actor
 			m.UpdatedAt = time.Now().UTC()
-			if _, ok := c.Data["status"]; ok {
-				return nil, invalid("use transition_integration for status")
-			}
 			v.Dependencies = slices.Clone(old.Dependencies)
 			v.Commits = slices.Clone(old.Commits)
 			v.AcceptanceCriteria = slices.Clone(old.AcceptanceCriteria)
@@ -885,13 +883,10 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			}
 			v.Status = "planned"
 		}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "objective", "rationale", "dependencies", "acceptance_criteria", "owner", "repositories", "branches", "commits", "pull_requests", "completed", "remaining", "working_areas", "position"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
-		if old == nil && v.Status != "planned" {
-			return nil, invalid("new integrations must be planned")
-		}
 		if old != nil && (old.Status == "ready" || !slices.Equal(old.Dependencies, v.Dependencies) || !slices.Equal(old.Commits, v.Commits) || !slices.Equal(old.AcceptanceCriteria, v.AcceptanceCriteria) || !slices.Equal(old.Repositories, v.Repositories)) {
 			if err := rejectForeignWork(ctx, old); err != nil {
 				return nil, err
@@ -982,17 +977,12 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 				}
 			}
 		}
-		if e := decode(memoryData, &v); e != nil {
+		if e := decodeWritable(memoryData, &v, "title", "body", "reason", "completed", "current", "remaining", "next", "warnings", "commit", "deployment", "session"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
 		v.IntegrationID = c.IntegrationID
 		v.Kind = map[string]string{"record_progress": "progress", "record_decision": "decision", "record_discovery": "discovery", "add_blocker": "blocker", "handoff": "handoff"}[c.Action]
-		if v.Question != nil {
-			return nil, invalid("question details are server-managed")
-		}
-		v.Status = ""
-		v.Resolution = ""
 		if v.Kind == "blocker" {
 			v.Status = "open"
 		}
@@ -1053,7 +1043,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("feature", c.FeatureID)
 		}
 		v := domain.Gate{Blocking: true}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "reason", "integration_ids", "position", "blocking", "environment_id", "commit", "deployment"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1075,7 +1065,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("gate", c.GateID)
 		}
 		v := domain.Check{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "mechanism", "instructions"); e != nil {
 			return nil, e
 		}
 		m.ProductID = g.ProductID
@@ -1096,7 +1086,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("external_scope_id is set by the server")
 		}
 		v := domain.CheckResult{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "result", "commit", "environment_id", "deployment", "steps", "observations", "logs", "artifacts"); e != nil {
 			return nil, e
 		}
 		m.ProductID = ch.ProductID
@@ -1125,7 +1115,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, invalid("findings require failed or blocked result")
 		}
 		v := domain.Finding{BlocksRelease: true}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "title", "severity", "body", "integration_ids", "gate_ids", "blocks_release"); e != nil {
 			return nil, e
 		}
 		m.ProductID = r.ProductID
@@ -1197,7 +1187,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 		} else if !productExists(st, c.ProductID) {
 			return nil, missing("product", c.ProductID)
 		}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "cluster", "namespace", "parameters", "desired", "reconciled", "runtime", "composition"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1233,7 +1223,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("product", c.ProductID)
 		}
 		v := domain.Repository{Role: "APPLICATION"}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "url", "provider", "role"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1250,7 +1240,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("product", c.ProductID)
 		}
 		v := domain.Release{}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "integration_ids", "excluded_integration_ids", "notes"); e != nil {
 			return nil, e
 		}
 		v.Meta = m
@@ -1291,7 +1281,7 @@ func applyAuthorizedOrigin(ctx context.Context, st *domain.State, c domain.Comma
 			return nil, missing("product", c.ProductID)
 		}
 		v := domain.Release{Status: "released", RecordedExternally: true}
-		if e := decode(c.Data, &v); e != nil {
+		if e := decodeWritable(c.Data, &v, "name", "environment_id", "integration_ids", "excluded_integration_ids", "notes", "evidence", "source_commits", "artifact_digests", "gitops_commits"); e != nil {
 			return nil, e
 		}
 		if v.Name == "" || len(v.IntegrationIDs) == 0 || v.EnvironmentID == "" {
