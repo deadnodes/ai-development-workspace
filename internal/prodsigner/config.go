@@ -12,6 +12,11 @@ import (
 	"strings"
 )
 
+type Cache struct {
+	ConfigMap  string `json:"configmap"`
+	TTLSeconds int    `json:"ttl_seconds"`
+}
+
 type Config struct {
 	RCP struct {
 		URL           string `json:"url"`
@@ -19,7 +24,8 @@ type Config struct {
 		ProductID     string `json:"product_id"`
 		EnvironmentID string `json:"environment_id"`
 	} `json:"rcp,omitempty"`
-	RequireSecurityScan bool `json:"require_security_scan,omitempty"`
+	Cache               Cache `json:"cache,omitempty"`
+	RequireSecurityScan bool  `json:"require_security_scan,omitempty"`
 	FluxArtifact        struct {
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
@@ -73,6 +79,13 @@ func (c Config) ValidateMode(mode string) error {
 	if len(c.OwnImagePrefixes) == 0 || len(c.BuilderIDs) == 0 {
 		return bad
 	}
+	if c.Cache.ConfigMap == "" {
+		if c.Cache.TTLSeconds != 0 {
+			return bad
+		}
+	} else if len(c.Cache.ConfigMap) > 253 || !dnsSubdomain(c.Cache.ConfigMap) || c.Cache.TTLSeconds < 60 || c.Cache.TTLSeconds > 86400 {
+		return bad
+	}
 	if mode == "flux" && (c.FluxArtifact.Kind != "GitRepository" || c.FluxArtifact.Namespace == "" || c.FluxArtifact.Name == "" || strings.ContainsAny(c.FluxArtifact.Namespace+c.FluxArtifact.Name, "/ ?#") || len(c.Paths) == 0) {
 		return bad
 	}
@@ -117,4 +130,25 @@ func (c Config) ValidateMode(mode string) error {
 		}
 	}
 	return nil
+}
+
+func dnsSubdomain(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, part := range strings.Split(s, ".") {
+		if part == "" || len(part) > 63 || !(part[0] >= 'a' && part[0] <= 'z' || part[0] >= '0' && part[0] <= '9') {
+			return false
+		}
+		last := part[len(part)-1]
+		if !(last >= 'a' && last <= 'z' || last >= '0' && last <= '9') {
+			return false
+		}
+		for _, c := range part {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }

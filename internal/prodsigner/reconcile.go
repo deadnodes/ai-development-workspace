@@ -11,14 +11,18 @@ import (
 	"releasecontrol/internal/imagesigning"
 	"sort"
 	"strings"
+	"time"
 )
 
 const ApprovalType = "https://deadnodes.dev/attestations/prod-approval/v1"
+
+var now = time.Now
 
 type Summary struct {
 	Revision      string `json:"revision"`
 	Total         int    `json:"total"`
 	AlreadySigned int    `json:"already_signed"`
+	Cached        int    `json:"cached"`
 	Signed        int    `json:"signed"`
 	Unapproved    int    `json:"unapproved"`
 	Errors        int    `json:"errors"`
@@ -139,6 +143,18 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 	if e != nil {
 		return fail()
 	}
+	cacheEnabled := c.Cache.ConfigMap != ""
+	loadedCache, newCache := map[string]int64{}, map[string]int64{}
+	resourceVersion := ""
+	if cacheEnabled {
+		loadedCache, resourceVersion, e = source.LoadCache(ctx, c.Cache.ConfigMap)
+		if e != nil {
+			cacheEnabled = false
+			if log != nil {
+				fmt.Fprintln(log, `{"cache":"unavailable"}`)
+			}
+		}
+	}
 	reg := buildconfig.Registry{Origin: c.Registry.Origin, InsecureHTTP: c.Registry.InsecureHTTP}
 	credential := filepath.Base(c.Registry.CredentialsFile)
 	keys := []string{}
@@ -170,6 +186,15 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 	s.Total = len(digests)
 	for _, digest := range digests {
 		r := byDigest[digest]
+		if cacheEnabled {
+			// Future timestamps are not trusted, so a bad entry cannot suppress rechecks indefinitely.
+			if ts, ok := loadedCache[digest]; ok && ts <= now().Unix() && now().Unix()-ts < int64(c.Cache.TTLSeconds) {
+				s.Cached++
+				s.AlreadySigned++
+				newCache[digest] = ts
+				continue
+			}
+		}
 		bodies, e := client.Evidence(ctx, reg, c.SignaturesRepository, credential, digest, "sig", c.ProdKey.PublicKeyPEM)
 		if e != nil {
 			s.Errors++
@@ -188,6 +213,9 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 		}
 		if exists {
 			s.AlreadySigned++
+			if cacheEnabled {
+				newCache[digest] = now().Unix()
+			}
 			continue
 		}
 		predicate := map[string]any{"flux_revision": a.Revision, "flux_artifact_digest": a.Digest, "file_paths": r.Paths, "image_ref": r.Image}
@@ -226,12 +254,32 @@ func Reconcile(ctx context.Context, c Config, source Source, client *imagesignin
 			s.Errors++
 		} else {
 			s.Signed++
+			if cacheEnabled {
+				newCache[digest] = now().Unix()
+			}
+		}
+	}
+	// The cache can only make the signer skip work for a digest; it can never cause a signature to be published.
+	if cacheEnabled && !sameCache(loadedCache, newCache) {
+		if source.SaveCache(ctx, c.Cache.ConfigMap, resourceVersion, newCache) != nil && log != nil {
+			fmt.Fprintln(log, `{"cache":"save_failed"}`)
 		}
 	}
 	if s.Errors > 0 {
 		return s, imagesigning.ErrUnavailable
 	}
 	return s, nil
+}
+func sameCache(a, b map[string]int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 func WriteMetrics(filename string, s Summary) error {
 	if filename == "" {
@@ -242,7 +290,7 @@ func WriteMetrics(filename string, s Summary) error {
 		return e
 	}
 	defer os.Remove(f.Name())
-	_, e = fmt.Fprintf(f, "prod_signer_total %d\nprod_signer_already_signed %d\nprod_signer_signed %d\nprod_signer_unapproved %d\nprod_signer_errors %d\n", s.Total, s.AlreadySigned, s.Signed, s.Unapproved, s.Errors)
+	_, e = fmt.Fprintf(f, "prod_signer_total %d\nprod_signer_already_signed %d\nprod_signer_cached %d\nprod_signer_signed %d\nprod_signer_unapproved %d\nprod_signer_errors %d\n", s.Total, s.AlreadySigned, s.Cached, s.Signed, s.Unapproved, s.Errors)
 	if closeErr := f.Close(); e == nil {
 		e = closeErr
 	}
