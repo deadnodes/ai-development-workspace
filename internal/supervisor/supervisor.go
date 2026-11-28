@@ -632,7 +632,7 @@ func (s *Supervisor) reconnectMCPTools(ctx context.Context, token string) error 
 	sort.Strings(keys)
 	for _, target := range keys {
 		h := targets[target]
-		request := WakeRequest{Kind: h.Kind, SessionRef: h.SessionRef, TmuxTarget: h.TmuxTarget, Message: "/mcp reconnect " + s.Config.MCPServerName, Confirmation: "Reconnected to " + s.Config.MCPServerName, VerifyTimeout: mcpReconnectVerifyTimeout, IdleCheck: true}
+		request := WakeRequest{Kind: h.Kind, SessionRef: h.SessionRef, TmuxTarget: h.TmuxTarget, Message: "/mcp reconnect " + s.Config.MCPServerName, Confirmation: "reconnected to " + strings.ToLower(s.Config.MCPServerName), VerifyTimeout: mcpReconnectVerifyTimeout, IdleCheck: true}
 		result := s.Adapter.Wake(ctx, request)
 		if result.Outcome == Delivered {
 			s.mu.Lock()
