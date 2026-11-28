@@ -93,6 +93,10 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest, paneID strin
 	if paneBusy(before) {
 		return WakeResult{Outcome: Failed, Detail: "busy"}
 	}
+	confirmationCount := 0
+	if req.Confirmation != "" {
+		confirmationCount = strings.Count(string(before), req.Confirmation)
+	}
 	if err = waitDuration(ctx, a.Config.IdleFor); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "idle check interrupted"}
 	}
@@ -130,6 +134,9 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest, paneID strin
 		return WakeResult{Outcome: Failed, Detail: "tmux enter failed"}
 	}
 	verifyFor := a.Config.VerifyFor
+	if req.VerifyTimeout > 0 {
+		verifyFor = req.VerifyTimeout
+	}
 	if verifyFor <= 0 {
 		verifyFor = a.Config.WakeFor
 	}
@@ -139,7 +146,10 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest, paneID strin
 	retried := false
 	for {
 		pane, e := a.capture(verifyCtx, paneID)
-		if e == nil && paneBusy(pane) {
+		if e == nil && req.Confirmation != "" && strings.Count(string(pane), req.Confirmation) > confirmationCount {
+			return WakeResult{Outcome: Delivered, Detail: "confirmation observed"}
+		}
+		if e == nil && req.Confirmation == "" && paneBusy(pane) {
 			return WakeResult{Outcome: Delivered, Detail: "tmux wake observed"}
 		}
 		if !req.IdleCheck && !retried && !time.Now().Before(retryAt) {

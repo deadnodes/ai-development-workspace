@@ -41,6 +41,8 @@ type WakeResult struct {
 }
 type WakeRequest struct {
 	Kind, SessionRef, TmuxTarget, GroupID, Message string
+	Confirmation                                   string
+	VerifyTimeout                                  time.Duration
 	Events                                         []domain.ExecutionEvent
 	IdleCheck                                      bool
 	bound                                          bool
@@ -58,12 +60,14 @@ type sessionBatch struct {
 }
 
 type Supervisor struct {
-	Config  Config
-	Client  *http.Client
-	Adapter Adapter
-	Now     func() time.Time
-	mu      sync.Mutex
-	wakes   map[string]time.Time
+	Config              Config
+	Client              *http.Client
+	Adapter             Adapter
+	Now                 func() time.Time
+	mu                  sync.Mutex
+	wakes               map[string]time.Time
+	mcpToolsFingerprint string
+	mcpReconnectPending map[string]domain.ExecutionHarness
 }
 
 func New(c Config, adapter Adapter) (*Supervisor, error) {
@@ -76,7 +80,7 @@ func New(c Config, adapter Adapter) (*Supervisor, error) {
 	if adapter == nil {
 		adapter = ExecAdapter{Config: c}
 	}
-	return &Supervisor{Config: c, Client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects forbidden") }}, Adapter: adapter, Now: time.Now, wakes: map[string]time.Time{}}, nil
+	return &Supervisor{Config: c, Client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects forbidden") }}, Adapter: adapter, Now: time.Now, wakes: map[string]time.Time{}, mcpReconnectPending: map[string]domain.ExecutionHarness{}}, nil
 }
 
 func credential(c Config) (string, error) {
@@ -98,6 +102,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			if err := s.Cycle(ctx, product, token); err != nil {
 				slog.Error("supervisor poll failed", "product_id", product, "error", err)
 			}
+		}
+		if err := s.reconnectMCPTools(ctx, token); err != nil {
+			slog.Error("supervisor MCP reconnect poll failed", "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -525,7 +532,120 @@ func (s *Supervisor) request(ctx context.Context, method, path, token string, in
 }
 
 type persistedState struct {
-	Wakes map[string]time.Time `json:"wakes"`
+	Wakes               map[string]time.Time               `json:"wakes"`
+	MCPToolsFingerprint string                             `json:"mcp_tools_fingerprint,omitempty"`
+	MCPReconnectPending map[string]domain.ExecutionHarness `json:"mcp_reconnect_pending,omitempty"`
+}
+
+const mcpReconnectVerifyTimeout = 10 * time.Second
+
+func (s *Supervisor) currentMCPReconnectTargets(ctx context.Context, token string) (map[string]domain.ExecutionHarness, error) {
+	targets := map[string]domain.ExecutionHarness{}
+	for _, productID := range s.Config.ProductIDs {
+		var result struct {
+			Items []domain.ExecutionHarness `json:"items"`
+		}
+		path := "/api/products/" + url.PathEscape(productID) + "/supervisor-orchestrators"
+		if err := s.request(ctx, http.MethodGet, path, token, nil, &result); err != nil {
+			return nil, err
+		}
+		for _, h := range result.Items {
+			if h.Kind != "claude_code" {
+				slog.Info("skipping MCP reconnect for unsupported orchestrator", "kind", h.Kind)
+				continue
+			}
+			if h.TmuxTarget == "" || !ValidTmuxTarget(h.TmuxTarget) {
+				slog.Info("skipping MCP reconnect without valid tmux target", "kind", h.Kind)
+				continue
+			}
+			targetKey := "target:" + h.TmuxTarget
+			if _, exists := targets[targetKey]; !exists {
+				targets[targetKey] = h
+			}
+		}
+	}
+	return targets, nil
+}
+
+func (s *Supervisor) reconnectMCPTools(ctx context.Context, token string) error {
+	var health struct {
+		Fingerprint string `json:"mcp_tools_fingerprint"`
+	}
+	if err := s.request(ctx, http.MethodGet, "/healthz", token, nil, &health); err != nil {
+		return err
+	}
+	if len(health.Fingerprint) != 64 {
+		return errors.New("invalid MCP tools fingerprint")
+	}
+	s.mu.Lock()
+	previous := s.mcpToolsFingerprint
+	hasPending := len(s.mcpReconnectPending) > 0
+	s.mu.Unlock()
+	if previous == "" {
+		s.mu.Lock()
+		s.mcpToolsFingerprint = health.Fingerprint
+		s.mu.Unlock()
+		return s.saveState()
+	}
+	var targets map[string]domain.ExecutionHarness
+	if previous != health.Fingerprint || hasPending {
+		var err error
+		targets, err = s.currentMCPReconnectTargets(ctx, token)
+		if err != nil {
+			return err
+		}
+	}
+	if previous != health.Fingerprint {
+		s.mu.Lock()
+		s.mcpToolsFingerprint = health.Fingerprint
+		s.mcpReconnectPending = targets
+		s.mu.Unlock()
+		if err := s.saveState(); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	pending := make(map[string]domain.ExecutionHarness, len(s.mcpReconnectPending))
+	for key, value := range s.mcpReconnectPending {
+		pending[key] = value
+	}
+	s.mu.Unlock()
+	if len(pending) == 0 {
+		return nil
+	}
+	for target := range pending {
+		if _, current := targets[target]; !current {
+			slog.Info("dropping stale MCP reconnect target", "target", target)
+			s.mu.Lock()
+			delete(s.mcpReconnectPending, target)
+			s.mu.Unlock()
+			delete(pending, target)
+		}
+	}
+	if len(pending) == 0 {
+		return s.saveState()
+	}
+	keys := make([]string, 0, len(pending))
+	for key := range pending {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, target := range keys {
+		h := targets[target]
+		request := WakeRequest{Kind: h.Kind, SessionRef: h.SessionRef, TmuxTarget: h.TmuxTarget, Message: "/mcp reconnect " + s.Config.MCPServerName, Confirmation: "Reconnected to " + s.Config.MCPServerName, VerifyTimeout: mcpReconnectVerifyTimeout, IdleCheck: true}
+		result := s.Adapter.Wake(ctx, request)
+		if result.Outcome == Delivered {
+			s.mu.Lock()
+			delete(s.mcpReconnectPending, target)
+			s.mu.Unlock()
+			if err := s.saveState(); err != nil {
+				return err
+			}
+		} else {
+			slog.Info("MCP reconnect remains pending", "kind", h.Kind, "outcome", result.Outcome, "detail", result.Detail)
+		}
+	}
+	return nil
 }
 
 func (s *Supervisor) loadState() error {
@@ -549,16 +669,24 @@ func (s *Supervisor) loadState() error {
 	if state.Wakes == nil {
 		state.Wakes = map[string]time.Time{}
 	}
+	if state.MCPReconnectPending == nil {
+		state.MCPReconnectPending = map[string]domain.ExecutionHarness{}
+	}
 	s.mu.Lock()
 	s.wakes = state.Wakes
+	s.mcpToolsFingerprint = state.MCPToolsFingerprint
+	s.mcpReconnectPending = state.MCPReconnectPending
 	s.mu.Unlock()
 	return nil
 }
 func (s *Supervisor) saveState() error {
 	s.mu.Lock()
-	state := persistedState{Wakes: map[string]time.Time{}}
+	state := persistedState{Wakes: map[string]time.Time{}, MCPToolsFingerprint: s.mcpToolsFingerprint, MCPReconnectPending: map[string]domain.ExecutionHarness{}}
 	for k, v := range s.wakes {
 		state.Wakes[k] = v
+	}
+	for k, v := range s.mcpReconnectPending {
+		state.MCPReconnectPending[k] = v
 	}
 	s.mu.Unlock()
 	raw, err := json.Marshal(state)

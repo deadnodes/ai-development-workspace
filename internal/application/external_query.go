@@ -151,6 +151,9 @@ func executionEventCursor(event domain.ExecutionEvent) string {
 }
 
 func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
+	if name == "list_supervisor_orchestrators" {
+		return s.listSupervisorOrchestrators(ctx, id)
+	}
 	switch name {
 	case "list_questions", "get_question", "get_dependency_graph", "next_work", "status_overview":
 		return s.queryWork(ctx, name, id)
@@ -697,6 +700,44 @@ func (s *Service) Query(ctx context.Context, name, id string) (any, error) {
 		return items, nil
 	}
 	return nil, invalid("unknown query")
+}
+
+// listSupervisorOrchestrators returns only targets visible to this caller for
+// one Product. User registrations are intentionally omitted from general State
+// snapshots, so this narrowly scoped query projects the caller's own record.
+func (s *Service) listSupervisorOrchestrators(ctx context.Context, productID string) (any, error) {
+	if productID == "" {
+		return nil, invalid("product_id required")
+	}
+	if err := authorize(ctx, "read", productID); err != nil {
+		return nil, err
+	}
+	authoritative, err := s.readDerivedState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	visible, err := scopedState(ctx, authoritative)
+	if err != nil {
+		return nil, err
+	}
+	productVisible := slices.ContainsFunc(visible.Products, func(product domain.Product) bool { return product.ID == productID })
+	if !productVisible {
+		return nil, missing("product", productID)
+	}
+	items := make([]domain.ExecutionHarness, 0)
+	for _, group := range visible.ExecutionGroups {
+		if group.ProductID == productID && group.ClosedAt == nil && group.OrchestratorHarness.Kind != "" && groupIdleOwnerVisible(ctx, group.Owner) {
+			items = append(items, group.OrchestratorHarness)
+		}
+	}
+	user := workUser(ctx)
+	for _, registration := range authoritative.UserOrchestrators {
+		if registration.UnregisteredAt == nil && registration.UserID == user &&
+			(registration.ProductID == productID || registration.ProductID == "") && registrationVisible(&authoritative, registration, productID) {
+			items = append(items, registration.Harness)
+		}
+	}
+	return map[string]any{"items": items}, nil
 }
 
 func (s *Service) listBranches(ctx context.Context, repositoryID string) (any, error) {

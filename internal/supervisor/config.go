@@ -29,6 +29,7 @@ type Config struct {
 	AllowedKinds   []string      `json:"allowed_kinds,omitempty"`
 	HeadlessKinds  []string      `json:"headless_kinds,omitempty"`
 	StateFile      string        `json:"state_file,omitempty"`
+	MCPServerName  string        `json:"mcp_server_name,omitempty"`
 	TmuxPath       string        `json:"tmux_path,omitempty"`
 	CodexPath      string        `json:"codex_path,omitempty"`
 	ClaudePath     string        `json:"claude_path,omitempty"`
@@ -154,6 +155,12 @@ func (c *Config) Normalize() error {
 	}
 	if c.SupervisorID == "" || len(c.SupervisorID) > 128 {
 		return errors.New("invalid supervisor_id")
+	}
+	if c.MCPServerName == "" {
+		c.MCPServerName = "release-control"
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(c.MCPServerName) {
+		return errors.New("invalid mcp_server_name")
 	}
 	for _, id := range c.ProductIDs {
 		if !idPattern.MatchString(id) {

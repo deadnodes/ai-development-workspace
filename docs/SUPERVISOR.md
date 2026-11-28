@@ -16,6 +16,7 @@ Create `~/.config/release-control/supervisor.json` with mode `0600`:
   "profile": "default",
   "supervisor_id": "mini-orchestrator",
   "product_ids": ["PRODUCT_ID"],
+  "mcp_server_name": "release-control",
   "poll_interval": "15s",
   "idle_window": "5s",
   "wake_timeout": "120s",
@@ -37,6 +38,25 @@ With `profile`, the supervisor resolves the same encrypted credential managed by
 `state_file` selects where the non-secret last-wake timestamps are stored. The
 `tmux_path`, `codex_path`, `claude_path`, and `pgrep_path` fields can pin command
 paths. Defaults are resolved using the launchd `PATH`.
+
+## MCP tool changes
+
+Once per poll cycle the supervisor reads `/healthz` and compares its
+`mcp_tools_fingerprint` with the saved value in the state file. The first poll
+only records the fingerprint. When it changes, the supervisor enumerates
+registered execution-group and user orchestrators for the
+configured Products. It sends `/mcp reconnect <mcp_server_name>` only to
+`claude_code` orchestrators with a valid registered tmux target. Codex and other
+harnesses are skipped. Workers are not included in the orchestrator listing.
+
+Reconnect uses the same idle and busy checks as other tmux wakes. An active or
+busy pane is skipped/failed. Delivery is confirmed only when the pane capture
+contains a new occurrence of `Reconnected to <mcp_server_name>` after Enter;
+older occurrences do not count. An unconfirmed pane remains pending in the state
+file and is retried on later poll cycles; a confirmed send is issued once for
+that fingerprint. Two registrations with the same tmux target produce one send.
+Set `mcp_server_name` to the MCP server's configured client name; it defaults to
+`release-control` and accepts letters, digits, `-`, and `_`.
 
 Each human runs their own supervisor with their own agent token on a host and
 tmux server they own. A registered wake target is trusted only within that
@@ -166,6 +186,7 @@ cat > ~/.config/release-control/supervisor.json <<'JSON'
   "profile": "default",
   "supervisor_id": "mini-orchestrator",
   "product_ids": ["PRODUCT_ID"],
+  "mcp_server_name": "release-control",
   "poll_interval": "15s",
   "idle_window": "5s",
   "wake_timeout": "120s",
