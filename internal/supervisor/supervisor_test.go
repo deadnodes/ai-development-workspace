@@ -560,7 +560,9 @@ func TestTmuxWakeConfirmationRequiresNewOutput(t *testing.T) {
 		want                 Outcome
 	}{
 		{"new confirmation", "idle", "idle\nReconnected to release-control", Delivered},
+		{"success confirmation", "idle", "idle\nSuccessfully reconnected to release-control", Delivered},
 		{"old confirmation", "idle\nReconnected to release-control", "idle\nReconnected to release-control", Failed},
+		{"old success confirmation", "idle\nSuccessfully reconnected to release-control", "idle\nSuccessfully reconnected to release-control", Failed},
 		{"no confirmation", "idle", "idle", Failed},
 		{"busy without confirmation", "idle", "Claude: Esc to interrupt", Failed},
 	} {
@@ -577,7 +579,7 @@ esac
 `)
 			t.Setenv("PANE", pane)
 			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: time.Second, VerifyFor: 30 * time.Millisecond}}
-			got := a.Wake(context.Background(), WakeRequest{Kind: "claude_code", TmuxTarget: "orch", Message: "/mcp reconnect release-control", Confirmation: "Reconnected to release-control", IdleCheck: true})
+			got := a.Wake(context.Background(), WakeRequest{Kind: "claude_code", TmuxTarget: "orch", Message: "/mcp reconnect release-control", Confirmation: "reconnected to release-control", IdleCheck: true})
 			if got.Outcome != tc.want {
 				t.Fatalf("got %+v", got)
 			}

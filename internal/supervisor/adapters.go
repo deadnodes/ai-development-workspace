@@ -95,7 +95,8 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest, paneID strin
 	}
 	confirmationCount := 0
 	if req.Confirmation != "" {
-		confirmationCount = strings.Count(string(before), req.Confirmation)
+		confirmation := strings.ToLower(req.Confirmation)
+		confirmationCount = strings.Count(strings.ToLower(string(before)), confirmation)
 	}
 	if err = waitDuration(ctx, a.Config.IdleFor); err != nil {
 		return WakeResult{Outcome: Failed, Detail: "idle check interrupted"}
@@ -146,7 +147,7 @@ func (a ExecAdapter) wakeTmux(ctx context.Context, req WakeRequest, paneID strin
 	retried := false
 	for {
 		pane, e := a.capture(verifyCtx, paneID)
-		if e == nil && req.Confirmation != "" && strings.Count(string(pane), req.Confirmation) > confirmationCount {
+		if e == nil && req.Confirmation != "" && strings.Count(strings.ToLower(string(pane)), strings.ToLower(req.Confirmation)) > confirmationCount {
 			return WakeResult{Outcome: Delivered, Detail: "confirmation observed"}
 		}
 		if e == nil && req.Confirmation == "" && paneBusy(pane) {

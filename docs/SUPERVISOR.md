@@ -51,7 +51,7 @@ harnesses are skipped. Workers are not included in the orchestrator listing.
 
 Reconnect uses the same idle and busy checks as other tmux wakes. An active or
 busy pane is skipped/failed. Delivery is confirmed only when the pane capture
-contains a new occurrence of `Reconnected to <mcp_server_name>` after Enter;
+contains a new case-insensitive occurrence of `reconnected to <mcp_server_name>` after Enter;
 older occurrences do not count. An unconfirmed pane remains pending in the state
 file and is retried on later poll cycles; a confirmed send is issued once for
 that fingerprint. Two registrations with the same tmux target produce one send.
