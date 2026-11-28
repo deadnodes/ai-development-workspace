@@ -2676,6 +2676,28 @@ List Product execution events with cursor and event filters.
 
 **Authority:** Read only.
 
+### `GET /api/products/{id}/supervisor-orchestrators` — http_route
+
+List registered orchestrator harnesses for one Product for local supervisor maintenance.
+
+**When:** The supervisor reads this when the MCP tool catalogue changes.
+
+**Inputs:**
+
+- `id` (path string, required): Product ID
+
+**Output:** Group and registered user orchestrator harnesses, without workers.
+
+**Errors:**
+
+- `NOT_FOUND`: Verify Product ID.
+
+**Example:** `GET /api/products/PRODUCT/supervisor-orchestrators`
+
+**Related:** `list_execution_events`
+
+**Authority:** Read only; Product-scoped harness metadata.
+
 ### `create_execution_group` — mcp_tool
 
 **Same operation:** `execute_action:create_execution_group`

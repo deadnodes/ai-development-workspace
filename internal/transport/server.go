@@ -2,7 +2,9 @@ package transport
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,7 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"releasecontrol/internal/agentguide"
@@ -71,8 +75,13 @@ func (mux observedMux) HandleFunc(pattern string, handler func(http.ResponseWrit
 
 func newServer(service Service, options Options, register func(string)) http.Handler {
 	mux := observedMux{http.NewServeMux(), register}
+	var toolsFingerprint string
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		write(w, http.StatusOK, map[string]string{"status": "ok"})
+		write(w, http.StatusOK, map[string]string{"status": "ok", "mcp_tools_fingerprint": toolsFingerprint})
+	})
+	mux.HandleFunc("GET /api/products/{id}/supervisor-orchestrators", func(w http.ResponseWriter, r *http.Request) {
+		v, err := service.Query(r.Context(), "list_supervisor_orchestrators", r.PathValue("id"))
+		respond(w, v, err)
 	})
 	mux.HandleFunc("GET /api/state", stateSnapshot(service))
 	mux.HandleFunc("GET /api/ui-state", uiStateSnapshot(service))
@@ -127,6 +136,7 @@ func newServer(service Service, options Options, register func(string)) http.Han
 	server := configureMCP(mux, service, options, agentguide.Instructions)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20})
 	registerCodeMode(mux, server, mcpHandler)
+	toolsFingerprint = registeredToolsFingerprint(server)
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 	var control http.Handler = mux
@@ -160,6 +170,57 @@ func newServer(service Service, options Options, register func(string)) http.Han
 		}
 		control.ServeHTTP(w, r)
 	}), options)
+}
+
+// registeredToolsFingerprint hashes only the public MCP tool catalogue. It deliberately
+// excludes handlers, credentials and process state.
+func registeredToolsFingerprint(server *mcp.Server) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "CatalogReader", Version: "1"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		panic("list MCP tools: " + err.Error())
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		panic("list MCP tools: " + err.Error())
+	}
+	defer clientSession.Close()
+	var tools []*mcp.Tool
+	var cursor string
+	for {
+		page, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			panic("list MCP tools: " + err.Error())
+		}
+		tools = append(tools, page.Tools...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+	canonical := make([]struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		InputSchema any    `json:"input_schema"`
+	}, 0, len(tools))
+	for _, tool := range tools {
+		canonical = append(canonical, struct {
+			Name        string `json:"name"`
+			Description string `json:"description,omitempty"`
+			InputSchema any    `json:"input_schema"`
+		}{tool.Name, tool.Description, tool.InputSchema})
+	}
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		panic("encode MCP tool catalogue: " + err.Error())
+	}
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:])
 }
 
 func NewLocalMCP(service Service) *mcp.Server {

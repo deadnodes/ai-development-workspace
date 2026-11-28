@@ -554,6 +554,37 @@ func TestTmuxWakeVerificationBusyMarkerAndUnconsumedFalsePositive(t *testing.T) 
 	}
 }
 
+func TestTmuxWakeConfirmationRequiresNewOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name, initial, final string
+		want                 Outcome
+	}{
+		{"new confirmation", "idle", "idle\nReconnected to release-control", Delivered},
+		{"old confirmation", "idle\nReconnected to release-control", "idle\nReconnected to release-control", Failed},
+		{"no confirmation", "idle", "idle", Failed},
+		{"busy without confirmation", "idle", "Claude: Esc to interrupt", Failed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pane := filepath.Join(dir, "pane")
+			_ = os.WriteFile(pane, []byte(tc.initial), 0600)
+			writeFakeTmux(t, filepath.Join(dir, "tmux"), `case "$1" in
+display) printf '%%1 $1 orch\n';;
+display-message) printf '1\n';;
+capture-pane) cat "$PANE";;
+send-keys) case "$*" in *" -l "*) printf 'typed\\n' >> "$PANE";; *Enter*) printf '`+tc.final+`\\n' > "$PANE";; esac;;
+esac
+`)
+			t.Setenv("PANE", pane)
+			a := ExecAdapter{Config: Config{TmuxPath: filepath.Join(dir, "tmux"), IdleFor: time.Millisecond, SubmitFor: time.Millisecond, WakeFor: time.Second, VerifyFor: 30 * time.Millisecond}}
+			got := a.Wake(context.Background(), WakeRequest{Kind: "claude_code", TmuxTarget: "orch", Message: "/mcp reconnect release-control", Confirmation: "Reconnected to release-control", IdleCheck: true})
+			if got.Outcome != tc.want {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
 func TestTmuxWakeRetriesSwallowedEnter(t *testing.T) {
 	dir := t.TempDir()
 	pane, calls := filepath.Join(dir, "pane"), filepath.Join(dir, "enters")
@@ -613,6 +644,9 @@ func TestConfigDefaultsAndTmuxValidation(t *testing.T) {
 	if c.PollEvery != 15*time.Second || c.IdleFor != 5*time.Second || c.WakeFor != 120*time.Second || c.SubmitFor != 800*time.Millisecond {
 		t.Fatalf("defaults: %+v", c)
 	}
+	if c.MCPServerName != "release-control" {
+		t.Fatalf("MCP server default = %q", c.MCPServerName)
+	}
 	for _, v := range []string{"orch", "orch:0.1", "session_a"} {
 		if !ValidTmuxTarget(v) {
 			t.Fatalf("rejected %q", v)
@@ -622,6 +656,19 @@ func TestConfigDefaultsAndTmuxValidation(t *testing.T) {
 		if ValidTmuxTarget(v) {
 			t.Fatalf("accepted %q", v)
 		}
+	}
+}
+
+func TestMCPServerNameValidation(t *testing.T) {
+	for _, name := range []string{"release-control", "rcp_server-1"} {
+		c := Config{RCPURL: "https://example.invalid", SupervisorID: "sup", ProductIDs: []string{"product"}, MCPServerName: name}
+		if err := c.Normalize(); err != nil {
+			t.Fatalf("accepted name %q failed: %v", name, err)
+		}
+	}
+	c := Config{RCPURL: "https://example.invalid", SupervisorID: "sup", ProductIDs: []string{"product"}, MCPServerName: "bad name"}
+	if err := c.Normalize(); err == nil {
+		t.Fatal("accepted invalid MCP server name")
 	}
 }
 
